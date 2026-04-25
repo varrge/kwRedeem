@@ -36,8 +36,9 @@ const updateState = {
 };
 
 await app.register(cors, {
-  origin: [env.appUrl, env.adminUrl, "http://127.0.0.1:4173", "http://127.0.0.1:4174"],
-  credentials: true
+  origin: true,
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"]
 });
 
 function nowIso() {

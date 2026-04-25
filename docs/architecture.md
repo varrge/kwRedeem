@@ -54,9 +54,12 @@
 - `{{publicKey}}`
 - `{{orderNo}}`
 - `{{sessionRaw}}`
+- `{{sessionString}}`
 - `{{session.user.email}}`
 - `{{siteName}}`
 - `{{siteSlug}}`
+
+其中 `{{sessionRaw}}` 会插入 session 的原始 JSON 片段，适合远端字段本身就是对象；`{{sessionString}}` 会插入带转义的 JSON 字符串，适合远端字段类型是 `String` 但内容仍需承载 session JSON。
 
 验证与提交阶段都可用 `success_rule` / `failure_rule` 基于 HTTP 状态、响应文本或 JSON Path 做成功判断。
 

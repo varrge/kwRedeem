@@ -344,7 +344,93 @@ function getOrderDetail(orderNo) {
   };
 }
 
-function normalizeOrderNos(input) {
+function getCdkeyLookupDetail(publicKey) {
+  const key = db.prepare(`
+    SELECT
+      c.public_key,
+      c.status,
+      c.prefix,
+      c.locked_at,
+      c.used_at,
+      c.updated_at,
+      s.name AS site_name,
+      s.slug AS site_slug,
+      p.title AS product_title,
+      (
+        SELECT ro.order_no
+        FROM redeem_orders ro
+        WHERE ro.public_key = c.public_key
+        ORDER BY ro.created_at DESC
+        LIMIT 1
+      ) AS latest_order_no
+    FROM cdkeys c
+    LEFT JOIN sites s ON s.id = c.site_id
+    LEFT JOIN products p ON p.id = c.product_id
+    WHERE c.public_key = ?
+  `).get(publicKey);
+
+  if (!key) return null;
+
+  return {
+    publicKey: key.public_key,
+    status: key.status,
+    prefix: key.prefix,
+    productTitle: key.site_name || key.product_title || "未命名网站",
+    siteName: key.site_name || key.product_title || "未命名网站",
+    siteSlug: key.site_slug || null,
+    latestOrderNo: key.latest_order_no || null,
+    lockedAt: key.locked_at,
+    usedAt: key.used_at,
+    updatedAt: key.updated_at
+  };
+}
+
+function looksLikeOrderNo(value) {
+  return /^KW\d{8,}$/i.test(String(value ?? "").trim());
+}
+
+function getLookupDetail(identifier) {
+  const normalized = String(identifier ?? "").trim().toUpperCase();
+  if (!normalized) return null;
+
+  if (looksLikeOrderNo(normalized)) {
+    const orderDetail = getOrderDetail(normalized);
+    if (orderDetail) {
+      return {
+        ...orderDetail,
+        lookupKind: "order",
+        lookupType: "orderNo",
+        queryValue: normalized
+      };
+    }
+  }
+
+  const keyDetail = getCdkeyLookupDetail(normalized);
+  if (!keyDetail) return null;
+
+  if (keyDetail.latestOrderNo) {
+    const latestOrderDetail = getOrderDetail(keyDetail.latestOrderNo);
+    if (latestOrderDetail) {
+      return {
+        ...latestOrderDetail,
+        lookupKind: "order",
+        lookupType: "publicKey",
+        queryValue: normalized,
+        cdkeyStatus: keyDetail.status
+      };
+    }
+  }
+
+  return {
+    ...keyDetail,
+    lookupKind: "cdkey",
+    lookupType: "publicKey",
+    queryValue: normalized,
+    canRedeem: keyDetail.status === cdkeyStatuses.active
+  };
+}
+
+function normalizeLookupIdentifiers(input) {
   const values = Array.isArray(input) ? input : [input];
   return Array.from(new Set(
     values
@@ -810,7 +896,7 @@ app.post("/api/public/orders/batch", async (request, reply) => {
     orderNos: z.array(z.string().min(1)).min(1).max(50)
   });
 
-  const normalized = normalizeOrderNos(request.body?.orderNos);
+  const normalized = normalizeLookupIdentifiers(request.body?.orderNos);
   const parsed = schema.safeParse({ orderNos: normalized });
   if (!parsed.success) {
     return reply.code(400).send({ message: "请提供 1-50 个有效订单号" });
@@ -833,6 +919,38 @@ app.post("/api/public/orders/batch", async (request, reply) => {
     found: items.length,
     missing: missingOrderNos.length,
     missingOrderNos,
+    items
+  };
+});
+
+app.post("/api/public/lookups/batch", async (request, reply) => {
+  const schema = z.object({
+    identifiers: z.array(z.string().min(1)).min(1).max(50)
+  });
+
+  const normalized = normalizeLookupIdentifiers(request.body?.identifiers);
+  const parsed = schema.safeParse({ identifiers: normalized });
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供 1-50 个有效订单号或卡密" });
+  }
+
+  const items = [];
+  const missingIdentifiers = [];
+
+  for (const identifier of parsed.data.identifiers) {
+    const detail = getLookupDetail(identifier);
+    if (detail) {
+      items.push(detail);
+    } else {
+      missingIdentifiers.push(identifier);
+    }
+  }
+
+  return {
+    total: parsed.data.identifiers.length,
+    found: items.length,
+    missing: missingIdentifiers.length,
+    missingIdentifiers,
     items
   };
 });
@@ -1419,7 +1537,7 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   let sql = `
     SELECT
-      c.id, c.public_key, c.prefix, c.status, c.used_at, c.locked_at,
+      c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at,
       b.name AS batch_name,
       s.name AS site_name
     FROM cdkeys c
@@ -1448,7 +1566,10 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   sql += " ORDER BY c.created_at DESC LIMIT 200";
 
-  const items = db.prepare(sql).all(...params);
+  const items = db.prepare(sql).all(...params).map((item) => ({
+    ...item,
+    source_key: decryptText(item.source_key)
+  }));
   return { items };
 });
 

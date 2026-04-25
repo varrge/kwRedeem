@@ -50,6 +50,7 @@ function claimJob() {
 
 function buildRequestContext(job, order, cdkey, site, endpoint) {
   const sessionJson = JSON.parse(decryptText(order.session_payload));
+  const sessionRaw = JSON.stringify(sessionJson);
   const sourceKey = decryptText(cdkey.source_key);
   const jobPayload = safeParseJson(job.payload, {});
   const abandonRemainingTime = Boolean(jobPayload.abandonRemainingTime || order.abandon_remaining_time);
@@ -58,7 +59,9 @@ function buildRequestContext(job, order, cdkey, site, endpoint) {
     publicKey: cdkey.public_key,
     sourceKey,
     session: sessionJson,
-    sessionRaw: JSON.stringify(sessionJson),
+    sessionRaw,
+    // Use this in templates when the remote field expects a JSON string, not an object.
+    sessionString: JSON.stringify(sessionRaw),
     abandonRemainingTime,
     endpointName: endpoint?.name || site?.name || "Unknown",
     siteName: site?.name || null,

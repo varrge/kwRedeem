@@ -173,18 +173,18 @@
       <section class="panel query-panel">
         <div class="section-heading">
           <p class="eyebrow">Step 3</p>
-          <h2>查询订单状态 / 批量查询</h2>
+          <h2>查询订单状态 / 卡密批量查询</h2>
         </div>
         <form id="lookup-form" class="lookup-form">
           <textarea
             id="order-no"
             name="orderNo"
             rows="4"
-            placeholder="输入一个或多个订单号，支持换行、空格或逗号分隔，例如&#10;KW1777019380358627&#10;KW1777018975520772"
+            placeholder="输入一个或多个订单号或卡密，支持换行、空格或逗号分隔，例如&#10;KW1777019380358627&#10;GPT-XXXX-XXXX"
           ></textarea>
           <button type="submit">Track Result</button>
         </form>
-        <p class="query-tip">最多可一次查询 50 个订单号，适合批量复核处理结果。</p>
+        <p class="query-tip">最多可一次查询 50 个订单号或卡密，支持混合批量查询。</p>
         <div id="order-result" class="result muted">暂无订单信息。</div>
       </section>
 

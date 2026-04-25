@@ -300,6 +300,7 @@ async function refreshCdkeys() {
   renderTable(refs.cdkeyList, [
     { label: "", render: (item) => `<input type="checkbox" class="cdkey-check" value="${item.id}" />` },
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
+    { label: "原始卡密", render: (item) => item.source_key ? `<code>${escapeHtml(item.source_key)}</code>` : "-" },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "前缀", render: (item) => item.prefix },
     { label: "批次", render: (item) => item.batch_name || "-" },

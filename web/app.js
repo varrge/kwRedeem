@@ -99,11 +99,18 @@ function renderRedeemSuccess(orderNo) {
 function renderOrderResult(payload) {
   const job = payload.job || {};
   const apiMessage = getApiMessage(job);
+  const title = payload.lookupType === "publicKey" ? "卡密关联订单" : "订单追踪结果";
   return `
     <div class="result-card">
-      <div class="result-title">订单追踪结果</div>
+      <div class="result-title">${title}</div>
       ${renderStatusBadge(payload.status)}
       <div class="result-grid">
+        ${payload.lookupType === "publicKey" ? `
+          <div class="result-item">
+            <span>查询卡密</span>
+            <strong>${escapeHtml(payload.queryValue || payload.publicKey)}</strong>
+          </div>
+        ` : ""}
         <div class="result-item">
           <span>订单号</span>
           <strong>${escapeHtml(payload.orderNo)}</strong>
@@ -132,6 +139,12 @@ function renderOrderResult(payload) {
           <span>放弃剩余会员时间</span>
           <strong>${payload.abandonRemainingTime ? "是" : "否"}</strong>
         </div>
+        ${payload.cdkeyStatus ? `
+          <div class="result-item">
+            <span>卡密状态</span>
+            <strong>${escapeHtml(payload.cdkeyStatus)}</strong>
+          </div>
+        ` : ""}
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
       ${payload.errorMessage ? `<div class="result-item"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
@@ -139,7 +152,46 @@ function renderOrderResult(payload) {
   `;
 }
 
-function parseOrderNos(rawValue) {
+function renderCdkeyResult(payload) {
+  return `
+    <div class="result-card">
+      <div class="result-title">卡密查询结果</div>
+      ${renderStatusBadge(payload.status)}
+      <div class="result-grid">
+        <div class="result-item">
+          <span>卡密</span>
+          <strong>${escapeHtml(payload.publicKey)}</strong>
+        </div>
+        <div class="result-item">
+          <span>当前状态</span>
+          <strong>${escapeHtml(payload.status)}</strong>
+        </div>
+        <div class="result-item">
+          <span>商品</span>
+          <strong>${escapeHtml(payload.productTitle)}</strong>
+        </div>
+        <div class="result-item">
+          <span>网站</span>
+          <strong>${escapeHtml(payload.siteName || "-")}</strong>
+        </div>
+        <div class="result-item">
+          <span>最近订单号</span>
+          <strong>${escapeHtml(payload.latestOrderNo || "暂无")}</strong>
+        </div>
+        <div class="result-item">
+          <span>当前可兑换</span>
+          <strong>${payload.canRedeem ? "是" : "否"}</strong>
+        </div>
+      </div>
+      <div class="result-item result-item-wide">
+        <span>说明</span>
+        <strong>该卡密当前没有可展示的订单记录，可继续使用卡密状态判断处理进度。</strong>
+      </div>
+    </div>
+  `;
+}
+
+function parseLookupIdentifiers(rawValue) {
   return Array.from(new Set(
     String(rawValue ?? "")
       .split(/[\s,]+/)
@@ -148,7 +200,98 @@ function parseOrderNos(rawValue) {
   ));
 }
 
-function renderBatchOrderResults(payload) {
+function renderBatchLookupItem(item) {
+  const job = item.job || {};
+  const apiMessage = getApiMessage(job);
+  const headLabel = item.lookupKind === "cdkey"
+    ? escapeHtml(item.publicKey)
+    : escapeHtml(item.orderNo);
+
+  const queryHint = item.lookupType === "publicKey"
+    ? `
+        <div class="result-item">
+          <span>查询卡密</span>
+          <strong>${escapeHtml(item.queryValue || item.publicKey)}</strong>
+        </div>
+      `
+    : "";
+
+  if (item.lookupKind === "cdkey") {
+    return `
+      <article class="batch-order-card">
+        <div class="batch-order-head">
+          <strong>${headLabel}</strong>
+          ${renderStatusBadge(item.status)}
+        </div>
+        <div class="result-grid">
+          ${queryHint}
+          <div class="result-item">
+            <span>商品</span>
+            <strong>${escapeHtml(item.productTitle)}</strong>
+          </div>
+          <div class="result-item">
+            <span>网站</span>
+            <strong>${escapeHtml(item.siteName || "-")}</strong>
+          </div>
+          <div class="result-item">
+            <span>最近订单号</span>
+            <strong>${escapeHtml(item.latestOrderNo || "暂无")}</strong>
+          </div>
+          <div class="result-item">
+            <span>当前可兑换</span>
+            <strong>${item.canRedeem ? "是" : "否"}</strong>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="batch-order-card">
+      <div class="batch-order-head">
+        <strong>${headLabel}</strong>
+        ${renderStatusBadge(item.status)}
+      </div>
+      <div class="result-grid">
+        ${queryHint}
+        <div class="result-item">
+          <span>订单号</span>
+          <strong>${escapeHtml(item.orderNo)}</strong>
+        </div>
+        <div class="result-item">
+          <span>卡密</span>
+          <strong>${escapeHtml(item.publicKey)}</strong>
+        </div>
+        <div class="result-item">
+          <span>商品</span>
+          <strong>${escapeHtml(item.productTitle)}</strong>
+        </div>
+        <div class="result-item">
+          <span>任务状态</span>
+          <strong>${escapeHtml(job.status || "-")}</strong>
+        </div>
+        <div class="result-item">
+          <span>重试次数</span>
+          <strong>${escapeHtml(job.attemptCount ?? 0)}</strong>
+        </div>
+        <div class="result-item">
+          <span>放弃剩余会员时间</span>
+          <strong>${item.abandonRemainingTime ? "是" : "否"}</strong>
+        </div>
+      </div>
+      ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
+      ${item.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(item.errorMessage)}</strong></div>` : ""}
+    </article>
+  `;
+}
+
+function renderBatchLookupResults(payload) {
+  const resultType = payload.items.some((item) => item.lookupKind === "order")
+    && payload.items.some((item) => item.lookupKind === "cdkey")
+    ? "混合"
+    : payload.items.some((item) => item.lookupKind === "cdkey")
+      ? "卡密"
+      : "订单";
   const summary = `
     <div class="result-card">
       <div class="result-title">批量查询结果</div>
@@ -158,7 +301,7 @@ function renderBatchOrderResults(payload) {
           <strong>${escapeHtml(payload.total)}</strong>
         </div>
         <div class="result-item">
-          <span>命中订单</span>
+          <span>命中结果</span>
           <strong>${escapeHtml(payload.found)}</strong>
         </div>
         <div class="result-item">
@@ -167,55 +310,20 @@ function renderBatchOrderResults(payload) {
         </div>
         <div class="result-item">
           <span>结果类型</span>
-          <strong>${payload.total > 1 ? "批量" : "单条"}</strong>
+          <strong>${resultType}</strong>
         </div>
       </div>
     </div>
   `;
 
-  const itemsHtml = payload.items.map((item) => {
-    const job = item.job || {};
-    const apiMessage = getApiMessage(job);
-    return `
-      <article class="batch-order-card">
-        <div class="batch-order-head">
-          <strong>${escapeHtml(item.orderNo)}</strong>
-          ${renderStatusBadge(item.status)}
-        </div>
-        <div class="result-grid">
-          <div class="result-item">
-            <span>卡密</span>
-            <strong>${escapeHtml(item.publicKey)}</strong>
-          </div>
-          <div class="result-item">
-            <span>商品</span>
-            <strong>${escapeHtml(item.productTitle)}</strong>
-          </div>
-          <div class="result-item">
-            <span>任务状态</span>
-            <strong>${escapeHtml(job.status || "-")}</strong>
-          </div>
-          <div class="result-item">
-            <span>重试次数</span>
-            <strong>${escapeHtml(job.attemptCount ?? 0)}</strong>
-          </div>
-          <div class="result-item">
-            <span>放弃剩余会员时间</span>
-            <strong>${item.abandonRemainingTime ? "是" : "否"}</strong>
-          </div>
-        </div>
-        ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
-        ${item.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(item.errorMessage)}</strong></div>` : ""}
-      </article>
-    `;
-  }).join("");
+  const itemsHtml = payload.items.map(renderBatchLookupItem).join("");
 
-  const missingHtml = payload.missingOrderNos?.length
+  const missingHtml = payload.missingIdentifiers?.length
     ? `
       <div class="result-card">
-        <div class="result-title">未找到的订单号</div>
+        <div class="result-title">未找到的订单号 / 卡密</div>
         <div class="missing-list">
-          ${payload.missingOrderNos.map((item) => `<code>${escapeHtml(item)}</code>`).join("")}
+          ${payload.missingIdentifiers.map((item) => `<code>${escapeHtml(item)}</code>`).join("")}
         </div>
       </div>
     `
@@ -301,26 +409,36 @@ redeemForm.addEventListener("submit", async (event) => {
 
 lookupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  setState(orderResult, "正在查询订单...");
+  setState(orderResult, "正在查询订单 / 卡密...");
 
   try {
-    const orderNos = parseOrderNos(orderNoInput.value);
-    if (!orderNos.length) {
-      setState(orderResult, "请先输入至少一个订单号。", "error");
+    const identifiers = parseLookupIdentifiers(orderNoInput.value);
+    if (!identifiers.length) {
+      setState(orderResult, "请先输入至少一个订单号或卡密。", "error");
       return;
     }
 
-    if (orderNos.length === 1) {
-      const payload = await request(`/api/public/orders/${orderNos[0]}`);
-      setRichState(orderResult, renderOrderResult(payload), "success");
-      return;
-    }
-
-    const payload = await request("/api/public/orders/batch", {
+    const payload = await request("/api/public/lookups/batch", {
       method: "POST",
-      body: JSON.stringify({ orderNos })
+      body: JSON.stringify({ identifiers })
     });
-    setRichState(orderResult, renderBatchOrderResults(payload), "success");
+
+    if (payload.total === 1) {
+      if (!payload.found) {
+        setState(orderResult, `未找到对应的订单或卡密：${identifiers[0]}`, "error");
+        return;
+      }
+
+      const item = payload.items[0];
+      setRichState(
+        orderResult,
+        item.lookupKind === "cdkey" ? renderCdkeyResult(item) : renderOrderResult(item),
+        "success"
+      );
+      return;
+    }
+
+    setRichState(orderResult, renderBatchLookupResults(payload), "success");
   } catch (error) {
     setState(orderResult, error.message, "error");
   }

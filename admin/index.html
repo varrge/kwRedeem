@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KaWang Admin Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="bg-grid"></div>
+
+    <main class="layout">
+      <header class="topbar">
+        <a class="brand" href="#">
+          <span class="brand-mark">K</span>
+          <span class="brand-copy">
+            <strong>KaWang Admin</strong>
+            <small>Ops Console</small>
+          </span>
+        </a>
+        <nav class="topnav">
+          <button class="nav-tab" data-tab="dashboard" type="button">仪表盘</button>
+          <button class="nav-tab" data-tab="sites" type="button">网站管理</button>
+          <button class="nav-tab" data-tab="cards" type="button">卡密管理</button>
+          <button class="nav-tab" data-tab="jobs" type="button">任务中心</button>
+          <button class="nav-tab" data-tab="logs" type="button">日志</button>
+          <button class="nav-tab" data-tab="system" type="button">系统更新</button>
+        </nav>
+      </header>
+
+      <section class="hero panel hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">KaWang Operations</p>
+          <h1>统一管理卡密、激活通道与任务队列</h1>
+          <p class="subtitle">
+            与前台保持同一套品牌视觉。登录后才能查看后台功能区，避免管理模块在未鉴权状态下直接暴露。
+          </p>
+          <div class="hero-tags">
+            <span>Secure Login</span>
+            <span>Batch Import</span>
+            <span>Retry Jobs</span>
+            <span>Audit Logs</span>
+          </div>
+        </div>
+        <div class="hero-side">
+          <div class="status-card">
+            <span class="status-label">Current Session</span>
+            <strong id="session-status">未登录</strong>
+            <p id="session-desc">请先使用管理员账号登录，登录成功后才会加载仪表盘和运营模块。</p>
+          </div>
+          <div class="action-row">
+            <button id="refresh-btn" class="ghost hidden" type="button">刷新数据</button>
+            <button id="logout-btn" class="ghost hidden" type="button">退出登录</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel login-panel" id="login-card">
+        <div class="section-heading">
+          <p class="eyebrow">Access Control</p>
+          <h2>登录后台</h2>
+        </div>
+        <form id="login-form" class="grid login-grid">
+          <label class="field">
+            <span>管理员账号</span>
+            <input id="username" placeholder="管理员账号" value="admin" />
+          </label>
+          <label class="field">
+            <span>管理员密码</span>
+            <input id="password" type="password" placeholder="管理员密码" />
+          </label>
+          <button type="submit">登录后台</button>
+        </form>
+        <div id="login-result" class="hint">请先登录后再进行管理操作。</div>
+      </section>
+
+      <div id="admin-shell" class="admin-shell hidden">
+        <section class="panel module-panel tab-panel" data-panel="dashboard">
+          <div class="section-heading">
+            <p class="eyebrow">Dashboard</p>
+            <h2>仪表盘</h2>
+          </div>
+          <section class="stats" id="stats"></section>
+          <div class="section-subpanel">
+            <h3>最近 5 条日志</h3>
+            <div id="dashboard-logs" class="table"></div>
+          </div>
+        </section>
+
+        <section class="panel module-panel tab-panel hidden" data-panel="sites">
+          <div class="section-heading">
+            <p class="eyebrow">Sites</p>
+            <h2>网站管理</h2>
+          </div>
+          <form id="site-form" class="grid two-columns">
+            <label class="field">
+              <span>载入预设</span>
+              <select id="site-preset">
+                <option value="">手动配置 / 选择预设</option>
+                <option value="oaifire">OAIFire（签名验证）</option>
+                <option value="redeemgpt">RedeemGPT（CDKEY 验证）</option>
+                <option value="niuniuai">NiuniuAI（cardCode 验证）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>站点状态</span>
+              <select id="site-status">
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>网站名称</span>
+              <input id="site-name" placeholder="例如 RedeemGPT" />
+            </label>
+            <label class="field">
+              <span>站点标识</span>
+              <input id="site-slug" placeholder="例如 redeemgpt" />
+            </label>
+            <label class="field">
+              <span>验证卡密 API</span>
+              <input id="site-verify-api-url" placeholder="https://example.com/api/verify" />
+            </label>
+            <label class="field">
+              <span>提交 Session API</span>
+              <input id="site-submit-api-url" placeholder="https://example.com/api/submit-session" />
+            </label>
+            <label class="field">
+              <span>验证方法</span>
+              <select id="site-verify-http-method">
+                <option value="POST">POST</option>
+                <option value="GET">GET</option>
+                <option value="PUT">PUT</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>提交方法</span>
+              <select id="site-submit-http-method">
+                <option value="POST">POST</option>
+                <option value="GET">GET</option>
+                <option value="PUT">PUT</option>
+              </select>
+            </label>
+            <fieldset class="field field-wide radio-field">
+              <legend>请求头类型</legend>
+              <div class="choice-group" id="site-auth-type-group">
+                <label class="choice-item">
+                  <input type="radio" name="site-auth-type" value="" checked />
+                  <span>无额外请求头</span>
+                </label>
+                <label class="choice-item">
+                  <input type="radio" name="site-auth-type" value="bearer" />
+                  <span>Bearer Token</span>
+                </label>
+                <label class="choice-item">
+                  <input type="radio" name="site-auth-type" value="header_json" />
+                  <span>自定义 Header JSON</span>
+                </label>
+                <label class="choice-item">
+                  <input type="radio" name="site-auth-type" value="oaifire_sign" />
+                  <span>OAIFire 签名头</span>
+                </label>
+              </div>
+            </fieldset>
+            <label class="field field-wide">
+              <span>请求头配置（可选）</span>
+              <textarea id="site-auth-config" rows="3" placeholder="Bearer 模式填 token；Header JSON 模式填 JSON；OAIFire 模式填签名盐值"></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>验证请求头模板</span>
+              <textarea id="site-verify-headers-template" rows="3" placeholder='例如 {"X-Trace-Id":"{{publicKey}}"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>验证请求体模板</span>
+              <textarea id="site-verify-body-template" rows="4" placeholder='例如 {"cdkey":"{{sourceKey}}"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>提交请求头模板</span>
+              <textarea id="site-submit-headers-template" rows="3" placeholder='例如 {"X-Channel":"kawang"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>提交请求体模板</span>
+              <textarea id="site-submit-body-template" rows="5" placeholder='例如 {"card":"{{sourceKey}}","session":{{sessionRaw}}}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>验证成功规则</span>
+              <textarea id="site-verify-success-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"true"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>验证失败规则</span>
+              <textarea id="site-verify-failure-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"false"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>提交成功规则</span>
+              <textarea id="site-submit-success-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"true"}'></textarea>
+            </label>
+            <label class="field field-wide">
+              <span>提交失败规则</span>
+              <textarea id="site-submit-failure-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"false"}'></textarea>
+            </label>
+            <label class="field">
+              <span>超时时间（秒）</span>
+              <input id="site-timeout-seconds" type="number" min="5" max="120" value="15" />
+            </label>
+            <label class="field">
+              <span>最大重试次数</span>
+              <input id="site-max-retries" type="number" min="1" max="10" value="3" />
+            </label>
+            <button type="submit">保存网站</button>
+          </form>
+          <div id="site-result" class="hint">这里维护的是外部网站的验证卡密 API 与提交 session API，用户前台始终只访问我们的 API。</div>
+          <div id="site-list" class="table"></div>
+        </section>
+
+        <section class="panel module-panel tab-panel hidden" data-panel="cards">
+          <div class="section-heading">
+            <p class="eyebrow">Card Keys</p>
+            <h2>卡密管理</h2>
+          </div>
+
+          <div class="split-grid">
+            <section class="section-subpanel">
+              <h3>单次添加卡密</h3>
+              <form id="single-cdkey-form" class="grid">
+                <label class="field">
+                  <span>原始卡密</span>
+                  <input id="single-source-key" placeholder="输入一条原始卡密" />
+                </label>
+                <label class="field">
+                  <span>归属网站</span>
+                  <select id="single-site"></select>
+                </label>
+                <label class="field">
+                  <span>混淆前缀</span>
+                  <input id="single-prefix" placeholder="例如 GPT" />
+                </label>
+                <label class="field">
+                  <span>备注（可选）</span>
+                  <input id="single-note" placeholder="补充说明" />
+                </label>
+                <button type="submit">添加卡密</button>
+              </form>
+              <div id="single-cdkey-result" class="hint">单次添加适合手动补卡、补单或临时分配场景。</div>
+            </section>
+
+            <section class="section-subpanel">
+              <h3>批量添加卡密</h3>
+              <form id="batch-form" class="grid">
+                <label class="field">
+                  <span>批次名称</span>
+                  <input id="batch-name" placeholder="批次名称" />
+                </label>
+                <label class="field">
+                  <span>归属网站</span>
+                  <select id="batch-site"></select>
+                </label>
+                <label class="field">
+                  <span>混淆前缀</span>
+                  <input id="batch-prefix" placeholder="例如 GPT" />
+                </label>
+                <label class="field field-wide">
+                  <span>原始卡密</span>
+                  <textarea id="batch-raw-keys" rows="8" placeholder="每行一条原始卡密"></textarea>
+                </label>
+                <label class="field field-wide">
+                  <span>批次说明</span>
+                  <textarea id="batch-note" rows="4" placeholder="批次说明（可选）"></textarea>
+                </label>
+                <button type="submit">批量导入卡密</button>
+              </form>
+              <div id="batch-result" class="hint">导入后会自动生成混淆后的 `publicKey`，用户前台只识别该混淆卡密。</div>
+            </section>
+          </div>
+
+          <div class="section-subpanel">
+            <h3>导入批次</h3>
+            <div id="batch-list" class="table"></div>
+          </div>
+
+          <div class="section-subpanel">
+            <div class="section-heading compact">
+              <h3>卡密列表与批量处理</h3>
+            </div>
+            <div class="toolbar">
+              <select id="cdkey-action">
+                <option value="enable">批量启用</option>
+                <option value="disable">批量禁用</option>
+                <option value="void">批量作废</option>
+                <option value="reset">重置为可用</option>
+              </select>
+              <button id="cdkey-action-btn" type="button">执行卡密批量操作</button>
+            </div>
+            <div id="cdkey-list" class="table"></div>
+          </div>
+        </section>
+
+        <section class="panel module-panel tab-panel hidden" data-panel="jobs">
+          <div class="section-heading">
+            <p class="eyebrow">Jobs</p>
+            <h2>任务中心</h2>
+          </div>
+          <div class="section-subpanel">
+            <h3>兑换订单</h3>
+            <div id="order-list" class="table"></div>
+          </div>
+          <div class="section-subpanel">
+            <div class="toolbar">
+              <h3>激活任务</h3>
+              <button id="retry-jobs-btn" type="button">重试已选任务</button>
+            </div>
+            <div id="job-list" class="table"></div>
+          </div>
+        </section>
+
+        <section class="panel module-panel tab-panel hidden" data-panel="logs">
+          <div class="section-heading">
+            <p class="eyebrow">Logs</p>
+            <h2>日志</h2>
+          </div>
+          <div class="section-subpanel">
+            <p class="hint">日志区会自动轮询刷新，便于实时观察导入、任务执行和后台操作。</p>
+            <div id="log-list" class="table"></div>
+          </div>
+        </section>
+
+        <section class="panel module-panel tab-panel hidden" data-panel="system">
+          <div class="section-heading">
+            <p class="eyebrow">System</p>
+            <h2>系统更新</h2>
+          </div>
+
+          <div class="section-subpanel">
+            <h3>版本信息</h3>
+            <section class="stats" id="system-version-cards"></section>
+            <div class="toolbar">
+              <button id="check-update-btn" type="button">检查更新</button>
+              <button id="start-update-btn" type="button">在线更新</button>
+            </div>
+            <p class="hint" id="system-update-hint">在线更新会执行固定脚本：备份数据库、拉取代码、安装依赖、初始化数据库并重启 PM2。</p>
+          </div>
+
+          <div class="section-subpanel">
+            <h3>更新日志</h3>
+            <pre id="system-update-log" class="log-panel">暂无更新日志。</pre>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

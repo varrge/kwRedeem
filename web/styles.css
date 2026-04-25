@@ -545,6 +545,10 @@ button:disabled {
   gap: 12px;
 }
 
+.result-card.compact-card {
+  gap: 10px;
+}
+
 .result-title {
   font-size: 16px;
   font-weight: 700;
@@ -554,17 +558,24 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  align-items: start;
+}
+
+.result-grid.compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
 }
 
 .result-item {
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(124, 145, 212, 0.12);
+  align-self: start;
 }
 
 .result-item-wide {
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .result-item span {
@@ -623,7 +634,7 @@ button:disabled {
 }
 
 .batch-order-card {
-  padding: 16px;
+  padding: 14px;
   border-radius: 18px;
   border: 1px solid rgba(124, 145, 212, 0.12);
   background: rgba(255, 255, 255, 0.03);

@@ -11,6 +11,22 @@ const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
 
 let verifiedKey = null;
+let redeemStatusTimer = null;
+
+const LIVE_STATUS_POLL_MS = 3000;
+const STATUS_LABELS = {
+  active: "可用",
+  locked: "锁定中",
+  used: "已使用",
+  disabled: "已禁用",
+  void: "已作废",
+  pending: "排队中",
+  processing: "处理中",
+  succeeded: "已成功",
+  failed: "失败",
+  cancelled: "已取消",
+  unknown: "未知"
+};
 
 function setState(element, message, type = "muted") {
   element.className = `result ${type}`;
@@ -31,9 +47,31 @@ function setRichState(element, html, type = "muted") {
   element.innerHTML = html;
 }
 
+function getStatusLabel(status) {
+  const normalized = String(status ?? "").trim().toLowerCase() || "unknown";
+  return STATUS_LABELS[normalized] || String(status ?? "未知");
+}
+
 function renderStatusBadge(status) {
-  const safeStatus = escapeHtml(status || "unknown");
-  return `<span class="status-badge ${safeStatus.toLowerCase()}">${safeStatus}</span>`;
+  const normalized = String(status ?? "").trim().toLowerCase() || "unknown";
+  return `<span class="status-badge ${escapeHtml(normalized)}">${escapeHtml(getStatusLabel(normalized))}</span>`;
+}
+
+function renderStatusText(status) {
+  return escapeHtml(getStatusLabel(status));
+}
+
+function stopRedeemStatusPolling() {
+  if (redeemStatusTimer) {
+    window.clearInterval(redeemStatusTimer);
+    redeemStatusTimer = null;
+  }
+}
+
+function shouldKeepPolling(order = {}) {
+  const orderStatus = String(order.status || "").toLowerCase();
+  const jobStatus = String(order.job?.status || "").toLowerCase();
+  return ["pending", "processing"].includes(orderStatus) || ["pending", "processing"].includes(jobStatus);
 }
 
 function getAbandonRemainingTime() {
@@ -66,7 +104,7 @@ function renderVerifyResult(payload) {
         </div>
         <div class="result-item">
           <span>当前状态</span>
-          <strong>${escapeHtml(payload.status)}</strong>
+          <strong>${renderStatusText(payload.status)}</strong>
         </div>
         <div class="result-item">
           <span>可兑换</span>
@@ -77,21 +115,41 @@ function renderVerifyResult(payload) {
   `;
 }
 
-function renderRedeemSuccess(orderNo) {
+function renderRedeemSuccess(payload) {
+  const liveStatus = payload.job?.status || payload.status || "processing";
+  const apiMessage = getApiMessage(payload.job || {});
+  const statusHint = {
+    pending: "任务已进入队列，等待系统处理。",
+    processing: "任务正在处理中，状态会自动刷新。",
+    succeeded: "任务已完成，无需手动刷新。",
+    failed: "任务处理失败，请根据错误信息或稍后重试。",
+    cancelled: "任务已取消。"
+  }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";
+
   return `
-    <div class="result-card">
+    <div class="result-card compact-card">
       <div class="result-title">任务已提交</div>
-      ${renderStatusBadge("processing")}
-      <div class="result-grid">
+      ${renderStatusBadge(liveStatus)}
+      <div class="result-grid compact-grid">
         <div class="result-item">
           <span>订单号</span>
-          <strong>${escapeHtml(orderNo)}</strong>
+          <strong>${escapeHtml(payload.orderNo)}</strong>
         </div>
         <div class="result-item">
-          <span>下一步</span>
-          <strong>可立即在下方查询执行进度</strong>
+          <span>实时任务状态</span>
+          <strong>${renderStatusText(liveStatus)}</strong>
+        </div>
+        <div class="result-item">
+          <span>处理说明</span>
+          <strong>${statusHint}</strong>
+        </div>
+        <div class="result-item">
+          <span>重试次数</span>
+          <strong>${escapeHtml(payload.job?.attemptCount ?? 0)}</strong>
         </div>
       </div>
+      ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
+      ${payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
     </div>
   `;
 }
@@ -101,10 +159,10 @@ function renderOrderResult(payload) {
   const apiMessage = getApiMessage(job);
   const title = payload.lookupType === "publicKey" ? "卡密关联订单" : "订单追踪结果";
   return `
-    <div class="result-card">
+    <div class="result-card compact-card">
       <div class="result-title">${title}</div>
       ${renderStatusBadge(payload.status)}
-      <div class="result-grid">
+      <div class="result-grid compact-grid">
         ${payload.lookupType === "publicKey" ? `
           <div class="result-item">
             <span>查询卡密</span>
@@ -125,7 +183,7 @@ function renderOrderResult(payload) {
         </div>
         <div class="result-item">
           <span>任务状态</span>
-          <strong>${escapeHtml(job.status || "-")}</strong>
+          <strong>${job.status ? renderStatusText(job.status) : "-"}</strong>
         </div>
         <div class="result-item">
           <span>重试次数</span>
@@ -142,7 +200,7 @@ function renderOrderResult(payload) {
         ${payload.cdkeyStatus ? `
           <div class="result-item">
             <span>卡密状态</span>
-            <strong>${escapeHtml(payload.cdkeyStatus)}</strong>
+            <strong>${renderStatusText(payload.cdkeyStatus)}</strong>
           </div>
         ` : ""}
       </div>
@@ -154,17 +212,17 @@ function renderOrderResult(payload) {
 
 function renderCdkeyResult(payload) {
   return `
-    <div class="result-card">
+    <div class="result-card compact-card">
       <div class="result-title">卡密查询结果</div>
       ${renderStatusBadge(payload.status)}
-      <div class="result-grid">
+      <div class="result-grid compact-grid">
         <div class="result-item">
           <span>卡密</span>
           <strong>${escapeHtml(payload.publicKey)}</strong>
         </div>
         <div class="result-item">
           <span>当前状态</span>
-          <strong>${escapeHtml(payload.status)}</strong>
+          <strong>${renderStatusText(payload.status)}</strong>
         </div>
         <div class="result-item">
           <span>商品</span>
@@ -223,7 +281,7 @@ function renderBatchLookupItem(item) {
           <strong>${headLabel}</strong>
           ${renderStatusBadge(item.status)}
         </div>
-        <div class="result-grid">
+        <div class="result-grid compact-grid">
           ${queryHint}
           <div class="result-item">
             <span>商品</span>
@@ -252,7 +310,7 @@ function renderBatchLookupItem(item) {
         <strong>${headLabel}</strong>
         ${renderStatusBadge(item.status)}
       </div>
-      <div class="result-grid">
+      <div class="result-grid compact-grid">
         ${queryHint}
         <div class="result-item">
           <span>订单号</span>
@@ -268,7 +326,7 @@ function renderBatchLookupItem(item) {
         </div>
         <div class="result-item">
           <span>任务状态</span>
-          <strong>${escapeHtml(job.status || "-")}</strong>
+          <strong>${job.status ? renderStatusText(job.status) : "-"}</strong>
         </div>
         <div class="result-item">
           <span>重试次数</span>
@@ -338,6 +396,22 @@ function renderBatchLookupResults(payload) {
   `;
 }
 
+async function refreshRedeemStatus(orderNo) {
+  const payload = await request(`/api/public/orders/${encodeURIComponent(orderNo)}`);
+  setRichState(redeemResult, renderRedeemSuccess(payload), "success");
+  if (!shouldKeepPolling(payload)) {
+    stopRedeemStatusPolling();
+  }
+  return payload;
+}
+
+function startRedeemStatusPolling(orderNo) {
+  stopRedeemStatusPolling();
+  redeemStatusTimer = window.setInterval(() => {
+    refreshRedeemStatus(orderNo).catch(() => {});
+  }, LIVE_STATUS_POLL_MS);
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -386,6 +460,7 @@ redeemForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  stopRedeemStatusPolling();
   setState(redeemResult, "正在提交兑换任务...");
 
   try {
@@ -401,7 +476,8 @@ redeemForm.addEventListener("submit", async (event) => {
     });
 
     orderNoInput.value = payload.orderNo;
-    setRichState(redeemResult, renderRedeemSuccess(payload.orderNo), "success");
+    await refreshRedeemStatus(payload.orderNo);
+    startRedeemStatusPolling(payload.orderNo);
   } catch (error) {
     setState(redeemResult, error.message, "error");
   }

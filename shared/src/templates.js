@@ -37,14 +37,33 @@ export function renderJsonTemplate(template, payload) {
   return JSON.parse(renderTemplateString(JSON.stringify(parsed), payload));
 }
 
+function valuesMatch(expected, actual) {
+  if (expected && typeof expected === "object") {
+    if (!actual || typeof actual !== "object") return false;
+
+    if (Array.isArray(expected)) {
+      if (!Array.isArray(actual) || actual.length < expected.length) return false;
+      return expected.every((item, index) => valuesMatch(item, actual[index]));
+    }
+
+    return Object.entries(expected).every(([key, value]) => valuesMatch(value, actual[key]));
+  }
+
+  return actual === expected;
+}
+
 export function evaluateRule(ruleJson, responseInfo) {
   if (!ruleJson) {
     return responseInfo.ok;
   }
 
   const rule = safeParseJson(ruleJson, null);
-  if (!rule || !rule.kind) {
+  if (!rule) {
     return responseInfo.ok;
+  }
+
+  if (!rule.kind) {
+    return valuesMatch(rule, responseInfo.json);
   }
 
   if (rule.kind === "http_status") {

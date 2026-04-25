@@ -361,6 +361,18 @@ button:hover:not(:disabled) {
   box-shadow: none;
 }
 
+.table-action {
+  width: auto;
+  min-width: 72px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.table-action:hover:not(:disabled) {
+  box-shadow: none;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

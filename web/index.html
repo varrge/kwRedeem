@@ -138,6 +138,19 @@
                 placeholder='例如 {"user":{"email":"demo@example.com"}}'
               ></textarea>
             </label>
+            <fieldset class="field radio-field">
+              <legend>是否放弃当前账号剩余会员时间（可选）</legend>
+              <div class="choice-group">
+                <label class="choice-item">
+                  <input type="radio" name="abandon-remaining-time" value="false" checked />
+                  <span>不放弃，保留当前账号剩余会员时间</span>
+                </label>
+                <label class="choice-item">
+                  <input type="radio" name="abandon-remaining-time" value="true" />
+                  <span>放弃剩余会员时间，按新激活规则提交</span>
+                </label>
+              </div>
+            </fieldset>
             <button type="submit" id="redeem-submit" disabled>Submit Mission</button>
           </form>
           <div id="redeem-result" class="result muted">卡密验证通过后才能提交。</div>

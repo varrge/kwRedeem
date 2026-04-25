@@ -36,6 +36,20 @@ function renderStatusBadge(status) {
   return `<span class="status-badge ${safeStatus.toLowerCase()}">${safeStatus}</span>`;
 }
 
+function getAbandonRemainingTime() {
+  return document.querySelector("input[name='abandon-remaining-time']:checked")?.value === "true";
+}
+
+function getApiMessage(job = {}) {
+  const response = job.lastResponse || {};
+  const json = response.json || {};
+  return json.msg
+    || json.message
+    || json.data?.msg
+    || json.data?.message
+    || "";
+}
+
 function renderVerifyResult(payload) {
   return `
     <div class="result-card">
@@ -84,6 +98,7 @@ function renderRedeemSuccess(orderNo) {
 
 function renderOrderResult(payload) {
   const job = payload.job || {};
+  const apiMessage = getApiMessage(job);
   return `
     <div class="result-card">
       <div class="result-title">订单追踪结果</div>
@@ -113,7 +128,12 @@ function renderOrderResult(payload) {
           <span>用户邮箱</span>
           <strong>${escapeHtml(payload.sessionPreview?.email || "-")}</strong>
         </div>
+        <div class="result-item">
+          <span>放弃剩余会员时间</span>
+          <strong>${payload.abandonRemainingTime ? "是" : "否"}</strong>
+        </div>
       </div>
+      ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
       ${payload.errorMessage ? `<div class="result-item"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
     </div>
   `;
@@ -155,6 +175,7 @@ function renderBatchOrderResults(payload) {
 
   const itemsHtml = payload.items.map((item) => {
     const job = item.job || {};
+    const apiMessage = getApiMessage(job);
     return `
       <article class="batch-order-card">
         <div class="batch-order-head">
@@ -178,7 +199,12 @@ function renderBatchOrderResults(payload) {
             <span>重试次数</span>
             <strong>${escapeHtml(job.attemptCount ?? 0)}</strong>
           </div>
+          <div class="result-item">
+            <span>放弃剩余会员时间</span>
+            <strong>${item.abandonRemainingTime ? "是" : "否"}</strong>
+          </div>
         </div>
+        ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
         ${item.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(item.errorMessage)}</strong></div>` : ""}
       </article>
     `;
@@ -256,11 +282,13 @@ redeemForm.addEventListener("submit", async (event) => {
 
   try {
     const sessionPayload = document.querySelector("#session-payload").value.trim();
+    const abandonRemainingTime = getAbandonRemainingTime();
     const payload = await request("/api/public/redeem", {
       method: "POST",
       body: JSON.stringify({
         publicKey: verifiedKey,
-        sessionPayload
+        sessionPayload,
+        abandonRemainingTime
       })
     });
 

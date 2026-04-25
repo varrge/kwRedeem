@@ -17,6 +17,7 @@ const SITE_PRESETS = {
     verifyBodyTemplate: '{"uniqueCode":"{{sourceKey}}"}',
     submitHeadersTemplate: "{}",
     submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
     verifySuccessRule: '{"kind":"json_path_equals","path":"status","value":"true"}',
     verifyFailureRule: '{"kind":"json_path_equals","path":"status","value":"false"}',
     submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -38,6 +39,7 @@ const SITE_PRESETS = {
     verifyBodyTemplate: '{"cdkey":"{{sourceKey}}"}',
     submitHeadersTemplate: "{}",
     submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
     verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
     verifyFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
     submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -59,6 +61,7 @@ const SITE_PRESETS = {
     verifyBodyTemplate: '{"cardCode":"{{sourceKey}}"}',
     submitHeadersTemplate: "{}",
     submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
     verifySuccessRule: '{"kind":"json_path_equals","path":"data.exists","value":"true"}',
     verifyFailureRule: '{"kind":"json_path_equals","path":"data.exists","value":"false"}',
     submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -97,6 +100,7 @@ const refs = {
   siteVerifyBodyTemplate: document.querySelector("#site-verify-body-template"),
   siteSubmitHeadersTemplate: document.querySelector("#site-submit-headers-template"),
   siteSubmitBodyTemplate: document.querySelector("#site-submit-body-template"),
+  siteAbandonSubmitBodyTemplate: document.querySelector("#site-abandon-submit-body-template"),
   siteVerifySuccessRule: document.querySelector("#site-verify-success-rule"),
   siteVerifyFailureRule: document.querySelector("#site-verify-failure-rule"),
   siteSubmitSuccessRule: document.querySelector("#site-submit-success-rule"),
@@ -129,6 +133,7 @@ const refs = {
 let autoRefreshTimer = null;
 let updatePollTimer = null;
 let currentTab = "dashboard";
+let currentEditingSiteId = null;
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -144,6 +149,15 @@ function clearToken() {
 
 function setHint(element, message) {
   element.textContent = message;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function renderStatus(value) {
@@ -179,6 +193,7 @@ function applySitePreset(presetKey) {
   const preset = SITE_PRESETS[presetKey];
   if (!preset) return;
 
+  currentEditingSiteId = null;
   refs.siteName.value = preset.name;
   refs.siteSlug.value = preset.slug;
   refs.siteVerifyApiUrl.value = preset.verifyApiUrl;
@@ -190,6 +205,7 @@ function applySitePreset(presetKey) {
   refs.siteVerifyBodyTemplate.value = preset.verifyBodyTemplate;
   refs.siteSubmitHeadersTemplate.value = preset.submitHeadersTemplate;
   refs.siteSubmitBodyTemplate.value = preset.submitBodyTemplate;
+  refs.siteAbandonSubmitBodyTemplate.value = preset.abandonSubmitBodyTemplate || preset.submitBodyTemplate;
   refs.siteVerifySuccessRule.value = preset.verifySuccessRule;
   refs.siteVerifyFailureRule.value = preset.verifyFailureRule;
   refs.siteSubmitSuccessRule.value = preset.submitSuccessRule;
@@ -199,6 +215,55 @@ function applySitePreset(presetKey) {
   refs.siteStatus.value = preset.status;
   setSelectedSiteAuthType(preset.authType);
   setHint(refs.siteResult, `已载入预设：${preset.name}。如需完整跑通，请补充提交 Session API 后再启用。`);
+}
+
+function resetSiteForm() {
+  currentEditingSiteId = null;
+  refs.siteForm.reset();
+  refs.sitePreset.value = "";
+  refs.siteVerifyHttpMethod.value = "POST";
+  refs.siteSubmitHttpMethod.value = "POST";
+  refs.siteStatus.value = "active";
+  refs.siteTimeoutSeconds.value = 15;
+  refs.siteMaxRetries.value = 3;
+  refs.siteVerifyHeadersTemplate.value = "{}";
+  refs.siteVerifyBodyTemplate.value = '{"card":"{{sourceKey}}"}';
+  refs.siteSubmitHeadersTemplate.value = "{}";
+  refs.siteSubmitBodyTemplate.value = '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
+  refs.siteAbandonSubmitBodyTemplate.value = '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
+  refs.siteVerifySuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
+  refs.siteVerifyFailureRule.value = "";
+  refs.siteSubmitSuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
+  refs.siteSubmitFailureRule.value = "";
+  setSelectedSiteAuthType("");
+}
+
+function editSite(site) {
+  currentEditingSiteId = site.id;
+  refs.sitePreset.value = "";
+  refs.siteName.value = site.name || "";
+  refs.siteSlug.value = site.slug || "";
+  refs.siteVerifyApiUrl.value = site.verify_api_url || "";
+  refs.siteSubmitApiUrl.value = site.submit_api_url || "";
+  refs.siteVerifyHttpMethod.value = site.verify_http_method || "POST";
+  refs.siteSubmitHttpMethod.value = site.submit_http_method || "POST";
+  refs.siteAuthConfig.value = site.auth_config || "";
+  refs.siteVerifyHeadersTemplate.value = site.verify_headers_template || "{}";
+  refs.siteVerifyBodyTemplate.value = site.verify_body_template || '{"card":"{{sourceKey}}"}';
+  refs.siteSubmitHeadersTemplate.value = site.submit_headers_template || "{}";
+  refs.siteSubmitBodyTemplate.value = site.submit_body_template || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
+  refs.siteAbandonSubmitBodyTemplate.value = site.abandon_submit_body_template || site.submit_body_template || "";
+  refs.siteVerifySuccessRule.value = site.verify_success_rule || "";
+  refs.siteVerifyFailureRule.value = site.verify_failure_rule || "";
+  refs.siteSubmitSuccessRule.value = site.submit_success_rule || "";
+  refs.siteSubmitFailureRule.value = site.submit_failure_rule || "";
+  refs.siteTimeoutSeconds.value = site.timeout_seconds || 15;
+  refs.siteMaxRetries.value = site.max_retries || 3;
+  refs.siteStatus.value = site.status || "active";
+  setSelectedSiteAuthType(site.auth_type || "");
+  switchTab("sites");
+  refs.siteName.focus();
+  setHint(refs.siteResult, `正在编辑网站：${site.name || site.slug}`);
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -331,6 +396,7 @@ async function refreshSites() {
   const payload = await api("/api/admin/sites");
   populateSiteSelects(payload.items);
   renderTable(refs.siteList, [
+    { label: "操作", render: (item) => `<button class="table-action edit-site-btn" type="button" data-site-id="${escapeHtml(item.id)}">编辑</button>` },
     { label: "网站名", render: (item) => item.name },
     { label: "标识", render: (item) => `<code>${item.slug}</code>` },
     { label: "验证 API", render: (item) => item.verify_api_url || "-" },
@@ -339,6 +405,12 @@ async function refreshSites() {
     { label: "验证模板", render: (item) => item.verify_body_template ? `<code>${item.verify_body_template}</code>` : "-" },
     { label: "状态", render: (item) => renderStatus(item.status) }
   ], payload.items, "暂无网站配置");
+  refs.siteList.querySelectorAll(".edit-site-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const site = payload.items.find((item) => item.id === button.dataset.siteId);
+      if (site) editSite(site);
+    });
+  });
 }
 
 async function refreshBatches() {
@@ -542,9 +614,11 @@ refs.loginForm.addEventListener("submit", async (event) => {
 refs.siteForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
+    const wasEditing = Boolean(currentEditingSiteId);
     await api("/api/admin/sites", {
       method: "POST",
       body: JSON.stringify({
+        id: currentEditingSiteId || undefined,
         name: document.querySelector("#site-name").value.trim(),
         slug: document.querySelector("#site-slug").value.trim(),
         verifyApiUrl: document.querySelector("#site-verify-api-url").value.trim(),
@@ -557,6 +631,7 @@ refs.siteForm.addEventListener("submit", async (event) => {
         verifyBodyTemplate: refs.siteVerifyBodyTemplate.value.trim() || '{"card":"{{sourceKey}}"}',
         submitHeadersTemplate: refs.siteSubmitHeadersTemplate.value.trim() || "{}",
         submitBodyTemplate: refs.siteSubmitBodyTemplate.value.trim() || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+        abandonSubmitBodyTemplate: refs.siteAbandonSubmitBodyTemplate.value.trim(),
         verifySuccessRule: refs.siteVerifySuccessRule.value.trim() || '{"kind":"json_path_equals","path":"success","value":"true"}',
         verifyFailureRule: refs.siteVerifyFailureRule.value.trim(),
         submitSuccessRule: refs.siteSubmitSuccessRule.value.trim() || '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -566,23 +641,8 @@ refs.siteForm.addEventListener("submit", async (event) => {
         status: refs.siteStatus.value
       })
     });
-    refs.siteForm.reset();
-    refs.sitePreset.value = "";
-    refs.siteVerifyHttpMethod.value = "POST";
-    refs.siteSubmitHttpMethod.value = "POST";
-    refs.siteStatus.value = "active";
-    refs.siteTimeoutSeconds.value = 15;
-    refs.siteMaxRetries.value = 3;
-    refs.siteVerifyHeadersTemplate.value = "{}";
-    refs.siteVerifyBodyTemplate.value = '{"card":"{{sourceKey}}"}';
-    refs.siteSubmitHeadersTemplate.value = "{}";
-    refs.siteSubmitBodyTemplate.value = '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
-    refs.siteVerifySuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
-    refs.siteVerifyFailureRule.value = "";
-    refs.siteSubmitSuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
-    refs.siteSubmitFailureRule.value = "";
-    setSelectedSiteAuthType("");
-    setHint(refs.siteResult, "网站保存成功。");
+    resetSiteForm();
+    setHint(refs.siteResult, wasEditing ? "网站更新成功。" : "网站保存成功。");
     await refreshAll();
   } catch (error) {
     setHint(refs.siteResult, error.message);
@@ -685,6 +745,7 @@ refs.logoutBtn.addEventListener("click", () => {
 
 switchTab(currentTab);
 updateSiteAuthConfigHint();
+resetSiteForm();
 
 if (getToken()) {
   setAuthState(true, "admin");

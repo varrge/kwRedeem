@@ -33,6 +33,8 @@ npm >= 10
 /www/wwwroot/KaWang
 ```
 
+下面命令默认使用这个目录。如果你的目录是小写或其他名字，例如 `/www/wwwroot/kawang`，后续所有命令都要替换成你的真实路径。Linux 路径区分大小写。
+
 如果从当前仓库上传，只需要上传：
 
 ```bash
@@ -64,15 +66,23 @@ cd /www/wwwroot/KaWang
 cp config/.env.example .env
 ```
 
+先确定 3 个真实线上地址。示例：
+
+```text
+前台：https://key.vsakura.top
+后台：https://adminkey.vsakura.top
+API：https://api.vsakura.top
+```
+
 编辑 `.env`：
 
 ```env
 NODE_ENV=production
 PORT=4300
 
-APP_URL=https://www.xxx.com
-ADMIN_URL=https://admin.xxx.com
-API_URL=https://api.xxx.com
+APP_URL=https://key.vsakura.top
+ADMIN_URL=https://adminkey.vsakura.top
+API_URL=https://api.vsakura.top
 
 DATABASE_PATH=./data/kawang.db
 WORKER_POLL_MS=5000
@@ -84,6 +94,14 @@ ADMIN_PASSWORD=replace-with-a-strong-password
 DEFAULT_REQUEST_TIMEOUT_MS=15000
 ```
 
+必须改掉这些默认值：
+
+- `APP_URL`：前台站点域名，必须带 `https://`，不要多写结尾 `/`
+- `ADMIN_URL`：后台站点域名，必须和浏览器访问后台的地址完全一致
+- `API_URL`：API 站点域名，必须和前后台代码里的 API 地址一致
+- `JWT_SECRET`：生产环境随机长字符串
+- `ADMIN_PASSWORD`：后台管理员强密码
+
 建议使用 3 个子域名：
 
 ```text
@@ -91,6 +109,14 @@ https://www.xxx.com      前台
 https://admin.xxx.com    后台
 https://api.xxx.com      API
 ```
+
+保存后先确认程序实际读到的值：
+
+```bash
+node -e "import('./shared/src/env.js').then(({env}) => console.log({appUrl: env.appUrl, adminUrl: env.adminUrl, apiUrl: env.apiUrl, adminUser: env.adminUsername, adminPassLen: env.adminPassword.length}))"
+```
+
+如果这里仍然显示 `127.0.0.1` 或 `change-this-password`，说明 `.env` 没有改对，先不要继续部署。
 
 ## 4. 安装依赖并初始化数据库
 
@@ -119,6 +145,13 @@ pm2 start worker/src/worker.js --name kawang-worker
 
 pm2 save
 pm2 startup
+```
+
+如果后续修改了 `.env`，必须使用 `--update-env` 重启，普通重启可能继续使用旧环境：
+
+```bash
+pm2 restart kawang-api --update-env
+pm2 restart kawang-worker --update-env
 ```
 
 检查进程：
@@ -165,6 +198,14 @@ location / {
 }
 ```
 
+宝塔默认配置里通常已经有一个 `location / { ... }`。不要再新增第二个 `location /`，否则会报：
+
+```text
+duplicate location "/" ...
+```
+
+正确做法是只保留一个 `location /`，把里面内容改成上面的 `try_files`。
+
 ### 后台站点
 
 宝塔添加网站：
@@ -181,6 +222,8 @@ location / {
     try_files $uri $uri/ /index.html;
 }
 ```
+
+同样只允许保留一个 `location /`。
 
 ### API 站点
 
@@ -202,6 +245,10 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
+
+API 站点也只能保留一个 `location /`。如果宝塔原配置里已经有 `location /`，就把原来的内容替换成上面的反向代理配置，不要额外粘贴一份。
+
+保存 Nginx 配置前，注意 `proxy_pass` 端口必须和 `.env` 里的 `PORT` 一致。本文默认都是 `4300`。
 
 ## 7. 配置 HTTPS
 
@@ -229,8 +276,8 @@ API_URL=https://api.xxx.com
 改完 `.env` 后重启服务：
 
 ```bash
-pm2 restart kawang-api
-pm2 restart kawang-worker
+pm2 restart kawang-api --update-env
+pm2 restart kawang-worker --update-env
 ```
 
 ## 8. 修改前后台 API 地址
@@ -256,6 +303,20 @@ https://api.xxx.com
 /www/wwwroot/KaWang/admin/app.js
 ```
 
+两个文件第一行通常是：
+
+```js
+const API_BASE = "http://127.0.0.1:4300";
+```
+
+生产环境必须改成你的 API 域名：
+
+```js
+const API_BASE = "https://api.vsakura.top";
+```
+
+改完静态 JS 后，浏览器可能缓存旧文件。后台登录仍然请求旧地址时，先强制刷新页面，或清浏览器缓存后重试。
+
 ## 9. 宝塔防火墙
 
 放行：
@@ -276,6 +337,28 @@ https://admin.xxx.com
 ```
 
 使用 `.env` 里的账号密码登录。
+
+登录前建议先在服务器验证一次 API、CORS 和账号密码：
+
+```bash
+curl -i -X POST https://api.xxx.com/api/admin/auth/login \
+  -H "Origin: https://admin.xxx.com" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"你的后台密码"}'
+```
+
+正常结果应该是：
+
+```text
+HTTP/2 200
+access-control-allow-origin: https://admin.xxx.com
+```
+
+并返回 `token`。如果返回 `401`，说明 `.env` 中 `ADMIN_USERNAME` 或 `ADMIN_PASSWORD` 和你输入的不一致。如果浏览器报 CORS，重点检查 `.env` 中的 `ADMIN_URL` 是否和后台真实域名完全一致，然后执行：
+
+```bash
+pm2 restart kawang-api --update-env
+```
 
 初始化顺序：
 

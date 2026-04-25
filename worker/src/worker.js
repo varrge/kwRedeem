@@ -51,12 +51,15 @@ function claimJob() {
 function buildRequestContext(job, order, cdkey, site, endpoint) {
   const sessionJson = JSON.parse(decryptText(order.session_payload));
   const sourceKey = decryptText(cdkey.source_key);
+  const jobPayload = safeParseJson(job.payload, {});
+  const abandonRemainingTime = Boolean(jobPayload.abandonRemainingTime || order.abandon_remaining_time);
   return {
     orderNo: order.order_no,
     publicKey: cdkey.public_key,
     sourceKey,
     session: sessionJson,
     sessionRaw: JSON.stringify(sessionJson),
+    abandonRemainingTime,
     endpointName: endpoint?.name || site?.name || "Unknown",
     siteName: site?.name || null,
     siteSlug: site?.slug || null
@@ -107,6 +110,7 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
     method: site.submit_http_method || "POST",
     headersTemplate: site.submit_headers_template || "{}",
     bodyTemplate: site.submit_body_template || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    abandonBodyTemplate: site.abandon_submit_body_template,
     authType: site.auth_type,
     authConfig: site.auth_config,
     successRule: site.submit_success_rule,
@@ -119,6 +123,7 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
     method: endpoint?.http_method || "POST",
     headersTemplate: endpoint?.headers_template || "{}",
     bodyTemplate: endpoint?.body_template || "{}",
+    abandonBodyTemplate: endpoint?.abandon_submit_body_template,
     authType: endpoint?.auth_type,
     authConfig: endpoint?.auth_config,
     successRule: endpoint?.success_rule,
@@ -138,8 +143,11 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   }
 
   const context = buildRequestContext(job, order, cdkey, site, endpoint);
+  const bodyTemplate = context.abandonRemainingTime && remoteConfig.abandonBodyTemplate
+    ? remoteConfig.abandonBodyTemplate
+    : remoteConfig.bodyTemplate;
   const renderedHeaders = renderJsonTemplate(remoteConfig.headersTemplate || "{}", context);
-  const renderedBody = renderJsonTemplate(remoteConfig.bodyTemplate || "{}", context);
+  const renderedBody = renderJsonTemplate(bodyTemplate || "{}", context);
   const headers = typeof renderedHeaders === "string"
     ? safeParseJson(renderedHeaders, {})
     : renderedHeaders;

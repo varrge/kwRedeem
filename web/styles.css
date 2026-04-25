@@ -386,6 +386,42 @@ textarea:focus {
   box-shadow: 0 0 0 4px rgba(88, 120, 255, 0.12);
 }
 
+.radio-field {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.radio-field legend {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.choice-group {
+  display: grid;
+  gap: 10px;
+}
+
+.choice-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(124, 145, 212, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dbe6ff;
+  cursor: pointer;
+}
+
+.choice-item input {
+  width: auto;
+  margin: 0;
+}
+
 button {
   background: linear-gradient(135deg, #5f8cff, #7550ff);
   color: white;

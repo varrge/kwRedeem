@@ -30,7 +30,7 @@ function upsertSite(db, site) {
       UPDATE sites
       SET name = ?, verify_api_url = ?, submit_api_url = ?, verify_http_method = ?, submit_http_method = ?,
           verify_headers_template = ?, verify_body_template = ?, submit_headers_template = ?, submit_body_template = ?,
-          auth_type = ?, auth_config = ?, verify_success_rule = ?, verify_failure_rule = ?,
+          abandon_submit_body_template = ?, auth_type = ?, auth_config = ?, verify_success_rule = ?, verify_failure_rule = ?,
           submit_success_rule = ?, submit_failure_rule = ?, timeout_seconds = ?, max_retries = ?,
           product_id = ?, activation_endpoint_id = ?, status = ?, updated_at = ?
       WHERE slug = ?
@@ -44,6 +44,7 @@ function upsertSite(db, site) {
       site.verifyBodyTemplate || "{}",
       site.submitHeadersTemplate || "{}",
       site.submitBodyTemplate || "{}",
+      site.abandonSubmitBodyTemplate || site.submitBodyTemplate || "{}",
       site.authType || null,
       site.authConfig || null,
       site.verifySuccessRule || null,
@@ -65,10 +66,10 @@ function upsertSite(db, site) {
     INSERT INTO sites (
       id, name, slug, verify_api_url, submit_api_url, verify_http_method, submit_http_method,
       verify_headers_template, verify_body_template, submit_headers_template, submit_body_template,
-      auth_type, auth_config, verify_success_rule, verify_failure_rule, submit_success_rule, submit_failure_rule,
+      abandon_submit_body_template, auth_type, auth_config, verify_success_rule, verify_failure_rule, submit_success_rule, submit_failure_rule,
       timeout_seconds, max_retries, product_id, activation_endpoint_id, status, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     site.id,
     site.name,
@@ -81,6 +82,7 @@ function upsertSite(db, site) {
     site.verifyBodyTemplate || "{}",
     site.submitHeadersTemplate || "{}",
     site.submitBodyTemplate || "{}",
+    site.abandonSubmitBodyTemplate || site.submitBodyTemplate || "{}",
     site.authType || null,
     site.authConfig || null,
     site.verifySuccessRule || null,
@@ -121,6 +123,7 @@ function createSchema(db) {
       http_method TEXT NOT NULL DEFAULT 'POST',
       headers_template TEXT,
       body_template TEXT,
+      abandon_submit_body_template TEXT,
       auth_type TEXT,
       auth_config TEXT,
       success_rule TEXT,
@@ -145,6 +148,7 @@ function createSchema(db) {
       verify_body_template TEXT,
       submit_headers_template TEXT,
       submit_body_template TEXT,
+      abandon_submit_body_template TEXT,
       auth_type TEXT,
       auth_config TEXT,
       verify_success_rule TEXT,
@@ -204,6 +208,7 @@ function createSchema(db) {
       session_payload TEXT NOT NULL,
       session_preview TEXT,
       customer_ip TEXT,
+      abandon_remaining_time INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending',
       latest_job_id TEXT,
       error_message TEXT,
@@ -248,7 +253,10 @@ function createSchema(db) {
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
+  ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");
+  ensureColumn(db, "activation_endpoints", "abandon_submit_body_template", "TEXT");
+  ensureColumn(db, "sites", "abandon_submit_body_template", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -317,6 +325,7 @@ function seedDefaults(db) {
       verifyBodyTemplate: '{"card":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
       submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+      abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
       authType: null,
       authConfig: null,
       verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -346,6 +355,7 @@ function seedDefaults(db) {
       verifyBodyTemplate: '{"uniqueCode":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
       submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+      abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
       authType: "oaifire_sign",
       authConfig: "ChatGPT#Plus@2026!",
       verifySuccessRule: '{"kind":"json_path_equals","path":"status","value":"true"}',
@@ -372,6 +382,7 @@ function seedDefaults(db) {
       verifyBodyTemplate: '{"cdkey":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
       submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+      abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
       authType: null,
       authConfig: null,
       verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
@@ -398,6 +409,7 @@ function seedDefaults(db) {
       verifyBodyTemplate: '{"cardCode":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
       submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+      abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
       authType: null,
       authConfig: null,
       verifySuccessRule: '{"kind":"json_path_equals","path":"data.exists","value":"true"}',

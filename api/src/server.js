@@ -324,6 +324,7 @@ function getOrderDetail(orderNo) {
     siteSlug: order.site_slug || null,
     status: order.status,
     errorMessage: order.error_message,
+    abandonRemainingTime: Boolean(order.abandon_remaining_time),
     sessionPreview: getJsonBodyOrNull(order.session_preview),
     createdAt: order.created_at,
     updatedAt: order.updated_at,
@@ -392,6 +393,7 @@ function ensureSiteLegacyResources(siteId, payload) {
     payload.submitHttpMethod,
     payload.submitHeadersTemplate || "{}",
     payload.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    payload.abandonSubmitBodyTemplate || payload.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
     payload.authType || null,
     payload.authConfig || null,
     payload.submitSuccessRule || null,
@@ -407,7 +409,7 @@ function ensureSiteLegacyResources(siteId, payload) {
     db.prepare(`
       UPDATE activation_endpoints
       SET name = ?, endpoint_type = ?, submit_url = ?, query_url = ?, http_method = ?,
-          headers_template = ?, body_template = ?, auth_type = ?, auth_config = ?,
+          headers_template = ?, body_template = ?, abandon_submit_body_template = ?, auth_type = ?, auth_config = ?,
           success_rule = ?, failure_rule = ?, polling_enabled = ?, timeout_seconds = ?,
           max_retries = ?, status = ?, updated_at = ?
       WHERE id = ?
@@ -416,10 +418,10 @@ function ensureSiteLegacyResources(siteId, payload) {
     db.prepare(`
       INSERT INTO activation_endpoints (
         id, name, endpoint_type, submit_url, query_url, http_method, headers_template, body_template,
-        auth_type, auth_config, success_rule, failure_rule, polling_enabled, timeout_seconds,
+        abandon_submit_body_template, auth_type, auth_config, success_rule, failure_rule, polling_enabled, timeout_seconds,
         max_retries, status, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(endpointId, ...endpointValues, now);
   }
 
@@ -664,7 +666,8 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
 app.post("/api/public/redeem", async (request, reply) => {
   const schema = z.object({
     publicKey: z.string().min(6),
-    sessionPayload: z.string().min(2)
+    sessionPayload: z.string().min(2),
+    abandonRemainingTime: z.boolean().optional().default(false)
   });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
@@ -713,10 +716,10 @@ app.post("/api/public/redeem", async (request, reply) => {
       db.prepare(`
         INSERT INTO redeem_orders (
           id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id, site_id,
-          session_payload, session_preview, customer_ip, status, latest_job_id,
+          session_payload, session_preview, customer_ip, abandon_remaining_time, status, latest_job_id,
           error_message, completed_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
       `).run(
         orderId,
         orderNo,
@@ -728,6 +731,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         encryptText(JSON.stringify(session.parsed)),
         JSON.stringify(session.preview),
         request.ip,
+        parsed.data.abandonRemainingTime ? 1 : 0,
         orderStatuses.processing,
         jobId,
         now,
@@ -753,6 +757,7 @@ app.post("/api/public/redeem", async (request, reply) => {
           orderNo,
           publicKey,
           siteId: site.id,
+          abandonRemainingTime: parsed.data.abandonRemainingTime,
           session: session.parsed
         }),
         site.max_retries || 3,
@@ -772,7 +777,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         actor: "public",
         resourceType: "redeem_order",
         resourceId: orderId,
-        detail: { publicKey, orderNo }
+        detail: { publicKey, orderNo, abandonRemainingTime: parsed.data.abandonRemainingTime }
       });
 
       return { orderNo };
@@ -985,6 +990,7 @@ app.post("/api/admin/sites", { preHandler: requireAdmin }, async (request, reply
     verifyBodyTemplate: z.string().optional().default('{"card":"{{sourceKey}}"}'),
     submitHeadersTemplate: z.string().optional().default("{}"),
     submitBodyTemplate: z.string().optional().default('{"card":"{{sourceKey}}","session":{{sessionRaw}}}'),
+    abandonSubmitBodyTemplate: z.string().optional().default(""),
     authType: z.string().optional().default(""),
     authConfig: z.string().optional().default(""),
     verifySuccessRule: z.string().optional().default('{"kind":"json_path_equals","path":"success","value":"true"}'),
@@ -1025,6 +1031,7 @@ app.post("/api/admin/sites", { preHandler: requireAdmin }, async (request, reply
     parsed.data.verifyBodyTemplate || '{"card":"{{sourceKey}}"}',
     parsed.data.submitHeadersTemplate || "{}",
     parsed.data.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+    parsed.data.abandonSubmitBodyTemplate || parsed.data.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
     parsed.data.authType || null,
     parsed.data.authConfig || null,
     parsed.data.verifySuccessRule || null,
@@ -1045,7 +1052,7 @@ app.post("/api/admin/sites", { preHandler: requireAdmin }, async (request, reply
       SET name = ?, slug = ?, verify_api_url = ?, submit_api_url = ?,
           verify_http_method = ?, submit_http_method = ?,
           verify_headers_template = ?, verify_body_template = ?,
-          submit_headers_template = ?, submit_body_template = ?,
+          submit_headers_template = ?, submit_body_template = ?, abandon_submit_body_template = ?,
           auth_type = ?, auth_config = ?,
           verify_success_rule = ?, verify_failure_rule = ?,
           submit_success_rule = ?, submit_failure_rule = ?,
@@ -1059,14 +1066,14 @@ app.post("/api/admin/sites", { preHandler: requireAdmin }, async (request, reply
         id, name, slug, verify_api_url, submit_api_url,
         verify_http_method, submit_http_method,
         verify_headers_template, verify_body_template,
-        submit_headers_template, submit_body_template,
+        submit_headers_template, submit_body_template, abandon_submit_body_template,
         auth_type, auth_config,
         verify_success_rule, verify_failure_rule,
         submit_success_rule, submit_failure_rule,
         timeout_seconds, max_retries, product_id, activation_endpoint_id,
         status, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, ...values.slice(0, -1), now, now);
   }
 
@@ -1174,6 +1181,7 @@ app.post("/api/admin/endpoints", { preHandler: requireAdmin }, async (request, r
     httpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
     headersTemplate: z.string().optional().default(""),
     bodyTemplate: z.string().optional().default(""),
+    abandonSubmitBodyTemplate: z.string().optional().default(""),
     authType: z.string().optional().default(""),
     authConfig: z.string().optional().default(""),
     successRule: z.string().optional().default(""),
@@ -1200,6 +1208,7 @@ app.post("/api/admin/endpoints", { preHandler: requireAdmin }, async (request, r
     parsed.data.httpMethod,
     parsed.data.headersTemplate || null,
     parsed.data.bodyTemplate || null,
+    parsed.data.abandonSubmitBodyTemplate || parsed.data.bodyTemplate || null,
     parsed.data.authType || null,
     parsed.data.authConfig || null,
     parsed.data.successRule || null,
@@ -1215,7 +1224,7 @@ app.post("/api/admin/endpoints", { preHandler: requireAdmin }, async (request, r
     db.prepare(`
       UPDATE activation_endpoints
       SET name = ?, endpoint_type = ?, submit_url = ?, query_url = ?, http_method = ?,
-          headers_template = ?, body_template = ?, auth_type = ?, auth_config = ?,
+          headers_template = ?, body_template = ?, abandon_submit_body_template = ?, auth_type = ?, auth_config = ?,
           success_rule = ?, failure_rule = ?, polling_enabled = ?, timeout_seconds = ?,
           max_retries = ?, status = ?, updated_at = ?
       WHERE id = ?
@@ -1224,10 +1233,10 @@ app.post("/api/admin/endpoints", { preHandler: requireAdmin }, async (request, r
     db.prepare(`
       INSERT INTO activation_endpoints (
         id, name, endpoint_type, submit_url, query_url, http_method, headers_template, body_template,
-        auth_type, auth_config, success_rule, failure_rule, polling_enabled, timeout_seconds,
+        abandon_submit_body_template, auth_type, auth_config, success_rule, failure_rule, polling_enabled, timeout_seconds,
         max_retries, status, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, ...values, now);
   }
 

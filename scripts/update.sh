@@ -87,6 +87,9 @@ npm install
 log "初始化或迁移数据库..."
 npm run db:init
 
+log "生成前后台运行时配置..."
+npm run config:runtime
+
 log "重启 Worker..."
 pm2 restart kawang-worker
 

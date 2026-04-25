@@ -11,6 +11,7 @@
     "db:init": "node api/src/init-db.js",
     "dev:api": "node api/src/server.js",
     "dev:worker": "node worker/src/worker.js",
+    "config:runtime": "node scripts/generate-runtime-config.js",
     "serve:web": "node scripts/static-server.js web 4173",
     "serve:admin": "node scripts/static-server.js admin 4174",
     "start:api": "node api/src/server.js",

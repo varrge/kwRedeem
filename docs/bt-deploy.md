@@ -282,7 +282,7 @@ pm2 restart kawang-worker --update-env
 
 ## 8. 确认前后台 API 地址
 
-前台和后台会通过静态服务生成的 `runtime-config.js` 读取 `.env` 里的 `API_URL`，不要再手动修改 `web/app.js` 或 `admin/app.js`。
+前台和后台会通过 `runtime-config.js` 读取 `.env` 里的 `API_URL`，不要再手动修改 `web/app.js` 或 `admin/app.js`。
 
 需要确认 `.env` 中已经配置真实 API 域名：
 
@@ -290,7 +290,14 @@ pm2 restart kawang-worker --update-env
 API_URL=https://api.xxx.com
 ```
 
-改完 `.env` 后，需要重启前后台静态服务，让 `runtime-config.js` 重新读取配置。浏览器中可直接访问以下地址确认返回值：
+如果是宝塔/Nginx 直接托管 `web/` 和 `admin/` 静态目录，改完 `.env` 后需要重新生成运行时配置：
+
+```bash
+cd /www/wwwroot/KaWang
+npm run config:runtime
+```
+
+浏览器中可直接访问以下地址确认返回值：
 
 ```text
 https://www.xxx.com/runtime-config.js
@@ -303,7 +310,7 @@ https://admin.xxx.com/runtime-config.js
 window.KAWANG_CONFIG = Object.freeze({"apiUrl":"https://api.xxx.com"});
 ```
 
-如果页面仍然请求旧地址，先确认静态服务已重启，再强制刷新页面或清浏览器缓存后重试。
+如果页面仍然请求旧地址，先确认 `runtime-config.js` 已重新生成，再强制刷新页面或清浏览器缓存后重试。
 
 ## 9. 宝塔防火墙
 
@@ -414,8 +421,9 @@ bash scripts/update.sh
 6. `git pull --ff-only`
 7. `npm install`
 8. `npm run db:init`
-9. `pm2 restart kawang-worker`
-10. `pm2 restart kawang-api`
+9. `npm run config:runtime`
+10. `pm2 restart kawang-worker`
+11. `pm2 restart kawang-api`
 
 如果线上曾手动修改过 `web/app.js`、`admin/app.js` 等已纳入 Git 的文件，在线更新会先执行 `git stash push` 保存这些本地改动，再继续拉取远端代码，避免出现 `Your local changes would be overwritten by merge` 后中止。更新日志会记录 stash 名称，后续可用 `git stash list` 查看。
 

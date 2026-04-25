@@ -25,6 +25,7 @@ KaWang 是一个独立的卡密兑换项目，覆盖以下能力：
 cd other/KaWang
 cp config/.env.example .env
 npm install
+npm run config:runtime
 npm run db:init
 npm run start:api
 ```

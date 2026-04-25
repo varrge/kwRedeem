@@ -280,42 +280,30 @@ pm2 restart kawang-api --update-env
 pm2 restart kawang-worker --update-env
 ```
 
-## 8. 修改前后台 API 地址
+## 8. 确认前后台 API 地址
 
-如果 `web/app.js` 或 `admin/app.js` 中仍然写着：
+前台和后台会通过静态服务生成的 `runtime-config.js` 读取 `.env` 里的 `API_URL`，不要再手动修改 `web/app.js` 或 `admin/app.js`。
 
-```js
-http://127.0.0.1:4300
+需要确认 `.env` 中已经配置真实 API 域名：
+
+```env
+API_URL=https://api.xxx.com
 ```
 
-部署外网时需要改成：
-
-```js
-https://api.xxx.com
-```
-
-否则用户浏览器会访问自己电脑的 `127.0.0.1:4300`，前后台接口会不通。
-
-需要检查：
+改完 `.env` 后，需要重启前后台静态服务，让 `runtime-config.js` 重新读取配置。浏览器中可直接访问以下地址确认返回值：
 
 ```text
-/www/wwwroot/KaWang/web/app.js
-/www/wwwroot/KaWang/admin/app.js
+https://www.xxx.com/runtime-config.js
+https://admin.xxx.com/runtime-config.js
 ```
 
-两个文件第一行通常是：
+内容应包含你的 API 域名，例如：
 
 ```js
-const API_BASE = "http://127.0.0.1:4300";
+window.KAWANG_CONFIG = Object.freeze({"apiUrl":"https://api.xxx.com"});
 ```
 
-生产环境必须改成你的 API 域名：
-
-```js
-const API_BASE = "https://api.vsakura.top";
-```
-
-改完静态 JS 后，浏览器可能缓存旧文件。后台登录仍然请求旧地址时，先强制刷新页面，或清浏览器缓存后重试。
+如果页面仍然请求旧地址，先确认静态服务已重启，再强制刷新页面或清浏览器缓存后重试。
 
 ## 9. 宝塔防火墙
 
@@ -624,7 +612,7 @@ curl https://api.xxx.com/healthz
 
 如果前后台页面能打开，但接口不通，重点检查：
 
-- `web/app.js` 和 `admin/app.js` 的 API 地址是否还是 `127.0.0.1`
+- `https://www.xxx.com/runtime-config.js` 和 `https://admin.xxx.com/runtime-config.js` 是否返回正确的 `API_URL`
 - `.env` 中 `APP_URL`、`ADMIN_URL`、`API_URL` 是否为真实 HTTPS 域名
 - 宝塔 API 站点是否正确反代到 `127.0.0.1:4300`
 - PM2 中 `kawang-api` 是否在线

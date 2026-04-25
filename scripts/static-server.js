@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
+import { env } from "../shared/src/env.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,7 @@ if (!targetDirArg) {
 }
 
 const rootDir = path.resolve(projectRoot, targetDirArg);
+const runtimeConfigPath = "/runtime-config.js";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -39,9 +41,25 @@ function sendFile(response, filePath) {
   fs.createReadStream(filePath).pipe(response);
 }
 
+function sendRuntimeConfig(response) {
+  const config = {
+    apiUrl: env.apiUrl
+  };
+  const payload = JSON.stringify(config).replaceAll("<", "\\u003c");
+
+  response.writeHead(200, {
+    "Content-Type": "application/javascript; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  response.end(`window.KAWANG_CONFIG = Object.freeze(${payload});\n`);
+}
+
+function getUrlPath(requestUrl) {
+  return decodeURIComponent((requestUrl || "/").split("?")[0]);
+}
+
 function resolveFilePath(urlPath) {
-  const cleanPath = decodeURIComponent(urlPath.split("?")[0]);
-  const relativePath = cleanPath === "/" ? "/index.html" : cleanPath;
+  const relativePath = urlPath === "/" ? "/index.html" : urlPath;
   const absolutePath = path.resolve(rootDir, `.${relativePath}`);
 
   if (!absolutePath.startsWith(rootDir)) {
@@ -57,7 +75,14 @@ function resolveFilePath(urlPath) {
 }
 
 const server = http.createServer((request, response) => {
-  const filePath = resolveFilePath(request.url || "/");
+  const urlPath = getUrlPath(request.url);
+
+  if (urlPath === runtimeConfigPath) {
+    sendRuntimeConfig(response);
+    return;
+  }
+
+  const filePath = resolveFilePath(urlPath);
   if (!filePath) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Not Found");

@@ -1,4 +1,4 @@
-const API_BASE = "http://127.0.0.1:4300";
+const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
 const TOKEN_KEY = "kawang_admin_token";
 const REFRESH_INTERVAL_MS = 5000;
 const UPDATE_POLL_INTERVAL_MS = 3000;

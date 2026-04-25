@@ -1,4 +1,4 @@
-const API_BASE = "http://127.0.0.1:4300";
+const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
 
 const verifyForm = document.querySelector("#verify-form");
 const verifyResult = document.querySelector("#verify-result");

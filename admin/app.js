@@ -479,10 +479,13 @@ function shortCommit(value) {
 function renderSystemInfo(payload) {
   const state = payload.updateState || {};
   const isBusy = ["running", "checking"].includes(state.status);
+  const localChanges = payload.localChanges || state.localChanges || [];
+  const hasLocalChanges = payload.hasLocalChanges || state.hasLocalChanges || localChanges.length > 0;
   const cards = [
     ["当前分支", payload.branch || state.branch || "-"],
     ["本地版本", shortCommit(payload.localCommit || state.localCommit)],
     ["远端版本", shortCommit(payload.remoteCommit || state.remoteCommit)],
+    ["本地改动", hasLocalChanges ? `${localChanges.length || ""} 个` : "无"],
     ["更新状态", state.status || "idle"],
     ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "暂无更新"],
     ["运行环境", payload.nodeEnv || "-"]
@@ -497,6 +500,8 @@ function renderSystemInfo(payload) {
 
   refs.systemUpdateHint.textContent = state.error
     ? `更新异常：${state.error}`
+    : hasLocalChanges
+      ? `检测到本地改动，在线更新会先自动暂存到 Git stash：${localChanges.slice(0, 3).join("，")}${localChanges.length > 3 ? "..." : ""}`
     : `最后状态：${state.status || "idle"}${state.endedAt ? `，结束时间：${state.endedAt}` : ""}`;
   refs.systemUpdateLog.textContent = payload.log || "暂无更新日志。";
   refs.checkUpdateBtn.disabled = isBusy;

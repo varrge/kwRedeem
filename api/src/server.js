@@ -91,6 +91,8 @@ async function getGitVersionInfo(fetchRemote = false) {
   const branch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"]);
   const localCommit = await runGit(["rev-parse", "HEAD"]);
   const upstream = await runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).catch(() => "");
+  const localChangesText = await runGit(["status", "--porcelain"]).catch(() => "");
+  const localChanges = localChangesText.split("\n").filter(Boolean);
 
   if (fetchRemote) {
     try {
@@ -102,7 +104,9 @@ async function getGitVersionInfo(fetchRemote = false) {
         upstream,
         localCommit,
         remoteCommit: null,
-        hasUpdate: false
+        hasUpdate: false,
+        hasLocalChanges: localChanges.length > 0,
+        localChanges
       };
       throw error;
     }
@@ -116,7 +120,9 @@ async function getGitVersionInfo(fetchRemote = false) {
     upstream,
     localCommit,
     remoteCommit,
-    hasUpdate: Boolean(remoteCommit && remoteCommit !== localCommit)
+    hasUpdate: Boolean(remoteCommit && remoteCommit !== localCommit),
+    hasLocalChanges: localChanges.length > 0,
+    localChanges
   };
 }
 
@@ -900,6 +906,9 @@ app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async (
       hasUpdate: version.hasUpdate,
       error: null
     });
+    if (version.hasLocalChanges) {
+      appendUpdateLog(`检测到本地改动：${version.localChanges.join(", ")}`);
+    }
     appendUpdateLog(version.hasUpdate ? "发现可用更新" : "当前已是最新版本");
 
     return {
@@ -927,6 +936,8 @@ app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async (
       localCommit: partial.localCommit ?? null,
       remoteCommit: partial.remoteCommit ?? null,
       hasUpdate: partial.hasUpdate ?? false,
+      hasLocalChanges: partial.hasLocalChanges ?? false,
+      localChanges: partial.localChanges ?? [],
       message: error.message,
       updateState,
       log: readUpdateLog()

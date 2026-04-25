@@ -410,11 +410,14 @@ bash scripts/update.sh
 2. 备份 `data/kawang.db`
 3. 备份 `data/kawang.db-wal` 和 `data/kawang.db-shm`
 4. `git fetch --prune`
-5. `git pull --ff-only`
-6. `npm install`
-7. `npm run db:init`
-8. `pm2 restart kawang-worker`
-9. `pm2 restart kawang-api`
+5. 如果存在本地代码改动，自动暂存到 Git stash
+6. `git pull --ff-only`
+7. `npm install`
+8. `npm run db:init`
+9. `pm2 restart kawang-worker`
+10. `pm2 restart kawang-api`
+
+如果线上曾手动修改过 `web/app.js`、`admin/app.js` 等已纳入 Git 的文件，在线更新会先执行 `git stash push` 保存这些本地改动，再继续拉取远端代码，避免出现 `Your local changes would be overwritten by merge` 后中止。更新日志会记录 stash 名称，后续可用 `git stash list` 查看。
 
 ### 备份目录
 
@@ -481,6 +484,7 @@ cd /www/wwwroot/KaWang
 git status
 git branch -vv
 git remote -v
+git stash list
 ```
 
 如果 `npm install` 失败，检查 Node 版本：

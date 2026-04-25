@@ -69,6 +69,14 @@ REMOTE_COMMIT="$(git rev-parse "$UPSTREAM")"
 if [ "$LOCAL_COMMIT" = "$REMOTE_COMMIT" ]; then
   log "当前已是最新版本：$LOCAL_COMMIT"
 else
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    STASH_MESSAGE="kawang-online-update-$STAMP"
+    log "检测到本地代码改动，更新前自动暂存到 Git stash：$STASH_MESSAGE"
+    git status --short
+    git stash push -m "$STASH_MESSAGE"
+    log "本地改动已暂存。更新完成后如需查看：git stash list；如需恢复：git stash pop"
+  fi
+
   log "更新代码：$LOCAL_COMMIT -> $REMOTE_COMMIT"
   git pull --ff-only
 fi

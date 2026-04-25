@@ -1045,24 +1045,18 @@ app.post("/api/admin/sites/:id/health-check", { preHandler: requireAdmin }, asyn
 
   async function pingUrl(url) {
     if (!url) return { ok: false, status: 0, latencyMs: 0, skipped: true };
+    const methods = ["HEAD", "OPTIONS", "GET"];
     const start = Date.now();
-    try {
-      const response = await fetch(url, {
-        method: "HEAD",
-        signal: AbortSignal.timeout(10000)
-      });
-      return { ok: response.ok, status: response.status, latencyMs: Date.now() - start, skipped: false };
-    } catch (error) {
+    for (const method of methods) {
       try {
-        const response = await fetch(url, {
-          method: "GET",
-          signal: AbortSignal.timeout(10000)
-        });
-        return { ok: response.ok, status: response.status, latencyMs: Date.now() - start, skipped: false };
-      } catch (fallbackError) {
-        return { ok: false, status: 0, latencyMs: Date.now() - start, skipped: false, error: fallbackError.message };
+        const response = await fetch(url, { method, signal: AbortSignal.timeout(10000) });
+        if (response.status === 405) continue;
+        return { ok: response.status < 500, status: response.status, latencyMs: Date.now() - start, skipped: false };
+      } catch {
+        return { ok: false, status: 0, latencyMs: Date.now() - start, skipped: false, error: "不可达" };
       }
     }
+    return { ok: false, status: 405, latencyMs: Date.now() - start, skipped: false, error: "所有方法均返回 405" };
   }
 
   const [verify, submit] = await Promise.all([

@@ -30,6 +30,8 @@ export const endpointTypes = {
 export const logActions = {
   login: "admin.login",
   siteUpsert: "site.upsert",
+  siteToggleStatus: "site.toggle_status",
+  siteHealthCheck: "site.health_check",
   batchImport: "cdkey.batch_import",
   cdkeySingleCreate: "cdkey.single_create",
   cdkeyBulk: "cdkey.bulk_action",

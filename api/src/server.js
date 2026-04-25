@@ -988,118 +988,102 @@ app.get("/api/admin/sites", { preHandler: requireAdmin }, async () => {
   return { items };
 });
 
-app.post("/api/admin/sites", { preHandler: requireAdmin }, async (request, reply) => {
+app.patch("/api/admin/sites/:id/status", { preHandler: requireAdmin }, async (request, reply) => {
   const schema = z.object({
-    id: z.string().optional(),
-    name: z.string().min(2),
-    slug: z.string().min(2),
-    verifyApiUrl: z.string().url().optional().or(z.literal("")).default(""),
-    submitApiUrl: z.string().url().optional().or(z.literal("")).default(""),
-    verifyHttpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
-    submitHttpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
-    verifyHeadersTemplate: z.string().optional().default("{}"),
-    verifyBodyTemplate: z.string().optional().default('{"card":"{{sourceKey}}"}'),
-    submitHeadersTemplate: z.string().optional().default("{}"),
-    submitBodyTemplate: z.string().optional().default('{"card":"{{sourceKey}}","session":{{sessionRaw}}}'),
-    abandonSubmitBodyTemplate: z.string().optional().default(""),
-    authType: z.string().optional().default(""),
-    authConfig: z.string().optional().default(""),
-    verifySuccessRule: z.string().optional().default('{"kind":"json_path_equals","path":"success","value":"true"}'),
-    verifyFailureRule: z.string().optional().default(""),
-    submitSuccessRule: z.string().optional().default('{"kind":"json_path_equals","path":"success","value":"true"}'),
-    submitFailureRule: z.string().optional().default(""),
-    timeoutSeconds: z.number().int().min(5).max(120).default(15),
-    maxRetries: z.number().int().min(1).max(10).default(3),
-    status: z.enum(["active", "disabled"]).default("active")
+    status: z.enum(["active", "disabled"])
   });
 
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
-    return reply.code(400).send({
-      message: "网站参数不正确",
-      detail: parsed.error.flatten()
-    });
+    return reply.code(400).send({ message: "状态参数不正确，仅支持 active / disabled" });
+  }
+
+  const site = getSiteById(request.params.id);
+  if (!site) {
+    return reply.code(404).send({ message: "站点不存在" });
   }
 
   const now = nowIso();
-  const normalizedSlug = parsed.data.slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
-  const existingBySlug = db.prepare("SELECT * FROM sites WHERE slug = ?").get(normalizedSlug);
-  const id = parsed.data.id || existingBySlug?.id || nanoid(16);
-  const resources = ensureSiteLegacyResources(id, {
-    ...parsed.data,
-    slug: normalizedSlug
+  db.prepare("UPDATE sites SET status = ?, updated_at = ? WHERE id = ?")
+    .run(parsed.data.status, now, site.id);
+
+  ensureSiteLegacyResources(site.id, {
+    ...site,
+    name: site.name,
+    slug: site.slug,
+    submitApiUrl: site.submit_api_url,
+    submitHttpMethod: site.submit_http_method,
+    submitHeadersTemplate: site.submit_headers_template,
+    submitBodyTemplate: site.submit_body_template,
+    abandonSubmitBodyTemplate: site.abandon_submit_body_template,
+    authType: site.auth_type,
+    authConfig: site.auth_config,
+    submitSuccessRule: site.submit_success_rule,
+    submitFailureRule: site.submit_failure_rule,
+    timeoutSeconds: site.timeout_seconds,
+    maxRetries: site.max_retries,
+    status: parsed.data.status
   });
-  const exists = existingBySlug || getSiteById(id);
-
-  const values = [
-    parsed.data.name,
-    normalizedSlug,
-    parsed.data.verifyApiUrl || null,
-    parsed.data.submitApiUrl || null,
-    parsed.data.verifyHttpMethod,
-    parsed.data.submitHttpMethod,
-    parsed.data.verifyHeadersTemplate || "{}",
-    parsed.data.verifyBodyTemplate || '{"card":"{{sourceKey}}"}',
-    parsed.data.submitHeadersTemplate || "{}",
-    parsed.data.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    parsed.data.abandonSubmitBodyTemplate || parsed.data.submitBodyTemplate || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    parsed.data.authType || null,
-    parsed.data.authConfig || null,
-    parsed.data.verifySuccessRule || null,
-    parsed.data.verifyFailureRule || null,
-    parsed.data.submitSuccessRule || null,
-    parsed.data.submitFailureRule || null,
-    parsed.data.timeoutSeconds,
-    parsed.data.maxRetries,
-    resources.productId,
-    resources.endpointId,
-    parsed.data.status,
-    now
-  ];
-
-  if (exists) {
-    db.prepare(`
-      UPDATE sites
-      SET name = ?, slug = ?, verify_api_url = ?, submit_api_url = ?,
-          verify_http_method = ?, submit_http_method = ?,
-          verify_headers_template = ?, verify_body_template = ?,
-          submit_headers_template = ?, submit_body_template = ?, abandon_submit_body_template = ?,
-          auth_type = ?, auth_config = ?,
-          verify_success_rule = ?, verify_failure_rule = ?,
-          submit_success_rule = ?, submit_failure_rule = ?,
-          timeout_seconds = ?, max_retries = ?, product_id = ?, activation_endpoint_id = ?,
-          status = ?, updated_at = ?
-      WHERE id = ?
-    `).run(...values, id);
-  } else {
-    db.prepare(`
-      INSERT INTO sites (
-        id, name, slug, verify_api_url, submit_api_url,
-        verify_http_method, submit_http_method,
-        verify_headers_template, verify_body_template,
-        submit_headers_template, submit_body_template, abandon_submit_body_template,
-        auth_type, auth_config,
-        verify_success_rule, verify_failure_rule,
-        submit_success_rule, submit_failure_rule,
-        timeout_seconds, max_retries, product_id, activation_endpoint_id,
-        status, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, ...values.slice(0, -1), now, now);
-  }
 
   createAuditLog({
-    action: logActions.siteUpsert,
+    action: logActions.siteToggleStatus,
     actor: request.admin.username,
     resourceType: "site",
-    resourceId: id,
-    detail: {
-      ...parsed.data,
-      slug: normalizedSlug
-    }
+    resourceId: site.id,
+    detail: { from: site.status, to: parsed.data.status }
   });
 
-  return { id };
+  return { id: site.id, status: parsed.data.status };
+});
+
+app.post("/api/admin/sites/:id/health-check", { preHandler: requireAdmin }, async (request, reply) => {
+  const site = getSiteById(request.params.id);
+  if (!site) {
+    return reply.code(404).send({ message: "站点不存在" });
+  }
+
+  async function pingUrl(url) {
+    if (!url) return { ok: false, status: 0, latencyMs: 0, skipped: true };
+    const start = Date.now();
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(10000)
+      });
+      return { ok: response.ok, status: response.status, latencyMs: Date.now() - start, skipped: false };
+    } catch (error) {
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          signal: AbortSignal.timeout(10000)
+        });
+        return { ok: response.ok, status: response.status, latencyMs: Date.now() - start, skipped: false };
+      } catch (fallbackError) {
+        return { ok: false, status: 0, latencyMs: Date.now() - start, skipped: false, error: fallbackError.message };
+      }
+    }
+  }
+
+  const [verify, submit] = await Promise.all([
+    pingUrl(site.verify_api_url),
+    pingUrl(site.submit_api_url)
+  ]);
+
+  const now = nowIso();
+  const result = { verify, submit };
+
+  db.prepare("UPDATE sites SET last_health_check = ?, last_health_result = ?, updated_at = ? WHERE id = ?")
+    .run(now, JSON.stringify(result), now, site.id);
+
+  createAuditLog({
+    action: logActions.siteHealthCheck,
+    actor: request.admin.username,
+    resourceType: "site",
+    resourceId: site.id,
+    detail: result
+  });
+
+  return { id: site.id, checkedAt: now, ...result };
 });
 
 app.get("/api/admin/products", { preHandler: requireAdmin }, async () => {

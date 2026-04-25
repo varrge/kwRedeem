@@ -32,7 +32,9 @@ function upsertSite(db, site) {
           verify_headers_template = ?, verify_body_template = ?, submit_headers_template = ?, submit_body_template = ?,
           abandon_submit_body_template = ?, auth_type = ?, auth_config = ?, verify_success_rule = ?, verify_failure_rule = ?,
           submit_success_rule = ?, submit_failure_rule = ?, timeout_seconds = ?, max_retries = ?,
-          product_id = ?, activation_endpoint_id = ?, status = ?, updated_at = ?
+          product_id = ?, activation_endpoint_id = ?,
+          query_api_url = ?, query_success_rule = ?, polling_enabled = ?,
+          status = ?, updated_at = ?
       WHERE slug = ?
     `).run(
       site.name,
@@ -55,6 +57,9 @@ function upsertSite(db, site) {
       site.maxRetries,
       site.productId || null,
       site.activationEndpointId || null,
+      site.queryApiUrl || null,
+      site.querySuccessRule || null,
+      site.pollingEnabled || 0,
       site.status,
       site.updatedAt,
       site.slug
@@ -67,9 +72,11 @@ function upsertSite(db, site) {
       id, name, slug, verify_api_url, submit_api_url, verify_http_method, submit_http_method,
       verify_headers_template, verify_body_template, submit_headers_template, submit_body_template,
       abandon_submit_body_template, auth_type, auth_config, verify_success_rule, verify_failure_rule, submit_success_rule, submit_failure_rule,
-      timeout_seconds, max_retries, product_id, activation_endpoint_id, status, created_at, updated_at
+      timeout_seconds, max_retries, product_id, activation_endpoint_id,
+      query_api_url, query_success_rule, polling_enabled,
+      status, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     site.id,
     site.name,
@@ -93,6 +100,9 @@ function upsertSite(db, site) {
     site.maxRetries,
     site.productId || null,
     site.activationEndpointId || null,
+    site.queryApiUrl || null,
+    site.querySuccessRule || null,
+    site.pollingEnabled || 0,
     site.status,
     site.createdAt,
     site.updatedAt
@@ -257,6 +267,11 @@ function createSchema(db) {
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");
   ensureColumn(db, "activation_endpoints", "abandon_submit_body_template", "TEXT");
   ensureColumn(db, "sites", "abandon_submit_body_template", "TEXT");
+  ensureColumn(db, "sites", "last_health_check", "TEXT");
+  ensureColumn(db, "sites", "last_health_result", "TEXT");
+  ensureColumn(db, "sites", "query_api_url", "TEXT");
+  ensureColumn(db, "sites", "query_success_rule", "TEXT");
+  ensureColumn(db, "sites", "polling_enabled", "INTEGER NOT NULL DEFAULT 0");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -402,22 +417,25 @@ function seedDefaults(db) {
       name: "NiuniuAI",
       slug: "niuniuai",
       verifyApiUrl: "https://niuniuai.online/api/redeem/verify",
-      submitApiUrl: null,
+      submitApiUrl: "https://niuniuai.online/api/redeem/submit",
       verifyHttpMethod: "POST",
       submitHttpMethod: "POST",
       verifyHeadersTemplate: "{}",
       verifyBodyTemplate: '{"cardCode":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
-      submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-      abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
+      submitBodyTemplate: '{"cardCode":"{{sourceKey}}","tokenContent":{{sessionRaw}},"allowOverwrite":false}',
+      abandonSubmitBodyTemplate: '{"cardCode":"{{sourceKey}}","tokenContent":{{sessionRaw}},"allowOverwrite":false}',
       authType: null,
       authConfig: null,
-      verifySuccessRule: '{"kind":"json_path_equals","path":"data.exists","value":"true"}',
-      verifyFailureRule: '{"kind":"json_path_equals","path":"data.exists","value":"false"}',
-      submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
-      submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
+      verifySuccessRule: '{"data":{"valid":true,"exists":true}}',
+      verifyFailureRule: '{"data":{"valid":false}}',
+      submitSuccessRule: '{"kind":"json_path_equals","path":"code","value":"200"}',
+      submitFailureRule: null,
+      queryApiUrl: "https://niuniuai.online/api/redeem/query/{{taskId}}",
+      querySuccessRule: '{"kind":"json_path_equals","path":"data.taskStatus","value":"SUCCESS"}',
+      pollingEnabled: 1,
       timeoutSeconds: 15,
-      maxRetries: 3,
+      maxRetries: 10,
       productId: "prod_demo",
       activationEndpointId: null,
       status: "disabled",

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { decryptText } from "../../shared/src/secure.js";
-import { evaluateRule, renderJsonTemplate, safeParseJson } from "../../shared/src/templates.js";
+import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, orderStatuses } from "../../shared/src/constants.js";
 
 const db = getDb();
@@ -262,6 +262,75 @@ function markFailed(jobId, orderId, errorMessage, responseInfo) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function updateJobPayload(jobId, extraFields) {
+  const row = db.prepare("SELECT payload FROM activation_jobs WHERE id = ?").get(jobId);
+  const existing = safeParseJson(row?.payload, {});
+  const merged = { ...existing, ...extraFields };
+  db.prepare("UPDATE activation_jobs SET payload = ?, updated_at = ? WHERE id = ?")
+    .run(JSON.stringify(merged), nowIso(), jobId);
+}
+
+async function queryRemoteTask(queryUrl, site) {
+  try {
+    const response = await fetch(queryUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
+    });
+    const text = await response.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { ok: response.ok, status: response.status, text, json };
+  } catch (error) {
+    return { ok: false, status: 599, text: error.message, json: null };
+  }
+}
+
+const POLL_MAX_ROUNDS = 6;
+const POLL_INTERVAL_MS = 5000;
+
+async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
+  const maxAttempts = site?.max_retries || job.max_attempts || 10;
+  const querySuccessRule = site.query_success_rule;
+
+  for (let round = 0; round < POLL_MAX_ROUNDS; round++) {
+    if (round > 0) await sleep(POLL_INTERVAL_MS);
+
+    const queryUrl = renderTemplateString(site.query_api_url, { taskId: remoteTaskId });
+    const queryResult = await queryRemoteTask(queryUrl, site);
+
+    const isSuccess = querySuccessRule
+      ? evaluateRule(querySuccessRule, queryResult)
+      : false;
+
+    if (isSuccess) {
+      markSuccess(job.id, order.id, cdkey.id, queryResult);
+      return;
+    }
+
+    const taskStatus = queryResult.json?.data?.taskStatus;
+    if (taskStatus && taskStatus !== "PROCESSING" && taskStatus !== "PENDING") {
+      const msg = queryResult.json?.data?.statusMessage || `远端任务失败: ${taskStatus}`;
+      markFailed(job.id, order.id, msg, queryResult);
+      return;
+    }
+  }
+
+  updateJobPayload(job.id, { remoteTaskId });
+  const msg = `远端任务仍在处理中，等待下轮继续轮询 (taskId: ${remoteTaskId})`;
+
+  if (job.attempt_count + 1 >= maxAttempts) {
+    markFailed(job.id, order.id, `轮询超过最大重试次数: ${msg}`, null);
+    return;
+  }
+
+  markRetry(job, order.id, msg, null, maxAttempts);
+}
+
 async function processJob(job) {
   const order = db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(job.order_id);
   const cdkey = db.prepare("SELECT * FROM cdkeys WHERE id = ?").get(job.cdkey_id);
@@ -273,11 +342,28 @@ async function processJob(job) {
     return;
   }
 
+  const jobPayload = safeParseJson(job.payload, {});
+  const isPollingEnabled = site?.polling_enabled && site?.query_api_url;
+
+  if (isPollingEnabled && jobPayload.remoteTaskId) {
+    await pollRemoteTask(job, order, cdkey, site, jobPayload.remoteTaskId);
+    return;
+  }
+
   const responseInfo = await invokeEndpoint(job, order, cdkey, site, endpoint);
   const failureRule = site?.submit_failure_rule || endpoint?.failure_rule;
   const successRule = site?.submit_success_rule || endpoint?.success_rule;
   const failureMatched = failureRule ? evaluateRule(failureRule, responseInfo) : false;
   const successMatched = successRule ? evaluateRule(successRule, responseInfo) : responseInfo.ok;
+
+  if (!failureMatched && successMatched && isPollingEnabled) {
+    const remoteTaskId = responseInfo.json?.data;
+    if (remoteTaskId) {
+      updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
+      await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId));
+      return;
+    }
+  }
 
   if (!failureMatched && successMatched) {
     markSuccess(job.id, order.id, cdkey.id, responseInfo);

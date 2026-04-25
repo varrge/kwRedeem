@@ -94,128 +94,13 @@
             <p class="eyebrow">Sites</p>
             <h2>网站管理</h2>
           </div>
-          <form id="site-form" class="grid two-columns">
-            <label class="field">
-              <span>载入预设</span>
-              <select id="site-preset">
-                <option value="">手动配置 / 选择预设</option>
-                <option value="oaifire">OAIFire（签名验证）</option>
-                <option value="redeemgpt">RedeemGPT（CDKEY 验证）</option>
-                <option value="niuniuai">NiuniuAI（cardCode 验证）</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>站点状态</span>
-              <select id="site-status">
-                <option value="active">active</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>网站名称</span>
-              <input id="site-name" placeholder="例如 RedeemGPT" />
-            </label>
-            <label class="field">
-              <span>站点标识</span>
-              <input id="site-slug" placeholder="例如 redeemgpt" />
-            </label>
-            <label class="field">
-              <span>验证卡密 API</span>
-              <input id="site-verify-api-url" placeholder="https://example.com/api/verify" />
-            </label>
-            <label class="field">
-              <span>提交 Session API</span>
-              <input id="site-submit-api-url" placeholder="https://example.com/api/submit-session" />
-            </label>
-            <label class="field">
-              <span>验证方法</span>
-              <select id="site-verify-http-method">
-                <option value="POST">POST</option>
-                <option value="GET">GET</option>
-                <option value="PUT">PUT</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>提交方法</span>
-              <select id="site-submit-http-method">
-                <option value="POST">POST</option>
-                <option value="GET">GET</option>
-                <option value="PUT">PUT</option>
-              </select>
-            </label>
-            <fieldset class="field field-wide radio-field">
-              <legend>请求头类型</legend>
-              <div class="choice-group" id="site-auth-type-group">
-                <label class="choice-item">
-                  <input type="radio" name="site-auth-type" value="" checked />
-                  <span>无额外请求头</span>
-                </label>
-                <label class="choice-item">
-                  <input type="radio" name="site-auth-type" value="bearer" />
-                  <span>Bearer Token</span>
-                </label>
-                <label class="choice-item">
-                  <input type="radio" name="site-auth-type" value="header_json" />
-                  <span>自定义 Header JSON</span>
-                </label>
-                <label class="choice-item">
-                  <input type="radio" name="site-auth-type" value="oaifire_sign" />
-                  <span>OAIFire 签名头</span>
-                </label>
-              </div>
-            </fieldset>
-            <label class="field field-wide">
-              <span>请求头配置（可选）</span>
-              <textarea id="site-auth-config" rows="3" placeholder="Bearer 模式填 token；Header JSON 模式填 JSON；OAIFire 模式填签名盐值"></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>验证请求头模板</span>
-              <textarea id="site-verify-headers-template" rows="3" placeholder='例如 {"X-Trace-Id":"{{publicKey}}"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>验证请求体模板</span>
-              <textarea id="site-verify-body-template" rows="4" placeholder='例如 {"cdkey":"{{sourceKey}}"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>提交请求头模板</span>
-              <textarea id="site-submit-headers-template" rows="3" placeholder='例如 {"X-Channel":"kawang"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>提交请求体模板</span>
-              <textarea id="site-submit-body-template" rows="5" placeholder='例如 {"card":"{{sourceKey}}","session":{{sessionRaw}}}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>放弃剩余会员时间时的提交请求体模板</span>
-              <textarea id="site-abandon-submit-body-template" rows="5" placeholder='留空则沿用普通提交请求体模板'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>验证成功规则</span>
-              <textarea id="site-verify-success-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"true"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>验证失败规则</span>
-              <textarea id="site-verify-failure-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"false"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>提交成功规则</span>
-              <textarea id="site-submit-success-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"true"}'></textarea>
-            </label>
-            <label class="field field-wide">
-              <span>提交失败规则</span>
-              <textarea id="site-submit-failure-rule" rows="3" placeholder='例如 {"kind":"json_path_equals","path":"success","value":"false"}'></textarea>
-            </label>
-            <label class="field">
-              <span>超时时间（秒）</span>
-              <input id="site-timeout-seconds" type="number" min="5" max="120" value="15" />
-            </label>
-            <label class="field">
-              <span>最大重试次数</span>
-              <input id="site-max-retries" type="number" min="1" max="10" value="3" />
-            </label>
-            <button type="submit">保存网站</button>
-          </form>
-          <div id="site-result" class="hint">这里维护的是外部网站的验证卡密 API 与提交 session API，用户前台始终只访问我们的 API。</div>
-          <div id="site-list" class="table"></div>
+          <div class="site-monitor">
+            <div class="site-monitor-actions">
+              <button id="health-check-all-btn" type="button">全部测活</button>
+            </div>
+            <div id="site-list" class="table"></div>
+            <div id="site-result" class="hint">站点配置由代码维护，此处仅用于查看状态、手动开关和测活。</div>
+          </div>
         </section>
 
         <section class="panel module-panel tab-panel hidden" data-panel="cards">

@@ -3,75 +3,6 @@ const TOKEN_KEY = "kawang_admin_token";
 const REFRESH_INTERVAL_MS = 5000;
 const UPDATE_POLL_INTERVAL_MS = 3000;
 
-const SITE_PRESETS = {
-  oaifire: {
-    name: "OAIFire",
-    slug: "oaifire",
-    verifyApiUrl: "https://oaifire.win/api/verify-cdk",
-    submitApiUrl: "",
-    verifyHttpMethod: "POST",
-    submitHttpMethod: "POST",
-    authType: "oaifire_sign",
-    authConfig: "ChatGPT#Plus@2026!",
-    verifyHeadersTemplate: "{}",
-    verifyBodyTemplate: '{"uniqueCode":"{{sourceKey}}"}',
-    submitHeadersTemplate: "{}",
-    submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    verifySuccessRule: '{"kind":"json_path_equals","path":"status","value":"true"}',
-    verifyFailureRule: '{"kind":"json_path_equals","path":"status","value":"false"}',
-    submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
-    submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
-    timeoutSeconds: 15,
-    maxRetries: 3,
-    status: "disabled"
-  },
-  redeemgpt: {
-    name: "RedeemGPT",
-    slug: "redeemgpt",
-    verifyApiUrl: "https://redeemgpt.com/api/check",
-    submitApiUrl: "",
-    verifyHttpMethod: "POST",
-    submitHttpMethod: "POST",
-    authType: "",
-    authConfig: "",
-    verifyHeadersTemplate: "{}",
-    verifyBodyTemplate: '{"cdkey":"{{sourceKey}}"}',
-    submitHeadersTemplate: "{}",
-    submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
-    verifyFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
-    submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
-    submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
-    timeoutSeconds: 15,
-    maxRetries: 3,
-    status: "disabled"
-  },
-  niuniuai: {
-    name: "NiuniuAI",
-    slug: "niuniuai",
-    verifyApiUrl: "https://niuniuai.online/api/redeem/verify",
-    submitApiUrl: "",
-    verifyHttpMethod: "POST",
-    submitHttpMethod: "POST",
-    authType: "",
-    authConfig: "",
-    verifyHeadersTemplate: "{}",
-    verifyBodyTemplate: '{"cardCode":"{{sourceKey}}"}',
-    submitHeadersTemplate: "{}",
-    submitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    abandonSubmitBodyTemplate: '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-    verifySuccessRule: '{"kind":"json_path_equals","path":"data.exists","value":"true"}',
-    verifyFailureRule: '{"kind":"json_path_equals","path":"data.exists","value":"false"}',
-    submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
-    submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
-    timeoutSeconds: 15,
-    maxRetries: 3,
-    status: "disabled"
-  }
-};
-
 const refs = {
   loginCard: document.querySelector("#login-card"),
   adminShell: document.querySelector("#admin-shell"),
@@ -83,30 +14,9 @@ const refs = {
   sessionDesc: document.querySelector("#session-desc"),
   stats: document.querySelector("#stats"),
   dashboardLogs: document.querySelector("#dashboard-logs"),
-  siteForm: document.querySelector("#site-form"),
   siteResult: document.querySelector("#site-result"),
   siteList: document.querySelector("#site-list"),
-  sitePreset: document.querySelector("#site-preset"),
-  siteStatus: document.querySelector("#site-status"),
-  siteName: document.querySelector("#site-name"),
-  siteSlug: document.querySelector("#site-slug"),
-  siteVerifyApiUrl: document.querySelector("#site-verify-api-url"),
-  siteSubmitApiUrl: document.querySelector("#site-submit-api-url"),
-  siteVerifyHttpMethod: document.querySelector("#site-verify-http-method"),
-  siteSubmitHttpMethod: document.querySelector("#site-submit-http-method"),
-  siteAuthConfig: document.querySelector("#site-auth-config"),
-  siteAuthTypes: document.querySelectorAll("input[name='site-auth-type']"),
-  siteVerifyHeadersTemplate: document.querySelector("#site-verify-headers-template"),
-  siteVerifyBodyTemplate: document.querySelector("#site-verify-body-template"),
-  siteSubmitHeadersTemplate: document.querySelector("#site-submit-headers-template"),
-  siteSubmitBodyTemplate: document.querySelector("#site-submit-body-template"),
-  siteAbandonSubmitBodyTemplate: document.querySelector("#site-abandon-submit-body-template"),
-  siteVerifySuccessRule: document.querySelector("#site-verify-success-rule"),
-  siteVerifyFailureRule: document.querySelector("#site-verify-failure-rule"),
-  siteSubmitSuccessRule: document.querySelector("#site-submit-success-rule"),
-  siteSubmitFailureRule: document.querySelector("#site-submit-failure-rule"),
-  siteTimeoutSeconds: document.querySelector("#site-timeout-seconds"),
-  siteMaxRetries: document.querySelector("#site-max-retries"),
+  healthCheckAllBtn: document.querySelector("#health-check-all-btn"),
   singleCdkeyForm: document.querySelector("#single-cdkey-form"),
   singleCdkeyResult: document.querySelector("#single-cdkey-result"),
   batchForm: document.querySelector("#batch-form"),
@@ -133,7 +43,6 @@ const refs = {
 let autoRefreshTimer = null;
 let updatePollTimer = null;
 let currentTab = "dashboard";
-let currentEditingSiteId = null;
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -162,108 +71,6 @@ function escapeHtml(value) {
 
 function renderStatus(value) {
   return `<span class="table-badge status-${String(value || "").toLowerCase()}">${value || "-"}</span>`;
-}
-
-function getSelectedSiteAuthType() {
-  return Array.from(refs.siteAuthTypes).find((item) => item.checked)?.value || "";
-}
-
-function updateSiteAuthConfigHint() {
-  const authType = getSelectedSiteAuthType();
-  const hints = {
-    "": "无额外请求头时可留空",
-    bearer: "请输入 Bearer Token 原文，不要加 Bearer 前缀",
-    header_json: '请输入 JSON，例如 {"X-Api-Key":"your-key"}',
-    oaifire_sign: "请输入签名盐值；如留空则默认使用 OAIFire 当前盐值"
-  };
-  refs.siteAuthConfig.placeholder = hints[authType] || "根据请求头类型填写对应配置";
-}
-
-function setSelectedSiteAuthType(value) {
-  refs.siteAuthTypes.forEach((item) => {
-    item.checked = item.value === value;
-  });
-  if (!Array.from(refs.siteAuthTypes).some((item) => item.checked)) {
-    refs.siteAuthTypes[0].checked = true;
-  }
-  updateSiteAuthConfigHint();
-}
-
-function applySitePreset(presetKey) {
-  const preset = SITE_PRESETS[presetKey];
-  if (!preset) return;
-
-  currentEditingSiteId = null;
-  refs.siteName.value = preset.name;
-  refs.siteSlug.value = preset.slug;
-  refs.siteVerifyApiUrl.value = preset.verifyApiUrl;
-  refs.siteSubmitApiUrl.value = preset.submitApiUrl;
-  refs.siteVerifyHttpMethod.value = preset.verifyHttpMethod;
-  refs.siteSubmitHttpMethod.value = preset.submitHttpMethod;
-  refs.siteAuthConfig.value = preset.authConfig;
-  refs.siteVerifyHeadersTemplate.value = preset.verifyHeadersTemplate;
-  refs.siteVerifyBodyTemplate.value = preset.verifyBodyTemplate;
-  refs.siteSubmitHeadersTemplate.value = preset.submitHeadersTemplate;
-  refs.siteSubmitBodyTemplate.value = preset.submitBodyTemplate;
-  refs.siteAbandonSubmitBodyTemplate.value = preset.abandonSubmitBodyTemplate || preset.submitBodyTemplate;
-  refs.siteVerifySuccessRule.value = preset.verifySuccessRule;
-  refs.siteVerifyFailureRule.value = preset.verifyFailureRule;
-  refs.siteSubmitSuccessRule.value = preset.submitSuccessRule;
-  refs.siteSubmitFailureRule.value = preset.submitFailureRule;
-  refs.siteTimeoutSeconds.value = preset.timeoutSeconds;
-  refs.siteMaxRetries.value = preset.maxRetries;
-  refs.siteStatus.value = preset.status;
-  setSelectedSiteAuthType(preset.authType);
-  setHint(refs.siteResult, `已载入预设：${preset.name}。如需完整跑通，请补充提交 Session API 后再启用。`);
-}
-
-function resetSiteForm() {
-  currentEditingSiteId = null;
-  refs.siteForm.reset();
-  refs.sitePreset.value = "";
-  refs.siteVerifyHttpMethod.value = "POST";
-  refs.siteSubmitHttpMethod.value = "POST";
-  refs.siteStatus.value = "active";
-  refs.siteTimeoutSeconds.value = 15;
-  refs.siteMaxRetries.value = 3;
-  refs.siteVerifyHeadersTemplate.value = "{}";
-  refs.siteVerifyBodyTemplate.value = '{"card":"{{sourceKey}}"}';
-  refs.siteSubmitHeadersTemplate.value = "{}";
-  refs.siteSubmitBodyTemplate.value = '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
-  refs.siteAbandonSubmitBodyTemplate.value = '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
-  refs.siteVerifySuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
-  refs.siteVerifyFailureRule.value = "";
-  refs.siteSubmitSuccessRule.value = '{"kind":"json_path_equals","path":"success","value":"true"}';
-  refs.siteSubmitFailureRule.value = "";
-  setSelectedSiteAuthType("");
-}
-
-function editSite(site) {
-  currentEditingSiteId = site.id;
-  refs.sitePreset.value = "";
-  refs.siteName.value = site.name || "";
-  refs.siteSlug.value = site.slug || "";
-  refs.siteVerifyApiUrl.value = site.verify_api_url || "";
-  refs.siteSubmitApiUrl.value = site.submit_api_url || "";
-  refs.siteVerifyHttpMethod.value = site.verify_http_method || "POST";
-  refs.siteSubmitHttpMethod.value = site.submit_http_method || "POST";
-  refs.siteAuthConfig.value = site.auth_config || "";
-  refs.siteVerifyHeadersTemplate.value = site.verify_headers_template || "{}";
-  refs.siteVerifyBodyTemplate.value = site.verify_body_template || '{"card":"{{sourceKey}}"}';
-  refs.siteSubmitHeadersTemplate.value = site.submit_headers_template || "{}";
-  refs.siteSubmitBodyTemplate.value = site.submit_body_template || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}';
-  refs.siteAbandonSubmitBodyTemplate.value = site.abandon_submit_body_template || site.submit_body_template || "";
-  refs.siteVerifySuccessRule.value = site.verify_success_rule || "";
-  refs.siteVerifyFailureRule.value = site.verify_failure_rule || "";
-  refs.siteSubmitSuccessRule.value = site.submit_success_rule || "";
-  refs.siteSubmitFailureRule.value = site.submit_failure_rule || "";
-  refs.siteTimeoutSeconds.value = site.timeout_seconds || 15;
-  refs.siteMaxRetries.value = site.max_retries || 3;
-  refs.siteStatus.value = site.status || "active";
-  setSelectedSiteAuthType(site.auth_type || "");
-  switchTab("sites");
-  refs.siteName.focus();
-  setHint(refs.siteResult, `正在编辑网站：${site.name || site.slug}`);
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -392,23 +199,87 @@ async function refreshDashboard() {
   ], payload.recentLogs || [], "暂无最近日志");
 }
 
+function renderHealthDot(result, key) {
+  if (!result) return `<span class="health-dot health-unknown" title="未检测"></span>`;
+  const data = typeof result === "string" ? JSON.parse(result) : result;
+  const entry = data[key];
+  if (!entry || entry.skipped) return `<span class="health-dot health-unknown" title="未配置"></span>`;
+  if (entry.ok) return `<span class="health-dot health-ok" title="可达 ${entry.latencyMs}ms"></span>`;
+  return `<span class="health-dot health-fail" title="不可达${entry.error ? ` (${entry.error})` : ""}"></span>`;
+}
+
+async function toggleSiteStatus(siteId, currentStatus) {
+  const newStatus = currentStatus === "active" ? "disabled" : "active";
+  try {
+    await api(`/api/admin/sites/${siteId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: newStatus })
+    });
+    await refreshSites();
+  } catch (error) {
+    setHint(refs.siteResult, error.message);
+  }
+}
+
+async function healthCheckSite(siteId) {
+  try {
+    setHint(refs.siteResult, "正在检测...");
+    await api(`/api/admin/sites/${siteId}/health-check`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await refreshSites();
+    setHint(refs.siteResult, "检测完成。");
+  } catch (error) {
+    setHint(refs.siteResult, error.message);
+  }
+}
+
+async function healthCheckAll() {
+  const payload = await api("/api/admin/sites");
+  const items = payload.items || [];
+  setHint(refs.siteResult, `正在逐个检测 ${items.length} 个站点...`);
+  for (const site of items) {
+    try {
+      await api(`/api/admin/sites/${site.id}/health-check`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+    } catch (_) {}
+  }
+  await refreshSites();
+  setHint(refs.siteResult, "全部检测完成。");
+}
+
 async function refreshSites() {
   const payload = await api("/api/admin/sites");
   populateSiteSelects(payload.items);
   renderTable(refs.siteList, [
-    { label: "操作", render: (item) => `<button class="table-action edit-site-btn" type="button" data-site-id="${escapeHtml(item.id)}">编辑</button>` },
-    { label: "网站名", render: (item) => item.name },
-    { label: "标识", render: (item) => `<code>${item.slug}</code>` },
-    { label: "验证 API", render: (item) => item.verify_api_url || "-" },
-    { label: "提交 API", render: (item) => item.submit_api_url || "-" },
-    { label: "请求头类型", render: (item) => item.auth_type || "-" },
-    { label: "验证模板", render: (item) => item.verify_body_template ? `<code>${item.verify_body_template}</code>` : "-" },
-    { label: "状态", render: (item) => renderStatus(item.status) }
-  ], payload.items, "暂无网站配置");
-  refs.siteList.querySelectorAll(".edit-site-btn").forEach((button) => {
+    { label: "网站名", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
+    { label: "验证 API", render: (item) => item.verify_api_url ? `<span class="url-cell">${escapeHtml(item.verify_api_url)}</span>` : "-" },
+    { label: "提交 API", render: (item) => item.submit_api_url ? `<span class="url-cell">${escapeHtml(item.submit_api_url)}</span>` : "-" },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "健康检查", render: (item) => {
+      const result = item.last_health_result;
+      return `<span class="health-group">${renderHealthDot(result, "verify")} 验证 ${renderHealthDot(result, "submit")} 提交</span>`;
+    }},
+    { label: "最后检测", render: (item) => item.last_health_check || "-" },
+    { label: "操作", render: (item) => `
+      <button class="table-action toggle-site-btn" type="button" data-site-id="${escapeHtml(item.id)}" data-status="${escapeHtml(item.status)}">
+        ${item.status === "active" ? "禁用" : "启用"}
+      </button>
+      <button class="table-action health-check-btn" type="button" data-site-id="${escapeHtml(item.id)}">测活</button>
+    ` }
+  ], payload.items, "暂无网站数据");
+
+  refs.siteList.querySelectorAll(".toggle-site-btn").forEach((button) => {
     button.addEventListener("click", () => {
-      const site = payload.items.find((item) => item.id === button.dataset.siteId);
-      if (site) editSite(site);
+      toggleSiteStatus(button.dataset.siteId, button.dataset.status);
+    });
+  });
+  refs.siteList.querySelectorAll(".health-check-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      healthCheckSite(button.dataset.siteId);
     });
   });
 }
@@ -557,12 +428,10 @@ refs.navTabs.forEach((button) => {
   });
 });
 
-refs.siteAuthTypes.forEach((item) => {
-  item.addEventListener("change", updateSiteAuthConfigHint);
-});
-
-refs.sitePreset.addEventListener("change", (event) => {
-  applySitePreset(event.target.value);
+refs.healthCheckAllBtn.addEventListener("click", () => {
+  healthCheckAll().catch((error) => {
+    setHint(refs.siteResult, error.message);
+  });
 });
 
 refs.checkUpdateBtn.addEventListener("click", async () => {
@@ -613,44 +482,6 @@ refs.loginForm.addEventListener("submit", async (event) => {
     await refreshAll();
   } catch (error) {
     setHint(refs.loginResult, error.message);
-  }
-});
-
-refs.siteForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    const wasEditing = Boolean(currentEditingSiteId);
-    await api("/api/admin/sites", {
-      method: "POST",
-      body: JSON.stringify({
-        id: currentEditingSiteId || undefined,
-        name: document.querySelector("#site-name").value.trim(),
-        slug: document.querySelector("#site-slug").value.trim(),
-        verifyApiUrl: document.querySelector("#site-verify-api-url").value.trim(),
-        submitApiUrl: document.querySelector("#site-submit-api-url").value.trim(),
-        verifyHttpMethod: document.querySelector("#site-verify-http-method").value,
-        submitHttpMethod: document.querySelector("#site-submit-http-method").value,
-        authType: getSelectedSiteAuthType(),
-        authConfig: document.querySelector("#site-auth-config").value.trim(),
-        verifyHeadersTemplate: refs.siteVerifyHeadersTemplate.value.trim() || "{}",
-        verifyBodyTemplate: refs.siteVerifyBodyTemplate.value.trim() || '{"card":"{{sourceKey}}"}',
-        submitHeadersTemplate: refs.siteSubmitHeadersTemplate.value.trim() || "{}",
-        submitBodyTemplate: refs.siteSubmitBodyTemplate.value.trim() || '{"card":"{{sourceKey}}","session":{{sessionRaw}}}',
-        abandonSubmitBodyTemplate: refs.siteAbandonSubmitBodyTemplate.value.trim(),
-        verifySuccessRule: refs.siteVerifySuccessRule.value.trim() || '{"kind":"json_path_equals","path":"success","value":"true"}',
-        verifyFailureRule: refs.siteVerifyFailureRule.value.trim(),
-        submitSuccessRule: refs.siteSubmitSuccessRule.value.trim() || '{"kind":"json_path_equals","path":"success","value":"true"}',
-        submitFailureRule: refs.siteSubmitFailureRule.value.trim(),
-        timeoutSeconds: Number(refs.siteTimeoutSeconds.value || 15),
-        maxRetries: Number(refs.siteMaxRetries.value || 3),
-        status: refs.siteStatus.value
-      })
-    });
-    resetSiteForm();
-    setHint(refs.siteResult, wasEditing ? "网站更新成功。" : "网站保存成功。");
-    await refreshAll();
-  } catch (error) {
-    setHint(refs.siteResult, error.message);
   }
 });
 
@@ -749,8 +580,6 @@ refs.logoutBtn.addEventListener("click", () => {
 });
 
 switchTab(currentTab);
-updateSiteAuthConfigHint();
-resetSiteForm();
 
 if (getToken()) {
   setAuthState(true, "admin");

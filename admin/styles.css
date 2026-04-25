@@ -538,6 +538,62 @@ pre {
   line-height: 1.65;
 }
 
+.site-monitor {
+  display: grid;
+  gap: 14px;
+}
+
+.site-monitor-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.site-monitor-actions button {
+  width: auto;
+  min-width: 100px;
+}
+
+.health-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.health-ok {
+  background: #43d59f;
+  box-shadow: 0 0 8px rgba(67, 213, 159, 0.5);
+}
+
+.health-fail {
+  background: #ff7f9f;
+  box-shadow: 0 0 8px rgba(255, 127, 159, 0.5);
+}
+
+.health-unknown {
+  background: #5a6680;
+}
+
+.health-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.url-cell {
+  word-break: break-all;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.toggle-site-btn {
+  margin-bottom: 6px;
+}
+
 @media (max-width: 1080px) {
   .hero-panel,
   .login-grid,

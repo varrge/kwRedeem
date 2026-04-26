@@ -74,8 +74,42 @@ function shouldKeepPolling(order = {}) {
   return ["pending", "processing"].includes(orderStatus) || ["pending", "processing"].includes(jobStatus);
 }
 
-function getAbandonRemainingTime() {
-  return document.querySelector("input[name='abandon-remaining-time']:checked")?.value === "true";
+function parseSessionPayloadInput(rawValue) {
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("session JSON 必须是对象");
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(error.message === "session JSON 必须是对象" ? error.message : "Session JSON 格式不正确");
+  }
+}
+
+function extractPlanType(sessionData = {}) {
+  const candidates = [
+    sessionData.planType,
+    sessionData.user?.planType,
+    sessionData.account?.planType
+  ];
+  return candidates.find((value) => typeof value === "string" && value.trim()) || "";
+}
+
+function shouldConfirmOverwrite(sessionData) {
+  return extractPlanType(sessionData).toLowerCase().includes("plus");
+}
+
+function isTokenInvalidMessage(message) {
+  return [
+    "token已失效",
+    "token无效",
+    "token 已失效",
+    "token 无效",
+    "token expired",
+    "token invalid",
+    "invalid token",
+    "expired token"
+  ].some((keyword) => String(message ?? "").toLowerCase().includes(keyword));
 }
 
 function getApiMessage(job = {}) {
@@ -118,11 +152,14 @@ function renderVerifyResult(payload) {
 function renderRedeemSuccess(payload) {
   const liveStatus = payload.job?.status || payload.status || "processing";
   const apiMessage = getApiMessage(payload.job || {});
+  const tokenInvalid = isTokenInvalidMessage(apiMessage) || isTokenInvalidMessage(payload.errorMessage);
   const statusHint = {
     pending: "任务已进入队列，等待系统处理。",
     processing: "任务正在处理中，状态会自动刷新。",
     succeeded: "任务已完成，无需手动刷新。",
-    failed: "任务处理失败，请根据错误信息或稍后重试。",
+    failed: tokenInvalid
+      ? "Session 已失效，请重新获取后再提交。当前卡密会自动释放，可重新发起兑换。"
+      : "任务处理失败，请根据错误信息或稍后重试。",
     cancelled: "任务已取消。"
   }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";
 
@@ -194,7 +231,7 @@ function renderOrderResult(payload) {
           <strong>${escapeHtml(payload.sessionPreview?.email || "-")}</strong>
         </div>
         <div class="result-item">
-          <span>放弃剩余会员时间</span>
+          <span>覆盖提交</span>
           <strong>${payload.abandonRemainingTime ? "是" : "否"}</strong>
         </div>
         ${payload.cdkeyStatus ? `
@@ -333,7 +370,7 @@ function renderBatchLookupItem(item) {
           <strong>${escapeHtml(job.attemptCount ?? 0)}</strong>
         </div>
         <div class="result-item">
-          <span>放弃剩余会员时间</span>
+          <span>覆盖提交</span>
           <strong>${item.abandonRemainingTime ? "是" : "否"}</strong>
         </div>
       </div>
@@ -460,12 +497,19 @@ redeemForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  stopRedeemStatusPolling();
-  setState(redeemResult, "正在提交兑换任务...");
-
   try {
     const sessionPayload = document.querySelector("#session-payload").value.trim();
-    const abandonRemainingTime = getAbandonRemainingTime();
+    const sessionData = parseSessionPayloadInput(sessionPayload);
+    const abandonRemainingTime = shouldConfirmOverwrite(sessionData);
+    if (abandonRemainingTime) {
+      const confirmed = window.confirm("检测到当前 Session 账号可能已开通 Plus。确认后将按覆盖提交流程继续，是否继续提交？");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    stopRedeemStatusPolling();
+    setState(redeemResult, "正在提交兑换任务...");
     const payload = await request("/api/public/redeem", {
       method: "POST",
       body: JSON.stringify({

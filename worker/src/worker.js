@@ -107,6 +107,40 @@ function applyAuthHeaders(headers, remoteConfig, bodyString) {
   }
 }
 
+function extractFailureMessages(responseInfo = {}) {
+  const candidates = [
+    responseInfo.text,
+    responseInfo.json?.msg,
+    responseInfo.json?.message,
+    responseInfo.json?.data?.msg,
+    responseInfo.json?.data?.message,
+    responseInfo.json?.data?.statusMessage
+  ];
+
+  return candidates
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+}
+
+function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
+  const messages = extractFailureMessages(responseInfo);
+  if (fallbackMessage) {
+    messages.push(String(fallbackMessage));
+  }
+
+  const normalized = messages.join("\n").toLowerCase();
+  return [
+    "token已失效",
+    "token无效",
+    "token 已失效",
+    "token 无效",
+    "token expired",
+    "token invalid",
+    "invalid token",
+    "expired token"
+  ].some((keyword) => normalized.includes(keyword));
+}
+
 async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   const remoteConfig = site?.submit_api_url ? {
     url: site.submit_api_url,
@@ -244,7 +278,7 @@ function markRetry(job, orderId, errorMessage, responseInfo, maxAttempts) {
   });
 }
 
-function markFailed(jobId, orderId, errorMessage, responseInfo) {
+function markFailed(jobId, orderId, cdkeyId, errorMessage, responseInfo) {
   const now = nowIso();
   db.prepare(`
     UPDATE activation_jobs
@@ -258,6 +292,12 @@ function markFailed(jobId, orderId, errorMessage, responseInfo) {
     SET status = ?, error_message = ?, updated_at = ?
     WHERE id = ?
   `).run(orderStatuses.failed, errorMessage, now, orderId);
+
+  db.prepare(`
+    UPDATE cdkeys
+    SET status = ?, locked_at = NULL, locked_by_order_id = NULL, updated_at = ?
+    WHERE id = ? AND status = ? AND locked_by_order_id = ?
+  `).run(cdkeyStatuses.active, now, cdkeyId, cdkeyStatuses.locked, orderId);
 
   writeAuditLog(logActions.jobFail, "activation_job", jobId, {
     errorMessage,
@@ -309,16 +349,22 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
     const isSuccess = querySuccessRule
       ? evaluateRule(querySuccessRule, queryResult)
       : false;
+    const queryErrorMessage = queryResult.json?.data?.statusMessage || queryResult.text || `HTTP ${queryResult.status}`;
 
     if (isSuccess) {
       markSuccess(job.id, order.id, cdkey.id, queryResult);
       return;
     }
 
+    if (isNonRetryableFailure(queryResult, queryErrorMessage)) {
+      markFailed(job.id, order.id, cdkey.id, queryErrorMessage, queryResult);
+      return;
+    }
+
     const taskStatus = queryResult.json?.data?.taskStatus;
     if (taskStatus && taskStatus !== "PROCESSING" && taskStatus !== "PENDING") {
       const msg = queryResult.json?.data?.statusMessage || `远端任务失败: ${taskStatus}`;
-      markFailed(job.id, order.id, msg, queryResult);
+      markFailed(job.id, order.id, cdkey.id, msg, queryResult);
       return;
     }
   }
@@ -327,7 +373,7 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
   const msg = `远端任务仍在处理中，等待下轮继续轮询 (taskId: ${remoteTaskId})`;
 
   if (job.attempt_count + 1 >= maxAttempts) {
-    markFailed(job.id, order.id, `轮询超过最大重试次数: ${msg}`, null);
+    markFailed(job.id, order.id, cdkey.id, `轮询超过最大重试次数: ${msg}`, null);
     return;
   }
 
@@ -341,7 +387,7 @@ async function processJob(job) {
   const endpoint = db.prepare("SELECT * FROM activation_endpoints WHERE id = ?").get(job.activation_endpoint_id);
 
   if (!order || !cdkey || (!site && !endpoint)) {
-    markFailed(job.id, job.order_id, "任务依赖数据不存在", null);
+    markFailed(job.id, job.order_id, job.cdkey_id, "任务依赖数据不存在", null);
     return;
   }
 
@@ -376,8 +422,13 @@ async function processJob(job) {
   const errorMessage = responseInfo.text || `HTTP ${responseInfo.status}`;
   const maxAttempts = site?.max_retries || endpoint?.max_retries || job.max_attempts || 3;
 
+  if (isNonRetryableFailure(responseInfo, errorMessage)) {
+    markFailed(job.id, order.id, cdkey.id, errorMessage, responseInfo);
+    return;
+  }
+
   if (job.attempt_count + 1 >= maxAttempts) {
-    markFailed(job.id, order.id, errorMessage, responseInfo);
+    markFailed(job.id, order.id, cdkey.id, errorMessage, responseInfo);
     return;
   }
 
@@ -391,7 +442,7 @@ async function tick() {
   try {
     await processJob(job);
   } catch (error) {
-    markFailed(job.id, job.order_id, error.message || "worker 执行失败", null);
+    markFailed(job.id, job.order_id, job.cdkey_id, error.message || "worker 执行失败", null);
   }
 }
 

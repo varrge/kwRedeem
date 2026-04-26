@@ -253,11 +253,19 @@ h2 {
   gap: 12px;
 }
 
+.intel-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+
 .ghost-link {
   text-decoration: none;
   border-radius: 14px;
   padding: 12px 16px;
   font-weight: 600;
+  text-align: center;
 }
 
 .status-card {

@@ -424,7 +424,7 @@ function seedDefaults(db) {
       verifyBodyTemplate: '{"cardCode":"{{sourceKey}}"}',
       submitHeadersTemplate: "{}",
       submitBodyTemplate: '{"cardCode":"{{sourceKey}}","tokenContent":{{sessionString}},"allowOverwrite":false}',
-      abandonSubmitBodyTemplate: '{"cardCode":"{{sourceKey}}","tokenContent":{{sessionString}},"allowOverwrite":false}',
+      abandonSubmitBodyTemplate: '{"cardCode":"{{sourceKey}}","tokenContent":{{sessionString}},"allowOverwrite":true}',
       authType: null,
       authConfig: null,
       verifySuccessRule: '{"data":{"valid":true,"exists":true}}',

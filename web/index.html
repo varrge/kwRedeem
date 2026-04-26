@@ -42,10 +42,6 @@
             参考标准卡密兑换流程设计，保留“验证卡密 -> 提交 Session -> 等待激活”的清晰链路，
             同时加入更现代、更偏游戏化的视觉风格。
           </p>
-          <div class="hero-actions">
-            <a class="ghost-link" href="https://chatgpt.com" target="_blank" rel="noreferrer">打开 ChatGPT</a>
-            <a class="ghost-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noreferrer">打开 Session 页面</a>
-          </div>
         </div>
         <div class="hero-side">
           <div class="status-card">
@@ -138,19 +134,6 @@
                 placeholder='例如 {"user":{"email":"demo@example.com"}}'
               ></textarea>
             </label>
-            <fieldset class="field radio-field">
-              <legend>是否放弃当前账号剩余会员时间（可选）</legend>
-              <div class="choice-group">
-                <label class="choice-item">
-                  <input type="radio" name="abandon-remaining-time" value="false" checked />
-                  <span>不放弃，保留当前账号剩余会员时间</span>
-                </label>
-                <label class="choice-item">
-                  <input type="radio" name="abandon-remaining-time" value="true" />
-                  <span>放弃剩余会员时间，按新激活规则提交</span>
-                </label>
-              </div>
-            </fieldset>
             <button type="submit" id="redeem-submit" disabled>Submit Mission</button>
           </form>
           <div id="redeem-result" class="result muted">卡密验证通过后才能提交。</div>
@@ -167,6 +150,10 @@
             <li>如果接口处理较慢，可使用订单号反复查询。</li>
             <li>失败任务会进入重试或后台人工处理流程。</li>
           </ul>
+          <div class="intel-actions">
+            <a class="ghost-link" href="https://chatgpt.com" target="_blank" rel="noreferrer">打开 ChatGPT</a>
+            <a class="ghost-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noreferrer">打开 Session 页面</a>
+          </div>
         </aside>
       </section>
 

@@ -99,12 +99,20 @@ function shouldConfirmOverwrite(sessionData) {
   return extractPlanType(sessionData).toLowerCase().includes("plus");
 }
 
-function isTokenInvalidMessage(message) {
+function isSessionFixNeededMessage(message) {
   return [
     "token已失效",
     "token无效",
     "token 已失效",
     "token 无效",
+    "token内容格式错误",
+    "token 内容格式错误",
+    "session格式错误",
+    "session 格式错误",
+    "缺少account字段",
+    "缺少 account 字段",
+    "missing account",
+    "account field is required",
     "token expired",
     "token invalid",
     "invalid token",
@@ -152,13 +160,13 @@ function renderVerifyResult(payload) {
 function renderRedeemSuccess(payload) {
   const liveStatus = payload.job?.status || payload.status || "processing";
   const apiMessage = getApiMessage(payload.job || {});
-  const tokenInvalid = isTokenInvalidMessage(apiMessage) || isTokenInvalidMessage(payload.errorMessage);
+  const sessionFixNeeded = isSessionFixNeededMessage(apiMessage) || isSessionFixNeededMessage(payload.errorMessage);
   const statusHint = {
     pending: "任务已进入队列，等待系统处理。",
     processing: "任务正在处理中，状态会自动刷新。",
     succeeded: "任务已完成，无需手动刷新。",
-    failed: tokenInvalid
-      ? "Session 已失效，请重新获取后再提交。当前卡密会自动释放，可重新发起兑换。"
+    failed: sessionFixNeeded
+      ? "Session 内容有误或已失效，请修正后重新提交。当前卡密会自动释放，可重新发起兑换。"
       : "任务处理失败，请根据错误信息或稍后重试。",
     cancelled: "任务已取消。"
   }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";

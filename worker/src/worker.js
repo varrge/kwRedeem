@@ -129,16 +129,43 @@ function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
   }
 
   const normalized = messages.join("\n").toLowerCase();
-  return [
+  const exactKeywords = [
     "token已失效",
     "token无效",
     "token 已失效",
     "token 无效",
+    "token内容格式错误",
+    "token 内容格式错误",
+    "session格式错误",
+    "session 格式错误",
+    "缺少account字段",
+    "缺少 account 字段",
+    "missing account",
+    "account field is required",
     "token expired",
     "token invalid",
     "invalid token",
     "expired token"
-  ].some((keyword) => normalized.includes(keyword));
+  ];
+
+  if (exactKeywords.some((keyword) => normalized.includes(keyword))) {
+    return true;
+  }
+
+  // Treat obvious user-correctable payload errors as fail-fast so the card can be resubmitted immediately.
+  return (
+    (normalized.includes("token") || normalized.includes("session")) &&
+    (
+      normalized.includes("格式错误")
+      || normalized.includes("format error")
+      || normalized.includes("invalid format")
+      || normalized.includes("missing")
+      || normalized.includes("缺少")
+      || normalized.includes("字段")
+      || normalized.includes("field")
+      || normalized.includes("account")
+    )
+  );
 }
 
 async function invokeEndpoint(job, order, cdkey, site, endpoint) {

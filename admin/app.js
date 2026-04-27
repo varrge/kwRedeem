@@ -35,6 +35,15 @@ const refs = {
   systemUpdateLog: document.querySelector("#system-update-log"),
   batchSite: document.querySelector("#batch-site"),
   singleSite: document.querySelector("#single-site"),
+  subCardTypeForm: document.querySelector("#sub-card-type-form"),
+  subCtName: document.querySelector("#sub-ct-name"),
+  subCtTotal: document.querySelector("#sub-ct-total"),
+  subCtEditId: document.querySelector("#sub-ct-edit-id"),
+  subCtSubmitBtn: document.querySelector("#sub-ct-submit-btn"),
+  subCtCancelBtn: document.querySelector("#sub-ct-cancel-btn"),
+  subCtResult: document.querySelector("#sub-ct-result"),
+  subCardTypeList: document.querySelector("#sub-card-type-list"),
+  subRequestList: document.querySelector("#sub-request-list"),
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
 };
@@ -384,6 +393,87 @@ async function refreshSystemUpdateStatus() {
   }
 }
 
+const stabilityLabels = { stable: "稳定", bumpy: "颠簸", danger: "危险" };
+
+function renderStability(value) {
+  const label = stabilityLabels[value] || value;
+  return `<span class="table-badge stability-${value}">${label}</span>`;
+}
+
+async function refreshSubscriptionCardTypes() {
+  const payload = await api("/api/admin/subscriptions/card-types");
+  renderTable(refs.subCardTypeList, [
+    { label: "名称", render: (item) => `<strong>${escapeHtml(item.name)}</strong>` },
+    { label: "总订阅量", render: (item) => item.totalSubscriptions },
+    { label: "总掉订阅", render: (item) => item.totalDrops },
+    { label: "今日掉订阅", render: (item) => item.todayDrops },
+    { label: "稳定性", render: (item) => renderStability(item.stability) },
+    { label: "可见", render: (item) => item.visible ? renderStatus("active") : renderStatus("disabled") },
+    { label: "操作", render: (item) => `
+      <button class="primary-btn small" type="button" onclick="editSubCardType('${escapeHtml(item.id)}', '${escapeHtml(item.name)}', ${item.totalSubscriptions})">编辑</button>
+      <button class="ghost-btn small" style="padding:6px 12px;font-size:13px" type="button" onclick="toggleSubCardTypeVisibility('${escapeHtml(item.id)}')">${item.visible ? "隐藏" : "显示"}</button>
+    ` }
+  ], payload.items, "暂无卡种数据");
+}
+
+async function refreshSubscriptionRequests() {
+  const payload = await api("/api/admin/subscriptions/requests");
+  renderTable(refs.subRequestList, [
+    { label: "订单号/QQ", render: (item) => `<code>${escapeHtml(item.identifier)}</code>` },
+    { label: "卡种", render: (item) => escapeHtml(item.card_type_name || "-") },
+    { label: "类型", render: (item) => escapeHtml(item.drop_type) },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "提交时间", render: (item) => `<span style="font-size:12px">${item.created_at}</span>` },
+    { label: "操作", render: (item) => item.status === "pending" ? `
+      <button class="primary-btn small" type="button" onclick="reviewSubRequest('${escapeHtml(item.id)}', 'approve')">批准</button>
+      <button class="ghost-btn small" style="padding:6px 12px;font-size:13px" type="button" onclick="reviewSubRequest('${escapeHtml(item.id)}', 'reject')">否决</button>
+    ` : `<span style="font-size:12px;color:var(--muted)">${item.reviewed_by ? `${item.reviewed_by}` : "-"}</span>` }
+  ], payload.items, "暂无订阅申请");
+}
+
+async function refreshSubscriptions() {
+  await Promise.all([
+    refreshSubscriptionCardTypes(),
+    refreshSubscriptionRequests()
+  ]);
+}
+
+async function editSubCardType(id, name, totalSubscriptions) {
+  refs.subCtEditId.value = id;
+  refs.subCtName.value = name;
+  refs.subCtTotal.value = totalSubscriptions;
+  refs.subCtSubmitBtn.textContent = "保存修改";
+  refs.subCtCancelBtn.classList.remove("hidden");
+  refs.subCtName.focus();
+}
+
+async function toggleSubCardTypeVisibility(id) {
+  try {
+    await api(`/api/admin/subscriptions/card-types/${id}/visibility`, { method: "PATCH" });
+    await refreshSubscriptions();
+  } catch (error) {
+    setHint(refs.subCtResult, error.message);
+  }
+}
+
+async function reviewSubRequest(id, action) {
+  const label = action === "approve" ? "批准" : "否决";
+  if (!window.confirm(`确认${label}该订阅申请？`)) return;
+  try {
+    await api(`/api/admin/subscriptions/requests/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ action })
+    });
+    await refreshSubscriptions();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+window.editSubCardType = editSubCardType;
+window.toggleSubCardTypeVisibility = toggleSubCardTypeVisibility;
+window.reviewSubRequest = reviewSubRequest;
+
 function getCheckedValues(selector) {
   return Array.from(document.querySelectorAll(selector))
     .filter((element) => element.checked)
@@ -400,7 +490,8 @@ async function refreshAll() {
     refreshOrders(),
     refreshJobs(),
     refreshLogs(),
-    refreshSystemVersion()
+    refreshSystemVersion(),
+    refreshSubscriptions()
   ]);
 }
 
@@ -529,6 +620,39 @@ refs.retryJobsBtn.addEventListener("click", async () => {
   } catch (error) {
     alert(error.message);
   }
+});
+
+refs.subCardTypeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editId = refs.subCtEditId.value;
+  const body = {
+    name: refs.subCtName.value.trim(),
+    totalSubscriptions: parseInt(refs.subCtTotal.value, 10) || 0
+  };
+  if (editId) body.id = editId;
+
+  try {
+    await api("/api/admin/subscriptions/card-types", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    refs.subCardTypeForm.reset();
+    refs.subCtEditId.value = "";
+    refs.subCtSubmitBtn.textContent = "添加卡种";
+    refs.subCtCancelBtn.classList.add("hidden");
+    setHint(refs.subCtResult, editId ? "卡种已更新" : "卡种已添加");
+    await refreshSubscriptions();
+  } catch (error) {
+    setHint(refs.subCtResult, error.message);
+  }
+});
+
+refs.subCtCancelBtn.addEventListener("click", () => {
+  refs.subCardTypeForm.reset();
+  refs.subCtEditId.value = "";
+  refs.subCtSubmitBtn.textContent = "添加卡种";
+  refs.subCtCancelBtn.classList.add("hidden");
+  setHint(refs.subCtResult, "");
 });
 
 refs.refreshBtn.addEventListener("click", () => {

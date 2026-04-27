@@ -343,6 +343,12 @@ tr:hover td { background: rgba(255,255,255,0.01); }
 .status-active, .status-succeeded { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
 .status-pending, .status-processing { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
 .status-disabled, .status-failed, .status-void { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
+.status-approved { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
+.status-rejected { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
+
+.stability-stable { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
+.stability-bumpy { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
+.stability-danger { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
 
 code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
 

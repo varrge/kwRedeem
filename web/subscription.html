@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KaWang 订阅状态</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .sub-dashboard {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 32px;
+      }
+
+      .dash-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 28px;
+        text-align: center;
+        backdrop-filter: blur(18px);
+      }
+
+      .dash-card .dash-label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .dash-card .dash-value {
+        font-size: 36px;
+        font-weight: 800;
+        margin-top: 8px;
+        display: block;
+      }
+
+      .dash-value.today { color: var(--error); }
+      .dash-value.total { color: var(--primary); }
+
+      .sub-table-wrapper {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 24px;
+        margin-bottom: 32px;
+        backdrop-filter: blur(18px);
+        overflow-x: auto;
+      }
+
+      .sub-table-wrapper h3 {
+        margin: 0 0 16px;
+        font-size: 16px;
+        color: var(--primary);
+      }
+
+      .sub-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .sub-table th {
+        text-align: left;
+        padding: 12px 16px;
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        font-weight: 700;
+        border-bottom: 2px solid var(--line);
+      }
+
+      .sub-table td {
+        padding: 14px 16px;
+        font-size: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .sub-table tr:hover td {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .stability-tag {
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        display: inline-block;
+      }
+
+      .stability-stable { color: #9ef3cf; background: rgba(67, 213, 159, 0.12); }
+      .stability-bumpy { color: #ffd58a; background: rgba(255, 213, 138, 0.12); }
+      .stability-danger { color: #ffc1d2; background: rgba(255, 127, 159, 0.12); }
+
+      .sub-form-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 32px;
+        backdrop-filter: blur(18px);
+      }
+
+      .sub-form-card h3 {
+        margin: 0 0 20px;
+        font-size: 16px;
+        color: var(--primary);
+      }
+
+      .sub-form {
+        display: grid;
+        gap: 16px;
+      }
+
+      .sub-form .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .sub-form .field label {
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      .sub-form select {
+        width: 100%;
+        background: rgba(7, 12, 27, 0.85);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px 16px;
+        color: var(--text);
+        font-size: 15px;
+        outline: none;
+        cursor: pointer;
+        transition: all 0.2s;
+        appearance: none;
+        -webkit-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2391a2cf' stroke-width='2' fill='none'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 16px center;
+      }
+
+      .sub-form select:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 4px rgba(113, 167, 255, 0.1);
+      }
+
+      .sub-hint {
+        margin-top: 16px;
+        padding: 16px;
+        border-radius: 14px;
+        font-size: 14px;
+        text-align: center;
+        display: none;
+      }
+
+      .sub-hint.show { display: block; }
+      .sub-hint.success { background: rgba(67, 213, 159, 0.08); border: 1px solid var(--success); color: var(--success); }
+      .sub-hint.error { background: rgba(255, 127, 159, 0.08); border: 1px solid var(--error); color: var(--error); }
+
+      .empty-row {
+        text-align: center;
+        color: var(--muted);
+        padding: 32px 16px;
+      }
+
+      @media (max-width: 600px) {
+        .sub-dashboard { grid-template-columns: 1fr; }
+        .sub-form-card { padding: 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="bg-grid"></div>
+
+    <main class="page">
+      <header class="topbar">
+        <a class="brand" href="./index.html">
+          <span class="brand-mark">K</span>
+          <span class="brand-copy">
+            <strong>KaWang</strong>
+            <small>Subscription</small>
+          </span>
+        </a>
+        <nav class="topnav">
+          <a class="nav-btn" href="./index.html">兑换中心</a>
+          <button class="nav-btn active">订阅状态</button>
+        </nav>
+      </header>
+
+      <!-- Dashboard -->
+      <div class="sub-dashboard">
+        <div class="dash-card">
+          <span class="dash-label">今日掉订阅</span>
+          <span class="dash-value today" id="today-drops">--</span>
+        </div>
+        <div class="dash-card">
+          <span class="dash-label">总掉订阅</span>
+          <span class="dash-value total" id="total-drops">--</span>
+        </div>
+      </div>
+
+      <!-- Card Types Table -->
+      <div class="sub-table-wrapper">
+        <h3>各卡种订阅情况</h3>
+        <table class="sub-table">
+          <thead>
+            <tr>
+              <th>卡种名称</th>
+              <th>总订阅量</th>
+              <th>总掉订阅</th>
+              <th>今日掉订阅</th>
+              <th>稳定性</th>
+            </tr>
+          </thead>
+          <tbody id="card-type-body">
+            <tr><td colspan="5" class="empty-row">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Submit Form -->
+      <div class="sub-form-card">
+        <h3>提交订阅申请</h3>
+        <form class="sub-form" id="sub-form">
+          <div class="field">
+            <label>订单号 / QQ号</label>
+            <input id="sub-identifier" placeholder="请输入订单号或QQ号" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label>选择卡种</label>
+            <select id="sub-card-type">
+              <option value="">加载中...</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>类型</label>
+            <select id="sub-drop-type">
+              <option value="">请选择类型</option>
+              <option value="平安夜">平安夜</option>
+              <option value="被杀害">被杀害</option>
+            </select>
+          </div>
+          <button type="submit" class="primary-btn">提交申请</button>
+        </form>
+        <div class="sub-hint" id="sub-hint"></div>
+      </div>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const API_BASE = (window.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
+
+      const stabilityLabels = { stable: "稳定", bumpy: "颠簸", danger: "危险" };
+
+      async function fetchJson(path, opts = {}) {
+        const res = await fetch(`${API_BASE}${path}`, {
+          headers: { "Content-Type": "application/json" },
+          ...opts
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "请求失败");
+        return data;
+      }
+
+      function escapeHtml(v) {
+        return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+
+      function showHint(msg, type) {
+        const el = document.getElementById("sub-hint");
+        el.textContent = msg;
+        el.className = `sub-hint show ${type}`;
+      }
+
+      async function loadDashboard() {
+        try {
+          const data = await fetchJson("/api/public/subscriptions/dashboard");
+          document.getElementById("today-drops").textContent = data.todayDrops;
+          document.getElementById("total-drops").textContent = data.totalDrops;
+        } catch { /* silent */ }
+      }
+
+      async function loadCardTypes() {
+        try {
+          const data = await fetchJson("/api/public/subscriptions/card-types");
+          const tbody = document.getElementById("card-type-body");
+          const select = document.getElementById("sub-card-type");
+
+          if (!data.items.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-row">暂无卡种数据</td></tr>';
+            select.innerHTML = '<option value="">暂无可选卡种</option>';
+            return;
+          }
+
+          tbody.innerHTML = data.items.map(ct => `
+            <tr>
+              <td><strong>${escapeHtml(ct.name)}</strong></td>
+              <td>${ct.totalSubscriptions}</td>
+              <td>${ct.totalDrops}</td>
+              <td>${ct.todayDrops}</td>
+              <td><span class="stability-tag stability-${ct.stability}">${stabilityLabels[ct.stability] || ct.stability}</span></td>
+            </tr>
+          `).join("");
+
+          select.innerHTML = '<option value="">请选择卡种</option>' +
+            data.items.map(ct => `<option value="${ct.id}">${escapeHtml(ct.name)}</option>`).join("");
+        } catch {
+          document.getElementById("card-type-body").innerHTML =
+            '<tr><td colspan="5" class="empty-row">加载失败</td></tr>';
+        }
+      }
+
+      document.getElementById("sub-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const identifier = document.getElementById("sub-identifier").value.trim();
+        const cardTypeId = document.getElementById("sub-card-type").value;
+        const dropType = document.getElementById("sub-drop-type").value;
+
+        if (!identifier) return showHint("请输入订单号或QQ号", "error");
+        if (!cardTypeId) return showHint("请选择卡种", "error");
+        if (!dropType) return showHint("请选择类型", "error");
+
+        try {
+          await fetchJson("/api/public/subscriptions/submit", {
+            method: "POST",
+            body: JSON.stringify({ identifier, cardTypeId, dropType })
+          });
+          showHint("提交成功，等待管理员审批", "success");
+          document.getElementById("sub-form").reset();
+          loadDashboard();
+          loadCardTypes();
+        } catch (err) {
+          showHint(err.message, "error");
+        }
+      });
+
+      loadDashboard();
+      loadCardTypes();
+    </script>
+  </body>
+</html>

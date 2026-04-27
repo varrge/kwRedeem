@@ -258,6 +258,26 @@ function createSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS subscription_card_types (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      total_subscriptions INTEGER NOT NULL DEFAULT 0,
+      visible INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS subscription_requests (
+      id TEXT PRIMARY KEY,
+      identifier TEXT NOT NULL,
+      card_type_id TEXT NOT NULL,
+      drop_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      reviewed_by TEXT
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -282,6 +302,8 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_jobs_site ON activation_jobs(site_id, status, next_retry_at);
     CREATE INDEX IF NOT EXISTS idx_logs_action ON admin_audit_logs(action, created_at);
     CREATE INDEX IF NOT EXISTS idx_sites_status ON sites(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sub_requests_card_status ON subscription_requests(card_type_id, status, reviewed_at);
+    CREATE INDEX IF NOT EXISTS idx_sub_requests_status ON subscription_requests(status, created_at);
   `);
 }
 

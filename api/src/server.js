@@ -594,6 +594,31 @@ app.get("/healthz", async () => ({
   now: nowIso()
 }));
 
+app.get("/api/credential-status", async () => {
+  try {
+    const upstream = await fetch("https://stock.makerich.club/api/credential-status", {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    return await upstream.json();
+  } catch (error) {
+    return { ok: false, fetched_at: nowIso(), data: null, error: error.message };
+  }
+});
+
+app.get("/api/stock-sparklines", async (request) => {
+  const days = request.query.days || "1";
+  try {
+    const upstream = await fetch(
+      `https://stock.makerich.club/api/stock-sparklines?days=${encodeURIComponent(days)}`,
+      { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) }
+    );
+    return await upstream.json();
+  } catch (error) {
+    return { series: {}, error: error.message };
+  }
+});
+
 app.post("/api/mock/verify", async (request, reply) => {
   const sourceKey = request.body?.card || request.body?.sourceKey;
   if (!sourceKey) {
@@ -1685,6 +1710,248 @@ app.get("/api/admin/logs", { preHandler: requireAdmin }, async () => {
   }));
 
   return { items };
+});
+
+// ── Subscription System ──
+
+function getTodayStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+}
+
+function getThreeDaysAgoStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 3).toISOString();
+}
+
+function computeStability(dropsLast3Days, totalSubscriptions) {
+  if (!totalSubscriptions || totalSubscriptions <= 0) return "stable";
+  const avgDaily = dropsLast3Days / 3;
+  const ratio = avgDaily / totalSubscriptions;
+  if (ratio === 0) return "stable";
+  if (ratio >= 0.5) return "danger";
+  return "bumpy";
+}
+
+app.get("/api/public/subscriptions/dashboard", async () => {
+  const todayStart = getTodayStart();
+  const todayDrops = db.prepare(`
+    SELECT COUNT(*) AS count FROM subscription_requests
+    WHERE status = 'approved' AND reviewed_at >= ?
+  `).get(todayStart).count;
+  const totalDrops = db.prepare(`
+    SELECT COUNT(*) AS count FROM subscription_requests
+    WHERE status = 'approved'
+  `).get().count;
+  return { todayDrops, totalDrops };
+});
+
+app.get("/api/public/subscriptions/card-types", async () => {
+  const todayStart = getTodayStart();
+  const threeDaysAgo = getThreeDaysAgoStart();
+  const cardTypes = db.prepare(`
+    SELECT * FROM subscription_card_types WHERE visible = 1 ORDER BY created_at DESC
+  `).all();
+
+  const items = cardTypes.map((ct) => {
+    const todayDrops = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+    `).get(ct.id, todayStart).count;
+    const dropsLast3Days = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+    `).get(ct.id, threeDaysAgo).count;
+    const totalDrops = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved'
+    `).get(ct.id).count;
+    return {
+      id: ct.id,
+      name: ct.name,
+      totalSubscriptions: ct.total_subscriptions,
+      totalDrops,
+      todayDrops,
+      stability: computeStability(dropsLast3Days, ct.total_subscriptions)
+    };
+  });
+
+  return { items };
+});
+
+app.post("/api/public/subscriptions/submit", async (request, reply) => {
+  const schema = z.object({
+    identifier: z.string().min(1, "订单号或QQ号不能为空"),
+    cardTypeId: z.string().min(1, "请选择卡种"),
+    dropType: z.enum(["平安夜", "被杀害"], { message: "请选择类型" })
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: parsed.error.issues[0]?.message || "参数不正确" });
+  }
+
+  const cardType = db.prepare("SELECT id FROM subscription_card_types WHERE id = ? AND visible = 1").get(parsed.data.cardTypeId);
+  if (!cardType) {
+    return reply.code(400).send({ message: "卡种不存在或已隐藏" });
+  }
+
+  const todayStart = getTodayStart();
+  const duplicate = db.prepare(`
+    SELECT id FROM subscription_requests
+    WHERE identifier = ? AND created_at >= ?
+  `).get(parsed.data.identifier.trim(), todayStart);
+  if (duplicate) {
+    return reply.code(400).send({ message: "该订单号/QQ号今日已提交过，请勿重复提交" });
+  }
+
+  const id = nanoid(16);
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO subscription_requests (id, identifier, card_type_id, drop_type, status, created_at)
+    VALUES (?, ?, ?, ?, 'pending', ?)
+  `).run(id, parsed.data.identifier.trim(), parsed.data.cardTypeId, parsed.data.dropType, now);
+
+  return { id, message: "提交成功，等待管理员审批" };
+});
+
+// ── Subscription Admin ──
+
+app.get("/api/admin/subscriptions/card-types", { preHandler: requireAdmin }, async () => {
+  const todayStart = getTodayStart();
+  const threeDaysAgo = getThreeDaysAgoStart();
+  const cardTypes = db.prepare("SELECT * FROM subscription_card_types ORDER BY created_at DESC").all();
+
+  const items = cardTypes.map((ct) => {
+    const todayDrops = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+    `).get(ct.id, todayStart).count;
+    const dropsLast3Days = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+    `).get(ct.id, threeDaysAgo).count;
+    const totalDrops = db.prepare(`
+      SELECT COUNT(*) AS count FROM subscription_requests
+      WHERE card_type_id = ? AND status = 'approved'
+    `).get(ct.id).count;
+    return {
+      id: ct.id,
+      name: ct.name,
+      totalSubscriptions: ct.total_subscriptions,
+      totalDrops,
+      todayDrops,
+      stability: computeStability(dropsLast3Days, ct.total_subscriptions),
+      visible: ct.visible,
+      createdAt: ct.created_at,
+      updatedAt: ct.updated_at
+    };
+  });
+
+  return { items };
+});
+
+app.post("/api/admin/subscriptions/card-types", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    id: z.string().optional(),
+    name: z.string().min(1, "卡种名称不能为空"),
+    totalSubscriptions: z.number().int().min(0).default(0)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: parsed.error.issues[0]?.message || "参数不正确" });
+  }
+
+  const now = nowIso();
+  const id = parsed.data.id || nanoid(16);
+  const exists = db.prepare("SELECT id FROM subscription_card_types WHERE id = ?").get(id);
+
+  if (exists) {
+    db.prepare(`
+      UPDATE subscription_card_types SET name = ?, total_subscriptions = ?, updated_at = ? WHERE id = ?
+    `).run(parsed.data.name, parsed.data.totalSubscriptions, now, id);
+  } else {
+    db.prepare(`
+      INSERT INTO subscription_card_types (id, name, total_subscriptions, visible, created_at, updated_at)
+      VALUES (?, ?, ?, 1, ?, ?)
+    `).run(id, parsed.data.name, parsed.data.totalSubscriptions, now, now);
+  }
+
+  createAuditLog({
+    action: "subscription.cardType.upsert",
+    actor: request.admin.username,
+    resourceType: "subscription_card_type",
+    resourceId: id,
+    detail: parsed.data
+  });
+
+  return { id };
+});
+
+app.patch("/api/admin/subscriptions/card-types/:id/visibility", { preHandler: requireAdmin }, async (request, reply) => {
+  const ct = db.prepare("SELECT * FROM subscription_card_types WHERE id = ?").get(request.params.id);
+  if (!ct) {
+    return reply.code(404).send({ message: "卡种不存在" });
+  }
+
+  const newVisible = ct.visible ? 0 : 1;
+  const now = nowIso();
+  db.prepare("UPDATE subscription_card_types SET visible = ?, updated_at = ? WHERE id = ?").run(newVisible, now, ct.id);
+
+  createAuditLog({
+    action: "subscription.cardType.toggleVisibility",
+    actor: request.admin.username,
+    resourceType: "subscription_card_type",
+    resourceId: ct.id,
+    detail: { from: ct.visible, to: newVisible }
+  });
+
+  return { id: ct.id, visible: newVisible };
+});
+
+app.get("/api/admin/subscriptions/requests", { preHandler: requireAdmin }, async () => {
+  const items = db.prepare(`
+    SELECT r.*, ct.name AS card_type_name
+    FROM subscription_requests r
+    LEFT JOIN subscription_card_types ct ON ct.id = r.card_type_id
+    ORDER BY r.created_at DESC
+    LIMIT 200
+  `).all();
+  return { items };
+});
+
+app.post("/api/admin/subscriptions/requests/:id/review", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    action: z.enum(["approve", "reject"])
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "操作参数不正确" });
+  }
+
+  const req = db.prepare("SELECT * FROM subscription_requests WHERE id = ?").get(request.params.id);
+  if (!req) {
+    return reply.code(404).send({ message: "申请不存在" });
+  }
+  if (req.status !== "pending") {
+    return reply.code(400).send({ message: "该申请已被处理" });
+  }
+
+  const now = nowIso();
+  const newStatus = parsed.data.action === "approve" ? "approved" : "rejected";
+
+  db.prepare(`
+    UPDATE subscription_requests SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?
+  `).run(newStatus, now, request.admin.username, req.id);
+
+  createAuditLog({
+    action: `subscription.request.${parsed.data.action}`,
+    actor: request.admin.username,
+    resourceType: "subscription_request",
+    resourceId: req.id,
+    detail: { identifier: req.identifier, cardTypeId: req.card_type_id, dropType: req.drop_type }
+  });
+
+  return { id: req.id, status: newStatus };
 });
 
 app.setErrorHandler((error, _request, reply) => {

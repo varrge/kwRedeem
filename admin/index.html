@@ -63,6 +63,9 @@
           <button class="nav-item" data-tab="logs">
             <span class="icon">📝</span> 操作日志
           </button>
+          <button class="nav-item" data-tab="subscriptions">
+            <span class="icon">📋</span> 订阅系统
+          </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
@@ -212,6 +215,46 @@
           </div>
           <div class="card">
             <div id="log-list" class="table-wrapper"></div>
+          </div>
+        </section>
+
+        <!-- Subscriptions -->
+        <section class="tab-panel hidden" data-panel="subscriptions">
+          <div class="content-header">
+            <h2>订阅系统</h2>
+            <p>管理订阅卡种与审批订阅申请</p>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3>新增卡种</h3></div>
+            <form id="sub-card-type-form" class="stack">
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>卡种名称</span>
+                  <input id="sub-ct-name" placeholder="输入卡种名称" />
+                </label>
+                <label class="field">
+                  <span>总订阅量</span>
+                  <input id="sub-ct-total" type="number" min="0" placeholder="不填默认为 0" />
+                </label>
+              </div>
+              <input type="hidden" id="sub-ct-edit-id" value="" />
+              <div class="header-actions">
+                <button type="submit" class="primary-btn" id="sub-ct-submit-btn">添加卡种</button>
+                <button type="button" class="ghost-btn hidden" id="sub-ct-cancel-btn">取消编辑</button>
+              </div>
+            </form>
+            <div id="sub-ct-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>卡种列表</h3></div>
+            <div id="sub-card-type-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>订阅申请</h3></div>
+            <div id="sub-request-list" class="table-wrapper"></div>
           </div>
         </section>
 

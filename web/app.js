@@ -51,7 +51,20 @@ function goToStep(step) {
 }
 
 document.querySelectorAll(".nav-btn").forEach((btn) => {
-  btn.addEventListener("click", () => switchView(btn.dataset.target));
+  btn.addEventListener("click", () => {
+    const target = btn.dataset.target;
+    if (target === "stock") {
+      window.location.href = "./stock.html";
+      return;
+    }
+    if (target === "subscription") {
+      window.location.href = "./subscription.html";
+      return;
+    }
+    if (target) {
+      switchView(target);
+    }
+  });
 });
 
 document.querySelector("#back-to-step-1").addEventListener("click", () => goToStep(1));
@@ -541,6 +554,76 @@ verifyForm.addEventListener("submit", async (event) => {
   }
 });
 
+// --- Confirm Modal ---
+
+const confirmModal = document.querySelector("#confirm-modal");
+const confirmEmailEl = document.querySelector("#confirm-email");
+const confirmCdkeyEl = document.querySelector("#confirm-cdkey");
+const confirmAbandonEl = document.querySelector("#confirm-abandon");
+const confirmOkBtn = document.querySelector("#confirm-ok");
+const confirmCancelBtn = document.querySelector("#confirm-cancel");
+
+let pendingRedeemData = null;
+
+function extractEmail(sessionData = {}) {
+  return sessionData.user?.email
+    || sessionData.email
+    || sessionData.account?.email
+    || sessionData.user?.name
+    || "";
+}
+
+function showConfirmModal(email, publicKey, abandonRemainingTime) {
+  confirmEmailEl.textContent = email || "未检测到邮箱";
+  confirmCdkeyEl.textContent = publicKey || "-";
+  confirmAbandonEl.textContent = abandonRemainingTime ? "开启（将覆盖旧会员）" : "关闭（仅续费）";
+  confirmModal.classList.remove("hidden");
+}
+
+function hideConfirmModal() {
+  confirmModal.classList.add("hidden");
+  pendingRedeemData = null;
+}
+
+async function executeRedeem(sessionPayload, abandonRemainingTime) {
+  stopRedeemStatusPolling();
+  setState(redeemResult, "正在提交兑换任务...");
+  const payload = await request("/api/public/redeem", {
+    method: "POST",
+    body: JSON.stringify({
+      publicKey: verifiedKey,
+      sessionPayload,
+      abandonRemainingTime
+    })
+  });
+
+  orderNoInput.value = payload.orderNo;
+  goToStep(3);
+  await refreshRedeemStatus(payload.orderNo);
+  startRedeemStatusPolling(payload.orderNo);
+}
+
+confirmOkBtn.addEventListener("click", async () => {
+  if (!pendingRedeemData) return;
+  const { sessionPayload, abandonRemainingTime } = pendingRedeemData;
+  hideConfirmModal();
+  try {
+    await executeRedeem(sessionPayload, abandonRemainingTime);
+  } catch (error) {
+    setState(redeemResult, error.message, "error");
+  }
+});
+
+confirmCancelBtn.addEventListener("click", () => {
+  hideConfirmModal();
+});
+
+confirmModal.addEventListener("click", (event) => {
+  if (event.target === confirmModal) {
+    hideConfirmModal();
+  }
+});
+
 redeemForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!verifiedKey) {
@@ -552,28 +635,10 @@ redeemForm.addEventListener("submit", async (event) => {
     const sessionPayload = document.querySelector("#session-payload").value.trim();
     const sessionData = parseSessionPayloadInput(sessionPayload);
     const abandonRemainingTime = shouldConfirmOverwrite(sessionData);
-    if (abandonRemainingTime) {
-      const confirmed = window.confirm("检测到当前 Session 账号可能已开通 Plus。确认后将按覆盖提交流程继续，是否继续提交？");
-      if (!confirmed) {
-        return;
-      }
-    }
+    const email = extractEmail(sessionData);
 
-    stopRedeemStatusPolling();
-    setState(redeemResult, "正在提交兑换任务...");
-    const payload = await request("/api/public/redeem", {
-      method: "POST",
-      body: JSON.stringify({
-        publicKey: verifiedKey,
-        sessionPayload,
-        abandonRemainingTime
-      })
-    });
-
-    orderNoInput.value = payload.orderNo;
-    goToStep(3);
-    await refreshRedeemStatus(payload.orderNo);
-    startRedeemStatusPolling(payload.orderNo);
+    pendingRedeemData = { sessionPayload, abandonRemainingTime };
+    showConfirmModal(email, verifiedKey, abandonRemainingTime);
   } catch (error) {
     setState(redeemResult, error.message, "error");
   }

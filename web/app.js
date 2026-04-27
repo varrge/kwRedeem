@@ -9,6 +9,7 @@ const lookupForm = document.querySelector("#lookup-form");
 const orderResult = document.querySelector("#order-result");
 const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
+const statusContainer = document.querySelector("#status-container");
 
 let verifiedKey = null;
 let redeemStatusTimer = null;
@@ -27,6 +28,45 @@ const STATUS_LABELS = {
   cancelled: "已取消",
   unknown: "未知"
 };
+
+// --- Navigation Logic ---
+
+function switchView(target) {
+  document.querySelectorAll(".view-section").forEach((section) => {
+    section.classList.toggle("hidden", section.id !== `${target}-container`);
+  });
+  document.querySelectorAll(".nav-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.target === target);
+  });
+}
+
+function goToStep(step) {
+  document.querySelectorAll(".wizard-pane").forEach((pane) => {
+    pane.classList.toggle("active", pane.id === `step-${step}`);
+  });
+  document.querySelectorAll(".step-dot").forEach((dot) => {
+    const s = parseInt(dot.dataset.step);
+    dot.classList.toggle("active", s === step);
+  });
+}
+
+document.querySelectorAll(".nav-btn").forEach((btn) => {
+  btn.addEventListener("click", () => switchView(btn.dataset.target));
+});
+
+document.querySelector("#back-to-step-1").addEventListener("click", () => goToStep(1));
+document.querySelector("#start-over").addEventListener("click", () => {
+  verifiedKey = null;
+  publicKeyInput.value = "";
+  document.querySelector("#session-payload").value = "";
+  setState(verifyResult, "请输入卡密并点击验证。");
+  setState(redeemResult, "等待提交任务...");
+  redeemSubmit.disabled = true;
+  stopRedeemStatusPolling();
+  goToStep(1);
+});
+
+// --- Existing Logic ---
 
 function setState(element, message, type = "muted") {
   element.className = `result ${type}`;
@@ -131,9 +171,10 @@ function getApiMessage(job = {}) {
 }
 
 function renderVerifyResult(payload) {
+  const title = payload.canRedeem ? "验证成功，正在跳转..." : "卡密验证完成";
   return `
     <div class="result-card">
-      <div class="result-title">卡密验证完成</div>
+      <div class="result-title">${title}</div>
       ${renderStatusBadge(payload.status)}
       <div class="result-grid">
         <div class="result-item">
@@ -172,10 +213,10 @@ function renderRedeemSuccess(payload) {
   }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";
 
   return `
-    <div class="result-card compact-card">
+    <div class="result-card">
       <div class="result-title">任务已提交</div>
       ${renderStatusBadge(liveStatus)}
-      <div class="result-grid compact-grid">
+      <div class="result-grid">
         <div class="result-item">
           <span>订单号</span>
           <strong>${escapeHtml(payload.orderNo)}</strong>
@@ -184,7 +225,7 @@ function renderRedeemSuccess(payload) {
           <span>实时任务状态</span>
           <strong>${renderStatusText(liveStatus)}</strong>
         </div>
-        <div class="result-item">
+        <div class="result-item result-item-wide">
           <span>处理说明</span>
           <strong>${statusHint}</strong>
         </div>
@@ -443,7 +484,7 @@ function renderBatchLookupResults(payload) {
 
 async function refreshRedeemStatus(orderNo) {
   const payload = await request(`/api/public/orders/${encodeURIComponent(orderNo)}`);
-  setRichState(redeemResult, renderRedeemSuccess(payload), "success");
+  statusContainer.innerHTML = renderRedeemSuccess(payload);
   if (!shouldKeepPolling(payload)) {
     stopRedeemStatusPolling();
   }
@@ -487,14 +528,16 @@ verifyForm.addEventListener("submit", async (event) => {
     verifiedKey = payload.canRedeem ? payload.publicKey : null;
     redeemSubmit.disabled = !payload.canRedeem;
     setRichState(verifyResult, renderVerifyResult(payload), payload.canRedeem ? "success" : "error");
+    
     if (payload.canRedeem) {
-      setState(redeemResult, "卡密验证通过，可以提交 session。");
+      setTimeout(() => {
+        goToStep(2);
+      }, 1500);
     }
   } catch (error) {
     verifiedKey = null;
     redeemSubmit.disabled = true;
     setState(verifyResult, error.message, "error");
-    setState(redeemResult, "卡密未通过验证，无法继续提交。", "error");
   }
 });
 
@@ -528,6 +571,7 @@ redeemForm.addEventListener("submit", async (event) => {
     });
 
     orderNoInput.value = payload.orderNo;
+    goToStep(3);
     await refreshRedeemStatus(payload.orderNo);
     startRedeemStatusPolling(payload.orderNo);
   } catch (error) {

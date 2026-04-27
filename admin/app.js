@@ -11,7 +11,6 @@ const refs = {
   refreshBtn: document.querySelector("#refresh-btn"),
   logoutBtn: document.querySelector("#logout-btn"),
   sessionStatus: document.querySelector("#session-status"),
-  sessionDesc: document.querySelector("#session-desc"),
   stats: document.querySelector("#stats"),
   dashboardLogs: document.querySelector("#dashboard-logs"),
   siteResult: document.querySelector("#site-result"),
@@ -36,7 +35,7 @@ const refs = {
   systemUpdateLog: document.querySelector("#system-update-log"),
   batchSite: document.querySelector("#batch-site"),
   singleSite: document.querySelector("#single-site"),
-  navTabs: document.querySelectorAll(".nav-tab"),
+  navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
 };
 
@@ -57,7 +56,7 @@ function clearToken() {
 }
 
 function setHint(element, message) {
-  element.textContent = message;
+  if (element) element.textContent = message;
 }
 
 function escapeHtml(value) {
@@ -76,17 +75,12 @@ function renderStatus(value) {
 function setAuthState(isLoggedIn, username = "") {
   refs.loginCard.classList.toggle("hidden", isLoggedIn);
   refs.adminShell.classList.toggle("hidden", !isLoggedIn);
-  refs.refreshBtn.classList.toggle("hidden", !isLoggedIn);
-  refs.logoutBtn.classList.toggle("hidden", !isLoggedIn);
-  refs.sessionStatus.textContent = isLoggedIn ? `已登录：${username}` : "未登录";
-  refs.sessionDesc.textContent = isLoggedIn
-    ? "后台页签已解锁，可按网站、卡密、任务和日志维度进行统一管理。"
-    : "请先使用管理员账号登录，登录成功后才会加载仪表盘和后台页签。";
+  refs.sessionStatus.textContent = isLoggedIn ? username : "未登录";
 }
 
 function switchTab(tabName) {
   currentTab = tabName;
-  refs.navTabs.forEach((button) => {
+  refs.navItems.forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabName);
   });
   refs.tabPanels.forEach((panel) => {
@@ -98,7 +92,7 @@ function startAutoRefresh() {
   stopAutoRefresh();
   autoRefreshTimer = window.setInterval(() => {
     refreshDashboard().catch(() => {});
-    refreshLogs().catch(() => {});
+    if (currentTab === "logs") refreshLogs().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 }
 
@@ -151,7 +145,7 @@ async function api(path, options = {}) {
 
 function renderTable(container, columns, rows, emptyText = "暂无数据") {
   if (!rows.length) {
-    container.innerHTML = `<p class="hint">${emptyText}</p>`;
+    container.innerHTML = `<p class="hint centered mt-24">${emptyText}</p>`;
     return;
   }
 
@@ -255,34 +249,27 @@ async function refreshSites() {
   const payload = await api("/api/admin/sites");
   populateSiteSelects(payload.items);
   renderTable(refs.siteList, [
-    { label: "网站名", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
-    { label: "验证 API", render: (item) => item.verify_api_url ? `<span class="url-cell">${escapeHtml(item.verify_api_url)}</span>` : "-" },
-    { label: "提交 API", render: (item) => item.submit_api_url ? `<span class="url-cell">${escapeHtml(item.submit_api_url)}</span>` : "-" },
+    { label: "网站名", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code style="font-size:10px;opacity:0.6">${escapeHtml(item.slug)}</code>` },
+    { label: "接口地址", render: (item) => `
+      <div class="health-group">
+        <div>${renderHealthDot(item.last_health_result, "verify")} 验证: <code style="font-size:11px">${escapeHtml(item.verify_api_url || "-")}</code></div>
+        <div>${renderHealthDot(item.last_health_result, "submit")} 提交: <code style="font-size:11px">${escapeHtml(item.submit_api_url || "-")}</code></div>
+      </div>
+    ` },
     { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "健康检查", render: (item) => {
-      const result = item.last_health_result;
-      return `<span class="health-group">${renderHealthDot(result, "verify")} 验证 ${renderHealthDot(result, "submit")} 提交</span>`;
-    }},
-    { label: "最后检测", render: (item) => item.last_health_check || "-" },
+    { label: "最后检测", render: (item) => `<span style="font-size:12px;color:var(--muted)">${item.last_health_check || "-"}</span>` },
     { label: "操作", render: (item) => `
-      <button class="table-action toggle-site-btn" type="button" data-site-id="${escapeHtml(item.id)}" data-status="${escapeHtml(item.status)}">
+      <button class="primary-btn small" type="button" onclick="toggleSiteStatus('${escapeHtml(item.id)}', '${escapeHtml(item.status)}')">
         ${item.status === "active" ? "禁用" : "启用"}
       </button>
-      <button class="table-action health-check-btn" type="button" data-site-id="${escapeHtml(item.id)}">测活</button>
+      <button class="ghost-btn small" style="padding: 6px 12px; font-size:13px" type="button" onclick="healthCheckSite('${escapeHtml(item.id)}')">测活</button>
     ` }
   ], payload.items, "暂无网站数据");
-
-  refs.siteList.querySelectorAll(".toggle-site-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      toggleSiteStatus(button.dataset.siteId, button.dataset.status);
-    });
-  });
-  refs.siteList.querySelectorAll(".health-check-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      healthCheckSite(button.dataset.siteId);
-    });
-  });
 }
+
+// Global exposure for onclick handlers
+window.toggleSiteStatus = toggleSiteStatus;
+window.healthCheckSite = healthCheckSite;
 
 async function refreshBatches() {
   const payload = await api("/api/admin/batches");
@@ -300,12 +287,10 @@ async function refreshCdkeys() {
   renderTable(refs.cdkeyList, [
     { label: "", render: (item) => `<input type="checkbox" class="cdkey-check" value="${item.id}" />` },
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
-    { label: "原始卡密", render: (item) => item.source_key ? `<code>${escapeHtml(item.source_key)}</code>` : "-" },
+    { label: "原始卡密", render: (item) => item.source_key ? `<code style="opacity:0.5">${escapeHtml(item.source_key)}</code>` : "-" },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "前缀", render: (item) => item.prefix },
-    { label: "批次", render: (item) => item.batch_name || "-" },
-    { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "锁定时间", render: (item) => item.locked_at || "-" }
+    { label: "状态", render: (item) => renderStatus(item.status) }
   ], payload.items);
 }
 
@@ -316,7 +301,7 @@ async function refreshOrders() {
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "错误", render: (item) => item.error_message || "-" }
+    { label: "错误", render: (item) => `<span title="${escapeHtml(item.error_message || "")}">${item.error_message ? (item.error_message.slice(0, 20) + "...") : "-"}</span>` }
   ], payload.items);
 }
 
@@ -324,12 +309,11 @@ async function refreshJobs() {
   const payload = await api("/api/admin/jobs");
   renderTable(refs.jobList, [
     { label: "", render: (item) => `<input type="checkbox" class="job-check" value="${item.id}" />` },
-    { label: "任务 ID", render: (item) => `<code>${item.id}</code>` },
     { label: "订单号", render: (item) => `<code>${item.order_no}</code>` },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "尝试", render: (item) => `${item.attempt_count}/${item.max_attempts}` },
-    { label: "错误", render: (item) => item.last_error || "-" }
+    { label: "最后错误", render: (item) => `<span style="font-size:12px;color:var(--error)" title="${escapeHtml(item.last_error || "")}">${item.last_error ? (item.last_error.slice(0, 30) + "...") : "-"}</span>` }
   ], payload.items);
 }
 
@@ -340,7 +324,7 @@ async function refreshLogs() {
     { label: "动作", render: (item) => `<code>${item.action}</code>` },
     { label: "资源", render: (item) => `${item.resource_type}${item.resource_id ? ` / ${item.resource_id}` : ""}` },
     { label: "执行人", render: (item) => item.actor },
-    { label: "详情", render: (item) => item.detail ? `<pre>${JSON.stringify(item.detail, null, 2)}</pre>` : "-" }
+    { label: "详情", render: (item) => item.detail ? `<pre style="font-size:11px">${JSON.stringify(item.detail, null, 2)}</pre>` : "-" }
   ], payload.items);
 }
 
@@ -354,13 +338,11 @@ function renderSystemInfo(payload) {
   const localChanges = payload.localChanges || state.localChanges || [];
   const hasLocalChanges = payload.hasLocalChanges || state.hasLocalChanges || localChanges.length > 0;
   const cards = [
-    ["当前分支", payload.branch || state.branch || "-"],
+    ["分支", payload.branch || state.branch || "-"],
     ["本地版本", shortCommit(payload.localCommit || state.localCommit)],
     ["远端版本", shortCommit(payload.remoteCommit || state.remoteCommit)],
-    ["本地改动", hasLocalChanges ? `${localChanges.length || ""} 个` : "无"],
     ["更新状态", state.status || "idle"],
-    ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "暂无更新"],
-    ["运行环境", payload.nodeEnv || "-"]
+    ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "无"]
   ];
 
   refs.systemVersionCards.innerHTML = cards.map(([label, value]) => `
@@ -370,18 +352,17 @@ function renderSystemInfo(payload) {
     </article>
   `).join("");
 
-  refs.systemUpdateHint.textContent = state.error
-    ? `更新异常：${state.error}`
+  setHint(refs.systemUpdateHint, state.error
+    ? `异常: ${state.error}`
     : hasLocalChanges
-      ? `检测到本地改动，在线更新会先自动暂存到 Git stash：${localChanges.slice(0, 3).join("，")}${localChanges.length > 3 ? "..." : ""}`
-    : `最后状态：${state.status || "idle"}${state.endedAt ? `，结束时间：${state.endedAt}` : ""}`;
-  refs.systemUpdateLog.textContent = payload.log || "暂无更新日志。";
+      ? `检测到本地改动，更新会暂存。`
+    : `最后状态: ${state.status || "idle"}`);
+    
+  refs.systemUpdateLog.textContent = payload.log || "暂无日志";
   refs.checkUpdateBtn.disabled = isBusy;
   refs.startUpdateBtn.disabled = isBusy;
 
-  if (isBusy && !updatePollTimer) {
-    startUpdatePolling();
-  }
+  if (isBusy && !updatePollTimer) startUpdatePolling();
 }
 
 async function refreshSystemVersion() {
@@ -423,20 +404,18 @@ async function refreshAll() {
   ]);
 }
 
-refs.navTabs.forEach((button) => {
+refs.navItems.forEach((button) => {
   button.addEventListener("click", () => {
     switchTab(button.dataset.tab);
   });
 });
 
 refs.healthCheckAllBtn.addEventListener("click", () => {
-  healthCheckAll().catch((error) => {
-    setHint(refs.siteResult, error.message);
-  });
+  healthCheckAll().catch((error) => setHint(refs.siteResult, error.message));
 });
 
 refs.checkUpdateBtn.addEventListener("click", async () => {
-  refs.systemUpdateHint.textContent = "正在检查远端更新...";
+  setHint(refs.systemUpdateHint, "正在检查...");
   try {
     const payload = await api("/api/admin/system/check-update", {
       method: "POST",
@@ -444,15 +423,13 @@ refs.checkUpdateBtn.addEventListener("click", async () => {
     });
     renderSystemInfo(payload);
   } catch (error) {
-    refs.systemUpdateHint.textContent = error.message;
+    setHint(refs.systemUpdateHint, error.message);
   }
 });
 
 refs.startUpdateBtn.addEventListener("click", async () => {
-  const confirmed = window.confirm("确认开始在线更新？系统会备份数据库、拉取代码并重启 PM2 服务。");
-  if (!confirmed) return;
-
-  refs.systemUpdateHint.textContent = "正在启动在线更新任务...";
+  if (!window.confirm("确认开始在线更新？")) return;
+  setHint(refs.systemUpdateHint, "启动中...");
   try {
     const payload = await api("/api/admin/system/update", {
       method: "POST",
@@ -461,7 +438,7 @@ refs.startUpdateBtn.addEventListener("click", async () => {
     renderSystemInfo(payload);
     startUpdatePolling();
   } catch (error) {
-    refs.systemUpdateHint.textContent = error.message;
+    setHint(refs.systemUpdateHint, error.message);
   }
 });
 
@@ -476,7 +453,6 @@ refs.loginForm.addEventListener("submit", async (event) => {
       })
     });
     setToken(payload.token);
-    setHint(refs.loginResult, `登录成功，当前用户：${payload.username}`);
     setAuthState(true, payload.username);
     switchTab(currentTab);
     startAutoRefresh();
@@ -495,11 +471,11 @@ refs.singleCdkeyForm.addEventListener("submit", async (event) => {
         sourceKey: document.querySelector("#single-source-key").value.trim(),
         siteId: refs.singleSite.value,
         prefix: document.querySelector("#single-prefix").value.trim(),
-        note: document.querySelector("#single-note").value.trim()
+        note: ""
       })
     });
     refs.singleCdkeyForm.reset();
-    setHint(refs.singleCdkeyResult, `卡密创建成功，混淆卡密：${payload.publicKey}`);
+    setHint(refs.singleCdkeyResult, `成功: ${payload.publicKey}`);
     await refreshAll();
   } catch (error) {
     setHint(refs.singleCdkeyResult, error.message);
@@ -516,11 +492,11 @@ refs.batchForm.addEventListener("submit", async (event) => {
         prefix: document.querySelector("#batch-prefix").value.trim(),
         siteId: refs.batchSite.value,
         rawKeys: document.querySelector("#batch-raw-keys").value,
-        note: document.querySelector("#batch-note").value.trim()
+        note: ""
       })
     });
     refs.batchForm.reset();
-    setHint(refs.batchResult, `导入成功，批次 ID：${payload.batchId}，导入数量：${payload.importedCount}`);
+    setHint(refs.batchResult, `成功导入 ${payload.importedCount} 条`);
     await refreshAll();
   } catch (error) {
     setHint(refs.batchResult, error.message);
@@ -529,18 +505,11 @@ refs.batchForm.addEventListener("submit", async (event) => {
 
 refs.cdkeyActionBtn.addEventListener("click", async () => {
   const ids = getCheckedValues(".cdkey-check");
-  if (!ids.length) {
-    alert("请先勾选卡密");
-    return;
-  }
-
+  if (!ids.length) return alert("请先勾选卡密");
   try {
     await api("/api/admin/cdkeys/bulk-action", {
       method: "POST",
-      body: JSON.stringify({
-        ids,
-        action: refs.cdkeyAction.value
-      })
+      body: JSON.stringify({ ids, action: refs.cdkeyAction.value })
     });
     await refreshAll();
   } catch (error) {
@@ -550,11 +519,7 @@ refs.cdkeyActionBtn.addEventListener("click", async () => {
 
 refs.retryJobsBtn.addEventListener("click", async () => {
   const ids = getCheckedValues(".job-check");
-  if (!ids.length) {
-    alert("请先勾选任务");
-    return;
-  }
-
+  if (!ids.length) return alert("请先勾选任务");
   try {
     await api("/api/admin/jobs/retry", {
       method: "POST",
@@ -567,9 +532,7 @@ refs.retryJobsBtn.addEventListener("click", async () => {
 });
 
 refs.refreshBtn.addEventListener("click", () => {
-  refreshAll().catch((error) => {
-    alert(error.message);
-  });
+  refreshAll().catch((error) => alert(error.message));
 });
 
 refs.logoutBtn.addEventListener("click", () => {
@@ -577,7 +540,6 @@ refs.logoutBtn.addEventListener("click", () => {
   stopAutoRefresh();
   stopUpdatePolling();
   setAuthState(false);
-  setHint(refs.loginResult, "已退出登录。");
 });
 
 switchTab(currentTab);
@@ -585,9 +547,8 @@ switchTab(currentTab);
 if (getToken()) {
   setAuthState(true, "admin");
   startAutoRefresh();
-  refreshAll().catch((error) => {
-    setHint(refs.loginResult, error.message);
-    stopAutoRefresh();
+  refreshAll().catch(() => {
+    clearToken();
     setAuthState(false);
   });
 } else {

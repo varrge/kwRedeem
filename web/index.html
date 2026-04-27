@@ -13,7 +13,7 @@
 
     <main class="page">
       <header class="topbar">
-        <a class="brand" href="#">
+        <a class="brand" href="/">
           <span class="brand-mark">K</span>
           <span class="brand-copy">
             <strong>KaWang</strong>
@@ -21,158 +21,147 @@
           </span>
         </a>
         <nav class="topnav">
-          <a href="#guide">兑换指引</a>
-          <a href="#mission">开始兑换</a>
-          <a href="#faq">FAQ</a>
+          <button class="nav-btn active" data-target="wizard">兑换中心</button>
+          <button class="nav-btn" data-target="query">订单查询</button>
+          <button class="nav-btn" data-target="faq">常见问题</button>
         </nav>
       </header>
 
-      <section class="guide panel" id="guide">
-        <div class="section-heading">
-          <p class="eyebrow">Guide</p>
-          <h2>4 个步骤完成兑换</h2>
+      <!-- Wizard Section -->
+      <section id="wizard-container" class="view-section">
+        <div class="step-indicator">
+          <div class="step-dot active" data-step="1"><span>1</span><label>验证卡密</label></div>
+          <div class="step-line"></div>
+          <div class="step-dot" data-step="2"><span>2</span><label>提交信息</label></div>
+          <div class="step-line"></div>
+          <div class="step-dot" data-step="3"><span>3</span><label>完成兑换</label></div>
         </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <span class="guide-step">01</span>
-            <h3>输入卡密并校验</h3>
-            <p>系统会检查卡密状态、绑定商品和激活通道，确认是否可兑换。</p>
-          </article>
-          <article class="guide-card">
-            <span class="guide-step">02</span>
-            <h3>登录目标账号</h3>
-            <p>在目标站点保持账号在线状态，避免后续激活失败或返回无效凭证。</p>
-          </article>
-          <article class="guide-card">
-            <span class="guide-step">03</span>
-            <h3>获取 Session JSON</h3>
-            <p>复制完整 Session 信息，粘贴到下方输入框，供系统生成激活任务。</p>
-          </article>
-          <article class="guide-card">
-            <span class="guide-step">04</span>
-            <h3>等待系统分发</h3>
-            <p>提交后会进入异步处理队列，你可以随时使用订单号查询执行结果。</p>
-          </article>
+
+        <div class="wizard-panes">
+          <!-- Step 1: Verify -->
+          <div class="wizard-pane active" id="step-1">
+            <div class="pane-content">
+              <div class="section-heading centered">
+                <p class="eyebrow">Step 1</p>
+                <h2>验证您的卡密</h2>
+                <p class="panel-desc">输入收到的兑换卡密，确认商品信息与可用性。</p>
+              </div>
+              <form id="verify-form" class="stack">
+                <div class="field">
+                  <input id="public-key" name="publicKey" placeholder="请输入卡密 (例如 GPT-XXXX-XXXX)" autocomplete="off" />
+                </div>
+                <button type="submit" class="primary-btn">验证卡密</button>
+              </form>
+              <div id="verify-result" class="result muted">请输入卡密并点击验证。</div>
+            </div>
+          </div>
+
+          <!-- Step 2: Submit Session -->
+          <div class="wizard-pane" id="step-2">
+            <div class="pane-content">
+              <div class="section-heading centered">
+                <p class="eyebrow">Step 2</p>
+                <h2>提交 Session 信息</h2>
+                <p class="panel-desc">请粘贴完整的 Session JSON，系统将为您创建激活任务。</p>
+              </div>
+
+              <div class="quick-nav-group">
+                <a class="quick-nav-btn" href="https://chatgpt.com" target="_blank" rel="noreferrer">
+                  <span>打开 ChatGPT</span>
+                </a>
+                <a class="quick-nav-btn" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noreferrer">
+                  <span>打开 Session 页面</span>
+                </a>
+              </div>
+
+              <form id="redeem-form" class="stack">
+                <div class="field">
+                  <textarea
+                    id="session-payload"
+                    name="sessionPayload"
+                    rows="8"
+                    placeholder='在此粘贴 JSON 格式的 Session 信息...'
+                  ></textarea>
+                </div>
+                <div class="action-group">
+                  <button type="button" class="ghost-btn" id="back-to-step-1">上一步</button>
+                  <button type="submit" id="redeem-submit" class="primary-btn" disabled>确认提交</button>
+                </div>
+              </form>
+              <div id="redeem-result" class="result muted">等待提交任务...</div>
+              
+              <div class="intel-box">
+                <h4>获取方式</h4>
+                <div class="intel-actions">
+                  <a class="intel-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noreferrer">点击获取 Session JSON</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Result -->
+          <div class="wizard-pane" id="step-3">
+            <div class="pane-content">
+              <div class="section-heading centered">
+                <p class="eyebrow">Step 3</p>
+                <h2>激活任务详情</h2>
+                <p class="panel-desc">您的激活任务已提交，系统正在为您处理中。</p>
+              </div>
+              <div id="status-container"></div>
+              <div class="action-group centered">
+                <button type="button" class="primary-btn" id="start-over">再次兑换</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="mission-layout" id="mission">
-        <section class="panel mission-panel">
+      <!-- Query Section -->
+      <section id="query-container" class="view-section hidden">
+        <div class="panel">
           <div class="section-heading">
-            <p class="eyebrow">Step 1</p>
-            <h2>验证卡密</h2>
+            <p class="eyebrow">Lookup</p>
+            <h2>订单与卡密查询</h2>
+            <p class="panel-desc">输入订单号或卡密，追踪处理进度。</p>
           </div>
-          <p class="panel-desc">输入收到的兑换卡密，确认商品、状态和当前可兑换性。</p>
-          <form id="verify-form" class="stack">
-            <label class="field">
-              <span>兑换卡密</span>
-              <input id="public-key" name="publicKey" placeholder="例如 GPT-XXXX-XXXX" autocomplete="off" />
-            </label>
-            <button type="submit">Check CDKEY</button>
+          <form id="lookup-form" class="lookup-form stack">
+            <textarea
+              id="order-no"
+              name="orderNo"
+              rows="4"
+              placeholder="输入一个或多个订单号或卡密，支持换行、空格或逗号分隔..."
+            ></textarea>
+            <button type="submit" class="primary-btn">查询状态</button>
           </form>
-          <div id="verify-result" class="result muted">尚未验证卡密。</div>
-        </section>
+          <div id="order-result" class="result muted">暂无查询信息。</div>
+        </div>
+      </section>
 
-        <section class="panel mission-panel">
+      <!-- FAQ Section -->
+      <section id="faq-container" class="view-section hidden">
+        <div class="panel">
           <div class="section-heading">
-            <p class="eyebrow">Step 2</p>
-            <h2>提交 Session</h2>
+            <p class="eyebrow">FAQ</p>
+            <h2>常见问题</h2>
           </div>
-          <p class="panel-desc">粘贴完整 Session JSON，系统校验通过后会创建异步激活任务。</p>
-          <form id="redeem-form" class="stack">
-            <label class="field">
-              <span>Session JSON</span>
-              <textarea
-                id="session-payload"
-                name="sessionPayload"
-                rows="10"
-                placeholder='例如 {"user":{"email":"demo@example.com"}}'
-              ></textarea>
-            </label>
-            <button type="submit" id="redeem-submit" disabled>Submit Mission</button>
-          </form>
-          <div id="redeem-result" class="result muted">卡密验证通过后才能提交。</div>
-        </section>
-
-        <aside class="panel side-panel">
-          <div class="section-heading">
-            <p class="eyebrow">Mission Intel</p>
-            <h2>兑换说明</h2>
+          <div class="faq-list">
+            <details open>
+              <summary>为什么必须先验证卡密？</summary>
+              <p>先确认卡密处于可兑换状态，再提交 Session，可以减少无效任务进入队列。</p>
+            </details>
+            <details>
+              <summary>提交后多久会有结果？</summary>
+              <p>通常几秒到几十秒，取决于绑定激活通道的处理速度。你可以用订单号反复查询。</p>
+            </details>
+            <details>
+              <summary>如果激活失败怎么办？</summary>
+              <p>系统会按配置自动重试，达到阈值后会进入后台人工处理或重试列表。</p>
+            </details>
+            <details>
+              <summary>Session 会被公开吗？</summary>
+              <p>不会。当前系统按加密方式存储 Session，并且前台不会展示原始敏感内容。</p>
+            </details>
           </div>
-          <ul class="intel-list">
-            <li>请使用已登录状态下导出的有效 Session。</li>
-            <li>卡密一旦激活成功，将立即转为已使用状态。</li>
-            <li>如果接口处理较慢，可使用订单号反复查询。</li>
-            <li>失败任务会进入重试或后台人工处理流程。</li>
-          </ul>
-          <div class="intel-actions">
-            <a class="ghost-link" href="https://chatgpt.com" target="_blank" rel="noreferrer">打开 ChatGPT</a>
-            <a class="ghost-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noreferrer">打开 Session 页面</a>
-          </div>
-        </aside>
-      </section>
-
-      <section class="panel query-panel">
-        <div class="section-heading">
-          <p class="eyebrow">Step 3</p>
-          <h2>查询订单状态 / 卡密批量查询</h2>
-        </div>
-        <form id="lookup-form" class="lookup-form">
-          <textarea
-            id="order-no"
-            name="orderNo"
-            rows="4"
-            placeholder="输入一个或多个订单号或卡密，支持换行、空格或逗号分隔，例如&#10;KW1777019380358627&#10;GPT-XXXX-XXXX"
-          ></textarea>
-          <button type="submit">Track Result</button>
-        </form>
-        <p class="query-tip">最多可一次查询 50 个订单号或卡密，支持混合批量查询。</p>
-        <div id="order-result" class="result muted">暂无订单信息。</div>
-      </section>
-
-      <section class="panel benefits-panel">
-        <div class="section-heading">
-          <p class="eyebrow">Why KaWang</p>
-          <h2>更像游戏运营台的兑换体验</h2>
-        </div>
-        <div class="benefits-grid">
-          <article class="benefit-card">
-            <h3>多通道激活</h3>
-            <p>一个商品可绑定不同激活网址，后台可灵活切换和扩展真实供应商通道。</p>
-          </article>
-          <article class="benefit-card">
-            <h3>批量运营</h3>
-            <p>支持批次导入、前缀混淆、批量启停和失败任务重试，适合卡密型业务日常运营。</p>
-          </article>
-          <article class="benefit-card">
-            <h3>进度可追踪</h3>
-            <p>每次提交都会生成订单号，用户与运营都可以围绕订单状态快速定位问题。</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="panel faq-panel" id="faq">
-        <div class="section-heading">
-          <p class="eyebrow">FAQ</p>
-          <h2>常见问题</h2>
-        </div>
-        <div class="faq-list">
-          <details open>
-            <summary>为什么必须先验证卡密？</summary>
-            <p>先确认卡密处于可兑换状态，再提交 Session，可以减少无效任务进入队列。</p>
-          </details>
-          <details>
-            <summary>提交后多久会有结果？</summary>
-            <p>通常几秒到几十秒，取决于绑定激活通道的处理速度。你可以用订单号反复查询。</p>
-          </details>
-          <details>
-            <summary>如果激活失败怎么办？</summary>
-            <p>系统会按配置自动重试，达到阈值后会进入后台人工处理或重试列表。</p>
-          </details>
-          <details>
-            <summary>Session 会被公开吗？</summary>
-            <p>不会。当前系统按加密方式存储 Session，并且前台不会展示原始敏感内容。</p>
-          </details>
         </div>
       </section>
     </main>

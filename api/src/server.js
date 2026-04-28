@@ -18,6 +18,7 @@ import { evaluateRule, renderJsonTemplate, safeParseJson } from "../../shared/sr
 const app = Fastify({ logger: false });
 const db = getDb();
 const execFileAsync = promisify(execFile);
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
@@ -559,9 +560,14 @@ async function callConfiguredApi(config, context) {
   let responseJson = null;
 
   try {
+    const origin = getUrlOrigin(config.url);
     response = await fetch(config.url, {
       method: config.method || "POST",
       headers: {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": origin ? `${origin}/` : undefined,
+        "Origin": origin || undefined,
         "Content-Type": "application/json",
         ...headers
       },

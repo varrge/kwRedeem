@@ -7,6 +7,7 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, orderStatuses } 
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
 function nowIso() {
   return new Date().toISOString();
@@ -226,9 +227,14 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   let responseJson = null;
 
   try {
+    const origin = getUrlOrigin(remoteConfig.url);
     response = await fetch(remoteConfig.url, {
       method: remoteConfig.method || "POST",
       headers: {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": origin ? `${origin}/` : undefined,
+        "Origin": origin || undefined,
         "Content-Type": "application/json",
         ...headers
       },
@@ -346,9 +352,15 @@ function updateJobPayload(jobId, extraFields) {
 
 async function queryRemoteTask(queryUrl, site) {
   try {
+    const origin = getUrlOrigin(queryUrl);
     const response = await fetch(queryUrl, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": origin ? `${origin}/` : undefined,
+        "Content-Type": "application/json"
+      },
       signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
     });
     const text = await response.text();
@@ -446,7 +458,10 @@ async function processJob(job) {
     return;
   }
 
-  const errorMessage = responseInfo.text || `HTTP ${responseInfo.status}`;
+  let errorMessage = responseInfo.text || `HTTP ${responseInfo.status}`;
+  if (errorMessage.includes("<!doctype") || errorMessage.includes("<!DOCTYPE") || errorMessage.includes("<html") || errorMessage.includes("<HTML")) {
+    errorMessage = `远端服务器返回 HTML 错误页 (HTTP ${responseInfo.status})`;
+  }
   const maxAttempts = site?.max_retries || endpoint?.max_retries || job.max_attempts || 3;
 
   if (isNonRetryableFailure(responseInfo, errorMessage)) {

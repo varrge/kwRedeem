@@ -1780,11 +1780,11 @@ app.get("/api/public/subscriptions/dashboard", async () => {
   const todayStart = getTodayStart();
   const todayDrops = db.prepare(`
     SELECT COUNT(*) AS count FROM subscription_requests
-    WHERE status = 'approved' AND reviewed_at >= ?
+    WHERE status = 'approved' AND drop_type = '被杀害' AND reviewed_at >= ?
   `).get(todayStart).count;
   const totalDrops = db.prepare(`
     SELECT COUNT(*) AS count FROM subscription_requests
-    WHERE status = 'approved'
+    WHERE status = 'approved' AND drop_type = '被杀害'
   `).get().count;
   return { todayDrops, totalDrops };
 });
@@ -1799,15 +1799,15 @@ app.get("/api/public/subscriptions/card-types", async () => {
   const items = cardTypes.map((ct) => {
     const todayDrops = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害' AND reviewed_at >= ?
     `).get(ct.id, todayStart).count;
     const dropsLast3Days = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害' AND reviewed_at >= ?
     `).get(ct.id, threeDaysAgo).count;
     const totalDrops = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved'
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害'
     `).get(ct.id).count;
     return {
       id: ct.id,
@@ -1867,15 +1867,15 @@ app.get("/api/admin/subscriptions/card-types", { preHandler: requireAdmin }, asy
   const items = cardTypes.map((ct) => {
     const todayDrops = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害' AND reviewed_at >= ?
     `).get(ct.id, todayStart).count;
     const dropsLast3Days = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved' AND reviewed_at >= ?
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害' AND reviewed_at >= ?
     `).get(ct.id, threeDaysAgo).count;
     const totalDrops = db.prepare(`
       SELECT COUNT(*) AS count FROM subscription_requests
-      WHERE card_type_id = ? AND status = 'approved'
+      WHERE card_type_id = ? AND status = 'approved' AND drop_type = '被杀害'
     `).get(ct.id).count;
     return {
       id: ct.id,

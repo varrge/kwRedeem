@@ -210,7 +210,6 @@
           <thead>
             <tr>
               <th>卡种名称</th>
-              <th>总订阅量</th>
               <th>总掉订阅</th>
               <th>今日掉订阅</th>
               <th>稳定性</th>
@@ -299,7 +298,6 @@
           tbody.innerHTML = data.items.map(ct => `
             <tr>
               <td><strong>${escapeHtml(ct.name)}</strong></td>
-              <td>${ct.totalSubscriptions}</td>
               <td>${ct.totalDrops}</td>
               <td>${ct.todayDrops}</td>
               <td><span class="stability-tag stability-${ct.stability}">${stabilityLabels[ct.stability] || ct.stability}</span></td>

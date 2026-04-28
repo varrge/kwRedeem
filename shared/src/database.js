@@ -427,7 +427,7 @@ function seedDefaults(db) {
       verifyFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
       submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
       submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
-      timeoutSeconds: 15,
+      timeoutSeconds: 60,
       maxRetries: 3,
       productId: "prod_demo",
       activationEndpointId: null,

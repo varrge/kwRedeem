@@ -561,16 +561,20 @@ async function callConfiguredApi(config, context) {
 
   try {
     const origin = getUrlOrigin(config.url);
+    const fetchHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": origin ? `${origin}/` : undefined,
+      "Origin": origin || undefined,
+      "Content-Type": "application/json",
+      ...headers
+    };
+    if (config.cookies) {
+      fetchHeaders.Cookie = config.cookies;
+    }
     response = await fetch(config.url, {
       method: config.method || "POST",
-      headers: {
-        "User-Agent": BROWSER_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": origin ? `${origin}/` : undefined,
-        "Origin": origin || undefined,
-        "Content-Type": "application/json",
-        ...headers
-      },
+      headers: fetchHeaders,
       body: config.method === "GET" ? undefined : bodyString,
       signal: AbortSignal.timeout((config.timeoutSeconds || env.requestTimeoutMs / 1000 || 15) * 1000)
     });
@@ -734,7 +738,8 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
       s.auth_config,
       s.verify_success_rule,
       s.verify_failure_rule,
-      s.timeout_seconds
+      s.timeout_seconds,
+      s.request_cookies
     FROM cdkeys c
     LEFT JOIN sites s ON s.id = c.site_id
     WHERE c.public_key = ?
@@ -762,7 +767,8 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
       bodyTemplate: key.verify_body_template,
       authType: key.auth_type,
       authConfig: key.auth_config,
-      timeoutSeconds: key.timeout_seconds
+      timeoutSeconds: key.timeout_seconds,
+      cookies: key.request_cookies || null
     }, verifyContext);
 
     const failureMatched = key.verify_failure_rule ? evaluateRule(key.verify_failure_rule, remoteResult) : false;
@@ -1184,6 +1190,37 @@ app.patch("/api/admin/sites/:id/status", { preHandler: requireAdmin }, async (re
   });
 
   return { id: site.id, status: parsed.data.status };
+});
+
+app.patch("/api/admin/sites/:id/cookies", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    requestCookies: z.string().max(4096).default("")
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "Cookie 参数不正确" });
+  }
+
+  const site = getSiteById(request.params.id);
+  if (!site) {
+    return reply.code(404).send({ message: "站点不存在" });
+  }
+
+  const now = nowIso();
+  const value = parsed.data.requestCookies.trim() || null;
+  db.prepare("UPDATE sites SET request_cookies = ?, updated_at = ? WHERE id = ?")
+    .run(value, now, site.id);
+
+  createAuditLog({
+    action: logActions.siteUpdateCookies || "site.update_cookies",
+    actor: request.admin.username,
+    resourceType: "site",
+    resourceId: site.id,
+    detail: { hasCookies: Boolean(value) }
+  });
+
+  return { id: site.id, requestCookies: value };
 });
 
 app.post("/api/admin/sites/:id/health-check", { preHandler: requireAdmin }, async (request, reply) => {

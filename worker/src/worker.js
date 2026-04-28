@@ -228,16 +228,20 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
 
   try {
     const origin = getUrlOrigin(remoteConfig.url);
+    const fetchHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": origin ? `${origin}/` : undefined,
+      "Origin": origin || undefined,
+      "Content-Type": "application/json",
+      ...headers
+    };
+    if (site?.request_cookies) {
+      fetchHeaders.Cookie = site.request_cookies;
+    }
     response = await fetch(remoteConfig.url, {
       method: remoteConfig.method || "POST",
-      headers: {
-        "User-Agent": BROWSER_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": origin ? `${origin}/` : undefined,
-        "Origin": origin || undefined,
-        "Content-Type": "application/json",
-        ...headers
-      },
+      headers: fetchHeaders,
       body: remoteConfig.method === "GET" ? undefined : bodyString,
       signal: AbortSignal.timeout((remoteConfig.timeoutSeconds || 15) * 1000)
     });
@@ -353,14 +357,18 @@ function updateJobPayload(jobId, extraFields) {
 async function queryRemoteTask(queryUrl, site) {
   try {
     const origin = getUrlOrigin(queryUrl);
+    const queryHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": origin ? `${origin}/` : undefined,
+      "Content-Type": "application/json"
+    };
+    if (site?.request_cookies) {
+      queryHeaders.Cookie = site.request_cookies;
+    }
     const response = await fetch(queryUrl, {
       method: "GET",
-      headers: {
-        "User-Agent": BROWSER_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": origin ? `${origin}/` : undefined,
-        "Content-Type": "application/json"
-      },
+      headers: queryHeaders,
       signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
     });
     const text = await response.text();

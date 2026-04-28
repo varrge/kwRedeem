@@ -292,6 +292,7 @@ function createSchema(db) {
   ensureColumn(db, "sites", "query_api_url", "TEXT");
   ensureColumn(db, "sites", "query_success_rule", "TEXT");
   ensureColumn(db, "sites", "polling_enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "sites", "request_cookies", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);

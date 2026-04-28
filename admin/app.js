@@ -265,6 +265,10 @@ async function refreshSites() {
         <div>${renderHealthDot(item.last_health_result, "submit")} 提交: <code style="font-size:11px">${escapeHtml(item.submit_api_url || "-")}</code></div>
       </div>
     ` },
+    { label: "Cookie", render: (item) => `
+      <span style="font-size:12px;color:var(--muted)">${item.request_cookies ? "已配置" : "未配置"}</span>
+      <button class="ghost-btn small" style="padding:4px 8px;font-size:11px;margin-left:4px" type="button" onclick="editSiteCookies('${escapeHtml(item.id)}', ${escapeHtml(JSON.stringify(item.request_cookies || ''))})">编辑</button>
+    ` },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "最后检测", render: (item) => `<span style="font-size:12px;color:var(--muted)">${item.last_health_check || "-"}</span>` },
     { label: "操作", render: (item) => `
@@ -275,6 +279,26 @@ async function refreshSites() {
     ` }
   ], payload.items, "暂无网站数据");
 }
+
+async function editSiteCookies(siteId, currentCookies) {
+  const value = window.prompt(
+    "输入该站点的请求 Cookie（如 cf_clearance=xxx），留空则清除：",
+    currentCookies || ""
+  );
+  if (value === null) return;
+  try {
+    await api(`/api/admin/sites/${siteId}/cookies`, {
+      method: "PATCH",
+      body: JSON.stringify({ requestCookies: value })
+    });
+    setHint(refs.siteResult, value ? "Cookie 已保存" : "Cookie 已清除");
+    await refreshSites();
+  } catch (error) {
+    setHint(refs.siteResult, error.message);
+  }
+}
+
+window.editSiteCookies = editSiteCookies;
 
 // Global exposure for onclick handlers
 window.toggleSiteStatus = toggleSiteStatus;

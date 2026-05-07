@@ -630,7 +630,7 @@ app.get("/api/stock-sparklines", async (request) => {
   }
 });
 
-app.get("/api/987ai-stock-info", async () => {
+app.get("/api/iostuqu-stock-info", async () => {
   try {
     const upstream = await fetch("https://api.987ai.vip/api/stock-info", {
       headers: { Accept: "application/json" },

@@ -380,12 +380,24 @@ async function queryRemoteTask(queryUrl, site) {
   }
 }
 
+function getJsonByPath(json, dotPath) {
+  if (!json || !dotPath) return undefined;
+  const segments = String(dotPath).split(".").filter(Boolean);
+  let current = json;
+  for (const segment of segments) {
+    if (current === null || current === undefined) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
 const POLL_MAX_ROUNDS = 6;
 const POLL_INTERVAL_MS = 5000;
 
 async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
   const maxAttempts = site?.max_retries || job.max_attempts || 10;
   const querySuccessRule = site.query_success_rule;
+  const queryFailureRule = site.query_failure_rule;
 
   for (let round = 0; round < POLL_MAX_ROUNDS; round++) {
     if (round > 0) await sleep(POLL_INTERVAL_MS);
@@ -396,7 +408,7 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
     const isSuccess = querySuccessRule
       ? evaluateRule(querySuccessRule, queryResult)
       : false;
-    const queryErrorMessage = queryResult.json?.data?.statusMessage || queryResult.text || `HTTP ${queryResult.status}`;
+    const queryErrorMessage = queryResult.json?.error || queryResult.json?.data?.statusMessage || queryResult.text || `HTTP ${queryResult.status}`;
 
     if (isSuccess) {
       markSuccess(job.id, order.id, cdkey.id, queryResult);
@@ -408,11 +420,18 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
       return;
     }
 
-    const taskStatus = queryResult.json?.data?.taskStatus;
-    if (taskStatus && taskStatus !== "PROCESSING" && taskStatus !== "PENDING") {
-      const msg = queryResult.json?.data?.statusMessage || `远端任务失败: ${taskStatus}`;
-      markFailed(job.id, order.id, cdkey.id, msg, queryResult);
+    if (queryFailureRule && evaluateRule(queryFailureRule, queryResult)) {
+      markFailed(job.id, order.id, cdkey.id, queryErrorMessage, queryResult);
       return;
+    }
+
+    if (!queryFailureRule) {
+      const taskStatus = queryResult.json?.data?.taskStatus;
+      if (taskStatus && taskStatus !== "PROCESSING" && taskStatus !== "PENDING") {
+        const msg = queryResult.json?.data?.statusMessage || `远端任务失败: ${taskStatus}`;
+        markFailed(job.id, order.id, cdkey.id, msg, queryResult);
+        return;
+      }
     }
   }
 
@@ -453,7 +472,8 @@ async function processJob(job) {
   const successMatched = successRule ? evaluateRule(successRule, responseInfo) : responseInfo.ok;
 
   if (!failureMatched && successMatched && isPollingEnabled) {
-    const remoteTaskId = responseInfo.json?.data;
+    const taskIdPath = site?.task_id_path || "data";
+    const remoteTaskId = getJsonByPath(responseInfo.json, taskIdPath);
     if (remoteTaskId) {
       updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
       await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId));

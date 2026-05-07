@@ -13,7 +13,7 @@ import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, orderStatuses } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
-import { evaluateRule, renderJsonTemplate, safeParseJson } from "../../shared/src/templates.js";
+import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 
 const app = Fastify({ logger: false });
 const db = getDb();
@@ -544,6 +544,7 @@ async function callConfiguredApi(config, context) {
     };
   }
 
+  const url = renderTemplateString(config.url, context) || config.url;
   const renderedHeaders = renderJsonTemplate(config.headersTemplate || "{}", context);
   const renderedBody = renderJsonTemplate(config.bodyTemplate || "{}", context);
   const headers = typeof renderedHeaders === "string"
@@ -553,14 +554,14 @@ async function callConfiguredApi(config, context) {
     ? safeParseJson(renderedBody, renderedBody)
     : renderedBody;
   const bodyString = config.method === "GET" ? "" : JSON.stringify(body);
-  applyAuthHeaders(headers, config, bodyString);
+  applyAuthHeaders(headers, { ...config, url }, bodyString);
 
   let response;
   let responseText = "";
   let responseJson = null;
 
   try {
-    const origin = getUrlOrigin(config.url);
+    const origin = getUrlOrigin(url);
     const fetchHeaders = {
       "User-Agent": BROWSER_UA,
       "Accept": "application/json, text/plain, */*",
@@ -572,7 +573,7 @@ async function callConfiguredApi(config, context) {
     if (config.cookies) {
       fetchHeaders.Cookie = config.cookies;
     }
-    response = await fetch(config.url, {
+    response = await fetch(url, {
       method: config.method || "POST",
       headers: fetchHeaders,
       body: config.method === "GET" ? undefined : bodyString,
@@ -626,6 +627,18 @@ app.get("/api/stock-sparklines", async (request) => {
     return await upstream.json();
   } catch (error) {
     return { series: {}, error: error.message };
+  }
+});
+
+app.get("/api/987ai-stock-info", async () => {
+  try {
+    const upstream = await fetch("https://api.987ai.vip/api/stock-info", {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    return await upstream.json();
+  } catch (error) {
+    return { items: [], error: error.message };
   }
 });
 
@@ -1853,6 +1866,17 @@ app.post("/api/public/subscriptions/submit", async (request, reply) => {
     INSERT INTO subscription_requests (id, identifier, card_type_id, drop_type, status, created_at)
     VALUES (?, ?, ?, ?, 'pending', ?)
   `).run(id, parsed.data.identifier.trim(), parsed.data.cardTypeId, parsed.data.dropType, now);
+
+  const isNewSubscriber = !db.prepare(`
+    SELECT id FROM subscription_requests
+    WHERE identifier = ? AND card_type_id = ? AND id != ?
+  `).get(parsed.data.identifier.trim(), parsed.data.cardTypeId, id);
+
+  if (isNewSubscriber) {
+    db.prepare(`
+      UPDATE subscription_card_types SET total_subscriptions = total_subscriptions + 1, updated_at = ? WHERE id = ?
+    `).run(now, parsed.data.cardTypeId);
+  }
 
   return { id, message: "提交成功，等待管理员审批" };
 });

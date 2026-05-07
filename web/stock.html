@@ -278,6 +278,12 @@
 
       const STATUS_RANK = { out: 0, low: 1, general: 2, sufficient: 3, good: 3 };
 
+      const AI987_LEVEL_MAP = {
+        none: { status: "out",  statusLabel: "缺货" },
+        low:  { status: "low",  statusLabel: "偏低" },
+        high: { status: "good", statusLabel: "充足" }
+      };
+
       let autoRefreshTimer = null;
       let currentProducts = [];
 
@@ -364,11 +370,13 @@
             const time = formatTime(p.updatedAt);
             const safeId = escapeHtml(p.id || "");
 
-            // 如果缺货且有备注（预估恢复时间），则在趋势列显示备注
             const isOut = p.status === "out";
+            const isAi987 = String(p.id || "").startsWith("987ai-");
             const trendContent = isOut && note
               ? `<div style="font-size:12px;color:#ffd58a;line-height:1.2;max-width:140px;">${note}</div>`
-              : `<div class="sparkline-container"><canvas id="spark-${safeId}"></canvas></div>`;
+              : isAi987
+                ? `<div style="font-size:12px;color:var(--muted);">无历史</div>`
+                : `<div class="sparkline-container"><canvas id="spark-${safeId}"></canvas></div>`;
 
             return `<tr>
               <td>
@@ -389,12 +397,33 @@
       async function loadCredentialStatus() {
         try {
           const payload = await fetchJson("/api/credential-status");
-          const products = Array.isArray(payload.data?.products) ? payload.data.products : [];
           renderApiOk(payload.fetched_at);
-          renderProducts(products);
-          return products;
+          return Array.isArray(payload.data?.products) ? payload.data.products : [];
         } catch (error) {
           renderApiError(error);
+          return [];
+        }
+      }
+
+      async function loadAi987Stock() {
+        try {
+          const payload = await fetchJson("/api/987ai-stock-info");
+          const items = Array.isArray(payload.items) ? payload.items : [];
+          const now = new Date().toISOString();
+          return items.map((item) => {
+            const mapped = AI987_LEVEL_MAP[String(item.level || "").toLowerCase()]
+              || { status: "general", statusLabel: "未知" };
+            const safeName = String(item.name || "unknown").replace(/[^A-Za-z0-9_-]/g, "_");
+            return {
+              id: `987ai-${safeName}`,
+              name: `[987AI] ${item.name || "未命名"}`,
+              status: mapped.status,
+              statusLabel: mapped.statusLabel,
+              updatedAt: now,
+              note: ""
+            };
+          });
+        } catch {
           return [];
         }
       }
@@ -445,7 +474,14 @@
         els.refreshBtn.textContent = "刷新中...";
         els.refreshBtn.disabled = true;
         try {
-          await loadCredentialStatus();
+          const [mainProducts, ai987Products] = await Promise.all([
+            loadCredentialStatus(),
+            loadAi987Stock()
+          ]);
+          const combined = [...mainProducts, ...ai987Products];
+          if (combined.length) {
+            renderProducts(combined);
+          }
           await loadSparklines();
         } finally {
           els.refreshBtn.textContent = "立即刷新";

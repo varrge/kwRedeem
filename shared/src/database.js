@@ -33,7 +33,8 @@ function upsertSite(db, site) {
           abandon_submit_body_template = ?, auth_type = ?, auth_config = ?, verify_success_rule = ?, verify_failure_rule = ?,
           submit_success_rule = ?, submit_failure_rule = ?, timeout_seconds = ?, max_retries = ?,
           product_id = ?, activation_endpoint_id = ?,
-          query_api_url = ?, query_success_rule = ?, polling_enabled = ?,
+          query_api_url = ?, query_success_rule = ?, query_failure_rule = ?, polling_enabled = ?,
+          task_id_path = ?,
           status = ?, updated_at = ?
       WHERE slug = ?
     `).run(
@@ -59,7 +60,9 @@ function upsertSite(db, site) {
       site.activationEndpointId || null,
       site.queryApiUrl || null,
       site.querySuccessRule || null,
+      site.queryFailureRule || null,
       site.pollingEnabled || 0,
+      site.taskIdPath || null,
       site.status,
       site.updatedAt,
       site.slug
@@ -73,10 +76,11 @@ function upsertSite(db, site) {
       verify_headers_template, verify_body_template, submit_headers_template, submit_body_template,
       abandon_submit_body_template, auth_type, auth_config, verify_success_rule, verify_failure_rule, submit_success_rule, submit_failure_rule,
       timeout_seconds, max_retries, product_id, activation_endpoint_id,
-      query_api_url, query_success_rule, polling_enabled,
+      query_api_url, query_success_rule, query_failure_rule, polling_enabled,
+      task_id_path,
       status, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     site.id,
     site.name,
@@ -102,7 +106,9 @@ function upsertSite(db, site) {
     site.activationEndpointId || null,
     site.queryApiUrl || null,
     site.querySuccessRule || null,
+    site.queryFailureRule || null,
     site.pollingEnabled || 0,
+    site.taskIdPath || null,
     site.status,
     site.createdAt,
     site.updatedAt
@@ -293,6 +299,8 @@ function createSchema(db) {
   ensureColumn(db, "sites", "query_success_rule", "TEXT");
   ensureColumn(db, "sites", "polling_enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "sites", "request_cookies", "TEXT");
+  ensureColumn(db, "sites", "task_id_path", "TEXT");
+  ensureColumn(db, "sites", "query_failure_rule", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -459,6 +467,38 @@ function seedDefaults(db) {
       pollingEnabled: 1,
       timeoutSeconds: 15,
       maxRetries: 10,
+      productId: "prod_demo",
+      activationEndpointId: null,
+      status: "disabled",
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "site_preset_987ai",
+      name: "987AI",
+      slug: "987ai",
+      verifyApiUrl: "https://api.987ai.vip/api/card-keys/{{sourceKey}}",
+      submitApiUrl: "https://api.987ai.vip/api/tasks",
+      verifyHttpMethod: "GET",
+      submitHttpMethod: "POST",
+      verifyHeadersTemplate: "{}",
+      verifyBodyTemplate: "{}",
+      submitHeadersTemplate: "{}",
+      submitBodyTemplate: '{"card_key":"{{sourceKey}}","access_token":"{{session.accessToken}}","force_recharge":false}',
+      abandonSubmitBodyTemplate: '{"card_key":"{{sourceKey}}","access_token":"{{session.accessToken}}","force_recharge":true}',
+      authType: null,
+      authConfig: null,
+      verifySuccessRule: '{"kind":"json_path_equals","path":"available","value":"true"}',
+      verifyFailureRule: '{"kind":"json_path_equals","path":"available","value":"false"}',
+      submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
+      submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
+      queryApiUrl: "https://api.987ai.vip/api/tasks/{{taskId}}",
+      querySuccessRule: '{"kind":"json_path_equals","path":"status","value":"completed"}',
+      queryFailureRule: '{"kind":"json_path_equals","path":"status","value":"failed"}',
+      pollingEnabled: 1,
+      taskIdPath: "task_id",
+      timeoutSeconds: 15,
+      maxRetries: 20,
       productId: "prod_demo",
       activationEndpointId: null,
       status: "disabled",

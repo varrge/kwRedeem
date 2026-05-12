@@ -14,7 +14,7 @@ const statusContainer = document.querySelector("#status-container");
 let verifiedKey = null;
 let redeemStatusTimer = null;
 
-const LIVE_STATUS_POLL_MS = 3000;
+const LIVE_STATUS_POLL_MS = 2000;
 const STATUS_LABELS = {
   active: "可用",
   locked: "锁定中",
@@ -24,6 +24,7 @@ const STATUS_LABELS = {
   pending: "排队中",
   processing: "处理中",
   succeeded: "已成功",
+  completed: "已成功",
   failed: "失败",
   cancelled: "已取消",
   unknown: "未知"
@@ -122,6 +123,8 @@ function stopRedeemStatusPolling() {
 }
 
 function shouldKeepPolling(order = {}) {
+  const live = String(order.liveTaskStatus || "").toLowerCase();
+  if (live === "completed" || live === "failed") return false;
   const orderStatus = String(order.status || "").toLowerCase();
   const jobStatus = String(order.job?.status || "").toLowerCase();
   return ["pending", "processing"].includes(orderStatus) || ["pending", "processing"].includes(jobStatus);
@@ -176,7 +179,8 @@ function isSessionFixNeededMessage(message) {
 function getApiMessage(job = {}) {
   const response = job.lastResponse || {};
   const json = response.json || {};
-  return json.msg
+  return json.result
+    || json.msg
     || json.message
     || json.data?.msg
     || json.data?.message
@@ -212,18 +216,31 @@ function renderVerifyResult(payload) {
 }
 
 function renderRedeemSuccess(payload) {
-  const liveStatus = payload.job?.status || payload.status || "processing";
+  const hasLiveTask = Boolean(payload.liveTaskStatus);
+  const liveStatus = hasLiveTask
+    ? (payload.liveTaskStatus === "completed" ? "succeeded" : payload.liveTaskStatus)
+    : (payload.job?.status || payload.status || "processing");
   const apiMessage = getApiMessage(payload.job || {});
   const sessionFixNeeded = isSessionFixNeededMessage(apiMessage) || isSessionFixNeededMessage(payload.errorMessage);
-  const statusHint = {
-    pending: "任务已进入队列，等待系统处理。",
-    processing: "任务正在处理中，状态会自动刷新。",
-    succeeded: "任务已完成，无需手动刷新。",
-    failed: sessionFixNeeded
-      ? "Session 内容有误或已失效，请修正后重新提交。当前卡密会自动释放，可重新发起兑换。"
-      : "任务处理失败，请根据错误信息或稍后重试。",
-    cancelled: "任务已取消。"
-  }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";
+
+  let statusHint;
+  if (hasLiveTask) {
+    statusHint = payload.liveMessage || "任务状态会自动刷新。";
+  } else {
+    statusHint = {
+      pending: "任务已进入队列，等待系统处理。",
+      processing: "任务正在处理中，状态会自动刷新。",
+      succeeded: "任务已完成，无需手动刷新。",
+      failed: sessionFixNeeded
+        ? "Session 内容有误或已失效，请修正后重新提交。当前卡密会自动释放，可重新发起兑换。"
+        : "任务处理失败，请根据错误信息或稍后重试。",
+      cancelled: "任务已取消。"
+    }[String(liveStatus).toLowerCase()] || "任务状态会自动刷新。";
+  }
+
+  const queueHtml = hasLiveTask && payload.queuePosition != null
+    ? `<div class="result-item"><span>排队位置</span><strong>第 ${escapeHtml(payload.queuePosition)} 位</strong></div>`
+    : "";
 
   return `
     <div class="result-card">
@@ -238,6 +255,7 @@ function renderRedeemSuccess(payload) {
           <span>实时任务状态</span>
           <strong>${renderStatusText(liveStatus)}</strong>
         </div>
+        ${queueHtml}
         <div class="result-item result-item-wide">
           <span>处理说明</span>
           <strong>${statusHint}</strong>
@@ -248,7 +266,7 @@ function renderRedeemSuccess(payload) {
         </div>
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
-      ${payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
+      ${!hasLiveTask && payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
     </div>
   `;
 }

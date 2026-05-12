@@ -354,21 +354,35 @@ function updateJobPayload(jobId, extraFields) {
     .run(JSON.stringify(merged), nowIso(), jobId);
 }
 
-async function queryRemoteTask(queryUrl, site) {
+async function queryRemoteTask(queryUrl, site, context) {
   try {
+    const method = (site?.query_http_method || "GET").toUpperCase();
     const origin = getUrlOrigin(queryUrl);
-    const queryHeaders = {
+    const baseHeaders = {
       "User-Agent": BROWSER_UA,
       "Accept": "application/json, text/plain, */*",
       "Referer": origin ? `${origin}/` : undefined,
       "Content-Type": "application/json"
     };
-    if (site?.request_cookies) {
-      queryHeaders.Cookie = site.request_cookies;
+    if (site?.query_headers_template && context) {
+      const rendered = renderJsonTemplate(site.query_headers_template, context);
+      const extra = typeof rendered === "string" ? safeParseJson(rendered, {}) : rendered;
+      Object.assign(baseHeaders, extra);
     }
+    if (site?.request_cookies) {
+      baseHeaders.Cookie = site.request_cookies;
+    }
+
+    let bodyString;
+    if (method !== "GET" && site?.query_body_template && context) {
+      const rendered = renderJsonTemplate(site.query_body_template, context);
+      bodyString = typeof rendered === "string" ? rendered : JSON.stringify(rendered);
+    }
+
     const response = await fetch(queryUrl, {
-      method: "GET",
-      headers: queryHeaders,
+      method,
+      headers: baseHeaders,
+      body: method === "GET" ? undefined : bodyString,
       signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
     });
     const text = await response.text();
@@ -394,16 +408,21 @@ function getJsonByPath(json, dotPath) {
 const POLL_MAX_ROUNDS = 6;
 const POLL_INTERVAL_MS = 5000;
 
-async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
+async function pollRemoteTask(job, order, cdkey, site, remoteTaskId, endpoint) {
   const maxAttempts = site?.max_retries || job.max_attempts || 10;
   const querySuccessRule = site.query_success_rule;
   const queryFailureRule = site.query_failure_rule;
 
+  const baseContext = buildRequestContext(job, order, cdkey, site, endpoint);
+  const queryContext = { ...baseContext, taskId: remoteTaskId };
+  let latestQueryResult = null;
+
   for (let round = 0; round < POLL_MAX_ROUNDS; round++) {
     if (round > 0) await sleep(POLL_INTERVAL_MS);
 
-    const queryUrl = renderTemplateString(site.query_api_url, { taskId: remoteTaskId });
-    const queryResult = await queryRemoteTask(queryUrl, site);
+    const queryUrl = renderTemplateString(site.query_api_url, queryContext);
+    const queryResult = await queryRemoteTask(queryUrl, site, queryContext);
+    latestQueryResult = queryResult;
 
     const isSuccess = querySuccessRule
       ? evaluateRule(querySuccessRule, queryResult)
@@ -439,11 +458,11 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId) {
   const msg = `远端任务仍在处理中，等待下轮继续轮询 (taskId: ${remoteTaskId})`;
 
   if (job.attempt_count + 1 >= maxAttempts) {
-    markFailed(job.id, order.id, cdkey.id, `轮询超过最大重试次数: ${msg}`, null);
+    markFailed(job.id, order.id, cdkey.id, `轮询超过最大重试次数: ${msg}`, latestQueryResult);
     return;
   }
 
-  markRetry(job, order.id, msg, null, maxAttempts);
+  markRetry(job, order.id, msg, latestQueryResult, maxAttempts);
 }
 
 async function processJob(job) {
@@ -461,7 +480,7 @@ async function processJob(job) {
   const isPollingEnabled = site?.polling_enabled && site?.query_api_url;
 
   if (isPollingEnabled && jobPayload.remoteTaskId) {
-    await pollRemoteTask(job, order, cdkey, site, jobPayload.remoteTaskId);
+    await pollRemoteTask(job, order, cdkey, site, jobPayload.remoteTaskId, endpoint);
     return;
   }
 
@@ -476,7 +495,7 @@ async function processJob(job) {
     const remoteTaskId = getJsonByPath(responseInfo.json, taskIdPath);
     if (remoteTaskId) {
       updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
-      await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId));
+      await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId), endpoint);
       return;
     }
   }

@@ -304,6 +304,32 @@ function getUniquePublicKey(prefix) {
   return candidate;
 }
 
+function extractLiveTaskInfo(lastResponse, pollingEnabled) {
+  if (!pollingEnabled || !lastResponse) return {};
+  const remoteJson = lastResponse.json;
+  if (!remoteJson || typeof remoteJson.status !== "string") return {};
+
+  const remoteStatus = remoteJson.status.toLowerCase();
+  if (remoteStatus === "pending") {
+    const pos = remoteJson.queue_position ?? null;
+    return {
+      liveTaskStatus: "pending",
+      queuePosition: pos,
+      liveMessage: pos != null ? `排队中，前方还有 ${pos} 个任务` : "排队中，请稍候"
+    };
+  }
+  if (remoteStatus === "processing") {
+    return { liveTaskStatus: "processing", queuePosition: null, liveMessage: "正在处理充值订单！" };
+  }
+  if (remoteStatus === "completed") {
+    return { liveTaskStatus: "completed", queuePosition: null, liveMessage: remoteJson.result || "充值成功！" };
+  }
+  if (remoteStatus === "failed") {
+    return { liveTaskStatus: "failed", queuePosition: null, liveMessage: remoteJson.result || remoteJson.error || "远端任务失败" };
+  }
+  return {};
+}
+
 function getOrderDetail(orderNo) {
   const order = db.prepare(`
     SELECT
@@ -311,6 +337,7 @@ function getOrderDetail(orderNo) {
       p.title AS product_title,
       s.name AS site_name,
       s.slug AS site_slug,
+      s.polling_enabled AS site_polling_enabled,
       j.status AS job_status,
       j.last_error AS job_error,
       j.last_response AS job_response,
@@ -324,6 +351,9 @@ function getOrderDetail(orderNo) {
 
   if (!order) return null;
 
+  const lastResponse = getJsonBodyOrNull(order.job_response);
+  const liveInfo = extractLiveTaskInfo(lastResponse, order.site_polling_enabled);
+
   return {
     orderNo: order.order_no,
     publicKey: order.public_key,
@@ -336,10 +366,13 @@ function getOrderDetail(orderNo) {
     sessionPreview: getJsonBodyOrNull(order.session_preview),
     createdAt: order.created_at,
     updatedAt: order.updated_at,
+    liveTaskStatus: liveInfo.liveTaskStatus || null,
+    queuePosition: liveInfo.queuePosition ?? null,
+    liveMessage: liveInfo.liveMessage || null,
     job: {
       status: order.job_status,
       lastError: order.job_error,
-      lastResponse: getJsonBodyOrNull(order.job_response),
+      lastResponse,
       attemptCount: order.job_attempt_count
     }
   };
@@ -639,6 +672,18 @@ app.get("/api/iostuqu-stock-info", async () => {
     return await upstream.json();
   } catch (error) {
     return { items: [], error: error.message };
+  }
+});
+
+app.get("/api/ow800-stock-info", async () => {
+  try {
+    const upstream = await fetch("https://kkk.ow800.com/api/cards/gpt-inventory?productId=3", {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    return await upstream.json();
+  } catch (error) {
+    return { success: false, data: null, error: error.message };
   }
 });
 

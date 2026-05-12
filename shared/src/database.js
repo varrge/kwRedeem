@@ -35,6 +35,7 @@ function upsertSite(db, site) {
           product_id = ?, activation_endpoint_id = ?,
           query_api_url = ?, query_success_rule = ?, query_failure_rule = ?, polling_enabled = ?,
           task_id_path = ?,
+          query_http_method = ?, query_headers_template = ?, query_body_template = ?,
           status = ?, updated_at = ?
       WHERE slug = ?
     `).run(
@@ -63,6 +64,9 @@ function upsertSite(db, site) {
       site.queryFailureRule || null,
       site.pollingEnabled || 0,
       site.taskIdPath || null,
+      site.queryHttpMethod || null,
+      site.queryHeadersTemplate || null,
+      site.queryBodyTemplate || null,
       site.status,
       site.updatedAt,
       site.slug
@@ -78,9 +82,10 @@ function upsertSite(db, site) {
       timeout_seconds, max_retries, product_id, activation_endpoint_id,
       query_api_url, query_success_rule, query_failure_rule, polling_enabled,
       task_id_path,
+      query_http_method, query_headers_template, query_body_template,
       status, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     site.id,
     site.name,
@@ -109,6 +114,9 @@ function upsertSite(db, site) {
     site.queryFailureRule || null,
     site.pollingEnabled || 0,
     site.taskIdPath || null,
+    site.queryHttpMethod || null,
+    site.queryHeadersTemplate || null,
+    site.queryBodyTemplate || null,
     site.status,
     site.createdAt,
     site.updatedAt
@@ -301,6 +309,9 @@ function createSchema(db) {
   ensureColumn(db, "sites", "request_cookies", "TEXT");
   ensureColumn(db, "sites", "task_id_path", "TEXT");
   ensureColumn(db, "sites", "query_failure_rule", "TEXT");
+  ensureColumn(db, "sites", "query_http_method", "TEXT");
+  ensureColumn(db, "sites", "query_headers_template", "TEXT");
+  ensureColumn(db, "sites", "query_body_template", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -497,6 +508,40 @@ function seedDefaults(db) {
       queryFailureRule: '{"kind":"json_path_equals","path":"status","value":"failed"}',
       pollingEnabled: 1,
       taskIdPath: "task_id",
+      timeoutSeconds: 15,
+      maxRetries: 20,
+      productId: "prod_demo",
+      activationEndpointId: null,
+      status: "disabled",
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "site_preset_ow800",
+      name: "三总",
+      slug: "ow800",
+      verifyApiUrl: "https://kkk.ow800.com/api/cards/verify",
+      submitApiUrl: "https://kkk.ow800.com/api/cards/verify-gpt",
+      verifyHttpMethod: "POST",
+      submitHttpMethod: "POST",
+      verifyHeadersTemplate: "{}",
+      verifyBodyTemplate: '{"cardInfo":"{{sourceKey}}"}',
+      submitHeadersTemplate: "{}",
+      submitBodyTemplate: '{"cardInfo":"{{sourceKey}}","userEmail":"{{session.user.email}}","userGptToken":"{{session.accessToken}}","fullAuthData":{{sessionString}},"productId":3}',
+      abandonSubmitBodyTemplate: '{"cardInfo":"{{sourceKey}}","userEmail":"{{session.user.email}}","userGptToken":"{{session.accessToken}}","fullAuthData":{{sessionString}},"productId":9}',
+      authType: null,
+      authConfig: null,
+      verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
+      verifyFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
+      submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
+      submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
+      queryApiUrl: "https://kkk.ow800.com/api/recharge/query-task-status",
+      queryHttpMethod: "POST",
+      queryBodyTemplate: '{"taskId":"{{taskId}}","productId":3,"cardInfo":"{{sourceKey}}"}',
+      querySuccessRule: '{"kind":"json_path_equals","path":"data.status","value":"success"}',
+      queryFailureRule: '{"kind":"json_path_equals","path":"data.status","value":"failed"}',
+      pollingEnabled: 1,
+      taskIdPath: "data.taskId",
       timeoutSeconds: 15,
       maxRetries: 20,
       productId: "prod_demo",

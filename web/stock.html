@@ -428,6 +428,28 @@
         }
       }
 
+      async function loadOw800Stock() {
+        try {
+          const payload = await fetchJson("/api/ow800-stock-info");
+          const d = payload.data;
+          if (!d) return [];
+          const now = new Date().toISOString();
+          let status = "good", statusLabel = "充足";
+          if (d.empty) { status = "out"; statusLabel = "缺货"; }
+          else if (d.low) { status = "low"; statusLabel = "偏低"; }
+          return [{
+            id: "ow800-gpt",
+            name: "[三总] ChatGPT Plus",
+            status,
+            statusLabel,
+            updatedAt: now,
+            note: ""
+          }];
+        } catch {
+          return [];
+        }
+      }
+
       async function loadSparklines() {
         const days = els.daysSelect.value || "1";
         try {
@@ -474,11 +496,12 @@
         els.refreshBtn.textContent = "刷新中...";
         els.refreshBtn.disabled = true;
         try {
-          const [mainProducts, tuquProducts] = await Promise.all([
+          const [mainProducts, tuquProducts, ow800Products] = await Promise.all([
             loadCredentialStatus(),
-            loadTuquStock()
+            loadTuquStock(),
+            loadOw800Stock()
           ]);
-          const combined = [...mainProducts, ...tuquProducts];
+          const combined = [...mainProducts, ...tuquProducts, ...ow800Products];
           if (combined.length) {
             renderProducts(combined);
           }

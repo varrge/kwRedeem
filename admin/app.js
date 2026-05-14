@@ -44,6 +44,35 @@ const refs = {
   subCtResult: document.querySelector("#sub-ct-result"),
   subCardTypeList: document.querySelector("#sub-card-type-list"),
   subRequestList: document.querySelector("#sub-request-list"),
+  notifySettingsForm: document.querySelector("#notify-settings-form"),
+  notifyGlobalWebhook: document.querySelector("#notify-global-webhook"),
+  notifySettingsResult: document.querySelector("#notify-settings-result"),
+  notifyTestGlobalWebhook: document.querySelector("#notify-test-global-webhook"),
+  notifyMonitorForm: document.querySelector("#notify-monitor-form"),
+  notifyFormTitle: document.querySelector("#notify-form-title"),
+  notifyFormCancel: document.querySelector("#notify-form-cancel"),
+  notifyEditId: document.querySelector("#notify-edit-id"),
+  notifyName: document.querySelector("#notify-name"),
+  notifyEnabled: document.querySelector("#notify-enabled"),
+  notifyMethod: document.querySelector("#notify-method"),
+  notifyInterval: document.querySelector("#notify-interval"),
+  notifyUrl: document.querySelector("#notify-url"),
+  notifyHeaders: document.querySelector("#notify-headers"),
+  notifyBody: document.querySelector("#notify-body"),
+  notifyWatchFields: document.querySelector("#notify-watch-fields"),
+  notifyMatchMode: document.querySelector("#notify-match-mode"),
+  notifyRulesList: document.querySelector("#notify-rules-list"),
+  notifyAddRule: document.querySelector("#notify-add-rule"),
+  notifyWebhookOverride: document.querySelector("#notify-webhook-override"),
+  notifyTitle: document.querySelector("#notify-title"),
+  notifyTimeout: document.querySelector("#notify-timeout"),
+  notifyCooldown: document.querySelector("#notify-cooldown"),
+  notifySubmitBtn: document.querySelector("#notify-submit-btn"),
+  notifyTestRunBtn: document.querySelector("#notify-test-run-btn"),
+  notifyFormResult: document.querySelector("#notify-form-result"),
+  notifyRefreshBtn: document.querySelector("#notify-refresh-btn"),
+  notifyMonitorList: document.querySelector("#notify-monitor-list"),
+  notifyEventList: document.querySelector("#notify-event-list"),
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
 };
@@ -498,6 +527,374 @@ window.editSubCardType = editSubCardType;
 window.toggleSubCardTypeVisibility = toggleSubCardTypeVisibility;
 window.reviewSubRequest = reviewSubRequest;
 
+// ── Notification Monitors ──
+
+const NOTIFY_INTERVAL_OPTIONS = [
+  { value: 1, label: "1 秒" },
+  { value: 2, label: "2 秒" },
+  { value: 5, label: "5 秒" },
+  { value: 10, label: "10 秒" },
+  { value: 15, label: "15 秒" },
+  { value: 30, label: "30 秒" },
+  { value: 60, label: "1 分钟" },
+  { value: 120, label: "2 分钟" },
+  { value: 300, label: "5 分钟" },
+  { value: 600, label: "10 分钟" },
+  { value: 900, label: "15 分钟" },
+  { value: 1800, label: "30 分钟" },
+  { value: 3600, label: "1 小时" }
+];
+
+const NOTIFY_OPERATORS = [
+  { value: "equals", label: "等于 (equals)" },
+  { value: "not_equals", label: "不等于 (not_equals)" },
+  { value: "contains", label: "包含 (contains)" },
+  { value: "not_contains", label: "不包含 (not_contains)" },
+  { value: "gt", label: "大于 (>)" },
+  { value: "gte", label: "大于等于 (>=)" },
+  { value: "lt", label: "小于 (<)" },
+  { value: "lte", label: "小于等于 (<=)" },
+  { value: "exists", label: "字段存在" },
+  { value: "not_exists", label: "字段不存在" }
+];
+
+const NOTIFY_OPERATORS_NO_VALUE = new Set(["exists", "not_exists"]);
+const NOTIFY_EVENT_LABELS = {
+  matched: "命中",
+  not_matched: "未命中",
+  fetch_error: "请求异常",
+  send_error: "通知失败",
+  send_ok: "通知成功",
+  test: "测试执行"
+};
+
+let notifyMonitorsCache = [];
+
+function populateNotifyIntervalOptions() {
+  if (!refs.notifyInterval || refs.notifyInterval.dataset.populated === "1") return;
+  refs.notifyInterval.innerHTML = NOTIFY_INTERVAL_OPTIONS
+    .map((option) => `<option value="${option.value}">${option.label}</option>`)
+    .join("");
+  refs.notifyInterval.value = "60";
+  refs.notifyInterval.dataset.populated = "1";
+}
+
+function setNotifyIntervalValue(seconds) {
+  populateNotifyIntervalOptions();
+  const target = String(seconds);
+  const exists = NOTIFY_INTERVAL_OPTIONS.some((option) => String(option.value) === target);
+  if (exists) {
+    refs.notifyInterval.value = target;
+    return;
+  }
+  if (!refs.notifyInterval.querySelector(`option[data-custom="1"]`)) {
+    const customOption = document.createElement("option");
+    customOption.value = target;
+    customOption.textContent = `${seconds} 秒（自定义）`;
+    customOption.dataset.custom = "1";
+    refs.notifyInterval.appendChild(customOption);
+  } else {
+    const customOption = refs.notifyInterval.querySelector(`option[data-custom="1"]`);
+    customOption.value = target;
+    customOption.textContent = `${seconds} 秒（自定义）`;
+  }
+  refs.notifyInterval.value = target;
+}
+
+function buildRuleRow(rule = { fieldPath: "", operator: "equals", expectedValue: "" }) {
+  const row = document.createElement("div");
+  row.className = "notify-rule-row";
+
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.className = "notify-rule-path";
+  pathInput.placeholder = "字段路径，如 data.count";
+  pathInput.value = rule.fieldPath || "";
+
+  const operatorSelect = document.createElement("select");
+  operatorSelect.className = "notify-rule-operator";
+  operatorSelect.innerHTML = NOTIFY_OPERATORS
+    .map((operator) => `<option value="${operator.value}">${operator.label}</option>`)
+    .join("");
+  operatorSelect.value = rule.operator || "equals";
+
+  const valueInput = document.createElement("input");
+  valueInput.type = "text";
+  valueInput.className = "notify-rule-value";
+  valueInput.placeholder = "期望值";
+  valueInput.value = rule.expectedValue ?? "";
+
+  function syncValueState() {
+    const noValue = NOTIFY_OPERATORS_NO_VALUE.has(operatorSelect.value);
+    valueInput.disabled = noValue;
+    if (noValue) {
+      valueInput.value = "";
+      valueInput.placeholder = "（不需要期望值）";
+    } else {
+      valueInput.placeholder = "期望值";
+    }
+  }
+  operatorSelect.addEventListener("change", syncValueState);
+  syncValueState();
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "ghost-btn small";
+  removeBtn.innerHTML = "🗑️";
+  removeBtn.title = "移除规则";
+  removeBtn.addEventListener("click", () => {
+    row.remove();
+    ensureRuleEmptyHint();
+  });
+
+  row.append(pathInput, operatorSelect, valueInput, removeBtn);
+  return row;
+}
+
+function ensureRuleEmptyHint() {
+  if (!refs.notifyRulesList) return;
+  const rows = refs.notifyRulesList.querySelectorAll(".notify-rule-row");
+  const hint = refs.notifyRulesList.querySelector(".notify-empty-rule");
+  if (rows.length === 0) {
+    if (!hint) {
+      const placeholder = document.createElement("div");
+      placeholder.className = "notify-empty-rule";
+      placeholder.textContent = "暂无规则。命中规则为空时该监听不会触发通知。";
+      refs.notifyRulesList.appendChild(placeholder);
+    }
+  } else if (hint) {
+    hint.remove();
+  }
+}
+
+function addRuleRow(rule) {
+  populateNotifyIntervalOptions();
+  if (!refs.notifyRulesList) return;
+  const row = buildRuleRow(rule);
+  refs.notifyRulesList.appendChild(row);
+  ensureRuleEmptyHint();
+}
+
+function collectRules() {
+  if (!refs.notifyRulesList) return { matchMode: "all", items: [] };
+  const rows = Array.from(refs.notifyRulesList.querySelectorAll(".notify-rule-row"));
+  const items = rows
+    .map((row) => {
+      const fieldPath = row.querySelector(".notify-rule-path")?.value.trim() || "";
+      const operator = row.querySelector(".notify-rule-operator")?.value || "equals";
+      const noValue = NOTIFY_OPERATORS_NO_VALUE.has(operator);
+      const expectedValueRaw = row.querySelector(".notify-rule-value")?.value ?? "";
+      const expectedValue = noValue ? "" : expectedValueRaw;
+      return { fieldPath, operator, expectedValue };
+    })
+    .filter((item) => item.fieldPath);
+  return { matchMode: refs.notifyMatchMode?.value || "all", items };
+}
+
+function resetNotifyForm() {
+  if (!refs.notifyMonitorForm) return;
+  refs.notifyMonitorForm.reset();
+  refs.notifyEditId.value = "";
+  refs.notifyEnabled.value = "1";
+  refs.notifyMethod.value = "GET";
+  refs.notifyTimeout.value = "15";
+  refs.notifyCooldown.value = "0";
+  refs.notifyMatchMode.value = "all";
+  refs.notifyRulesList.innerHTML = "";
+  ensureRuleEmptyHint();
+  setNotifyIntervalValue(60);
+  refs.notifyFormTitle.textContent = "添加监听";
+  refs.notifySubmitBtn.textContent = "添加监听";
+  refs.notifyTestRunBtn.classList.add("hidden");
+  refs.notifyFormCancel.classList.add("hidden");
+  setHint(refs.notifyFormResult, "");
+}
+
+function fillNotifyForm(monitor) {
+  populateNotifyIntervalOptions();
+  refs.notifyEditId.value = monitor.id;
+  refs.notifyName.value = monitor.name || "";
+  refs.notifyEnabled.value = monitor.enabled ? "1" : "0";
+  refs.notifyMethod.value = monitor.httpMethod || "GET";
+  refs.notifyUrl.value = monitor.requestUrl || "";
+  refs.notifyHeaders.value = monitor.headersJson || "";
+  refs.notifyBody.value = monitor.bodyJson || "";
+  refs.notifyWatchFields.value = (monitor.watchFields || []).join(", ");
+  refs.notifyWebhookOverride.value = monitor.feishuWebhookOverride || "";
+  refs.notifyTitle.value = monitor.notifyTitle || "";
+  refs.notifyTimeout.value = monitor.timeoutSeconds || 15;
+  refs.notifyCooldown.value = monitor.cooldownSeconds || 0;
+  refs.notifyMatchMode.value = monitor.rules?.matchMode || "all";
+  refs.notifyRulesList.innerHTML = "";
+  (monitor.rules?.items || []).forEach((rule) => addRuleRow(rule));
+  ensureRuleEmptyHint();
+  setNotifyIntervalValue(monitor.intervalSeconds || 60);
+  refs.notifyFormTitle.textContent = `编辑监听：${monitor.name}`;
+  refs.notifySubmitBtn.textContent = "保存修改";
+  refs.notifyTestRunBtn.classList.remove("hidden");
+  refs.notifyFormCancel.classList.remove("hidden");
+  setHint(refs.notifyFormResult, "");
+  refs.notifyName.focus();
+}
+
+function formatLastStatus(value) {
+  const map = {
+    notified: "已通知",
+    matched: "已命中",
+    matched_cooldown: "命中(冷却)",
+    matched_no_webhook: "命中(无Webhook)",
+    no_match: "未命中",
+    http_error: "HTTP 异常",
+    error: "请求异常",
+    send_error: "通知失败"
+  };
+  return map[value] || value || "-";
+}
+
+async function refreshNotificationSettings() {
+  if (!refs.notifyGlobalWebhook) return;
+  const payload = await api("/api/admin/notifications/settings");
+  refs.notifyGlobalWebhook.value = payload.globalFeishuWebhook || "";
+}
+
+async function refreshNotificationMonitors() {
+  if (!refs.notifyMonitorList) return;
+  const payload = await api("/api/admin/notifications/monitors");
+  notifyMonitorsCache = payload.items || [];
+
+  renderTable(refs.notifyMonitorList, [
+    {
+      label: "名称",
+      render: (item) => `<strong>${escapeHtml(item.name)}</strong>${item.notifyTitle ? `<br/><span style="font-size:11px;color:var(--muted)">${escapeHtml(item.notifyTitle)}</span>` : ""}`
+    },
+    {
+      label: "接口",
+      render: (item) => `<code style="font-size:11px">${escapeHtml(item.httpMethod)} ${escapeHtml(item.requestUrl)}</code>`
+    },
+    {
+      label: "周期",
+      render: (item) => `${item.intervalSeconds} 秒`
+    },
+    {
+      label: "规则",
+      render: (item) => `${item.rules?.items?.length || 0} 条 (${item.rules?.matchMode === "any" ? "任一命中" : "全部命中"})`
+    },
+    {
+      label: "Webhook",
+      render: (item) => item.feishuWebhookOverride ? "覆盖" : "全局"
+    },
+    {
+      label: "状态",
+      render: (item) => item.enabled ? renderStatus("active") : renderStatus("disabled")
+    },
+    {
+      label: "最近执行",
+      render: (item) => `
+        <div style="font-size:11px;line-height:1.4">
+          <div>${item.lastRunAt ? escapeHtml(item.lastRunAt) : "未执行"}</div>
+          <div style="color:var(--muted)">${escapeHtml(formatLastStatus(item.lastStatus))}${item.lastError ? ` · ${escapeHtml(item.lastError.slice(0, 40))}` : ""}</div>
+        </div>
+      `
+    },
+    {
+      label: "操作",
+      render: (item) => `
+        <button class="primary-btn small" type="button" onclick="editNotifyMonitor('${escapeHtml(item.id)}')">编辑</button>
+        <button class="ghost-btn small" style="padding:6px 12px;font-size:12px" type="button" onclick="toggleNotifyMonitor('${escapeHtml(item.id)}', ${item.enabled ? 0 : 1})">${item.enabled ? "停用" : "启用"}</button>
+        <button class="ghost-btn small" style="padding:6px 12px;font-size:12px" type="button" onclick="testNotifyMonitor('${escapeHtml(item.id)}')">测试</button>
+        <button class="ghost-btn small" style="padding:6px 12px;font-size:12px;color:var(--error)" type="button" onclick="deleteNotifyMonitor('${escapeHtml(item.id)}')">删除</button>
+      `
+    }
+  ], notifyMonitorsCache, "暂无监听项");
+}
+
+async function refreshNotificationEvents() {
+  if (!refs.notifyEventList) return;
+  const payload = await api("/api/admin/notifications/events?limit=80");
+  renderTable(refs.notifyEventList, [
+    { label: "时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` },
+    { label: "监听", render: (item) => escapeHtml(item.monitorName || "-") },
+    {
+      label: "类型",
+      render: (item) => {
+        const label = NOTIFY_EVENT_LABELS[item.eventType] || item.eventType;
+        const cls = item.eventType === "matched" || item.eventType === "send_ok"
+          ? "status-succeeded"
+          : item.eventType === "fetch_error" || item.eventType === "send_error"
+            ? "status-failed"
+            : item.eventType === "test"
+              ? "status-pending"
+              : "status-disabled";
+        return `<span class="table-badge ${cls}">${escapeHtml(label)}</span>`;
+      }
+    },
+    {
+      label: "摘要",
+      render: (item) => `<span class="event-summary" title="${escapeHtml(item.summary || "")}">${escapeHtml(item.summary || "-")}</span>`
+    }
+  ], payload.items || [], "暂无通知事件");
+}
+
+async function refreshNotifications() {
+  await Promise.all([
+    refreshNotificationSettings().catch(() => {}),
+    refreshNotificationMonitors().catch(() => {}),
+    refreshNotificationEvents().catch(() => {})
+  ]);
+}
+
+function editNotifyMonitor(id) {
+  const monitor = notifyMonitorsCache.find((item) => item.id === id);
+  if (!monitor) return;
+  fillNotifyForm(monitor);
+  refs.notifyMonitorForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function toggleNotifyMonitor(id, nextEnabled) {
+  try {
+    await api(`/api/admin/notifications/monitors/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !!nextEnabled })
+    });
+    await refreshNotifications();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function deleteNotifyMonitor(id) {
+  if (!window.confirm("确认删除该监听项？删除后历史事件仍会保留。")) return;
+  try {
+    await api(`/api/admin/notifications/monitors/${id}`, { method: "DELETE" });
+    if (refs.notifyEditId.value === id) resetNotifyForm();
+    await refreshNotifications();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function testNotifyMonitor(id) {
+  try {
+    setHint(refs.notifyFormResult, "测试执行中...");
+    const result = await api(`/api/admin/notifications/monitors/${id}/test-run`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    const matched = result.ruleResult?.matched;
+    const status = result.response?.status;
+    const summary = matched ? "命中规则" : "未命中规则";
+    setHint(refs.notifyFormResult, `测试完成（HTTP ${status}）：${summary}`);
+    await refreshNotificationEvents().catch(() => {});
+  } catch (error) {
+    setHint(refs.notifyFormResult, error.message);
+  }
+}
+
+window.editNotifyMonitor = editNotifyMonitor;
+window.toggleNotifyMonitor = toggleNotifyMonitor;
+window.deleteNotifyMonitor = deleteNotifyMonitor;
+window.testNotifyMonitor = testNotifyMonitor;
+
 function getCheckedValues(selector) {
   return Array.from(document.querySelectorAll(selector))
     .filter((element) => element.checked)
@@ -515,7 +912,8 @@ async function refreshAll() {
     refreshJobs(),
     refreshLogs(),
     refreshSystemVersion(),
-    refreshSubscriptions()
+    refreshSubscriptions(),
+    refreshNotifications()
   ]);
 }
 
@@ -678,6 +1076,131 @@ refs.subCtCancelBtn.addEventListener("click", () => {
   refs.subCtCancelBtn.classList.add("hidden");
   setHint(refs.subCtResult, "");
 });
+
+if (refs.notifyMonitorForm) {
+  populateNotifyIntervalOptions();
+  ensureRuleEmptyHint();
+
+  refs.notifyAddRule?.addEventListener("click", () => addRuleRow());
+
+  refs.notifySettingsForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = await api("/api/admin/notifications/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ globalFeishuWebhook: refs.notifyGlobalWebhook.value.trim() })
+      });
+      setHint(refs.notifySettingsResult, payload.globalFeishuWebhook ? "已保存全局 Webhook" : "已清空全局 Webhook");
+    } catch (error) {
+      setHint(refs.notifySettingsResult, error.message);
+    }
+  });
+
+  refs.notifyTestGlobalWebhook?.addEventListener("click", async () => {
+    const webhookUrl = refs.notifyGlobalWebhook.value.trim();
+    if (!webhookUrl) {
+      setHint(refs.notifySettingsResult, "请先填写飞书 Webhook 地址");
+      return;
+    }
+    try {
+      setHint(refs.notifySettingsResult, "正在发送测试消息...");
+      const payload = await api("/api/admin/notifications/test-feishu", {
+        method: "POST",
+        body: JSON.stringify({ webhookUrl })
+      });
+      setHint(refs.notifySettingsResult, payload.ok
+        ? "飞书测试消息已发送，请到群里查收"
+        : `飞书返回失败：${payload.text || payload.status}`);
+    } catch (error) {
+      setHint(refs.notifySettingsResult, error.message);
+    }
+  });
+
+  refs.notifyFormCancel?.addEventListener("click", () => {
+    resetNotifyForm();
+  });
+
+  refs.notifyRefreshBtn?.addEventListener("click", () => {
+    refreshNotifications().catch((error) => setHint(refs.notifyFormResult, error.message));
+  });
+
+  refs.notifyTestRunBtn?.addEventListener("click", async () => {
+    const id = refs.notifyEditId.value;
+    if (!id) {
+      setHint(refs.notifyFormResult, "请先保存监听后再测试");
+      return;
+    }
+    await testNotifyMonitor(id);
+  });
+
+  refs.notifyMonitorForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const editId = refs.notifyEditId.value;
+    const rules = collectRules();
+    const watchFieldsRaw = refs.notifyWatchFields.value || "";
+    const watchFields = watchFieldsRaw
+      .split(/[\n,;\s]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const intervalSeconds = Number(refs.notifyInterval.value);
+
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds < 1 || intervalSeconds > 3600) {
+      setHint(refs.notifyFormResult, "轮询间隔必须在 1-3600 秒之间");
+      return;
+    }
+
+    const headersValue = refs.notifyHeaders.value.trim();
+    if (headersValue) {
+      try {
+        const parsed = JSON.parse(headersValue);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("Headers 必须是 JSON 对象");
+        }
+      } catch (error) {
+        setHint(refs.notifyFormResult, `Headers 不是合法 JSON：${error.message}`);
+        return;
+      }
+    }
+    const bodyValue = refs.notifyBody.value.trim();
+    if (bodyValue) {
+      try {
+        JSON.parse(bodyValue);
+      } catch (error) {
+        setHint(refs.notifyFormResult, `Body 不是合法 JSON：${error.message}`);
+        return;
+      }
+    }
+
+    const payload = {
+      name: refs.notifyName.value.trim(),
+      enabled: refs.notifyEnabled.value === "1",
+      requestUrl: refs.notifyUrl.value.trim(),
+      httpMethod: refs.notifyMethod.value,
+      headersJson: headersValue,
+      bodyJson: bodyValue,
+      intervalSeconds,
+      timeoutSeconds: Math.max(1, Math.min(120, Number(refs.notifyTimeout.value) || 15)),
+      watchFields,
+      rules,
+      feishuWebhookOverride: refs.notifyWebhookOverride.value.trim(),
+      notifyTitle: refs.notifyTitle.value.trim(),
+      cooldownSeconds: Math.max(0, Math.min(86400, Number(refs.notifyCooldown.value) || 0))
+    };
+    if (editId) payload.id = editId;
+
+    try {
+      const result = await api("/api/admin/notifications/monitors", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      setHint(refs.notifyFormResult, editId ? "监听已更新" : `监听已创建：${result.id}`);
+      resetNotifyForm();
+      await refreshNotifications();
+    } catch (error) {
+      setHint(refs.notifyFormResult, error.message);
+    }
+  });
+}
 
 refs.refreshBtn.addEventListener("click", () => {
   refreshAll().catch((error) => alert(error.message));

@@ -3,7 +3,16 @@ import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { decryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, orderStatuses } from "../../shared/src/constants.js";
+import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
+import {
+  buildFeishuMarkdown,
+  clampIntervalSeconds,
+  evaluateMonitorRules,
+  fetchMonitorEndpoint,
+  normalizeWatchFields,
+  sendFeishuMarkdown,
+  summarizeResponseInfo
+} from "../../shared/src/notifications.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
@@ -567,6 +576,254 @@ async function tick() {
   }
 }
 
+// ── Notification monitors ──
+
+const NOTIFICATION_TICK_INTERVAL_MS = 1000;
+const NOTIFICATION_LOCK_TIMEOUT_MS = 60 * 1000;
+
+function getNotificationGlobalWebhook() {
+  const row = db.prepare("SELECT global_feishu_webhook FROM notification_settings WHERE id = 'default'").get();
+  return row?.global_feishu_webhook || "";
+}
+
+function claimNotificationMonitor() {
+  const now = nowIso();
+  const expiredLockTime = new Date(Date.now() - NOTIFICATION_LOCK_TIMEOUT_MS).toISOString();
+
+  const candidate = db.prepare(`
+    SELECT *
+    FROM notification_monitors
+    WHERE enabled = 1
+      AND (next_run_at IS NULL OR next_run_at <= ?)
+      AND (locked_at IS NULL OR locked_at < ?)
+    ORDER BY (next_run_at IS NULL) DESC, next_run_at ASC
+    LIMIT 1
+  `).get(now, expiredLockTime);
+
+  if (!candidate) return null;
+
+  const result = db.prepare(`
+    UPDATE notification_monitors
+    SET locked_at = ?, locked_by = ?
+    WHERE id = ? AND (locked_at IS NULL OR locked_at < ?)
+  `).run(now, workerId, candidate.id, expiredLockTime);
+
+  if (!result.changes) return null;
+  return { ...candidate, locked_at: now, locked_by: workerId };
+}
+
+function recordMonitorEvent({ monitorId, monitorName, eventType, matched, summary, detail }) {
+  db.prepare(`
+    INSERT INTO notification_events (id, monitor_id, monitor_name, event_type, matched, summary, detail, created_at)
+    VALUES (lower(hex(randomblob(8))), ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    monitorId || null,
+    monitorName || null,
+    eventType,
+    matched ? 1 : 0,
+    summary || null,
+    detail ? JSON.stringify(detail) : null,
+    nowIso()
+  );
+}
+
+function updateMonitorAfterRun(monitor, patch) {
+  const intervalSeconds = clampIntervalSeconds(monitor.interval_seconds || 60);
+  const next = addSeconds(nowIso(), intervalSeconds);
+  db.prepare(`
+    UPDATE notification_monitors
+    SET last_run_at = ?, last_match_at = COALESCE(?, last_match_at), last_notified_at = COALESCE(?, last_notified_at),
+        last_status = ?, last_error = ?, last_response_summary = ?,
+        next_run_at = ?, locked_at = NULL, locked_by = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(
+    patch.lastRunAt || nowIso(),
+    patch.lastMatchAt || null,
+    patch.lastNotifiedAt || null,
+    patch.lastStatus || null,
+    patch.lastError || null,
+    patch.lastResponseSummary ? JSON.stringify(patch.lastResponseSummary) : null,
+    next,
+    nowIso(),
+    monitor.id
+  );
+}
+
+async function processMonitor(monitor) {
+  const startedAt = nowIso();
+  const watchFields = normalizeWatchFields(monitor.watch_fields);
+  const responseInfo = await fetchMonitorEndpoint(monitor);
+  const responseSummary = summarizeResponseInfo(responseInfo);
+
+  if (!responseInfo.ok && responseInfo.status === 0) {
+    const errorMessage = responseInfo.text || "请求失败";
+    recordMonitorEvent({
+      monitorId: monitor.id,
+      monitorName: monitor.name,
+      eventType: notificationEventTypes.fetchError,
+      matched: false,
+      summary: `请求失败：${errorMessage.slice(0, 200)}`,
+      detail: { response: responseSummary }
+    });
+    updateMonitorAfterRun(monitor, {
+      lastRunAt: startedAt,
+      lastStatus: "error",
+      lastError: errorMessage,
+      lastResponseSummary: responseSummary
+    });
+    return;
+  }
+
+  const ruleResult = evaluateMonitorRules(safeParseJson(monitor.rules_json, null), responseInfo.json);
+
+  if (!ruleResult.matched) {
+    recordMonitorEvent({
+      monitorId: monitor.id,
+      monitorName: monitor.name,
+      eventType: notificationEventTypes.notMatched,
+      matched: false,
+      summary: `未命中 (HTTP ${responseInfo.status})`,
+      detail: { response: responseSummary, rules: ruleResult, watchFields }
+    });
+    updateMonitorAfterRun(monitor, {
+      lastRunAt: startedAt,
+      lastStatus: responseInfo.ok ? "no_match" : "http_error",
+      lastError: responseInfo.ok ? null : `HTTP ${responseInfo.status}`,
+      lastResponseSummary: responseSummary
+    });
+    return;
+  }
+
+  // Matched — apply cooldown if configured.
+  const cooldownSeconds = Number(monitor.cooldown_seconds || 0);
+  if (cooldownSeconds > 0 && monitor.last_notified_at) {
+    const lastNotifiedMs = Date.parse(monitor.last_notified_at);
+    if (Number.isFinite(lastNotifiedMs) && (Date.now() - lastNotifiedMs) < cooldownSeconds * 1000) {
+      recordMonitorEvent({
+        monitorId: monitor.id,
+        monitorName: monitor.name,
+        eventType: notificationEventTypes.matched,
+        matched: true,
+        summary: `命中但处于冷却期，未发送（剩余 ${Math.ceil((cooldownSeconds * 1000 - (Date.now() - lastNotifiedMs)) / 1000)}s）`,
+        detail: { response: responseSummary, rules: ruleResult, watchFields, suppressed: true }
+      });
+      updateMonitorAfterRun(monitor, {
+        lastRunAt: startedAt,
+        lastMatchAt: startedAt,
+        lastStatus: "matched_cooldown",
+        lastResponseSummary: responseSummary
+      });
+      return;
+    }
+  }
+
+  recordMonitorEvent({
+    monitorId: monitor.id,
+    monitorName: monitor.name,
+    eventType: notificationEventTypes.matched,
+    matched: true,
+    summary: `命中规则 (HTTP ${responseInfo.status})`,
+    detail: { response: responseSummary, rules: ruleResult, watchFields }
+  });
+
+  const webhookUrl = monitor.feishu_webhook_override || getNotificationGlobalWebhook();
+  if (!webhookUrl) {
+    recordMonitorEvent({
+      monitorId: monitor.id,
+      monitorName: monitor.name,
+      eventType: notificationEventTypes.sendError,
+      matched: true,
+      summary: "命中但未配置飞书 Webhook，未发送",
+      detail: { rules: ruleResult }
+    });
+    updateMonitorAfterRun(monitor, {
+      lastRunAt: startedAt,
+      lastMatchAt: startedAt,
+      lastStatus: "matched_no_webhook",
+      lastError: "未配置飞书 Webhook",
+      lastResponseSummary: responseSummary
+    });
+    return;
+  }
+
+  const message = buildFeishuMarkdown({
+    monitorName: monitor.name,
+    monitorUrl: monitor.request_url,
+    matchMode: ruleResult.matchMode,
+    matchedItems: ruleResult.matchedItems,
+    watchFields,
+    responseJson: responseInfo.json,
+    timestamp: startedAt,
+    customTitle: monitor.notify_title || `KaWang 监听触发：${monitor.name}`
+  });
+
+  const sendResult = await sendFeishuMarkdown(webhookUrl, message);
+
+  if (sendResult.ok) {
+    recordMonitorEvent({
+      monitorId: monitor.id,
+      monitorName: monitor.name,
+      eventType: notificationEventTypes.sendOk,
+      matched: true,
+      summary: "飞书通知发送成功",
+      detail: { message, result: sendResult }
+    });
+    updateMonitorAfterRun(monitor, {
+      lastRunAt: startedAt,
+      lastMatchAt: startedAt,
+      lastNotifiedAt: startedAt,
+      lastStatus: "notified",
+      lastError: null,
+      lastResponseSummary: responseSummary
+    });
+    return;
+  }
+
+  const sendError = `飞书发送失败：${(sendResult.text || sendResult.status || "未知错误").toString().slice(0, 200)}`;
+  recordMonitorEvent({
+    monitorId: monitor.id,
+    monitorName: monitor.name,
+    eventType: notificationEventTypes.sendError,
+    matched: true,
+    summary: sendError,
+    detail: { message, result: sendResult }
+  });
+  updateMonitorAfterRun(monitor, {
+    lastRunAt: startedAt,
+    lastMatchAt: startedAt,
+    lastStatus: "send_error",
+    lastError: sendError,
+    lastResponseSummary: responseSummary
+  });
+}
+
+async function notificationTick() {
+  // Drain due monitors quickly so that 1-second polling is responsive.
+  for (let i = 0; i < 50; i++) {
+    const monitor = claimNotificationMonitor();
+    if (!monitor) return;
+
+    try {
+      await processMonitor(monitor);
+    } catch (error) {
+      const message = error?.message || "监听任务执行异常";
+      recordMonitorEvent({
+        monitorId: monitor.id,
+        monitorName: monitor.name,
+        eventType: notificationEventTypes.fetchError,
+        matched: false,
+        summary: `执行异常：${message.slice(0, 200)}`,
+        detail: { error: message }
+      });
+      updateMonitorAfterRun(monitor, {
+        lastRunAt: nowIso(),
+        lastStatus: "error",
+        lastError: message
+      });
+    }
+  }
+}
+
 console.log(`[KaWang worker] started with poll interval ${env.workerPollMs}ms`);
 
 setInterval(() => {
@@ -575,6 +832,16 @@ setInterval(() => {
   });
 }, env.workerPollMs);
 
+setInterval(() => {
+  notificationTick().catch((error) => {
+    console.error("[KaWang worker] notification", error);
+  });
+}, NOTIFICATION_TICK_INTERVAL_MS);
+
 tick().catch((error) => {
   console.error("[KaWang worker]", error);
+});
+
+notificationTick().catch((error) => {
+  console.error("[KaWang worker] notification", error);
 });

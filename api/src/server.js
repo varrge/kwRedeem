@@ -11,9 +11,21 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, orderStatuses } from "../../shared/src/constants.js";
+import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationRuleOperators, orderStatuses } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
+import {
+  NOTIFICATION_MAX_INTERVAL,
+  NOTIFICATION_MIN_INTERVAL,
+  buildFeishuMarkdown,
+  clampIntervalSeconds,
+  evaluateMonitorRules,
+  fetchMonitorEndpoint,
+  normalizeMonitorRules,
+  normalizeWatchFields,
+  sendFeishuMarkdown,
+  summarizeResponseInfo
+} from "../../shared/src/notifications.js";
 
 const app = Fastify({ logger: false });
 const db = getDb();
@@ -1828,6 +1840,451 @@ app.get("/api/admin/logs", { preHandler: requireAdmin }, async () => {
   `).all().map((item) => ({
     ...item,
     detail: getJsonBodyOrNull(item.detail)
+  }));
+
+  return { items };
+});
+
+// ── Notification Monitors ──
+
+function getNotificationSettings() {
+  let row = db.prepare("SELECT * FROM notification_settings WHERE id = 'default'").get();
+  if (!row) {
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO notification_settings (id, global_feishu_webhook, updated_at, updated_by)
+      VALUES ('default', NULL, ?, 'system')
+    `).run(now);
+    row = db.prepare("SELECT * FROM notification_settings WHERE id = 'default'").get();
+  }
+  return row;
+}
+
+function serializeMonitor(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: !!row.enabled,
+    requestUrl: row.request_url,
+    httpMethod: row.http_method,
+    headersJson: row.headers_json || "",
+    bodyJson: row.body_json || "",
+    intervalSeconds: row.interval_seconds,
+    timeoutSeconds: row.timeout_seconds,
+    watchFields: normalizeWatchFields(row.watch_fields),
+    rules: normalizeMonitorRules(row.rules_json),
+    feishuWebhookOverride: row.feishu_webhook_override || "",
+    notifyTitle: row.notify_title || "",
+    cooldownSeconds: row.cooldown_seconds || 0,
+    lastRunAt: row.last_run_at,
+    lastMatchAt: row.last_match_at,
+    lastNotifiedAt: row.last_notified_at,
+    lastStatus: row.last_status,
+    lastError: row.last_error,
+    nextRunAt: row.next_run_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+const monitorPayloadSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "请填写监听名称").max(80, "名称过长"),
+  enabled: z.boolean().optional().default(true),
+  requestUrl: z.string().url("请输入合法的请求 URL"),
+  httpMethod: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
+  headersJson: z.string().optional().default(""),
+  bodyJson: z.string().optional().default(""),
+  intervalSeconds: z
+    .number({ invalid_type_error: "轮询间隔必须是数字" })
+    .int("轮询间隔必须是整数")
+    .min(NOTIFICATION_MIN_INTERVAL, "轮询间隔最小 1 秒")
+    .max(NOTIFICATION_MAX_INTERVAL, "轮询间隔最大 3600 秒"),
+  timeoutSeconds: z.number().int().min(1).max(120).optional().default(15),
+  watchFields: z.array(z.string()).optional().default([]),
+  rules: z
+    .object({
+      matchMode: z.enum(notificationMatchModes).optional().default("all"),
+      items: z
+        .array(
+          z.object({
+            fieldPath: z.string().min(1, "字段路径不能为空"),
+            operator: z.enum(notificationRuleOperators),
+            expectedValue: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional()
+          })
+        )
+        .optional()
+        .default([])
+    })
+    .optional()
+    .default({ matchMode: "all", items: [] }),
+  feishuWebhookOverride: z.string().optional().default(""),
+  notifyTitle: z.string().optional().default(""),
+  cooldownSeconds: z.number().int().min(0).max(86400).optional().default(0)
+});
+
+function validateOptionalJsonObject(value, fieldLabel) {
+  if (!value || !String(value).trim()) return null;
+  const parsed = safeParseJson(value, null);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${fieldLabel} 必须是合法的 JSON 对象`);
+  }
+  return parsed;
+}
+
+function upsertMonitor(payload, isUpdate, existing) {
+  const now = nowIso();
+  const id = isUpdate ? existing.id : nanoid(16);
+  const intervalSeconds = clampIntervalSeconds(payload.intervalSeconds);
+  const headersTrimmed = String(payload.headersJson || "").trim();
+  const bodyTrimmed = String(payload.bodyJson || "").trim();
+  validateOptionalJsonObject(headersTrimmed, "Headers");
+
+  if (bodyTrimmed && payload.httpMethod !== "GET" && payload.httpMethod !== "HEAD") {
+    const parsed = safeParseJson(bodyTrimmed, null);
+    if (parsed === null && !bodyTrimmed.startsWith("{")) {
+      // tolerate raw string bodies but warn if obvious JSON-looking but invalid
+    }
+  }
+
+  const watchFields = normalizeWatchFields(payload.watchFields);
+  const normalizedRules = normalizeMonitorRules(payload.rules);
+  const rulesJson = JSON.stringify(normalizedRules);
+
+  if (isUpdate) {
+    db.prepare(`
+      UPDATE notification_monitors
+      SET name = ?, enabled = ?, request_url = ?, http_method = ?, headers_json = ?, body_json = ?,
+          interval_seconds = ?, timeout_seconds = ?, watch_fields = ?, rules_json = ?,
+          feishu_webhook_override = ?, notify_title = ?, cooldown_seconds = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      payload.name.trim(),
+      payload.enabled ? 1 : 0,
+      payload.requestUrl.trim(),
+      payload.httpMethod,
+      headersTrimmed || null,
+      bodyTrimmed || null,
+      intervalSeconds,
+      payload.timeoutSeconds || 15,
+      JSON.stringify(watchFields),
+      rulesJson,
+      payload.feishuWebhookOverride?.trim() || null,
+      payload.notifyTitle?.trim() || null,
+      payload.cooldownSeconds || 0,
+      now,
+      id
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO notification_monitors (
+        id, name, enabled, request_url, http_method, headers_json, body_json,
+        interval_seconds, timeout_seconds, watch_fields, rules_json,
+        feishu_webhook_override, notify_title, cooldown_seconds,
+        next_run_at, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      payload.name.trim(),
+      payload.enabled ? 1 : 0,
+      payload.requestUrl.trim(),
+      payload.httpMethod,
+      headersTrimmed || null,
+      bodyTrimmed || null,
+      intervalSeconds,
+      payload.timeoutSeconds || 15,
+      JSON.stringify(watchFields),
+      rulesJson,
+      payload.feishuWebhookOverride?.trim() || null,
+      payload.notifyTitle?.trim() || null,
+      payload.cooldownSeconds || 0,
+      now,
+      now,
+      now
+    );
+  }
+
+  return id;
+}
+
+function recordNotificationEvent({ monitorId, monitorName, eventType, matched, summary, detail }) {
+  db.prepare(`
+    INSERT INTO notification_events (id, monitor_id, monitor_name, event_type, matched, summary, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    nanoid(16),
+    monitorId || null,
+    monitorName || null,
+    eventType,
+    matched ? 1 : 0,
+    summary || null,
+    detail ? JSON.stringify(detail) : null,
+    nowIso()
+  );
+}
+
+app.get("/api/admin/notifications/settings", { preHandler: requireAdmin }, async () => {
+  const settings = getNotificationSettings();
+  return {
+    globalFeishuWebhook: settings.global_feishu_webhook || "",
+    updatedAt: settings.updated_at,
+    updatedBy: settings.updated_by,
+    intervalBounds: { min: NOTIFICATION_MIN_INTERVAL, max: NOTIFICATION_MAX_INTERVAL }
+  };
+});
+
+app.patch("/api/admin/notifications/settings", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    globalFeishuWebhook: z.string().max(4096).optional().default("")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: parsed.error.issues[0]?.message || "参数不正确" });
+  }
+
+  const value = parsed.data.globalFeishuWebhook.trim() || null;
+  if (value && !/^https?:\/\//i.test(value)) {
+    return reply.code(400).send({ message: "飞书 Webhook 必须以 http(s):// 开头" });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE notification_settings
+    SET global_feishu_webhook = ?, updated_at = ?, updated_by = ?
+    WHERE id = 'default'
+  `).run(value, now, request.admin.username);
+
+  createAuditLog({
+    action: logActions.notificationSettingsUpdate,
+    actor: request.admin.username,
+    resourceType: "notification_settings",
+    resourceId: "default",
+    detail: { hasGlobalWebhook: !!value }
+  });
+
+  return { globalFeishuWebhook: value || "", updatedAt: now };
+});
+
+app.get("/api/admin/notifications/monitors", { preHandler: requireAdmin }, async () => {
+  const rows = db.prepare("SELECT * FROM notification_monitors ORDER BY created_at DESC").all();
+  return {
+    items: rows.map(serializeMonitor),
+    intervalBounds: { min: NOTIFICATION_MIN_INTERVAL, max: NOTIFICATION_MAX_INTERVAL }
+  };
+});
+
+app.post("/api/admin/notifications/monitors", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = monitorPayloadSchema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: parsed.error.issues[0]?.message || "参数不正确" });
+  }
+
+  const payload = parsed.data;
+  const existing = payload.id ? db.prepare("SELECT * FROM notification_monitors WHERE id = ?").get(payload.id) : null;
+  if (payload.id && !existing) {
+    return reply.code(404).send({ message: "监听项不存在" });
+  }
+
+  try {
+    const id = upsertMonitor(payload, !!existing, existing);
+    createAuditLog({
+      action: logActions.notificationMonitorUpsert,
+      actor: request.admin.username,
+      resourceType: "notification_monitor",
+      resourceId: id,
+      detail: {
+        name: payload.name,
+        enabled: !!payload.enabled,
+        intervalSeconds: clampIntervalSeconds(payload.intervalSeconds),
+        ruleCount: payload.rules?.items?.length || 0
+      }
+    });
+
+    return { id };
+  } catch (error) {
+    return reply.code(400).send({ message: error.message || "保存失败" });
+  }
+});
+
+app.patch("/api/admin/notifications/monitors/:id/status", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({ enabled: z.boolean() });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const monitor = db.prepare("SELECT * FROM notification_monitors WHERE id = ?").get(request.params.id);
+  if (!monitor) {
+    return reply.code(404).send({ message: "监听项不存在" });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE notification_monitors
+    SET enabled = ?, next_run_at = CASE WHEN ? = 1 THEN ? ELSE next_run_at END, updated_at = ?
+    WHERE id = ?
+  `).run(parsed.data.enabled ? 1 : 0, parsed.data.enabled ? 1 : 0, now, now, monitor.id);
+
+  createAuditLog({
+    action: logActions.notificationMonitorToggle,
+    actor: request.admin.username,
+    resourceType: "notification_monitor",
+    resourceId: monitor.id,
+    detail: { enabled: parsed.data.enabled }
+  });
+
+  return { id: monitor.id, enabled: parsed.data.enabled };
+});
+
+app.delete("/api/admin/notifications/monitors/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const monitor = db.prepare("SELECT * FROM notification_monitors WHERE id = ?").get(request.params.id);
+  if (!monitor) {
+    return reply.code(404).send({ message: "监听项不存在" });
+  }
+
+  db.prepare("DELETE FROM notification_monitors WHERE id = ?").run(monitor.id);
+
+  createAuditLog({
+    action: logActions.notificationMonitorDelete,
+    actor: request.admin.username,
+    resourceType: "notification_monitor",
+    resourceId: monitor.id,
+    detail: { name: monitor.name }
+  });
+
+  return { id: monitor.id };
+});
+
+app.post("/api/admin/notifications/monitors/:id/test-run", { preHandler: requireAdmin }, async (request, reply) => {
+  const monitor = db.prepare("SELECT * FROM notification_monitors WHERE id = ?").get(request.params.id);
+  if (!monitor) {
+    return reply.code(404).send({ message: "监听项不存在" });
+  }
+
+  const responseInfo = await fetchMonitorEndpoint(monitor);
+  const ruleResult = evaluateMonitorRules(safeParseJson(monitor.rules_json, null), responseInfo.json);
+  const watchFields = normalizeWatchFields(monitor.watch_fields);
+
+  const summary = summarizeResponseInfo(responseInfo);
+  const eventDetail = {
+    response: summary,
+    rules: ruleResult,
+    watchFields
+  };
+
+  recordNotificationEvent({
+    monitorId: monitor.id,
+    monitorName: monitor.name,
+    eventType: notificationEventTypes.test,
+    matched: ruleResult.matched,
+    summary: responseInfo.ok ? `HTTP ${responseInfo.status} ${ruleResult.matched ? "命中" : "未命中"}` : `请求失败：${responseInfo.text?.slice(0, 120) || "-"}`,
+    detail: eventDetail
+  });
+
+  createAuditLog({
+    action: logActions.notificationMonitorTest,
+    actor: request.admin.username,
+    resourceType: "notification_monitor",
+    resourceId: monitor.id,
+    detail: { matched: ruleResult.matched, ok: responseInfo.ok, status: responseInfo.status }
+  });
+
+  return {
+    monitorId: monitor.id,
+    monitorName: monitor.name,
+    response: summary,
+    ruleResult,
+    watchFields
+  };
+});
+
+app.post("/api/admin/notifications/test-feishu", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    webhookUrl: z.string().optional().default(""),
+    monitorId: z.string().optional()
+  });
+  const parsed = schema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  let webhookUrl = parsed.data.webhookUrl.trim();
+  let monitor = null;
+  if (!webhookUrl && parsed.data.monitorId) {
+    monitor = db.prepare("SELECT * FROM notification_monitors WHERE id = ?").get(parsed.data.monitorId);
+    if (monitor?.feishu_webhook_override) {
+      webhookUrl = monitor.feishu_webhook_override;
+    }
+  }
+  if (!webhookUrl) {
+    const settings = getNotificationSettings();
+    webhookUrl = settings.global_feishu_webhook || "";
+  }
+  if (!webhookUrl) {
+    return reply.code(400).send({ message: "未配置飞书 Webhook" });
+  }
+
+  const message = buildFeishuMarkdown({
+    monitorName: monitor?.name || "测试通知",
+    monitorUrl: monitor?.request_url || "",
+    matchMode: "all",
+    matchedItems: [
+      { fieldPath: "test", operator: "equals", expectedValue: "ok", actualValue: "ok" }
+    ],
+    watchFields: monitor ? normalizeWatchFields(monitor.watch_fields) : [],
+    responseJson: { test: "ok" },
+    timestamp: nowIso(),
+    customTitle: monitor?.notify_title || "KaWang 通知测试"
+  });
+
+  const sendResult = await sendFeishuMarkdown(webhookUrl, message);
+
+  recordNotificationEvent({
+    monitorId: monitor?.id || null,
+    monitorName: monitor?.name || "(测试)",
+    eventType: sendResult.ok ? notificationEventTypes.sendOk : notificationEventTypes.sendError,
+    matched: false,
+    summary: sendResult.ok
+      ? "飞书测试通知发送成功"
+      : `飞书测试发送失败：${(sendResult.text || sendResult.status || "未知错误").toString().slice(0, 200)}`,
+    detail: { message, result: sendResult }
+  });
+
+  createAuditLog({
+    action: logActions.notificationFeishuSend,
+    actor: request.admin.username,
+    resourceType: "notification_monitor",
+    resourceId: monitor?.id || "(test)",
+    detail: { test: true, ok: sendResult.ok, status: sendResult.status }
+  });
+
+  return { ok: sendResult.ok, status: sendResult.status, text: sendResult.text, json: sendResult.json };
+});
+
+app.get("/api/admin/notifications/events", { preHandler: requireAdmin }, async (request) => {
+  const monitorId = request.query?.monitorId ? String(request.query.monitorId) : null;
+  const limit = Math.min(200, Math.max(1, Number(request.query?.limit) || 100));
+
+  let sql = "SELECT * FROM notification_events";
+  const params = [];
+  if (monitorId) {
+    sql += " WHERE monitor_id = ?";
+    params.push(monitorId);
+  }
+  sql += " ORDER BY created_at DESC LIMIT ?";
+  params.push(limit);
+
+  const items = db.prepare(sql).all(...params).map((row) => ({
+    id: row.id,
+    monitorId: row.monitor_id,
+    monitorName: row.monitor_name,
+    eventType: row.event_type,
+    matched: !!row.matched,
+    summary: row.summary,
+    detail: getJsonBodyOrNull(row.detail),
+    createdAt: row.created_at
   }));
 
   return { items };

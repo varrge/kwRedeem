@@ -292,6 +292,52 @@ function createSchema(db) {
       reviewed_by TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      id TEXT PRIMARY KEY,
+      global_feishu_webhook TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      request_url TEXT NOT NULL,
+      http_method TEXT NOT NULL DEFAULT 'GET',
+      headers_json TEXT,
+      body_json TEXT,
+      interval_seconds INTEGER NOT NULL DEFAULT 60,
+      timeout_seconds INTEGER NOT NULL DEFAULT 15,
+      watch_fields TEXT,
+      rules_json TEXT,
+      feishu_webhook_override TEXT,
+      notify_title TEXT,
+      cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+      last_response_summary TEXT,
+      last_run_at TEXT,
+      last_match_at TEXT,
+      last_notified_at TEXT,
+      last_status TEXT,
+      last_error TEXT,
+      next_run_at TEXT,
+      locked_at TEXT,
+      locked_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_events (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT,
+      monitor_name TEXT,
+      event_type TEXT NOT NULL,
+      matched INTEGER NOT NULL DEFAULT 0,
+      summary TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -324,6 +370,9 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sites_status ON sites(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_sub_requests_card_status ON subscription_requests(card_type_id, status, reviewed_at);
     CREATE INDEX IF NOT EXISTS idx_sub_requests_status ON subscription_requests(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_notify_monitors_due ON notification_monitors(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_notify_events_monitor ON notification_events(monitor_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_notify_events_created ON notification_events(created_at);
   `);
 }
 
@@ -607,6 +656,14 @@ function seedDefaults(db) {
     SET site_id = COALESCE(site_id, 'site_demo')
     WHERE site_id IS NULL OR site_id = ''
   `).run();
+
+  const hasNotificationSettings = db.prepare("SELECT COUNT(*) AS count FROM notification_settings").get();
+  if (hasNotificationSettings.count === 0) {
+    db.prepare(`
+      INSERT INTO notification_settings (id, global_feishu_webhook, updated_at, updated_by)
+      VALUES ('default', NULL, ?, 'system')
+    `).run(new Date().toISOString());
+  }
 }
 
 export function getDb() {

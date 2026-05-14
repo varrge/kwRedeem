@@ -66,6 +66,9 @@
           <button class="nav-item" data-tab="subscriptions">
             <span class="icon">📋</span> 订阅系统
           </button>
+          <button class="nav-item" data-tab="notifications">
+            <span class="icon">🔔</span> 通知监听
+          </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
@@ -255,6 +258,162 @@
           <div class="card mt-24">
             <div class="card-header"><h3>订阅申请</h3></div>
             <div id="sub-request-list" class="table-wrapper"></div>
+          </div>
+        </section>
+
+        <!-- Notifications -->
+        <section class="tab-panel hidden" data-panel="notifications">
+          <div class="content-header">
+            <h2>通知监听</h2>
+            <p>配置自定义 API 监听，按规则命中后通过飞书 Webhook 发送 Markdown 通知</p>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>飞书通知设置</h3>
+              <div class="header-actions">
+                <span class="table-badge status-active">飞书 Webhook</span>
+              </div>
+            </div>
+            <form id="notify-settings-form" class="stack">
+              <label class="field">
+                <span>全局飞书机器人 Webhook</span>
+                <input id="notify-global-webhook" type="text" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx" />
+              </label>
+              <div class="header-actions">
+                <button type="submit" class="primary-btn">💾 保存设置</button>
+                <button type="button" id="notify-test-global-webhook" class="ghost-btn">🧪 发送测试消息</button>
+              </div>
+              <div id="notify-settings-result" class="hint"></div>
+            </form>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3 id="notify-form-title">添加监听</h3>
+              <div class="header-actions">
+                <button type="button" id="notify-form-cancel" class="ghost-btn hidden">取消编辑</button>
+              </div>
+            </div>
+            <form id="notify-monitor-form" class="stack">
+              <input type="hidden" id="notify-edit-id" value="" />
+              
+              <div class="form-section-title">基本配置</div>
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>监听名称</span>
+                  <input id="notify-name" placeholder="例如：库存告警" required />
+                </label>
+                <label class="field">
+                  <span>是否启用</span>
+                  <select id="notify-enabled">
+                    <option value="1">启用</option>
+                    <option value="0">停用</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="form-section-title">请求配置</div>
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>请求 URL</span>
+                  <input id="notify-url" type="url" placeholder="https://api.example.com/stock" required />
+                </label>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>HTTP 方法</span>
+                    <select id="notify-method">
+                      <option value="GET">GET</option>
+                      <option value="POST">POST</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                      <option value="DELETE">DELETE</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>轮询间隔</span>
+                    <select id="notify-interval"></select>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>Headers (JSON 对象)</span>
+                  <textarea id="notify-headers" rows="3" placeholder='{"Authorization":"Bearer xxx"}'></textarea>
+                </label>
+                <label class="field">
+                  <span>Body (JSON 对象)</span>
+                  <textarea id="notify-body" rows="3" placeholder='{"q":"foo"}'></textarea>
+                </label>
+              </div>
+
+              <div class="form-section-title">触发规则</div>
+              <label class="field">
+                <span>监听 JSON 字段（用逗号或空格分隔多个路径，如 data.count）</span>
+                <input id="notify-watch-fields" placeholder="data.status, data.items.0.status" />
+              </label>
+
+              <div class="notify-rules-block">
+                <div class="notify-rules-header">
+                  <div class="notify-rules-title">规则逻辑</div>
+                  <div class="notify-rules-actions">
+                    <label class="inline-field">
+                      <span>匹配模式</span>
+                      <select id="notify-match-mode">
+                        <option value="all">全部条件命中</option>
+                        <option value="any">任一条件命中</option>
+                      </select>
+                    </label>
+                    <button type="button" id="notify-add-rule" class="primary-btn small">➕ 添加规则</button>
+                  </div>
+                </div>
+                <div id="notify-rules-list" class="notify-rules-list"></div>
+                <p class="hint">运算符说明：equals (等于), contains (包含), gt (大于), exists (字段存在) 等。路径支持点号访问嵌套字段。</p>
+              </div>
+
+              <div class="form-section-title">通知配置</div>
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>飞书 Webhook（覆盖全局）</span>
+                  <input id="notify-webhook-override" placeholder="留空则使用全局 Webhook" />
+                </label>
+                <label class="field">
+                  <span>通知标题</span>
+                  <input id="notify-title" placeholder="如：库存掉量告警" />
+                </label>
+              </div>
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>超时时间 (秒)</span>
+                  <input id="notify-timeout" type="number" min="1" max="120" value="15" />
+                </label>
+                <label class="field">
+                  <span>冷却时间 (秒)</span>
+                  <input id="notify-cooldown" type="number" min="0" max="86400" value="0" />
+                </label>
+              </div>
+              <div class="header-actions mt-12">
+                <button type="submit" class="primary-btn" id="notify-submit-btn">添加监听</button>
+                <button type="button" id="notify-test-run-btn" class="ghost-btn hidden">测试执行</button>
+              </div>
+              <div id="notify-form-result" class="hint"></div>
+            </form>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>当前监听</h3>
+              <div class="header-actions">
+                <button id="notify-refresh-btn" type="button" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="notify-monitor-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>最近通知事件</h3></div>
+            <div id="notify-event-list" class="table-wrapper"></div>
           </div>
         </section>
 

@@ -28,6 +28,7 @@
 - `卡密管理`：按网站批量导卡、单张补卡、卡密批量状态操作
 - `任务中心`：查看订单和任务状态，重试失败任务
 - `日志`：轮询查看后台操作与任务审计
+- `通知监听`：自定义 API 轮询监听 + 飞书 Webhook 通知（见下文）
 
 ## 状态流转
 
@@ -62,6 +63,16 @@
 其中 `{{sessionRaw}}` 会插入 session 的原始 JSON 片段，适合远端字段本身就是对象；`{{sessionString}}` 会插入带转义的 JSON 字符串，适合远端字段类型是 `String` 但内容仍需承载 session JSON。
 
 验证与提交阶段都可用 `success_rule` / `failure_rule` 基于 HTTP 状态、响应文本或 JSON Path 做成功判断。
+
+## 通知监听系统
+
+- 数据模型：
+  - `notification_settings`：单行 `id='default'`，保存全局飞书 Webhook
+  - `notification_monitors`：每条监听项，含请求配置、轮询间隔（1-3600 秒）、监听字段、触发规则、Webhook 覆盖、冷却时间、运行状态
+  - `notification_events`：监听执行/匹配/发送事件流水
+- 流程：管理员在后台「通知监听」配置 API 监听项与触发规则；Worker 每秒检查 `next_run_at` 到期的监听项，按 `enabled + 锁` 抢占并执行，命中规则后通过飞书 Webhook 发送 Markdown 卡片，并把执行结果写入 `notification_events`。
+- 触发规则：每条规则形如 `{ fieldPath, operator, expectedValue }`，运算符支持 `equals / not_equals / contains / not_contains / gt / gte / lt / lte / exists / not_exists`，多条规则之间可选 `all`（全部命中）或 `any`（任一命中）。
+- 飞书 Webhook：默认使用 `notification_settings.global_feishu_webhook`，监听项可单独覆盖；消息格式为 `interactive` 卡片 + `markdown` 元素，包含监听名称、接口、命中规则与监听字段当前值。
 
 ## 安全说明
 

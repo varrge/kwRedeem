@@ -235,6 +235,23 @@ function parseSessionPayload(rawValue) {
   return { parsed, preview };
 }
 
+// 站点级 session 校验：根据 site.slug 在订单创建前校验 session 关键字段，
+// 避免明显无效的 session 浪费一次卡密锁定 + 任务重试周期。
+function validateSessionForSite(site, session) {
+  const slug = String(site?.slug || "").toLowerCase();
+  const accessToken = typeof session?.accessToken === "string" ? session.accessToken.trim() : "";
+  const email = typeof session?.user?.email === "string" ? session.user.email.trim() : "";
+
+  if (slug === "666") {
+    if (!accessToken) {
+      throw new Error("666 站 session 缺少 accessToken 字段，请重新获取完整 Session JSON");
+    }
+    if (!email) {
+      throw new Error("666 站 session 缺少 user.email 字段，请重新获取完整 Session JSON");
+    }
+  }
+}
+
 function getJsonBodyOrNull(value) {
   if (!value) return null;
 
@@ -842,6 +859,7 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
     endpointName: key.site_name || "未绑定网站",
     siteId: key.site_id,
     siteName: key.site_name || "未命名网站",
+    siteSlug: key.site_slug || null,
     canRedeem,
     remoteResult: remoteResult ? {
       ok: remoteResult.ok,
@@ -895,6 +913,8 @@ app.post("/api/public/redeem", async (request, reply) => {
       if (!site) {
         throw new Error("当前卡密未绑定有效网站");
       }
+
+      validateSessionForSite(site, session.parsed);
 
       const now = nowIso();
       const orderId = nanoid(18);

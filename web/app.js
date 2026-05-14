@@ -12,6 +12,7 @@ const orderNoInput = document.querySelector("#order-no");
 const statusContainer = document.querySelector("#status-container");
 
 let verifiedKey = null;
+let verifiedSiteSlug = null;
 let redeemStatusTimer = null;
 
 const LIVE_STATUS_POLL_MS = 2000;
@@ -71,6 +72,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
 document.querySelector("#back-to-step-1").addEventListener("click", () => goToStep(1));
 document.querySelector("#start-over").addEventListener("click", () => {
   verifiedKey = null;
+  verifiedSiteSlug = null;
   publicKeyInput.value = "";
   document.querySelector("#session-payload").value = "";
   setState(verifyResult, "请输入卡密并点击验证。");
@@ -142,6 +144,22 @@ function parseSessionPayloadInput(rawValue) {
   }
 }
 
+// 站点级 session 预检：与后端 validateSessionForSite 对齐，保证用户在提交前就能看到明确报错。
+function validateSessionForSiteSlug(siteSlug, sessionData) {
+  const slug = String(siteSlug || "").toLowerCase();
+  const accessToken = typeof sessionData?.accessToken === "string" ? sessionData.accessToken.trim() : "";
+  const email = typeof sessionData?.user?.email === "string" ? sessionData.user.email.trim() : "";
+
+  if (slug === "666") {
+    if (!accessToken) {
+      throw new Error("666 站需要完整的 ChatGPT Session JSON：缺少 accessToken 字段，请重新到 chatgpt.com/api/auth/session 复制完整内容。");
+    }
+    if (!email) {
+      throw new Error("666 站需要完整的 ChatGPT Session JSON：缺少 user.email 字段，请重新到 chatgpt.com/api/auth/session 复制完整内容。");
+    }
+  }
+}
+
 function extractPlanType(sessionData = {}) {
   const candidates = [
     sessionData.planType,
@@ -165,26 +183,37 @@ function isSessionFixNeededMessage(message) {
     "token 内容格式错误",
     "session格式错误",
     "session 格式错误",
+    "session 无效",
+    "session无效",
     "缺少account字段",
     "缺少 account 字段",
+    "字段缺失",
     "missing account",
     "account field is required",
     "token expired",
     "token invalid",
     "invalid token",
-    "expired token"
+    "expired token",
+    "invalid_session",
+    "invalid session",
+    "session_invalid"
   ].some((keyword) => String(message ?? "").toLowerCase().includes(keyword));
 }
 
 function getApiMessage(job = {}) {
   const response = job.lastResponse || {};
   const json = response.json || {};
-  return json.result
+  const code = json.code || json.data?.code;
+  const message = json.result
     || json.msg
     || json.message
     || json.data?.msg
     || json.data?.message
     || "";
+  if (code && message) return `${code}: ${message}`;
+  if (message) return message;
+  if (code) return String(code);
+  return "";
 }
 
 function renderVerifyResult(payload) {
@@ -557,6 +586,7 @@ verifyForm.addEventListener("submit", async (event) => {
     });
 
     verifiedKey = payload.canRedeem ? payload.publicKey : null;
+    verifiedSiteSlug = payload.canRedeem ? (payload.siteSlug || null) : null;
     redeemSubmit.disabled = !payload.canRedeem;
     setRichState(verifyResult, renderVerifyResult(payload), payload.canRedeem ? "success" : "error");
     
@@ -567,6 +597,7 @@ verifyForm.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     verifiedKey = null;
+    verifiedSiteSlug = null;
     redeemSubmit.disabled = true;
     setState(verifyResult, error.message, "error");
   }
@@ -652,6 +683,7 @@ redeemForm.addEventListener("submit", async (event) => {
   try {
     const sessionPayload = document.querySelector("#session-payload").value.trim();
     const sessionData = parseSessionPayloadInput(sessionPayload);
+    validateSessionForSiteSlug(verifiedSiteSlug, sessionData);
     const abandonRemainingTime = shouldConfirmOverwrite(sessionData);
     const email = extractEmail(sessionData);
 

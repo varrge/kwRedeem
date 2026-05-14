@@ -110,17 +110,33 @@ function applyAuthHeaders(headers, remoteConfig, bodyString) {
 
 function extractFailureMessages(responseInfo = {}) {
   const candidates = [
-    responseInfo.text,
-    responseInfo.json?.msg,
     responseInfo.json?.message,
+    responseInfo.json?.msg,
+    responseInfo.json?.result,
     responseInfo.json?.data?.msg,
     responseInfo.json?.data?.message,
-    responseInfo.json?.data?.statusMessage
+    responseInfo.json?.data?.statusMessage,
+    responseInfo.json?.code,
+    responseInfo.json?.data?.code,
+    responseInfo.text
   ];
 
   return candidates
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
+}
+
+// 把远端 `{code, message}` 类响应组合成更可读的错误，方便订单/任务列表展示。
+function formatRemoteErrorMessage(responseInfo = {}, fallback = "") {
+  const json = responseInfo.json;
+  if (json && typeof json === "object") {
+    const code = json.code || json.data?.code;
+    const message = json.message || json.msg || json.data?.message || json.data?.msg || json.data?.statusMessage;
+    if (code && message) return `${code}: ${message}`;
+    if (message) return String(message);
+    if (code) return String(code);
+  }
+  return fallback || responseInfo.text || `HTTP ${responseInfo.status}`;
 }
 
 function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
@@ -139,14 +155,30 @@ function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
     "token 内容格式错误",
     "session格式错误",
     "session 格式错误",
+    "session 无效",
+    "session无效",
+    "session 已失效",
+    "session已失效",
     "缺少account字段",
     "缺少 account 字段",
+    "字段缺失",
     "missing account",
     "account field is required",
     "token expired",
     "token invalid",
     "invalid token",
-    "expired token"
+    "expired token",
+    "invalid_session",
+    "invalid session",
+    "session_invalid",
+    "cdk_used",
+    "cdk used",
+    "cdk 已被使用",
+    "卡密已被使用",
+    "已被使用",
+    "cdk_invalid",
+    "cdk invalid",
+    "invalid_cdk"
   ];
 
   if (exactKeywords.some((keyword) => normalized.includes(keyword))) {
@@ -427,7 +459,7 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId, endpoint) {
     const isSuccess = querySuccessRule
       ? evaluateRule(querySuccessRule, queryResult)
       : false;
-    const queryErrorMessage = queryResult.json?.error || queryResult.json?.data?.statusMessage || queryResult.text || `HTTP ${queryResult.status}`;
+    const queryErrorMessage = formatRemoteErrorMessage(queryResult, queryResult.json?.error || queryResult.text || `HTTP ${queryResult.status}`);
 
     if (isSuccess) {
       markSuccess(job.id, order.id, cdkey.id, queryResult);
@@ -505,7 +537,7 @@ async function processJob(job) {
     return;
   }
 
-  let errorMessage = responseInfo.text || `HTTP ${responseInfo.status}`;
+  let errorMessage = formatRemoteErrorMessage(responseInfo, responseInfo.text || `HTTP ${responseInfo.status}`);
   if (errorMessage.includes("<!doctype") || errorMessage.includes("<!DOCTYPE") || errorMessage.includes("<html") || errorMessage.includes("<HTML")) {
     errorMessage = `远端服务器返回 HTML 错误页 (HTTP ${responseInfo.status})`;
   }

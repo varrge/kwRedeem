@@ -465,8 +465,9 @@ function seedDefaults(db) {
       verifyHeadersTemplate: "{}",
       verifyBodyTemplate: "{}",
       submitHeadersTemplate: "{}",
-      submitBodyTemplate: '{"cdk":"{{sourceKey}}","session":{{sessionRaw}}}',
-      abandonSubmitBodyTemplate: '{"cdk":"{{sourceKey}}","session":{{sessionRaw}}}',
+      // 666 站现网契约：cdk + session_json (字符串) + sku，sku 固定为 chatgpt_plus_tr_499
+      submitBodyTemplate: '{"cdk":"{{sourceKey}}","session_json":{{sessionString}},"sku":"chatgpt_plus_tr_499"}',
+      abandonSubmitBodyTemplate: '{"cdk":"{{sourceKey}}","session_json":{{sessionString}},"sku":"chatgpt_plus_tr_499"}',
       authType: null,
       authConfig: null,
       verifySuccessRule: null,

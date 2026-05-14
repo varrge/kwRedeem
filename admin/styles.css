@@ -302,6 +302,38 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 }
 
 .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.status-message {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.status-message-info {
+  color: #cfe0ff;
+  background: rgba(113, 167, 255, 0.1);
+  border-color: rgba(113, 167, 255, 0.18);
+}
+
+.status-message-success {
+  color: #9ef3cf;
+  background: rgba(67, 213, 159, 0.12);
+  border-color: rgba(67, 213, 159, 0.2);
+}
+
+.status-message-error {
+  color: #ffc1d2;
+  background: rgba(255, 127, 159, 0.12);
+  border-color: rgba(255, 127, 159, 0.2);
+}
+
+.ghost-btn.is-busy,
+.primary-btn.is-busy {
+  opacity: 0.75;
+  cursor: progress;
+}
 .centered { text-align: center; }
 
 /* Tables */

@@ -97,6 +97,24 @@ function setHint(element, message) {
   if (element) element.textContent = message;
 }
 
+function setStatusMessage(element, message, type = "info") {
+  if (!element) return;
+  element.textContent = message || "";
+  element.classList.remove("status-message", "status-message-info", "status-message-success", "status-message-error");
+  if (!message) return;
+  element.classList.add("status-message", `status-message-${type}`);
+}
+
+function setButtonBusy(button, busy, busyText) {
+  if (!button) return;
+  if (!button.dataset.idleText) {
+    button.dataset.idleText = button.textContent;
+  }
+  button.disabled = busy;
+  button.classList.toggle("is-busy", busy);
+  button.textContent = busy ? busyText : button.dataset.idleText;
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -707,7 +725,7 @@ function resetNotifyForm() {
   refs.notifySubmitBtn.textContent = "添加监听";
   refs.notifyTestRunBtn.classList.add("hidden");
   refs.notifyFormCancel.classList.add("hidden");
-  setHint(refs.notifyFormResult, "");
+  setStatusMessage(refs.notifyFormResult, "");
 }
 
 function fillNotifyForm(monitor) {
@@ -733,7 +751,7 @@ function fillNotifyForm(monitor) {
   refs.notifySubmitBtn.textContent = "保存修改";
   refs.notifyTestRunBtn.classList.remove("hidden");
   refs.notifyFormCancel.classList.remove("hidden");
-  setHint(refs.notifyFormResult, "");
+  setStatusMessage(refs.notifyFormResult, "");
   refs.notifyName.focus();
 }
 
@@ -875,7 +893,8 @@ async function deleteNotifyMonitor(id) {
 
 async function testNotifyMonitor(id) {
   try {
-    setHint(refs.notifyFormResult, "测试执行中...");
+    setStatusMessage(refs.notifyFormResult, "正在测试执行监听，请稍候...", "info");
+    setButtonBusy(refs.notifyTestRunBtn, true, "测试中...");
     const result = await api(`/api/admin/notifications/monitors/${id}/test-run`, {
       method: "POST",
       body: JSON.stringify({})
@@ -883,10 +902,12 @@ async function testNotifyMonitor(id) {
     const matched = result.ruleResult?.matched;
     const status = result.response?.status;
     const summary = matched ? "命中规则" : "未命中规则";
-    setHint(refs.notifyFormResult, `测试完成（HTTP ${status}）：${summary}`);
+    setStatusMessage(refs.notifyFormResult, `测试完成（HTTP ${status}）：${summary}`, matched ? "success" : "info");
     await refreshNotificationEvents().catch(() => {});
   } catch (error) {
-    setHint(refs.notifyFormResult, error.message);
+    setStatusMessage(refs.notifyFormResult, `测试失败：${error.message}`, "error");
+  } finally {
+    setButtonBusy(refs.notifyTestRunBtn, false);
   }
 }
 
@@ -1090,29 +1111,40 @@ if (refs.notifyMonitorForm) {
         method: "PATCH",
         body: JSON.stringify({ globalFeishuWebhook: refs.notifyGlobalWebhook.value.trim() })
       });
-      setHint(refs.notifySettingsResult, payload.globalFeishuWebhook ? "已保存全局 Webhook" : "已清空全局 Webhook");
+      setStatusMessage(
+        refs.notifySettingsResult,
+        payload.globalFeishuWebhook ? "已保存全局 Webhook" : "已清空全局 Webhook",
+        "success"
+      );
     } catch (error) {
-      setHint(refs.notifySettingsResult, error.message);
+      setStatusMessage(refs.notifySettingsResult, `保存失败：${error.message}`, "error");
     }
   });
 
   refs.notifyTestGlobalWebhook?.addEventListener("click", async () => {
     const webhookUrl = refs.notifyGlobalWebhook.value.trim();
     if (!webhookUrl) {
-      setHint(refs.notifySettingsResult, "请先填写飞书 Webhook 地址");
+      setStatusMessage(refs.notifySettingsResult, "请先填写飞书 Webhook 地址", "error");
       return;
     }
     try {
-      setHint(refs.notifySettingsResult, "正在发送测试消息...");
+      setStatusMessage(refs.notifySettingsResult, "正在发送飞书测试消息，请稍候...", "info");
+      setButtonBusy(refs.notifyTestGlobalWebhook, true, "发送中...");
       const payload = await api("/api/admin/notifications/test-feishu", {
         method: "POST",
         body: JSON.stringify({ webhookUrl })
       });
-      setHint(refs.notifySettingsResult, payload.ok
-        ? "飞书测试消息已发送，请到群里查收"
-        : `飞书返回失败：${payload.text || payload.status}`);
+      setStatusMessage(
+        refs.notifySettingsResult,
+        payload.ok
+          ? "飞书测试消息已发送，请到群里查收。"
+          : `飞书返回失败：${payload.text || payload.status}`,
+        payload.ok ? "success" : "error"
+      );
     } catch (error) {
-      setHint(refs.notifySettingsResult, error.message);
+      setStatusMessage(refs.notifySettingsResult, `发送失败：${error.message}`, "error");
+    } finally {
+      setButtonBusy(refs.notifyTestGlobalWebhook, false);
     }
   });
 
@@ -1127,7 +1159,7 @@ if (refs.notifyMonitorForm) {
   refs.notifyTestRunBtn?.addEventListener("click", async () => {
     const id = refs.notifyEditId.value;
     if (!id) {
-      setHint(refs.notifyFormResult, "请先保存监听后再测试");
+      setStatusMessage(refs.notifyFormResult, "请先保存监听后再测试", "error");
       return;
     }
     await testNotifyMonitor(id);
@@ -1145,7 +1177,7 @@ if (refs.notifyMonitorForm) {
     const intervalSeconds = Number(refs.notifyInterval.value);
 
     if (!Number.isFinite(intervalSeconds) || intervalSeconds < 1 || intervalSeconds > 3600) {
-      setHint(refs.notifyFormResult, "轮询间隔必须在 1-3600 秒之间");
+      setStatusMessage(refs.notifyFormResult, "轮询间隔必须在 1-3600 秒之间", "error");
       return;
     }
 
@@ -1157,7 +1189,7 @@ if (refs.notifyMonitorForm) {
           throw new Error("Headers 必须是 JSON 对象");
         }
       } catch (error) {
-        setHint(refs.notifyFormResult, `Headers 不是合法 JSON：${error.message}`);
+        setStatusMessage(refs.notifyFormResult, `Headers 不是合法 JSON：${error.message}`, "error");
         return;
       }
     }
@@ -1166,7 +1198,7 @@ if (refs.notifyMonitorForm) {
       try {
         JSON.parse(bodyValue);
       } catch (error) {
-        setHint(refs.notifyFormResult, `Body 不是合法 JSON：${error.message}`);
+        setStatusMessage(refs.notifyFormResult, `Body 不是合法 JSON：${error.message}`, "error");
         return;
       }
     }
@@ -1193,11 +1225,11 @@ if (refs.notifyMonitorForm) {
         method: "POST",
         body: JSON.stringify(payload)
       });
-      setHint(refs.notifyFormResult, editId ? "监听已更新" : `监听已创建：${result.id}`);
       resetNotifyForm();
       await refreshNotifications();
+      setStatusMessage(refs.notifyFormResult, editId ? "监听已更新" : `监听已创建：${result.id}`, "success");
     } catch (error) {
-      setHint(refs.notifyFormResult, error.message);
+      setStatusMessage(refs.notifyFormResult, `保存失败：${error.message}`, "error");
     }
   });
 }

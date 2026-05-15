@@ -53,10 +53,15 @@ const refs = {
   notifyFormCancel: document.querySelector("#notify-form-cancel"),
   notifyEditId: document.querySelector("#notify-edit-id"),
   notifyName: document.querySelector("#notify-name"),
+  notifyMonitorType: document.querySelector("#notify-monitor-type"),
   notifyEnabled: document.querySelector("#notify-enabled"),
   notifyMethod: document.querySelector("#notify-method"),
   notifyInterval: document.querySelector("#notify-interval"),
   notifyUrl: document.querySelector("#notify-url"),
+  notifyBrowserFields: document.querySelector("#notify-browser-fields"),
+  notifyBrowserPageUrl: document.querySelector("#notify-browser-page-url"),
+  notifyBrowserReadySelector: document.querySelector("#notify-browser-ready-selector"),
+  notifyBrowserWaitMs: document.querySelector("#notify-browser-wait-ms"),
   notifyHeaders: document.querySelector("#notify-headers"),
   notifyBody: document.querySelector("#notify-body"),
   notifyWatchFields: document.querySelector("#notify-watch-fields"),
@@ -588,6 +593,11 @@ const NOTIFY_EVENT_LABELS = {
 
 let notifyMonitorsCache = [];
 
+function syncNotifyModeUi() {
+  const isBrowser = refs.notifyMonitorType?.value === "browser";
+  refs.notifyBrowserFields?.classList.toggle("hidden", !isBrowser);
+}
+
 function populateNotifyIntervalOptions() {
   if (!refs.notifyInterval || refs.notifyInterval.dataset.populated === "1") return;
   refs.notifyInterval.innerHTML = NOTIFY_INTERVAL_OPTIONS
@@ -713,8 +723,12 @@ function resetNotifyForm() {
   if (!refs.notifyMonitorForm) return;
   refs.notifyMonitorForm.reset();
   refs.notifyEditId.value = "";
+  refs.notifyMonitorType.value = "http";
   refs.notifyEnabled.value = "1";
   refs.notifyMethod.value = "GET";
+  refs.notifyBrowserPageUrl.value = "";
+  refs.notifyBrowserReadySelector.value = "";
+  refs.notifyBrowserWaitMs.value = "10000";
   refs.notifyTimeout.value = "15";
   refs.notifyCooldown.value = "0";
   refs.notifyMatchMode.value = "all";
@@ -726,15 +740,20 @@ function resetNotifyForm() {
   refs.notifyTestRunBtn.classList.add("hidden");
   refs.notifyFormCancel.classList.add("hidden");
   setStatusMessage(refs.notifyFormResult, "");
+  syncNotifyModeUi();
 }
 
 function fillNotifyForm(monitor) {
   populateNotifyIntervalOptions();
   refs.notifyEditId.value = monitor.id;
   refs.notifyName.value = monitor.name || "";
+  refs.notifyMonitorType.value = monitor.monitorType || "http";
   refs.notifyEnabled.value = monitor.enabled ? "1" : "0";
   refs.notifyMethod.value = monitor.httpMethod || "GET";
   refs.notifyUrl.value = monitor.requestUrl || "";
+  refs.notifyBrowserPageUrl.value = monitor.browserPageUrl || "";
+  refs.notifyBrowserReadySelector.value = monitor.browserReadySelector || "";
+  refs.notifyBrowserWaitMs.value = monitor.browserWaitMs || 10000;
   refs.notifyHeaders.value = monitor.headersJson || "";
   refs.notifyBody.value = monitor.bodyJson || "";
   refs.notifyWatchFields.value = (monitor.watchFields || []).join(", ");
@@ -752,6 +771,7 @@ function fillNotifyForm(monitor) {
   refs.notifyTestRunBtn.classList.remove("hidden");
   refs.notifyFormCancel.classList.remove("hidden");
   setStatusMessage(refs.notifyFormResult, "");
+  syncNotifyModeUi();
   refs.notifyName.focus();
 }
 
@@ -783,7 +803,7 @@ async function refreshNotificationMonitors() {
   renderTable(refs.notifyMonitorList, [
     {
       label: "名称",
-      render: (item) => `<strong>${escapeHtml(item.name)}</strong>${item.notifyTitle ? `<br/><span style="font-size:11px;color:var(--muted)">${escapeHtml(item.notifyTitle)}</span>` : ""}`
+      render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><span style="font-size:11px;color:var(--muted)">${item.monitorType === "browser" ? "浏览器模式" : "HTTP 直连"}${item.notifyTitle ? ` · ${escapeHtml(item.notifyTitle)}` : ""}</span>`
     },
     {
       label: "接口",
@@ -1101,8 +1121,10 @@ refs.subCtCancelBtn.addEventListener("click", () => {
 if (refs.notifyMonitorForm) {
   populateNotifyIntervalOptions();
   ensureRuleEmptyHint();
+  syncNotifyModeUi();
 
   refs.notifyAddRule?.addEventListener("click", () => addRuleRow());
+  refs.notifyMonitorType?.addEventListener("change", syncNotifyModeUi);
 
   refs.notifySettingsForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1205,9 +1227,13 @@ if (refs.notifyMonitorForm) {
 
     const payload = {
       name: refs.notifyName.value.trim(),
+      monitorType: refs.notifyMonitorType.value,
       enabled: refs.notifyEnabled.value === "1",
       requestUrl: refs.notifyUrl.value.trim(),
       httpMethod: refs.notifyMethod.value,
+      browserPageUrl: refs.notifyBrowserPageUrl.value.trim(),
+      browserReadySelector: refs.notifyBrowserReadySelector.value.trim(),
+      browserWaitMs: Math.max(1000, Math.min(60000, Number(refs.notifyBrowserWaitMs.value) || 10000)),
       headersJson: headersValue,
       bodyJson: bodyValue,
       intervalSeconds,
@@ -1219,6 +1245,11 @@ if (refs.notifyMonitorForm) {
       cooldownSeconds: Math.max(0, Math.min(86400, Number(refs.notifyCooldown.value) || 0))
     };
     if (editId) payload.id = editId;
+
+    if (payload.monitorType === "browser" && !payload.browserPageUrl) {
+      setStatusMessage(refs.notifyFormResult, "浏览器模式必须填写页面 URL", "error");
+      return;
+    }
 
     try {
       const result = await api("/api/admin/notifications/monitors", {

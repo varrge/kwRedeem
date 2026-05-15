@@ -210,6 +210,34 @@ function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
   );
 }
 
+function shouldTreatAlreadyUsedAsSuccess(site, responseInfo = {}, fallbackMessage = "") {
+  const slug = String(site?.slug || "").trim().toLowerCase();
+  if (slug !== "666") return false;
+
+  const normalized = [
+    responseInfo.json?.message,
+    responseInfo.json?.msg,
+    responseInfo.json?.result,
+    responseInfo.json?.data?.message,
+    responseInfo.json?.data?.msg,
+    responseInfo.text,
+    fallbackMessage
+  ]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean)
+    .join("\n");
+
+  return [
+    "cdk_used",
+    "cdk used",
+    "cdk已被使用",
+    "cdk 已被使用",
+    "卡密已被使用",
+    "已被使用",
+    "already used"
+  ].some((keyword) => normalized.includes(keyword));
+}
+
 async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   const remoteConfig = site?.submit_api_url ? {
     url: site.submit_api_url,
@@ -475,6 +503,15 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId, endpoint) {
       return;
     }
 
+    if (shouldTreatAlreadyUsedAsSuccess(site, queryResult, queryErrorMessage)) {
+      markSuccess(job.id, order.id, cdkey.id, {
+        ...queryResult,
+        treatedAsSuccess: true,
+        successReason: "666 站点返回 CDK 已使用，按成功处理"
+      });
+      return;
+    }
+
     if (isNonRetryableFailure(queryResult, queryErrorMessage)) {
       markFailed(job.id, order.id, cdkey.id, queryErrorMessage, queryResult);
       return;
@@ -551,6 +588,15 @@ async function processJob(job) {
     errorMessage = `远端服务器返回 HTML 错误页 (HTTP ${responseInfo.status})`;
   }
   const maxAttempts = site?.max_retries || endpoint?.max_retries || job.max_attempts || 3;
+
+  if (shouldTreatAlreadyUsedAsSuccess(site, responseInfo, errorMessage)) {
+    markSuccess(job.id, order.id, cdkey.id, {
+      ...responseInfo,
+      treatedAsSuccess: true,
+      successReason: "666 站点返回 CDK 已使用，按成功处理"
+    });
+    return;
+  }
 
   if (isNonRetryableFailure(responseInfo, errorMessage)) {
     markFailed(job.id, order.id, cdkey.id, errorMessage, responseInfo);

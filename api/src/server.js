@@ -11,13 +11,14 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationRuleOperators, orderStatuses } from "../../shared/src/constants.js";
+import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
   buildFeishuMarkdown,
+  clampBrowserWaitMs,
   clampIntervalSeconds,
   evaluateMonitorRules,
   fetchMonitorEndpoint,
@@ -1865,11 +1866,15 @@ function serializeMonitor(row) {
   return {
     id: row.id,
     name: row.name,
+    monitorType: row.monitor_type || "http",
     enabled: !!row.enabled,
     requestUrl: row.request_url,
     httpMethod: row.http_method,
     headersJson: row.headers_json || "",
     bodyJson: row.body_json || "",
+    browserPageUrl: row.browser_page_url || "",
+    browserReadySelector: row.browser_ready_selector || "",
+    browserWaitMs: row.browser_wait_ms || 10000,
     intervalSeconds: row.interval_seconds,
     timeoutSeconds: row.timeout_seconds,
     watchFields: normalizeWatchFields(row.watch_fields),
@@ -1891,11 +1896,15 @@ function serializeMonitor(row) {
 const monitorPayloadSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1, "请填写监听名称").max(80, "名称过长"),
+  monitorType: z.enum(notificationMonitorTypes).optional().default("http"),
   enabled: z.boolean().optional().default(true),
   requestUrl: z.string().url("请输入合法的请求 URL"),
   httpMethod: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
   headersJson: z.string().optional().default(""),
   bodyJson: z.string().optional().default(""),
+  browserPageUrl: z.string().optional().default(""),
+  browserReadySelector: z.string().optional().default(""),
+  browserWaitMs: z.number().int().min(1000).max(60000).optional().default(10000),
   intervalSeconds: z
     .number({ invalid_type_error: "轮询间隔必须是数字" })
     .int("轮询间隔必须是整数")
@@ -1936,10 +1945,25 @@ function validateOptionalJsonObject(value, fieldLabel) {
 function upsertMonitor(payload, isUpdate, existing) {
   const now = nowIso();
   const id = isUpdate ? existing.id : nanoid(16);
+  const monitorType = notificationMonitorTypes.includes(payload.monitorType) ? payload.monitorType : "http";
   const intervalSeconds = clampIntervalSeconds(payload.intervalSeconds);
+  const browserWaitMs = clampBrowserWaitMs(payload.browserWaitMs);
   const headersTrimmed = String(payload.headersJson || "").trim();
   const bodyTrimmed = String(payload.bodyJson || "").trim();
+  const browserPageUrl = String(payload.browserPageUrl || "").trim();
+  const browserReadySelector = String(payload.browserReadySelector || "").trim();
   validateOptionalJsonObject(headersTrimmed, "Headers");
+
+  if (monitorType === "browser") {
+    if (!browserPageUrl) {
+      throw new Error("browser 模式必须填写页面 URL");
+    }
+    try {
+      new URL(browserPageUrl);
+    } catch {
+      throw new Error("browser 模式的页面 URL 不合法");
+    }
+  }
 
   if (bodyTrimmed && payload.httpMethod !== "GET" && payload.httpMethod !== "HEAD") {
     const parsed = safeParseJson(bodyTrimmed, null);
@@ -1955,17 +1979,22 @@ function upsertMonitor(payload, isUpdate, existing) {
   if (isUpdate) {
     db.prepare(`
       UPDATE notification_monitors
-      SET name = ?, enabled = ?, request_url = ?, http_method = ?, headers_json = ?, body_json = ?,
+      SET name = ?, monitor_type = ?, enabled = ?, request_url = ?, http_method = ?, headers_json = ?, body_json = ?,
+          browser_page_url = ?, browser_ready_selector = ?, browser_wait_ms = ?,
           interval_seconds = ?, timeout_seconds = ?, watch_fields = ?, rules_json = ?,
           feishu_webhook_override = ?, notify_title = ?, cooldown_seconds = ?, updated_at = ?
       WHERE id = ?
     `).run(
       payload.name.trim(),
+      monitorType,
       payload.enabled ? 1 : 0,
       payload.requestUrl.trim(),
       payload.httpMethod,
       headersTrimmed || null,
       bodyTrimmed || null,
+      browserPageUrl || null,
+      browserReadySelector || null,
+      browserWaitMs,
       intervalSeconds,
       payload.timeoutSeconds || 15,
       JSON.stringify(watchFields),
@@ -1979,20 +2008,25 @@ function upsertMonitor(payload, isUpdate, existing) {
   } else {
     db.prepare(`
       INSERT INTO notification_monitors (
-        id, name, enabled, request_url, http_method, headers_json, body_json,
+        id, name, monitor_type, enabled, request_url, http_method, headers_json, body_json,
+        browser_page_url, browser_ready_selector, browser_wait_ms,
         interval_seconds, timeout_seconds, watch_fields, rules_json,
         feishu_webhook_override, notify_title, cooldown_seconds,
         next_run_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       payload.name.trim(),
+      monitorType,
       payload.enabled ? 1 : 0,
       payload.requestUrl.trim(),
       payload.httpMethod,
       headersTrimmed || null,
       bodyTrimmed || null,
+      browserPageUrl || null,
+      browserReadySelector || null,
+      browserWaitMs,
       intervalSeconds,
       payload.timeoutSeconds || 15,
       JSON.stringify(watchFields),

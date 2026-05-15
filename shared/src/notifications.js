@@ -1,15 +1,31 @@
+import fs from "node:fs";
+import path from "node:path";
+import { chromium } from "playwright";
 import { safeParseJson } from "./templates.js";
-import { notificationMatchModes, notificationRuleOperators } from "./constants.js";
+import { resolveProjectPath } from "./env.js";
+import { notificationMatchModes, notificationMonitorTypes, notificationRuleOperators } from "./constants.js";
 
 export const NOTIFICATION_MIN_INTERVAL = 1;
 export const NOTIFICATION_MAX_INTERVAL = 3600;
 
 const NOTIFICATION_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+const PLAYWRIGHT_BROWSERS_PATH = resolveProjectPath(".playwright-browsers");
+
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= PLAYWRIGHT_BROWSERS_PATH;
+fs.mkdirSync(PLAYWRIGHT_BROWSERS_PATH, { recursive: true });
+
+function normalizePathSegments(dotPath) {
+  return String(dotPath || "")
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
 
 export function getJsonValueByPath(json, dotPath) {
   if (json === null || json === undefined) return undefined;
   if (!dotPath) return json;
-  const segments = String(dotPath).split(".").map((segment) => segment.trim()).filter(Boolean);
+  const segments = normalizePathSegments(dotPath);
   let current = json;
   for (const segment of segments) {
     if (current === null || current === undefined) return undefined;
@@ -83,7 +99,7 @@ export function normalizeMonitorRules(rules) {
   const itemsSource = Array.isArray(parsed.items) ? parsed.items : [];
   const items = itemsSource
     .map((item) => ({
-      fieldPath: String(item?.fieldPath ?? "").trim(),
+      fieldPath: normalizePathSegments(item?.fieldPath ?? "").join("."),
       operator: notificationRuleOperators.includes(item?.operator) ? item.operator : "equals",
       expectedValue: item?.expectedValue === undefined || item?.expectedValue === null
         ? ""
@@ -102,7 +118,7 @@ export function normalizeWatchFields(fields) {
   if (typeof parsed === "string") {
     return parsed
       .split(/[\n,;\s]+/)
-      .map((item) => item.trim())
+      .map((item) => normalizePathSegments(item).join("."))
       .filter(Boolean);
   }
   return [];
@@ -147,6 +163,12 @@ export function clampIntervalSeconds(value, fallback = 60) {
   return rounded;
 }
 
+export function clampBrowserWaitMs(value, fallback = 10000) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(60000, Math.max(1000, Math.round(num)));
+}
+
 export function summarizeJsonValue(value, limit = 240) {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
@@ -185,7 +207,160 @@ function looksLikeHtml(text) {
     || normalized.includes("<head");
 }
 
+function getMonitorType(monitor) {
+  const value = String(monitor.monitor_type || monitor.monitorType || "http").trim().toLowerCase();
+  return notificationMonitorTypes.includes(value) ? value : "http";
+}
+
+function getProfileDir(monitor) {
+  const safeId = String(monitor.id || monitor.name || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = resolveProjectPath("data", "notification-browser-profiles", safeId);
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  return dir;
+}
+
+function sanitizeBrowserHeaders(headers) {
+  const blocked = new Set([
+    "cookie",
+    "host",
+    "content-length",
+    "connection",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "user-agent"
+  ]);
+  return Object.fromEntries(
+    Object.entries(headers || {}).filter(([key]) => !blocked.has(String(key).toLowerCase()))
+  );
+}
+
+async function fetchBrowserMonitorEndpoint(monitor, { timeoutMsOverride } = {}) {
+  const method = String(monitor.http_method || monitor.httpMethod || "GET").toUpperCase();
+  const headersSource = monitor.headers_json ?? monitor.headersJson ?? "";
+  const bodySource = monitor.body_json ?? monitor.bodyJson ?? "";
+  const requestUrl = monitor.request_url || monitor.requestUrl;
+  const pageUrl = monitor.browser_page_url || monitor.browserPageUrl || requestUrl;
+  const readySelector = String(monitor.browser_ready_selector || monitor.browserReadySelector || "").trim();
+  const timeoutMs = timeoutMsOverride ?? (Number(monitor.timeout_seconds ?? monitor.timeoutSeconds ?? 15) * 1000);
+  const browserWaitMs = clampBrowserWaitMs(monitor.browser_wait_ms ?? monitor.browserWaitMs ?? 10000);
+
+  if (!requestUrl) {
+    return { ok: false, status: 0, text: "browser 模式缺少请求 URL", json: null };
+  }
+  if (!pageUrl) {
+    return { ok: false, status: 0, text: "browser 模式缺少页面 URL", json: null };
+  }
+
+  let headers = {};
+  if (headersSource) {
+    const parsed = safeParseJson(headersSource, null);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      headers = sanitizeBrowserHeaders(parsed);
+    } else {
+      return { ok: false, status: 0, text: "Headers 必须是合法的 JSON 对象", json: null };
+    }
+  }
+
+  let bodyString;
+  if (method !== "GET" && method !== "HEAD" && bodySource) {
+    const parsed = safeParseJson(bodySource, null);
+    bodyString = parsed === null ? String(bodySource) : JSON.stringify(parsed);
+  }
+
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(getProfileDir(monitor), {
+      headless: true,
+      userAgent: NOTIFICATION_BROWSER_UA,
+      viewport: { width: 1440, height: 900 }
+    });
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto(pageUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: browserWaitMs
+    });
+
+    if (readySelector) {
+      await page.waitForSelector(readySelector, {
+        timeout: browserWaitMs,
+        state: "attached"
+      });
+    } else {
+      await page.waitForTimeout(1200);
+    }
+
+    const referer = page.url() || pageUrl;
+    const origin = (() => {
+      try {
+        return new URL(referer).origin;
+      } catch {
+        return "";
+      }
+    })();
+
+    const response = await context.request.fetch(requestUrl, {
+      method,
+      headers: {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        ...(origin ? { Origin: origin } : {}),
+        ...(referer ? { Referer: referer } : {}),
+        ...headers
+      },
+      ...(method === "GET" || method === "HEAD" ? {} : { data: bodyString || "" }),
+      timeout: timeoutMs
+    });
+
+    const text = await response.text();
+    const json = safeParseJson(text, null);
+    const contentType = response.headers()["content-type"] || "";
+
+    if (response.ok() && json === null) {
+      if (looksLikeHtml(text)) {
+        return {
+          ok: false,
+          status: response.status(),
+          text: `浏览器模式下目标接口返回了 HTML 页面，不是 JSON 数据，可能仍触发了风控/验证页。content-type=${contentType || "-"}`,
+          json: null
+        };
+      }
+      return {
+        ok: false,
+        status: response.status(),
+        text: `浏览器模式下目标接口返回的内容不是合法 JSON。content-type=${contentType || "-"}`,
+        json: null
+      };
+    }
+
+    return {
+      ok: response.ok(),
+      status: response.status(),
+      text,
+      json
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      text: error.message || "浏览器模式请求失败",
+      json: null
+    };
+  } finally {
+    if (context) {
+      await context.close().catch(() => {});
+    }
+  }
+}
+
 export async function fetchMonitorEndpoint(monitor, { timeoutMsOverride } = {}) {
+  if (getMonitorType(monitor) === "browser") {
+    return fetchBrowserMonitorEndpoint(monitor, { timeoutMsOverride });
+  }
+
   const method = String(monitor.http_method || monitor.httpMethod || "GET").toUpperCase();
   const headersSource = monitor.headers_json ?? monitor.headersJson ?? "";
   const bodySource = monitor.body_json ?? monitor.bodyJson ?? "";

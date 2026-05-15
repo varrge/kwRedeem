@@ -302,11 +302,15 @@ function createSchema(db) {
     CREATE TABLE IF NOT EXISTS notification_monitors (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      monitor_type TEXT NOT NULL DEFAULT 'http',
       enabled INTEGER NOT NULL DEFAULT 1,
       request_url TEXT NOT NULL,
       http_method TEXT NOT NULL DEFAULT 'GET',
       headers_json TEXT,
       body_json TEXT,
+      browser_page_url TEXT,
+      browser_ready_selector TEXT,
+      browser_wait_ms INTEGER NOT NULL DEFAULT 10000,
       interval_seconds INTEGER NOT NULL DEFAULT 60,
       timeout_seconds INTEGER NOT NULL DEFAULT 15,
       watch_fields TEXT,
@@ -358,6 +362,10 @@ function createSchema(db) {
   ensureColumn(db, "sites", "query_http_method", "TEXT");
   ensureColumn(db, "sites", "query_headers_template", "TEXT");
   ensureColumn(db, "sites", "query_body_template", "TEXT");
+  ensureColumn(db, "notification_monitors", "monitor_type", "TEXT NOT NULL DEFAULT 'http'");
+  ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
+  ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");
+  ensureColumn(db, "notification_monitors", "browser_wait_ms", "INTEGER NOT NULL DEFAULT 10000");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);

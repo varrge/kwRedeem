@@ -305,11 +305,24 @@
                   <input id="notify-name" placeholder="例如：库存告警" required />
                 </label>
                 <label class="field">
+                  <span>监听模式</span>
+                  <select id="notify-monitor-type">
+                    <option value="http">HTTP 直连</option>
+                    <option value="browser">浏览器模式</option>
+                  </select>
+                </label>
+              </div>
+              <div class="grid grid-2">
+                <label class="field">
                   <span>是否启用</span>
                   <select id="notify-enabled">
                     <option value="1">启用</option>
                     <option value="0">停用</option>
                   </select>
+                </label>
+                <label class="field">
+                  <span>模式说明</span>
+                  <input value="HTTP 模式适合纯 JSON API；浏览器模式会先打开页面再带浏览器会话请求接口" disabled />
                 </label>
               </div>
 
@@ -335,6 +348,24 @@
                     <select id="notify-interval"></select>
                   </label>
                 </div>
+              </div>
+
+              <div id="notify-browser-fields" class="stack hidden">
+                <div class="form-section-title">浏览器模式配置</div>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>页面 URL（先打开这个页面建立浏览器上下文）</span>
+                    <input id="notify-browser-page-url" type="url" placeholder="https://pay.ldxp.cn/shop/RATQDE0N" />
+                  </label>
+                  <label class="field">
+                    <span>页面就绪选择器（可空）</span>
+                    <input id="notify-browser-ready-selector" placeholder=".goods-list, #app, body" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>页面等待时间（毫秒，1000-60000）</span>
+                  <input id="notify-browser-wait-ms" type="number" min="1000" max="60000" value="10000" />
+                </label>
               </div>
               
               <div class="grid grid-2">

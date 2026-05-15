@@ -64,6 +64,8 @@ export const notificationRuleOperators = [
 
 export const notificationMatchModes = ["all", "any"];
 
+export const notificationMonitorTypes = ["http", "browser"];
+
 export const notificationEventTypes = {
   matched: "matched",
   notMatched: "not_matched",

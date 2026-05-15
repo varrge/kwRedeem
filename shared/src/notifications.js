@@ -176,6 +176,15 @@ export function summarizeResponseInfo(responseInfo) {
   };
 }
 
+function looksLikeHtml(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  return normalized.startsWith("<!doctype html")
+    || normalized.startsWith("<html")
+    || normalized.startsWith("<script")
+    || normalized.includes("<body")
+    || normalized.includes("<head");
+}
+
 export async function fetchMonitorEndpoint(monitor, { timeoutMsOverride } = {}) {
   const method = String(monitor.http_method || monitor.httpMethod || "GET").toUpperCase();
   const headersSource = monitor.headers_json ?? monitor.headersJson ?? "";
@@ -223,6 +232,26 @@ export async function fetchMonitorEndpoint(monitor, { timeoutMsOverride } = {}) 
     });
     const text = await response.text();
     const json = safeParseJson(text, null);
+    const contentType = response.headers.get("content-type") || "";
+
+    if (response.ok && json === null) {
+      if (looksLikeHtml(text)) {
+        return {
+          ok: false,
+          status: response.status,
+          text: `目标接口返回了 HTML 页面，不是 JSON 数据，可能触发了风控/验证页。content-type=${contentType || "-"}`,
+          json: null
+        };
+      }
+
+      return {
+        ok: false,
+        status: response.status,
+        text: `目标接口返回的内容不是合法 JSON。content-type=${contentType || "-"}`,
+        json: null
+      };
+    }
+
     return { ok: response.ok, status: response.status, text, json };
   } catch (error) {
     return { ok: false, status: 0, text: error.message || "请求失败", json: null };

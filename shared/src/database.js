@@ -578,9 +578,9 @@ function seedDefaults(db) {
       updatedAt: now
     },
     {
-      id: "site_preset_dengta_plus",
-      name: "老蹬plus",
-      slug: "dengta-plus",
+      id: "site_preset_meimei_site",
+      name: "老妹plus",
+      slug: "meimei_site",
       verifyApiUrl: "https://ai.dengta-learning.online/api/cdk/validate",
       submitApiUrl: "https://ai.dengta-learning.online/api/cdk/redeem",
       verifyHttpMethod: "POST",

@@ -265,17 +265,17 @@ function validateSessionForSite(site, session) {
   }
 }
 
-const DENGTA_PLUS_SLUG = "dengta-plus";
-const DENGTA_PLUS_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
+const MEIMEI_SITE_SLUG = "meimei_site";
+const MEIMEI_SITE_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
 
 async function fetchQueueStatusForSite(site) {
   const slug = String(site?.slug || "").trim().toLowerCase();
-  if (slug !== DENGTA_PLUS_SLUG) {
+  if (slug !== MEIMEI_SITE_SLUG) {
     return null;
   }
 
   try {
-    const response = await fetch(DENGTA_PLUS_QUEUE_STATUS_URL, {
+    const response = await fetch(MEIMEI_SITE_QUEUE_STATUS_URL, {
       method: "GET",
       headers: {
         "User-Agent": BROWSER_UA,
@@ -302,18 +302,18 @@ async function fetchQueueStatusForSite(site) {
 
 function getQueueStatusBlockMessage(queueStatus) {
   if (!queueStatus?.ok || !queueStatus.json) {
-    return "老蹬plus 队列状态获取失败，请稍后重试";
+    return "老妹plus 队列状态获取失败，请稍后重试";
   }
 
   const queue = queueStatus.json;
   if (queue.maintenance) {
-    return "老蹬plus 当前维护中，暂时无法提交兑换";
+    return "老妹plus 当前维护中，暂时无法提交兑换";
   }
   if (queue.full || Number(queue.available ?? 0) <= 0) {
-    return `老蹬plus 当前队列已满（可用 ${Number(queue.available ?? 0)}/${Number(queue.max ?? 0)}），请稍后再试`;
+    return `老妹plus 当前队列已满（可用 ${Number(queue.available ?? 0)}/${Number(queue.max ?? 0)}），请稍后再试`;
   }
   if (Number(queue.gopay_deny_cooldown_remaining ?? 0) > 0) {
-    return `老蹬plus 当前受限，请 ${queue.gopay_deny_cooldown_remaining} 秒后再试`;
+    return `老妹plus 当前受限，请 ${queue.gopay_deny_cooldown_remaining} 秒后再试`;
   }
   return "";
 }

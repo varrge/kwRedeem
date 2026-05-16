@@ -267,6 +267,7 @@ function validateSessionForSite(site, session) {
 
 const MEIMEI_SITE_SLUG = "meimei_site";
 const MEIMEI_SITE_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
+const SUPPORT_API_BASE_URL = "https://ai.dengta-learning.online/support/api/support";
 
 async function fetchQueueStatusForSite(site) {
   const slug = String(site?.slug || "").trim().toLowerCase();
@@ -770,6 +771,162 @@ async function callConfiguredApi(config, context) {
   };
 }
 
+function getResponseSetCookies(headers) {
+  if (typeof headers?.getSetCookie === "function") {
+    return headers.getSetCookie();
+  }
+  const fallback = headers?.get("set-cookie");
+  return fallback ? [fallback] : [];
+}
+
+function compactCookieHeader(cookies = []) {
+  return cookies
+    .map((item) => String(item ?? "").split(";")[0].trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function mergeCookieHeaders(...values) {
+  return values
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function getSupportApiMessage(responseInfo = {}) {
+  const json = responseInfo.json;
+  if (json && typeof json === "object") {
+    const message = json.error
+      || json.error_msg
+      || json.message
+      || json.msg
+      || json.result
+      || json.detail
+      || json.data?.error
+      || json.data?.error_msg
+      || json.data?.message
+      || json.data?.msg;
+    if (message) return String(message);
+  }
+  return String(responseInfo.text || "请求失败");
+}
+
+function buildSupportAuthCandidates({ token = "", sessionId = "", supportCookie = "" } = {}) {
+  const candidates = [];
+
+  if (supportCookie) {
+    candidates.push({ label: "cookie", cookie: supportCookie });
+  }
+
+  if (sessionId) {
+    candidates.push({ label: "support_session_cookie", cookie: `support_session=${sessionId}` });
+    candidates.push({ label: "session_cookie", cookie: `session_id=${sessionId}` });
+    candidates.push({ label: "session_header", sessionIdHeader: sessionId });
+    candidates.push({ label: "session_query", queryParams: { session_id: sessionId } });
+    candidates.push({ label: "session_bearer", bearerToken: sessionId });
+  }
+
+  if (token) {
+    candidates.push({ label: "token_bearer", bearerToken: token });
+  }
+
+  return Array.from(new Map(
+    candidates.map((candidate) => [JSON.stringify(candidate), candidate])
+  ).values());
+}
+
+async function callSupportApi(pathname, {
+  method = "GET",
+  body = null,
+  authCandidates = [],
+  minimalHeaders = false
+} = {}) {
+  const attempts = authCandidates.length ? authCandidates : [{}];
+  let lastResponse = null;
+
+  for (const auth of attempts) {
+    const url = new URL(`${SUPPORT_API_BASE_URL}${pathname}`);
+    for (const [key, value] of Object.entries(auth.queryParams || {})) {
+      if (value != null && String(value).trim()) {
+        url.searchParams.set(key, String(value).trim());
+      }
+    }
+
+    const headers = minimalHeaders
+      ? {}
+      : {
+          "User-Agent": BROWSER_UA,
+          Accept: "application/json, text/plain, */*"
+        };
+    const shouldSendJsonBody = method !== "GET" && body !== null && body !== undefined;
+
+    if (shouldSendJsonBody) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (auth.bearerToken) {
+      headers.Authorization = `Bearer ${auth.bearerToken}`;
+    }
+    if (auth.sessionIdHeader) {
+      headers["X-Session-Id"] = auth.sessionIdHeader;
+    }
+    if (auth.cookie) {
+      headers.Cookie = mergeCookieHeaders(auth.cookie);
+    }
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: shouldSendJsonBody ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(15000)
+      });
+      const text = await response.text();
+      const json = safeParseJson(text, null);
+      const supportCookie = compactCookieHeader(getResponseSetCookies(response.headers));
+      const result = {
+        ok: response.ok,
+        status: response.status,
+        text,
+        json,
+        supportCookie,
+        authMode: auth.label || "none"
+      };
+
+      lastResponse = result;
+      if (response.status !== 401 && response.status !== 403) {
+        return result;
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        status: 599,
+        text: error.message,
+        json: null,
+        supportCookie: "",
+        authMode: auth.label || "none"
+      };
+    }
+  }
+
+  return lastResponse || {
+    ok: false,
+    status: 400,
+    text: "请求失败",
+    json: null,
+    supportCookie: "",
+    authMode: "none"
+  };
+}
+
+function getSupportRequestContext(request) {
+  const query = request.query || {};
+  return {
+    token: String(query.token || request.headers["x-support-token"] || "").trim(),
+    sessionId: String(query.sessionId || query.session_id || request.headers["x-support-session-id"] || "").trim(),
+    supportCookie: String(query.supportCookie || request.headers["x-support-cookie"] || "").trim()
+  };
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -904,6 +1061,158 @@ app.get("/api/public/products", async () => {
   `).all();
 
   return { items };
+});
+
+app.post("/api/public/support/auth", async (request, reply) => {
+  const schema = z.object({
+    token: z.string().min(1),
+    type: z.string().trim().min(1).optional().default("single")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "临时 token 不能为空" });
+  }
+
+  const upstream = await callSupportApi("/auth", {
+    method: "POST",
+    body: {
+      token: parsed.data.token.trim(),
+      type: parsed.data.type
+    }
+  });
+
+  if (!upstream.ok) {
+    const statusCode = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 400;
+    return reply.code(statusCode).send({
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      raw: upstream.json
+    });
+  }
+
+  return {
+    ok: Boolean(upstream.json?.ok ?? upstream.ok),
+    sessionId: upstream.json?.session_id ?? null,
+    email: upstream.json?.email ?? null,
+    supportCookie: upstream.supportCookie || null,
+    raw: upstream.json
+  };
+});
+
+app.get("/api/public/support/account", async (request, reply) => {
+  const parsed = z.object({
+    token: z.string().optional(),
+    sessionId: z.string().optional(),
+    supportCookie: z.string().optional()
+  }).safeParse(getSupportRequestContext(request));
+
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "账号查询参数不正确" });
+  }
+  if (!parsed.data.token && !parsed.data.sessionId && !parsed.data.supportCookie) {
+    return reply.code(400).send({ message: "缺少 support 鉴权信息，请先完成前台验证" });
+  }
+
+  const upstream = await callSupportApi("/account", {
+    method: "GET",
+    authCandidates: buildSupportAuthCandidates(parsed.data)
+  });
+
+  if (!upstream.ok) {
+    const statusCode = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 400;
+    return reply.code(statusCode).send({
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      authMode: upstream.authMode,
+      raw: upstream.json
+    });
+  }
+
+  return {
+    email: upstream.json?.email ?? null,
+    currentEmail: upstream.json?.current_email ?? null,
+    planType: upstream.json?.plan_type ?? null,
+    warranty: upstream.json?.warranty ?? null,
+    replacements: upstream.json?.replacements ?? null,
+    supportCookie: upstream.supportCookie || null,
+    authMode: upstream.authMode,
+    raw: upstream.json
+  };
+});
+
+app.get("/api/public/support/otp", async (request, reply) => {
+  const parsed = z.object({
+    token: z.string().optional(),
+    sessionId: z.string().optional(),
+    supportCookie: z.string().optional()
+  }).safeParse(getSupportRequestContext(request));
+
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "验证码查询参数不正确" });
+  }
+  if (!parsed.data.token && !parsed.data.sessionId && !parsed.data.supportCookie) {
+    return reply.code(400).send({ message: "缺少 support 鉴权信息，请先完成前台验证" });
+  }
+
+  const upstream = await callSupportApi("/otp", {
+    method: "GET",
+    authCandidates: buildSupportAuthCandidates(parsed.data)
+  });
+
+  if (!upstream.ok) {
+    const statusCode = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 400;
+    return reply.code(statusCode).send({
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      authMode: upstream.authMode,
+      raw: upstream.json
+    });
+  }
+
+  return {
+    otps: Array.isArray(upstream.json?.otps) ? upstream.json.otps : [],
+    supportCookie: upstream.supportCookie || null,
+    authMode: upstream.authMode,
+    raw: upstream.json
+  };
+});
+
+app.post("/api/public/support/logout", async (request, reply) => {
+  const parsed = z.object({
+    token: z.string().optional(),
+    sessionId: z.string().optional(),
+    supportCookie: z.string().optional()
+  }).safeParse(getSupportRequestContext(request));
+
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "退出参数不正确" });
+  }
+  if (!parsed.data.token && !parsed.data.sessionId && !parsed.data.supportCookie) {
+    return reply.code(400).send({ message: "缺少 support 鉴权信息，请先完成前台验证" });
+  }
+
+  const upstream = await callSupportApi("/logout", {
+    method: "POST",
+    authCandidates: buildSupportAuthCandidates(parsed.data),
+    minimalHeaders: true
+  });
+
+  if (!upstream.ok) {
+    const statusCode = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 400;
+    return reply.code(statusCode).send({
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      authMode: upstream.authMode,
+      raw: upstream.json
+    });
+  }
+
+  return {
+    ok: Boolean(upstream.json?.ok ?? upstream.ok),
+    supportCookie: upstream.supportCookie || null,
+    authMode: upstream.authMode,
+    raw: upstream.json
+  };
 });
 
 app.post("/api/public/cdkeys/verify", async (request, reply) => {

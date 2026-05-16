@@ -10,12 +10,26 @@ const orderResult = document.querySelector("#order-result");
 const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
 const statusContainer = document.querySelector("#status-container");
+const supportPanel = document.querySelector("#support-panel");
+const supportAuthForm = document.querySelector("#support-auth-form");
+const supportTokenInput = document.querySelector("#support-token");
+const supportResetBtn = document.querySelector("#support-reset");
+const supportAuthResult = document.querySelector("#support-auth-result");
+const supportAccountResult = document.querySelector("#support-account-result");
+const refreshAccountBtn = document.querySelector("#refresh-account-btn");
+const fetchOtpBtn = document.querySelector("#fetch-otp-btn");
+const supportLogoutBtn = document.querySelector("#support-logout-btn");
+const supportOtpResult = document.querySelector("#support-otp-result");
 
 let verifiedKey = null;
 let verifiedSiteSlug = null;
 let redeemStatusTimer = null;
+let supportSessionId = null;
+let supportCookie = null;
+let supportAuthEmail = null;
 
 const LIVE_STATUS_POLL_MS = 2000;
+const SUPPORT_SITE_SLUG = "meimei_site";
 const STATUS_LABELS = {
   active: "可用",
   locked: "锁定中",
@@ -76,6 +90,7 @@ document.querySelector("#start-over").addEventListener("click", () => {
   verifiedSiteSlug = null;
   publicKeyInput.value = "";
   document.querySelector("#session-payload").value = "";
+  resetSupportState({ clearToken: true, clearOtp: true });
   setState(verifyResult, "请输入卡密并点击验证。");
   setState(redeemResult, "等待提交任务...");
   redeemSubmit.disabled = true;
@@ -240,6 +255,261 @@ function getApiMessage(job = {}) {
   if (message) return message;
   if (code) return String(code);
   return "";
+}
+
+function isSupportSiteSlug(siteSlug) {
+  return String(siteSlug || "").trim().toLowerCase() === SUPPORT_SITE_SLUG;
+}
+
+function stringifySupportValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function buildSupportAuthHeaders() {
+  const headers = {};
+  const token = supportTokenInput?.value?.trim();
+  if (token) {
+    headers["X-Support-Token"] = token;
+  }
+  if (supportSessionId) {
+    headers["X-Support-Session-Id"] = supportSessionId;
+  }
+  if (supportCookie) {
+    headers["X-Support-Cookie"] = supportCookie;
+  }
+  return headers;
+}
+
+function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
+  supportSessionId = null;
+  supportCookie = null;
+  supportAuthEmail = null;
+  if (!isSupportSiteSlug(verifiedSiteSlug)) {
+    supportPanel.classList.add("hidden");
+  }
+  if (clearToken && supportTokenInput) {
+    supportTokenInput.value = "";
+  }
+  refreshAccountBtn.disabled = true;
+  fetchOtpBtn.disabled = true;
+  supportLogoutBtn.disabled = true;
+  setState(
+    supportAuthResult,
+    isSupportSiteSlug(verifiedSiteSlug)
+      ? "卡密验证成功后，请输入临时 token 完成前台验证。"
+      : "当前站点未启用前台 token 验证。"
+  );
+  setState(supportAccountResult, "验证成功后会在这里展示邮箱和账号信息。");
+  if (clearOtp) {
+    setState(supportOtpResult, "暂未获取验证码邮件。");
+  }
+}
+
+function syncSupportPanel(siteSlug) {
+  const enabled = isSupportSiteSlug(siteSlug);
+  supportPanel.classList.toggle("hidden", !enabled);
+  if (enabled) {
+    resetSupportState();
+  }
+}
+
+function renderSupportAuthResult(payload = {}) {
+  return `
+    <div class="result-card">
+      <div class="result-title">前台验证成功</div>
+      <span class="status-badge active">已认证</span>
+      <div class="support-summary-grid">
+        <div class="result-item">
+          <span>邮箱</span>
+          <strong>${escapeHtml(payload.email || supportAuthEmail || "-")}</strong>
+        </div>
+        <div class="result-item">
+          <span>Session ID</span>
+          <strong>${escapeHtml(payload.sessionId || "-")}</strong>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSupportAccountResult(payload = {}) {
+  return `
+    <div class="result-card">
+      <div class="result-title">账号信息</div>
+      <div class="support-summary-grid">
+        <div class="result-item">
+          <span>邮箱</span>
+          <strong>${escapeHtml(stringifySupportValue(payload.email || supportAuthEmail))}</strong>
+        </div>
+        <div class="result-item">
+          <span>当前邮箱</span>
+          <strong>${escapeHtml(stringifySupportValue(payload.currentEmail))}</strong>
+        </div>
+        <div class="result-item">
+          <span>套餐类型</span>
+          <strong>${escapeHtml(stringifySupportValue(payload.planType))}</strong>
+        </div>
+        <div class="result-item">
+          <span>质保</span>
+          <strong>${escapeHtml(stringifySupportValue(payload.warranty))}</strong>
+        </div>
+        <div class="result-item result-item-wide">
+          <span>补偿 / 更换</span>
+          <strong>${escapeHtml(stringifySupportValue(payload.replacements))}</strong>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function extractOtpCode(item = {}) {
+  const candidates = [
+    item.code,
+    item.otp,
+    item.verification_code
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+
+  const textCandidates = [
+    item.subject,
+    item.title,
+    item.preview,
+    item.snippet,
+    item.body,
+    item.content,
+    item.text
+  ];
+
+  for (const value of textCandidates) {
+    const match = String(value ?? "").match(/\b\d{4,8}\b/);
+    if (match) {
+      candidates.push(match[0]);
+      break;
+    }
+  }
+
+  return candidates[0] || "";
+}
+
+function extractOtpTimestamp(item = {}) {
+  return [
+    item.received_at,
+    item.receivedAt,
+    item.created_at,
+    item.createdAt,
+    item.sent_at,
+    item.sentAt,
+    item.date,
+    item.time
+  ].find((value) => String(value ?? "").trim()) || "";
+}
+
+function extractOtpPreview(item = {}) {
+  return [
+    item.preview,
+    item.snippet,
+    item.body,
+    item.content,
+    item.text
+  ].find((value) => String(value ?? "").trim()) || "";
+}
+
+function extractOtpTitle(item = {}, index = 0) {
+  return [
+    item.subject,
+    item.title,
+    item.email,
+    item.to,
+    item.from
+  ].find((value) => String(value ?? "").trim()) || `验证码邮件 ${index + 1}`;
+}
+
+function renderSupportOtpList(otps = []) {
+  if (!Array.isArray(otps) || !otps.length) {
+    return `
+      <div class="result-card">
+        <div class="result-title">验证码邮件</div>
+        <div class="result-item result-item-wide">
+          <span>状态</span>
+          <strong>当前没有可展示的验证码邮件。</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  const itemsHtml = otps.map((item, index) => {
+    const title = extractOtpTitle(item, index);
+    const code = extractOtpCode(item);
+    const time = extractOtpTimestamp(item);
+    const preview = extractOtpPreview(item);
+    const meta = [
+      item.email ? `邮箱：${item.email}` : "",
+      item.current_email ? `当前邮箱：${item.current_email}` : "",
+      item.from ? `发件人：${item.from}` : ""
+    ].filter(Boolean);
+
+    return `
+      <article class="otp-card ${index === 0 ? "latest" : ""}">
+        <div class="otp-head">
+          <div class="otp-title">
+            <strong>${escapeHtml(title)}</strong>
+            <span class="otp-time">${escapeHtml(time || "时间未知")}</span>
+          </div>
+          ${index === 0 ? '<span class="otp-latest-badge">最新</span>' : ""}
+        </div>
+        ${code ? `<div class="otp-code">${escapeHtml(code)}</div>` : ""}
+        <p class="otp-preview">${escapeHtml(preview || "该邮件未提供可展示的正文摘要。")}</p>
+        ${meta.length ? `<div class="otp-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>` : ""}
+      </article>
+    `;
+  }).join("");
+
+  return `
+    <div class="result-card">
+      <div class="result-title">最近验证码邮件</div>
+      <div class="otp-list">${itemsHtml}</div>
+    </div>
+  `;
+}
+
+async function loadSupportAccount() {
+  setState(supportAccountResult, "正在获取账号信息...");
+  const payload = await request("/api/public/support/account", {
+    headers: buildSupportAuthHeaders()
+  });
+  if (payload.supportCookie) {
+    supportCookie = payload.supportCookie;
+  }
+  setRichState(supportAccountResult, renderSupportAccountResult(payload), "success");
+  return payload;
+}
+
+async function loadSupportOtps() {
+  setState(supportOtpResult, "正在获取验证码邮件...");
+  const payload = await request("/api/public/support/otp", {
+    headers: buildSupportAuthHeaders()
+  });
+  if (payload.supportCookie) {
+    supportCookie = payload.supportCookie;
+  }
+  setRichState(supportOtpResult, renderSupportOtpList(payload.otps), "success");
+  return payload;
+}
+
+async function logoutSupportAccount() {
+  const payload = await request("/api/public/support/logout", {
+    method: "POST",
+    headers: buildSupportAuthHeaders()
+  });
+  if (payload.supportCookie) {
+    supportCookie = payload.supportCookie;
+  }
+  return payload;
 }
 
 function renderVerifyResult(payload) {
@@ -623,11 +893,17 @@ function startRedeemStatusPolling(orderNo) {
 }
 
 async function request(path, options = {}) {
+  const {
+    headers = {},
+    ...restOptions
+  } = options;
+
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...headers
     },
-    ...options
+    ...restOptions
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -640,6 +916,8 @@ async function request(path, options = {}) {
 verifyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setState(verifyResult, "正在验证卡密...");
+  resetSupportState({ clearOtp: true });
+  supportPanel.classList.add("hidden");
 
   try {
     const payload = await request("/api/public/cdkeys/verify", {
@@ -652,6 +930,7 @@ verifyForm.addEventListener("submit", async (event) => {
     verifiedKey = payload.canRedeem ? payload.publicKey : null;
     verifiedSiteSlug = payload.canRedeem ? (payload.siteSlug || null) : null;
     redeemSubmit.disabled = !payload.canRedeem;
+    syncSupportPanel(verifiedSiteSlug);
     setRichState(verifyResult, renderVerifyResult(payload), payload.canRedeem ? "success" : "error");
     
     if (payload.canRedeem) {
@@ -663,7 +942,94 @@ verifyForm.addEventListener("submit", async (event) => {
     verifiedKey = null;
     verifiedSiteSlug = null;
     redeemSubmit.disabled = true;
+    resetSupportState({ clearOtp: true });
+    supportPanel.classList.add("hidden");
     setState(verifyResult, error.message, "error");
+  }
+});
+
+supportResetBtn.addEventListener("click", () => {
+  resetSupportState({ clearToken: true, clearOtp: true });
+});
+
+supportAuthForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  if (!verifiedKey) {
+    setState(supportAuthResult, "请先完成卡密验证。", "error");
+    return;
+  }
+  if (!isSupportSiteSlug(verifiedSiteSlug)) {
+    setState(supportAuthResult, "当前站点不需要前台 token 验证。", "error");
+    return;
+  }
+
+  const token = supportTokenInput.value.trim();
+  if (!token) {
+    setState(supportAuthResult, "请输入临时 token。", "error");
+    return;
+  }
+
+  setState(supportAuthResult, "正在验证前台 token...");
+  setState(supportAccountResult, "等待账号信息加载...");
+  setState(supportOtpResult, "暂未获取验证码邮件。");
+  refreshAccountBtn.disabled = true;
+  fetchOtpBtn.disabled = true;
+
+  try {
+    const payload = await request("/api/public/support/auth", {
+      method: "POST",
+      body: JSON.stringify({
+        token,
+        type: "single"
+      })
+    });
+
+    supportSessionId = payload.sessionId || null;
+    supportCookie = payload.supportCookie || null;
+    supportAuthEmail = payload.email || null;
+    refreshAccountBtn.disabled = false;
+    fetchOtpBtn.disabled = false;
+    supportLogoutBtn.disabled = false;
+
+    setRichState(supportAuthResult, renderSupportAuthResult(payload), "success");
+
+    try {
+      await loadSupportAccount();
+    } catch (error) {
+      setState(supportAccountResult, error.message, "error");
+    }
+  } catch (error) {
+    resetSupportState();
+    setState(supportAuthResult, error.message, "error");
+  }
+});
+
+refreshAccountBtn.addEventListener("click", async () => {
+  try {
+    await loadSupportAccount();
+  } catch (error) {
+    setState(supportAccountResult, error.message, "error");
+  }
+});
+
+fetchOtpBtn.addEventListener("click", async () => {
+  try {
+    await loadSupportOtps();
+  } catch (error) {
+    setState(supportOtpResult, error.message, "error");
+  }
+});
+
+supportLogoutBtn.addEventListener("click", async () => {
+  try {
+    supportLogoutBtn.disabled = true;
+    await logoutSupportAccount();
+    resetSupportState({ clearToken: true, clearOtp: true });
+    setState(supportAuthResult, "已退出当前 support 账号，请重新输入临时 token。", "success");
+  } catch (error) {
+    supportLogoutBtn.disabled = false;
+    setState(supportAuthResult, error.message, "error");
   }
 });
 

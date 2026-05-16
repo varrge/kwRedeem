@@ -63,8 +63,37 @@
             <div class="pane-content">
               <div class="section-heading centered">
                 <p class="eyebrow">Step 2</p>
-                <h2>提交 Session 信息</h2>
-                <p class="panel-desc">请粘贴完整的 Session JSON，系统将为您创建激活任务。</p>
+                <h2>提交信息与前台验证</h2>
+                <p class="panel-desc">如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。</p>
+              </div>
+
+              <div id="support-panel" class="support-panel hidden">
+                <div class="support-panel-head">
+                  <h3>前台 Token 验证</h3>
+                  <p>卡密验证成功后，在这里输入临时 token。验证通过后会显示邮箱，并可继续获取最近的验证码邮件。</p>
+                </div>
+                <form id="support-auth-form" class="stack">
+                  <div class="field">
+                    <textarea
+                      id="support-token"
+                      name="supportToken"
+                      rows="4"
+                      placeholder="在此粘贴临时 token..."
+                    ></textarea>
+                  </div>
+                  <div class="action-group">
+                    <button type="button" class="ghost-btn" id="support-reset">清空 Token</button>
+                    <button type="submit" class="primary-btn">验证前台 Token</button>
+                  </div>
+                </form>
+                <div id="support-auth-result" class="result muted">当前站点未启用前台 token 验证。</div>
+                <div id="support-account-result" class="result muted">验证成功后会在这里展示邮箱和账号信息。</div>
+                <div class="action-group support-otp-actions">
+                  <button type="button" class="ghost-btn" id="refresh-account-btn" disabled>刷新账号信息</button>
+                  <button type="button" class="primary-btn" id="fetch-otp-btn" disabled>获取验证码</button>
+                  <button type="button" class="ghost-btn danger-btn" id="support-logout-btn" disabled>退出当前账号</button>
+                </div>
+                <div id="support-otp-result" class="result muted">暂未获取验证码邮件。</div>
               </div>
 
               <div class="quick-nav-group">

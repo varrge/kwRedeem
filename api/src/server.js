@@ -265,6 +265,76 @@ function validateSessionForSite(site, session) {
   }
 }
 
+const DENGTA_PLUS_SLUG = "dengta-plus";
+const DENGTA_PLUS_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
+
+async function fetchQueueStatusForSite(site) {
+  const slug = String(site?.slug || "").trim().toLowerCase();
+  if (slug !== DENGTA_PLUS_SLUG) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(DENGTA_PLUS_QUEUE_STATUS_URL, {
+      method: "GET",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "application/json, text/plain, */*"
+      },
+      signal: AbortSignal.timeout(10000)
+    });
+    const text = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      text,
+      json: safeParseJson(text, null)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 599,
+      text: error.message,
+      json: null
+    };
+  }
+}
+
+function getQueueStatusBlockMessage(queueStatus) {
+  if (!queueStatus?.ok || !queueStatus.json) {
+    return "老蹬plus 队列状态获取失败，请稍后重试";
+  }
+
+  const queue = queueStatus.json;
+  if (queue.maintenance) {
+    return "老蹬plus 当前维护中，暂时无法提交兑换";
+  }
+  if (queue.full || Number(queue.available ?? 0) <= 0) {
+    return `老蹬plus 当前队列已满（可用 ${Number(queue.available ?? 0)}/${Number(queue.max ?? 0)}），请稍后再试`;
+  }
+  if (Number(queue.gopay_deny_cooldown_remaining ?? 0) > 0) {
+    return `老蹬plus 当前受限，请 ${queue.gopay_deny_cooldown_remaining} 秒后再试`;
+  }
+  return "";
+}
+
+async function assertSiteQueueReady(site) {
+  const queueStatus = await fetchQueueStatusForSite(site);
+  if (!queueStatus) {
+    return;
+  }
+
+  const blockMessage = getQueueStatusBlockMessage(queueStatus);
+  if (!blockMessage) {
+    return;
+  }
+
+  const extra = queueStatus.json?.gopay_deny_count
+    ? `（最近拒绝次数 ${queueStatus.json.gopay_deny_count}）`
+    : "";
+  throw new Error(`${blockMessage}${extra}`);
+}
+
 function getJsonBodyOrNull(value) {
   if (!value) return null;
 
@@ -340,22 +410,56 @@ function extractLiveTaskInfo(lastResponse, pollingEnabled) {
   if (!remoteJson || typeof remoteJson.status !== "string") return {};
 
   const remoteStatus = remoteJson.status.toLowerCase();
+  const stage = typeof remoteJson.stage === "string" ? remoteJson.stage.trim() : "";
+  const progress = Number.isFinite(Number(remoteJson.progress)) ? Number(remoteJson.progress) : null;
+  const errorMessage = remoteJson.error_msg || remoteJson.error || remoteJson.result || remoteJson.message || "";
+  const buildProgressHint = () => {
+    if (!stage && progress === null) return "";
+    if (stage && progress !== null) return `${stage}（${progress}%）`;
+    return stage || `${progress}%`;
+  };
   if (remoteStatus === "pending") {
     const pos = remoteJson.queue_position ?? null;
     return {
       liveTaskStatus: "pending",
       queuePosition: pos,
-      liveMessage: pos != null ? `排队中，前方还有 ${pos} 个任务` : "排队中，请稍候"
+      liveStage: stage || null,
+      liveProgress: progress,
+      liveErrorMessage: null,
+      liveMessage: pos != null
+        ? `排队中，前方还有 ${pos} 个任务`
+        : (buildProgressHint() || "排队中，请稍候")
     };
   }
   if (remoteStatus === "processing") {
-    return { liveTaskStatus: "processing", queuePosition: null, liveMessage: "正在处理充值订单！" };
+    return {
+      liveTaskStatus: "processing",
+      queuePosition: null,
+      liveStage: stage || null,
+      liveProgress: progress,
+      liveErrorMessage: null,
+      liveMessage: buildProgressHint() || "正在处理充值订单！"
+    };
   }
-  if (remoteStatus === "completed") {
-    return { liveTaskStatus: "completed", queuePosition: null, liveMessage: remoteJson.result || "充值成功！" };
+  if (["completed", "success", "succeeded"].includes(remoteStatus)) {
+    return {
+      liveTaskStatus: "completed",
+      queuePosition: null,
+      liveStage: stage || null,
+      liveProgress: progress,
+      liveErrorMessage: null,
+      liveMessage: stage || remoteJson.result || remoteJson.message || "充值成功！"
+    };
   }
-  if (remoteStatus === "failed") {
-    return { liveTaskStatus: "failed", queuePosition: null, liveMessage: remoteJson.result || remoteJson.error || "远端任务失败" };
+  if (["failed", "error"].includes(remoteStatus)) {
+    return {
+      liveTaskStatus: "failed",
+      queuePosition: null,
+      liveStage: stage || null,
+      liveProgress: progress,
+      liveErrorMessage: errorMessage || null,
+      liveMessage: errorMessage || buildProgressHint() || "远端任务失败"
+    };
   }
   return {};
 }
@@ -399,6 +503,9 @@ function getOrderDetail(orderNo) {
     liveTaskStatus: liveInfo.liveTaskStatus || null,
     queuePosition: liveInfo.queuePosition ?? null,
     liveMessage: liveInfo.liveMessage || null,
+    liveStage: liveInfo.liveStage || null,
+    liveProgress: liveInfo.liveProgress ?? null,
+    liveErrorMessage: liveInfo.liveErrorMessage || null,
     job: {
       status: order.job_status,
       lastError: order.job_error,
@@ -875,7 +982,13 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
     siteSlug: key.site_slug || null,
     canRedeem,
     remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
-    remoteError: typeof remoteResult?.json?.error === "string" ? remoteResult.json.error : "",
+    remoteError: typeof remoteResult?.json?.error_msg === "string"
+      ? remoteResult.json.error_msg
+      : (typeof remoteResult?.json?.error === "string"
+        ? remoteResult.json.error
+        : (typeof remoteResult?.json?.message === "string"
+          ? remoteResult.json.message
+          : (typeof remoteResult?.json?.msg === "string" ? remoteResult.json.msg : ""))),
     stockLevel: typeof remoteResult?.json?.stock_level === "string" ? remoteResult.json.stock_level : "",
     remoteResult: remoteResult ? {
       ok: remoteResult.ok,
@@ -907,6 +1020,29 @@ app.post("/api/public/redeem", async (request, reply) => {
   }
 
   try {
+    const preflight = db.prepare(`
+      SELECT
+        c.id AS cdkey_id,
+        c.status AS cdkey_status,
+        c.site_id,
+        s.*
+      FROM cdkeys c
+      LEFT JOIN sites s ON s.id = c.site_id
+      WHERE c.public_key = ?
+    `).get(publicKey);
+
+    if (!preflight) {
+      return reply.code(404).send({ message: "卡密不存在" });
+    }
+    if (preflight.cdkey_status !== cdkeyStatuses.active) {
+      return reply.code(400).send({ message: `当前卡密状态不可兑换：${preflight.cdkey_status}` });
+    }
+    if (!preflight.site_id || preflight.status !== "active") {
+      return reply.code(400).send({ message: "当前卡密未绑定有效网站" });
+    }
+
+    await assertSiteQueueReady(preflight);
+
     const result = withTransaction(() => {
       const cdkey = db.prepare(`
         SELECT *

@@ -34,7 +34,7 @@ function upsertSite(db, site) {
           submit_success_rule = ?, submit_failure_rule = ?, timeout_seconds = ?, max_retries = ?,
           product_id = ?, activation_endpoint_id = ?,
           query_api_url = ?, query_success_rule = ?, query_failure_rule = ?, polling_enabled = ?,
-          task_id_path = ?,
+          task_id_path = ?, poll_interval_ms = ?, poll_max_rounds = ?,
           query_http_method = ?, query_headers_template = ?, query_body_template = ?,
           status = ?, updated_at = ?
       WHERE slug = ?
@@ -64,6 +64,8 @@ function upsertSite(db, site) {
       site.queryFailureRule || null,
       site.pollingEnabled || 0,
       site.taskIdPath || null,
+      site.pollIntervalMs || 5000,
+      site.pollMaxRounds || 6,
       site.queryHttpMethod || null,
       site.queryHeadersTemplate || null,
       site.queryBodyTemplate || null,
@@ -81,11 +83,11 @@ function upsertSite(db, site) {
       abandon_submit_body_template, auth_type, auth_config, verify_success_rule, verify_failure_rule, submit_success_rule, submit_failure_rule,
       timeout_seconds, max_retries, product_id, activation_endpoint_id,
       query_api_url, query_success_rule, query_failure_rule, polling_enabled,
-      task_id_path,
+      task_id_path, poll_interval_ms, poll_max_rounds,
       query_http_method, query_headers_template, query_body_template,
       status, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     site.id,
     site.name,
@@ -114,6 +116,8 @@ function upsertSite(db, site) {
     site.queryFailureRule || null,
     site.pollingEnabled || 0,
     site.taskIdPath || null,
+    site.pollIntervalMs || 5000,
+    site.pollMaxRounds || 6,
     site.queryHttpMethod || null,
     site.queryHeadersTemplate || null,
     site.queryBodyTemplate || null,
@@ -183,6 +187,8 @@ function createSchema(db) {
       max_retries INTEGER NOT NULL DEFAULT 3,
       product_id TEXT,
       activation_endpoint_id TEXT,
+      poll_interval_ms INTEGER NOT NULL DEFAULT 5000,
+      poll_max_rounds INTEGER NOT NULL DEFAULT 6,
       status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -362,6 +368,8 @@ function createSchema(db) {
   ensureColumn(db, "sites", "query_http_method", "TEXT");
   ensureColumn(db, "sites", "query_headers_template", "TEXT");
   ensureColumn(db, "sites", "query_body_template", "TEXT");
+  ensureColumn(db, "sites", "poll_interval_ms", "INTEGER NOT NULL DEFAULT 5000");
+  ensureColumn(db, "sites", "poll_max_rounds", "INTEGER NOT NULL DEFAULT 6");
   ensureColumn(db, "notification_monitors", "monitor_type", "TEXT NOT NULL DEFAULT 'http'");
   ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");
@@ -570,6 +578,40 @@ function seedDefaults(db) {
       updatedAt: now
     },
     {
+      id: "site_preset_dengta_plus",
+      name: "老蹬plus",
+      slug: "dengta-plus",
+      verifyApiUrl: "https://ai.dengta-learning.online/api/cdk/validate",
+      submitApiUrl: "https://ai.dengta-learning.online/api/cdk/redeem",
+      verifyHttpMethod: "POST",
+      submitHttpMethod: "POST",
+      verifyHeadersTemplate: "{}",
+      verifyBodyTemplate: '{"code":"{{sourceKey}}"}',
+      submitHeadersTemplate: "{}",
+      submitBodyTemplate: '{"code":"{{sourceKey}}","session_json":{{sessionString}}}',
+      abandonSubmitBodyTemplate: '{"code":"{{sourceKey}}","session_json":{{sessionString}}}',
+      authType: null,
+      authConfig: null,
+      verifySuccessRule: '{"kind":"json_path_equals","path":"valid","value":"true"}',
+      verifyFailureRule: '{"kind":"json_path_equals","path":"valid","value":"false"}',
+      submitSuccessRule: null,
+      submitFailureRule: null,
+      queryApiUrl: "https://ai.dengta-learning.online/api/cdk/status/{{taskId}}",
+      querySuccessRule: '{"kind":"json_path_equals","path":"status","value":"completed"}',
+      queryFailureRule: '{"kind":"json_path_equals","path":"status","value":"failed"}',
+      pollingEnabled: 1,
+      taskIdPath: "task_id",
+      pollIntervalMs: 3000,
+      pollMaxRounds: 20,
+      timeoutSeconds: 15,
+      maxRetries: 20,
+      productId: "prod_demo",
+      activationEndpointId: null,
+      status: "disabled",
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: "site_preset_987ai",
       name: "987AI",
       slug: "987ai",
@@ -593,6 +635,8 @@ function seedDefaults(db) {
       queryFailureRule: '{"kind":"json_path_equals","path":"status","value":"failed"}',
       pollingEnabled: 1,
       taskIdPath: "task_id",
+      pollIntervalMs: 5000,
+      pollMaxRounds: 6,
       timeoutSeconds: 15,
       maxRetries: 20,
       productId: "prod_demo",
@@ -627,6 +671,8 @@ function seedDefaults(db) {
       queryFailureRule: '{"kind":"json_path_equals","path":"data.status","value":"failed"}',
       pollingEnabled: 1,
       taskIdPath: "data.taskId",
+      pollIntervalMs: 5000,
+      pollMaxRounds: 6,
       timeoutSeconds: 15,
       maxRetries: 20,
       productId: "prod_demo",

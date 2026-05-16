@@ -226,10 +226,12 @@ function getApiMessage(job = {}) {
   const response = job.lastResponse || {};
   const json = response.json || {};
   const code = json.code || json.data?.code;
-  const message = json.error
+  const message = json.error_msg
+    || json.error
     || json.result
     || json.msg
     || json.message
+    || json.data?.error_msg
     || json.data?.error
     || json.data?.msg
     || json.data?.message
@@ -287,10 +289,13 @@ function renderRedeemSuccess(payload) {
     : (payload.job?.status || payload.status || "processing");
   const apiMessage = getApiMessage(payload.job || {});
   const sessionFixNeeded = isSessionFixNeededMessage(apiMessage) || isSessionFixNeededMessage(payload.errorMessage);
+  const liveStage = String(payload.liveStage || "").trim();
+  const liveProgress = Number.isFinite(Number(payload.liveProgress)) ? Number(payload.liveProgress) : null;
+  const liveErrorMessage = String(payload.liveErrorMessage || "").trim();
 
   let statusHint;
   if (hasLiveTask) {
-    statusHint = payload.liveMessage || "任务状态会自动刷新。";
+    statusHint = liveErrorMessage || payload.liveMessage || "任务状态会自动刷新。";
   } else {
     statusHint = {
       pending: "任务已进入队列，等待系统处理。",
@@ -305,6 +310,12 @@ function renderRedeemSuccess(payload) {
 
   const queueHtml = hasLiveTask && payload.queuePosition != null
     ? `<div class="result-item"><span>排队位置</span><strong>第 ${escapeHtml(payload.queuePosition)} 位</strong></div>`
+    : "";
+  const progressHtml = hasLiveTask && liveProgress != null
+    ? `<div class="result-item"><span>处理进度</span><strong>${escapeHtml(liveProgress)}%</strong></div>`
+    : "";
+  const stageHtml = hasLiveTask && liveStage
+    ? `<div class="result-item result-item-wide"><span>当前阶段</span><strong>${escapeHtml(liveStage)}</strong></div>`
     : "";
 
   return `
@@ -321,6 +332,8 @@ function renderRedeemSuccess(payload) {
           <strong>${renderStatusText(liveStatus)}</strong>
         </div>
         ${queueHtml}
+        ${progressHtml}
+        ${stageHtml}
         <div class="result-item result-item-wide">
           <span>处理说明</span>
           <strong>${statusHint}</strong>
@@ -331,6 +344,7 @@ function renderRedeemSuccess(payload) {
         </div>
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
+      ${hasLiveTask && liveErrorMessage ? `<div class="result-item result-item-wide"><span>远端失败原因</span><strong>${escapeHtml(liveErrorMessage)}</strong></div>` : ""}
       ${!hasLiveTask && payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
     </div>
   `;
@@ -340,6 +354,7 @@ function renderOrderResult(payload) {
   const job = payload.job || {};
   const apiMessage = getApiMessage(job);
   const title = payload.lookupType === "publicKey" ? "卡密关联订单" : "订单追踪结果";
+  const liveProgress = Number.isFinite(Number(payload.liveProgress)) ? Number(payload.liveProgress) : null;
   return `
     <div class="result-card compact-card">
       <div class="result-title">${title}</div>
@@ -368,8 +383,16 @@ function renderOrderResult(payload) {
           <strong>${job.status ? renderStatusText(job.status) : "-"}</strong>
         </div>
         <div class="result-item">
+          <span>远端状态</span>
+          <strong>${payload.liveTaskStatus ? renderStatusText(payload.liveTaskStatus) : "-"}</strong>
+        </div>
+        <div class="result-item">
           <span>重试次数</span>
           <strong>${escapeHtml(job.attemptCount ?? 0)}</strong>
+        </div>
+        <div class="result-item">
+          <span>处理进度</span>
+          <strong>${liveProgress != null ? `${escapeHtml(liveProgress)}%` : "-"}</strong>
         </div>
         <div class="result-item">
           <span>用户邮箱</span>
@@ -379,6 +402,10 @@ function renderOrderResult(payload) {
           <span>覆盖提交</span>
           <strong>${payload.abandonRemainingTime ? "是" : "否"}</strong>
         </div>
+        <div class="result-item result-item-wide">
+          <span>当前阶段</span>
+          <strong>${escapeHtml(payload.liveStage || payload.liveMessage || "-")}</strong>
+        </div>
         ${payload.cdkeyStatus ? `
           <div class="result-item">
             <span>卡密状态</span>
@@ -387,6 +414,7 @@ function renderOrderResult(payload) {
         ` : ""}
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
+      ${payload.liveErrorMessage ? `<div class="result-item result-item-wide"><span>远端失败原因</span><strong>${escapeHtml(payload.liveErrorMessage)}</strong></div>` : ""}
       ${payload.errorMessage ? `<div class="result-item"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
     </div>
   `;

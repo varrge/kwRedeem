@@ -142,9 +142,11 @@ function formatRemoteErrorMessage(responseInfo = {}, fallback = "") {
   const json = responseInfo.json;
   if (json && typeof json === "object") {
     const code = json.code || json.data?.code;
-    const message = json.error
+    const message = json.error_msg
+      || json.error
       || json.message
       || json.msg
+      || json.data?.error_msg
       || json.data?.error
       || json.data?.message
       || json.data?.msg
@@ -180,6 +182,28 @@ function extractRemoteTaskId(responseInfo, taskIdPath) {
   }
 
   return "";
+}
+
+function getRemoteTaskStatus(responseInfo = {}) {
+  const status = responseInfo.json?.status;
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
+}
+
+function isKnownSuccessfulTaskStatus(responseInfo = {}) {
+  return ["completed", "success", "succeeded"].includes(getRemoteTaskStatus(responseInfo));
+}
+
+function isKnownFailedTaskStatus(responseInfo = {}) {
+  return ["failed", "error"].includes(getRemoteTaskStatus(responseInfo));
+}
+
+function getPollingConfig(site) {
+  const intervalMs = Number(site?.poll_interval_ms);
+  const maxRounds = Number(site?.poll_max_rounds);
+  return {
+    intervalMs: Number.isFinite(intervalMs) && intervalMs >= 1000 ? intervalMs : 5000,
+    maxRounds: Number.isFinite(maxRounds) && maxRounds >= 1 ? maxRounds : 6
+  };
 }
 
 function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
@@ -508,29 +532,30 @@ function getJsonByPath(json, dotPath) {
   return current;
 }
 
-const POLL_MAX_ROUNDS = 6;
-const POLL_INTERVAL_MS = 5000;
-
 async function pollRemoteTask(job, order, cdkey, site, remoteTaskId, endpoint) {
   const maxAttempts = site?.max_retries || job.max_attempts || 10;
   const querySuccessRule = site.query_success_rule;
   const queryFailureRule = site.query_failure_rule;
+  const { intervalMs, maxRounds } = getPollingConfig(site);
 
   const baseContext = buildRequestContext(job, order, cdkey, site, endpoint);
   const queryContext = { ...baseContext, taskId: remoteTaskId };
   let latestQueryResult = null;
 
-  for (let round = 0; round < POLL_MAX_ROUNDS; round++) {
-    if (round > 0) await sleep(POLL_INTERVAL_MS);
+  for (let round = 0; round < maxRounds; round++) {
+    if (round > 0) await sleep(intervalMs);
 
     const queryUrl = renderTemplateString(site.query_api_url, queryContext);
     const queryResult = await queryRemoteTask(queryUrl, site, queryContext);
     latestQueryResult = queryResult;
 
-    const isSuccess = querySuccessRule
+    const isSuccess = (querySuccessRule
       ? evaluateRule(querySuccessRule, queryResult)
-      : false;
-    const queryErrorMessage = formatRemoteErrorMessage(queryResult, queryResult.json?.error || queryResult.text || `HTTP ${queryResult.status}`);
+      : false) || isKnownSuccessfulTaskStatus(queryResult);
+    const queryErrorMessage = formatRemoteErrorMessage(
+      queryResult,
+      queryResult.json?.error_msg || queryResult.json?.error || queryResult.text || `HTTP ${queryResult.status}`
+    );
 
     if (isSuccess) {
       markSuccess(job.id, order.id, cdkey.id, queryResult);
@@ -551,7 +576,7 @@ async function pollRemoteTask(job, order, cdkey, site, remoteTaskId, endpoint) {
       return;
     }
 
-    if (queryFailureRule && evaluateRule(queryFailureRule, queryResult)) {
+    if ((queryFailureRule && evaluateRule(queryFailureRule, queryResult)) || isKnownFailedTaskStatus(queryResult)) {
       markFailed(job.id, order.id, cdkey.id, queryErrorMessage, queryResult);
       return;
     }
@@ -601,10 +626,11 @@ async function processJob(job) {
   const successRule = site?.submit_success_rule || endpoint?.success_rule;
   const failureMatched = failureRule ? evaluateRule(failureRule, responseInfo) : false;
   const successMatched = successRule ? evaluateRule(successRule, responseInfo) : responseInfo.ok;
+  const taskIdPath = site?.task_id_path || "data";
+  const remoteTaskId = isPollingEnabled ? extractRemoteTaskId(responseInfo, taskIdPath) : "";
+  const acceptedAsyncTask = Boolean(remoteTaskId) && Number(responseInfo.status) >= 200 && Number(responseInfo.status) < 300;
 
-  if (!failureMatched && successMatched && isPollingEnabled) {
-    const taskIdPath = site?.task_id_path || "data";
-    const remoteTaskId = extractRemoteTaskId(responseInfo, taskIdPath);
+  if (!failureMatched && isPollingEnabled && (successMatched || acceptedAsyncTask)) {
     if (remoteTaskId) {
       updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
       await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId), endpoint);
@@ -613,7 +639,6 @@ async function processJob(job) {
   }
 
   if (isPollingEnabled && Number(responseInfo.status) === 409) {
-    const remoteTaskId = extractRemoteTaskId(responseInfo, site?.task_id_path || "task_id");
     if (remoteTaskId) {
       updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
       await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId), endpoint);

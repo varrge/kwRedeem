@@ -927,6 +927,213 @@ function getSupportRequestContext(request) {
   };
 }
 
+function parseCdkeyMetadata(value) {
+  const parsed = safeParseJson(value, null);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function buildCdkeyMetadata(existingValue, { note, emailToken } = {}) {
+  const metadata = parseCdkeyMetadata(existingValue);
+
+  if (note !== undefined) {
+    const normalizedNote = String(note ?? "").trim();
+    if (normalizedNote) {
+      metadata.note = normalizedNote;
+    } else {
+      delete metadata.note;
+    }
+  }
+
+  if (emailToken !== undefined) {
+    const normalizedToken = String(emailToken ?? "").trim();
+    if (normalizedToken) {
+      metadata.emailToken = normalizedToken;
+    } else {
+      delete metadata.emailToken;
+      delete metadata.email_token;
+    }
+  }
+
+  return Object.keys(metadata).length ? JSON.stringify(metadata) : null;
+}
+
+function getCdkeyEmailToken(metadataValue) {
+  const metadata = parseCdkeyMetadata(metadataValue);
+  const token = metadata.emailToken ?? metadata.email_token ?? "";
+  return typeof token === "string" ? token.trim() : "";
+}
+
+function getCdkeyNote(metadataValue) {
+  const metadata = parseCdkeyMetadata(metadataValue);
+  const note = metadata.note ?? "";
+  return typeof note === "string" ? note.trim() : "";
+}
+
+function buildSupportAccountPayload(raw = {}, supportCookie = null, authMode = null) {
+  return {
+    email: raw.email ?? null,
+    currentEmail: raw.current_email ?? null,
+    planType: raw.plan_type ?? null,
+    warranty: raw.warranty ?? null,
+    replacements: raw.replacements ?? null,
+    supportCookie: supportCookie || null,
+    authMode: authMode || null,
+    raw
+  };
+}
+
+function buildSupportOtpPayload(raw = {}, supportCookie = null, authMode = null) {
+  return {
+    otps: Array.isArray(raw.otps) ? raw.otps : [],
+    supportCookie: supportCookie || null,
+    authMode: authMode || null,
+    raw
+  };
+}
+
+async function verifyCdkeyForPublic(publicKey) {
+  const key = db.prepare(`
+    SELECT
+      c.public_key,
+      c.source_key,
+      c.status,
+      c.prefix,
+      c.site_id,
+      c.metadata,
+      s.name AS site_name,
+      s.slug AS site_slug,
+      s.verify_api_url,
+      s.verify_http_method,
+      s.verify_headers_template,
+      s.verify_body_template,
+      s.auth_type,
+      s.auth_config,
+      s.verify_success_rule,
+      s.verify_failure_rule,
+      s.timeout_seconds,
+      s.request_cookies
+    FROM cdkeys c
+    LEFT JOIN sites s ON s.id = c.site_id
+    WHERE c.public_key = ?
+  `).get(publicKey);
+
+  if (!key) {
+    return null;
+  }
+
+  const verifyContext = {
+    publicKey: key.public_key,
+    sourceKey: decryptText(key.source_key),
+    siteName: key.site_name,
+    siteSlug: key.site_slug
+  };
+
+  let remoteResult = null;
+  let canRedeem = key.status === cdkeyStatuses.active;
+
+  if (canRedeem && key.verify_api_url) {
+    remoteResult = await callConfiguredApi({
+      url: key.verify_api_url,
+      method: key.verify_http_method,
+      headersTemplate: key.verify_headers_template,
+      bodyTemplate: key.verify_body_template,
+      authType: key.auth_type,
+      authConfig: key.auth_config,
+      timeoutSeconds: key.timeout_seconds,
+      cookies: key.request_cookies || null
+    }, verifyContext);
+
+    const failureMatched = key.verify_failure_rule ? evaluateRule(key.verify_failure_rule, remoteResult) : false;
+    const successMatched = key.verify_success_rule ? evaluateRule(key.verify_success_rule, remoteResult) : remoteResult.ok;
+    canRedeem = !failureMatched && successMatched;
+  }
+
+  const emailToken = getCdkeyEmailToken(key.metadata);
+
+  return {
+    key,
+    emailToken,
+    payload: {
+      publicKey: key.public_key,
+      status: key.status,
+      productTitle: key.site_name || "未命名网站",
+      productDescription: key.site_slug ? `站点标识：${key.site_slug}` : "未配置网站标识",
+      endpointName: key.site_name || "未绑定网站",
+      siteId: key.site_id,
+      siteName: key.site_name || "未命名网站",
+      siteSlug: key.site_slug || null,
+      canRedeem,
+      hasBoundEmailToken: Boolean(emailToken),
+      remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
+      remoteError: typeof remoteResult?.json?.error_msg === "string"
+        ? remoteResult.json.error_msg
+        : (typeof remoteResult?.json?.error === "string"
+          ? remoteResult.json.error
+          : (typeof remoteResult?.json?.message === "string"
+            ? remoteResult.json.message
+            : (typeof remoteResult?.json?.msg === "string" ? remoteResult.json.msg : ""))),
+      stockLevel: typeof remoteResult?.json?.stock_level === "string" ? remoteResult.json.stock_level : "",
+      remoteResult: remoteResult ? {
+        ok: remoteResult.ok,
+        status: remoteResult.status,
+        text: remoteResult.text,
+        json: remoteResult.json
+      } : null
+    }
+  };
+}
+
+async function loadSupportBundleByToken(emailToken) {
+  const upstream = await callSupportApi("/auth", {
+    method: "POST",
+    body: {
+      token: emailToken,
+      type: "single"
+    }
+  });
+
+  if (!upstream.ok) {
+    return {
+      ok: false,
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      raw: upstream.json
+    };
+  }
+
+  const sessionId = upstream.json?.session_id ?? null;
+  const email = upstream.json?.email ?? null;
+  let supportCookie = upstream.supportCookie || null;
+
+  const accountUpstream = await callSupportApi("/account", {
+    method: "GET",
+    authCandidates: buildSupportAuthCandidates({ token: emailToken, sessionId, supportCookie })
+  });
+  if (accountUpstream.supportCookie) {
+    supportCookie = mergeCookieHeaders(supportCookie, accountUpstream.supportCookie);
+  }
+
+  const otpUpstream = await callSupportApi("/otp", {
+    method: "GET",
+    authCandidates: buildSupportAuthCandidates({ token: emailToken, sessionId, supportCookie })
+  });
+  if (otpUpstream.supportCookie) {
+    supportCookie = mergeCookieHeaders(supportCookie, otpUpstream.supportCookie);
+  }
+
+  return {
+    ok: true,
+    sessionId,
+    email,
+    supportCookie: supportCookie || null,
+    account: accountUpstream.ok ? buildSupportAccountPayload(accountUpstream.json, accountUpstream.supportCookie, accountUpstream.authMode) : null,
+    accountError: accountUpstream.ok ? null : getSupportApiMessage(accountUpstream),
+    otps: otpUpstream.ok ? buildSupportOtpPayload(otpUpstream.json, otpUpstream.supportCookie, otpUpstream.authMode) : null,
+    otpError: otpUpstream.ok ? null : getSupportApiMessage(otpUpstream),
+    raw: upstream.json
+  };
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -1215,6 +1422,70 @@ app.post("/api/public/support/logout", async (request, reply) => {
   };
 });
 
+app.post("/api/public/support/cdkey-auth", async (request, reply) => {
+  const schema = z.object({
+    publicKey: z.string().min(6)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "卡密格式不正确" });
+  }
+
+  const publicKey = parsed.data.publicKey.trim().toUpperCase();
+  const verified = await verifyCdkeyForPublic(publicKey);
+  if (!verified) {
+    return reply.code(404).send({ message: "卡密不存在" });
+  }
+
+  if (!verified.payload.canRedeem) {
+    return reply.code(400).send({
+      message: verified.payload.remoteError || "当前卡密未通过验证，暂时无法进入接码页面",
+      ...verified.payload
+    });
+  }
+
+  if (String(verified.payload.siteSlug || "").toLowerCase() !== MEIMEI_SITE_SLUG) {
+    return reply.code(400).send({
+      message: "当前卡密所属站点未启用接码页面",
+      ...verified.payload
+    });
+  }
+
+  if (!verified.emailToken) {
+    return {
+      ...verified.payload,
+      autoAuthorized: false,
+      requiresManualToken: true,
+      message: "该卡密尚未绑定 email_token，请在后台补录，或在前台手动输入临时 token。"
+    };
+  }
+
+  const supportBundle = await loadSupportBundleByToken(verified.emailToken);
+  if (!supportBundle.ok) {
+    return {
+      ...verified.payload,
+      autoAuthorized: false,
+      requiresManualToken: true,
+      message: `已读取绑定的 email_token，但自动认证失败：${supportBundle.message}`,
+      authError: supportBundle.message
+    };
+  }
+
+  return {
+    ...verified.payload,
+    autoAuthorized: true,
+    requiresManualToken: false,
+    message: "已根据卡密绑定的 email_token 自动完成认证。",
+    sessionId: supportBundle.sessionId,
+    email: supportBundle.email,
+    supportCookie: supportBundle.supportCookie,
+    account: supportBundle.account,
+    accountError: supportBundle.accountError,
+    otp: supportBundle.otps,
+    otpError: supportBundle.otpError
+  };
+});
+
 app.post("/api/public/cdkeys/verify", async (request, reply) => {
   const schema = z.object({
     publicKey: z.string().min(6)
@@ -1225,87 +1496,11 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
   }
 
   const publicKey = parsed.data.publicKey.trim().toUpperCase();
-  const key = db.prepare(`
-    SELECT
-      c.public_key,
-      c.source_key,
-      c.status,
-      c.prefix,
-      c.site_id,
-      s.name AS site_name,
-      s.slug AS site_slug,
-      s.verify_api_url,
-      s.verify_http_method,
-      s.verify_headers_template,
-      s.verify_body_template,
-      s.auth_type,
-      s.auth_config,
-      s.verify_success_rule,
-      s.verify_failure_rule,
-      s.timeout_seconds,
-      s.request_cookies
-    FROM cdkeys c
-    LEFT JOIN sites s ON s.id = c.site_id
-    WHERE c.public_key = ?
-  `).get(publicKey);
-
-  if (!key) {
+  const verified = await verifyCdkeyForPublic(publicKey);
+  if (!verified) {
     return reply.code(404).send({ message: "卡密不存在" });
   }
-
-  const verifyContext = {
-    publicKey: key.public_key,
-    sourceKey: decryptText(key.source_key),
-    siteName: key.site_name,
-    siteSlug: key.site_slug
-  };
-
-  let remoteResult = null;
-  let canRedeem = key.status === cdkeyStatuses.active;
-
-  if (canRedeem && key.verify_api_url) {
-    remoteResult = await callConfiguredApi({
-      url: key.verify_api_url,
-      method: key.verify_http_method,
-      headersTemplate: key.verify_headers_template,
-      bodyTemplate: key.verify_body_template,
-      authType: key.auth_type,
-      authConfig: key.auth_config,
-      timeoutSeconds: key.timeout_seconds,
-      cookies: key.request_cookies || null
-    }, verifyContext);
-
-    const failureMatched = key.verify_failure_rule ? evaluateRule(key.verify_failure_rule, remoteResult) : false;
-    const successMatched = key.verify_success_rule ? evaluateRule(key.verify_success_rule, remoteResult) : remoteResult.ok;
-    canRedeem = !failureMatched && successMatched;
-  }
-
-  return {
-    publicKey: key.public_key,
-    status: key.status,
-    productTitle: key.site_name || "未命名网站",
-    productDescription: key.site_slug ? `站点标识：${key.site_slug}` : "未配置网站标识",
-    endpointName: key.site_name || "未绑定网站",
-    siteId: key.site_id,
-    siteName: key.site_name || "未命名网站",
-    siteSlug: key.site_slug || null,
-    canRedeem,
-    remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
-    remoteError: typeof remoteResult?.json?.error_msg === "string"
-      ? remoteResult.json.error_msg
-      : (typeof remoteResult?.json?.error === "string"
-        ? remoteResult.json.error
-        : (typeof remoteResult?.json?.message === "string"
-          ? remoteResult.json.message
-          : (typeof remoteResult?.json?.msg === "string" ? remoteResult.json.msg : ""))),
-    stockLevel: typeof remoteResult?.json?.stock_level === "string" ? remoteResult.json.stock_level : "",
-    remoteResult: remoteResult ? {
-      ok: remoteResult.ok,
-      status: remoteResult.status,
-      text: remoteResult.text,
-      json: remoteResult.json
-    } : null
-  };
+  return verified.payload;
 });
 
 app.post("/api/public/redeem", async (request, reply) => {
@@ -1998,14 +2193,32 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     return reply.code(400).send({ message: "网站不存在" });
   }
 
-  const rawKeys = Array.from(new Set(
+  const rawEntries = Array.from(new Map(
     parsed.data.rawKeys
-      .split(/\r?\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-  ));
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        const trimmedLine = String(line ?? "").trim();
+        if (!trimmedLine) return [];
+        if (trimmedLine.includes("|")) {
+          const [sourceKey, ...tokenParts] = trimmedLine.split("|");
+          return [{
+            sourceKey: sourceKey.trim(),
+            emailToken: tokenParts.join("|").trim()
+          }];
+        }
+        return trimmedLine
+          .split(",")
+          .map((item) => ({
+            sourceKey: item.trim(),
+            emailToken: ""
+          }))
+          .filter((item) => item.sourceKey);
+      })
+      .filter((item) => item.sourceKey)
+      .map((item) => [`${item.sourceKey}::${item.emailToken}`, item])
+  ).values());
 
-  if (!rawKeys.length) {
+  if (!rawEntries.length) {
     return reply.code(400).send({ message: "没有可导入的卡密" });
   }
 
@@ -2025,7 +2238,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
       site.product_id || "prod_demo",
       site.activation_endpoint_id || "endpoint_demo",
       site.id,
-      rawKeys.length,
+      rawEntries.length,
       parsed.data.note,
       request.admin.username,
       now,
@@ -2037,20 +2250,21 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
         id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix, status,
         locked_at, locked_by_order_id, used_at, disabled_reason, metadata, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
     `);
 
-    for (const rawKey of rawKeys) {
+    for (const entry of rawEntries) {
       insertKey.run(
         nanoid(18),
         batchId,
         site.product_id || "prod_demo",
         site.activation_endpoint_id || "endpoint_demo",
         site.id,
-        encryptText(rawKey),
+        encryptText(entry.sourceKey),
         getUniquePublicKey(parsed.data.prefix),
         parsed.data.prefix,
         cdkeyStatuses.active,
+        buildCdkeyMetadata(null, { emailToken: entry.emailToken }),
         now,
         now
       );
@@ -2062,7 +2276,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
       resourceType: "cdkey_batch",
       resourceId: batchId,
       detail: {
-        count: rawKeys.length,
+        count: rawEntries.length,
         prefix: parsed.data.prefix,
         siteId: site.id
       }
@@ -2070,7 +2284,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
 
     return {
       batchId,
-      importedCount: rawKeys.length
+      importedCount: rawEntries.length
     };
   });
 
@@ -2082,7 +2296,8 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     sourceKey: z.string().min(1),
     prefix: z.string().min(1),
     siteId: z.string().min(1),
-    note: z.string().optional().default("")
+    note: z.string().optional().default(""),
+    emailToken: z.string().optional().default("")
   });
 
   const parsed = schema.safeParse(request.body);
@@ -2114,7 +2329,10 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     publicKey,
     parsed.data.prefix,
     cdkeyStatuses.active,
-    parsed.data.note ? JSON.stringify({ note: parsed.data.note }) : null,
+    buildCdkeyMetadata(null, {
+      note: parsed.data.note,
+      emailToken: parsed.data.emailToken
+    }),
     now,
     now
   );
@@ -2127,7 +2345,8 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     detail: {
       siteId: site.id,
       prefix: parsed.data.prefix,
-      publicKey
+      publicKey,
+      hasEmailToken: Boolean(parsed.data.emailToken?.trim())
     }
   });
 
@@ -2145,7 +2364,7 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   let sql = `
     SELECT
-      c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at,
+      c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at, c.metadata,
       b.name AS batch_name,
       s.name AS site_name
     FROM cdkeys c
@@ -2176,9 +2395,52 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   const items = db.prepare(sql).all(...params).map((item) => ({
     ...item,
-    source_key: decryptText(item.source_key)
+    source_key: decryptText(item.source_key),
+    note: getCdkeyNote(item.metadata),
+    email_token: getCdkeyEmailToken(item.metadata),
+    has_email_token: Boolean(getCdkeyEmailToken(item.metadata))
   }));
   return { items };
+});
+
+app.patch("/api/admin/cdkeys/:id/email-token", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    emailToken: z.string().optional().default("")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "email_token 参数不正确" });
+  }
+
+  const cdkey = db.prepare("SELECT id, public_key, metadata FROM cdkeys WHERE id = ?").get(request.params.id);
+  if (!cdkey) {
+    return reply.code(404).send({ message: "卡密不存在" });
+  }
+
+  const now = nowIso();
+  const metadata = buildCdkeyMetadata(cdkey.metadata, {
+    emailToken: parsed.data.emailToken
+  });
+
+  db.prepare("UPDATE cdkeys SET metadata = ?, updated_at = ? WHERE id = ?")
+    .run(metadata, now, cdkey.id);
+
+  createAuditLog({
+    action: "cdkey.email_token.update",
+    actor: request.admin.username,
+    resourceType: "cdkey",
+    resourceId: cdkey.id,
+    detail: {
+      publicKey: cdkey.public_key,
+      hasEmailToken: Boolean(parsed.data.emailToken?.trim())
+    }
+  });
+
+  return {
+    id: cdkey.id,
+    publicKey: cdkey.public_key,
+    hasEmailToken: Boolean(parsed.data.emailToken?.trim())
+  };
 });
 
 app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (request, reply) => {

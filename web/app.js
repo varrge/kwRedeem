@@ -2,6 +2,7 @@ const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").r
 
 const verifyForm = document.querySelector("#verify-form");
 const verifyResult = document.querySelector("#verify-result");
+const wizardContainer = document.querySelector("#wizard-container");
 const redeemForm = document.querySelector("#redeem-form");
 const redeemSubmit = document.querySelector("#redeem-submit");
 const redeemResult = document.querySelector("#redeem-result");
@@ -10,6 +11,11 @@ const orderResult = document.querySelector("#order-result");
 const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
 const statusContainer = document.querySelector("#status-container");
+const supportAccessPanel = document.querySelector("#support-access-panel");
+const supportAccessForm = document.querySelector("#support-access-form");
+const supportPublicKeyInput = document.querySelector("#support-public-key");
+const supportAccessResetBtn = document.querySelector("#support-access-reset");
+const supportAccessResult = document.querySelector("#support-access-result");
 const supportPanel = document.querySelector("#support-panel");
 const supportAuthForm = document.querySelector("#support-auth-form");
 const supportTokenInput = document.querySelector("#support-token");
@@ -20,6 +26,9 @@ const refreshAccountBtn = document.querySelector("#refresh-account-btn");
 const fetchOtpBtn = document.querySelector("#fetch-otp-btn");
 const supportLogoutBtn = document.querySelector("#support-logout-btn");
 const supportOtpResult = document.querySelector("#support-otp-result");
+const supportNavBanner = document.querySelector("#support-nav-banner");
+const stepTwoTitle = document.querySelector("#step-2-title");
+const stepTwoDesc = document.querySelector("#step-2-desc");
 
 let verifiedKey = null;
 let verifiedSiteSlug = null;
@@ -27,6 +36,7 @@ let redeemStatusTimer = null;
 let supportSessionId = null;
 let supportCookie = null;
 let supportAuthEmail = null;
+let supportNavMode = false;
 
 const LIVE_STATUS_POLL_MS = 2000;
 const SUPPORT_SITE_SLUG = "meimei_site";
@@ -48,13 +58,72 @@ const STATUS_LABELS = {
 
 // --- Navigation Logic ---
 
-function switchView(target) {
+function setVisibleSection(target) {
   document.querySelectorAll(".view-section").forEach((section) => {
     section.classList.toggle("hidden", section.id !== `${target}-container`);
   });
+}
+
+function setActiveNav(target) {
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.target === target);
   });
+}
+
+function updateViewHash(target) {
+  if (!["wizard", "query", "faq", "support"].includes(target)) return;
+  const nextHash = `#${target}`;
+  if (window.location.hash !== nextHash) {
+    window.history.replaceState(null, "", nextHash);
+  }
+}
+
+function shouldShowSupportPanel(siteSlug = verifiedSiteSlug) {
+  return supportNavMode || isSupportSiteSlug(siteSlug);
+}
+
+function setSupportNavMode(enabled) {
+  supportNavMode = enabled;
+  wizardContainer.classList.toggle("support-nav-mode", enabled);
+  supportNavBanner.classList.toggle("hidden", !enabled);
+  supportAccessPanel.classList.toggle("hidden", !enabled);
+  stepTwoTitle.textContent = enabled ? "接码验证中心" : "提交信息与前台验证";
+  stepTwoDesc.textContent = enabled
+    ? "可直接输入临时 token 完成前台验证，并查看当前邮箱与最近验证码邮件。"
+    : "如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。";
+  if (enabled && verifiedKey && !supportPublicKeyInput.value.trim()) {
+    supportPublicKeyInput.value = verifiedKey;
+  }
+}
+
+function syncSupportVisibility(siteSlug = verifiedSiteSlug) {
+  supportPanel.classList.toggle("hidden", !shouldShowSupportPanel(siteSlug));
+}
+
+function openSupportView() {
+  setSupportNavMode(true);
+  setVisibleSection("wizard");
+  setActiveNav("support");
+  updateViewHash("support");
+  goToStep(2);
+  if (!supportPublicKeyInput.value.trim() && verifiedKey) {
+    supportPublicKeyInput.value = verifiedKey;
+    setState(supportAccessResult, "已填入当前已验证卡密，可直接点击按钮尝试自动接码。");
+  }
+  syncSupportVisibility();
+}
+
+function switchView(target) {
+  if (target === "support") {
+    openSupportView();
+    return;
+  }
+
+  setSupportNavMode(false);
+  setVisibleSection(target);
+  setActiveNav(target);
+  updateViewHash(target);
+  syncSupportVisibility();
 }
 
 function goToStep(step) {
@@ -286,13 +355,21 @@ function buildSupportAuthHeaders() {
   return headers;
 }
 
+function applySupportAuthSession(payload, title = "前台验证成功") {
+  supportSessionId = payload.sessionId || null;
+  supportCookie = payload.supportCookie || null;
+  supportAuthEmail = payload.email || null;
+  refreshAccountBtn.disabled = false;
+  fetchOtpBtn.disabled = false;
+  supportLogoutBtn.disabled = false;
+  setRichState(supportAuthResult, renderSupportAuthResult({ ...payload, title }), "success");
+}
+
 function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
   supportSessionId = null;
   supportCookie = null;
   supportAuthEmail = null;
-  if (!isSupportSiteSlug(verifiedSiteSlug)) {
-    supportPanel.classList.add("hidden");
-  }
+  syncSupportVisibility();
   if (clearToken && supportTokenInput) {
     supportTokenInput.value = "";
   }
@@ -301,9 +378,11 @@ function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
   supportLogoutBtn.disabled = true;
   setState(
     supportAuthResult,
-    isSupportSiteSlug(verifiedSiteSlug)
-      ? "卡密验证成功后，请输入临时 token 完成前台验证。"
-      : "当前站点未启用前台 token 验证。"
+    supportNavMode
+      ? "可直接输入临时 token 完成前台验证。"
+      : isSupportSiteSlug(verifiedSiteSlug)
+        ? "卡密验证成功后，请输入临时 token 完成前台验证。"
+        : "当前站点未启用前台 token 验证。"
   );
   setState(supportAccountResult, "验证成功后会在这里展示邮箱和账号信息。");
   if (clearOtp) {
@@ -312,9 +391,8 @@ function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
 }
 
 function syncSupportPanel(siteSlug) {
-  const enabled = isSupportSiteSlug(siteSlug);
-  supportPanel.classList.toggle("hidden", !enabled);
-  if (enabled) {
+  syncSupportVisibility(siteSlug);
+  if (shouldShowSupportPanel(siteSlug)) {
     resetSupportState();
   }
 }
@@ -322,7 +400,7 @@ function syncSupportPanel(siteSlug) {
 function renderSupportAuthResult(payload = {}) {
   return `
     <div class="result-card">
-      <div class="result-title">前台验证成功</div>
+      <div class="result-title">${escapeHtml(payload.title || "前台验证成功")}</div>
       <span class="status-badge active">已认证</span>
       <div class="support-summary-grid">
         <div class="result-item">
@@ -332,6 +410,42 @@ function renderSupportAuthResult(payload = {}) {
         <div class="result-item">
           <span>Session ID</span>
           <strong>${escapeHtml(payload.sessionId || "-")}</strong>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSupportAccessResult(payload = {}) {
+  const autoStatus = payload.autoAuthorized
+    ? "已自动认证"
+    : payload.hasBoundEmailToken
+      ? "已绑定 token"
+      : "未绑定 token";
+  return `
+    <div class="result-card">
+      <div class="result-title">接码卡密验证完成</div>
+      <span class="status-badge active">可进入</span>
+      <div class="result-grid compact-grid">
+        <div class="result-item">
+          <span>卡密</span>
+          <strong>${escapeHtml(payload.publicKey || "-")}</strong>
+        </div>
+        <div class="result-item">
+          <span>网站</span>
+          <strong>${escapeHtml(payload.siteName || "-")}</strong>
+        </div>
+        <div class="result-item">
+          <span>自动接码</span>
+          <strong>${escapeHtml(autoStatus)}</strong>
+        </div>
+        <div class="result-item">
+          <span>卡密状态</span>
+          <strong>${escapeHtml(renderStatusText(payload.status || "unknown"))}</strong>
+        </div>
+        <div class="result-item result-item-wide">
+          <span>说明</span>
+          <strong>${escapeHtml(payload.message || "卡密已验证，可继续接码操作。")}</strong>
         </div>
       </div>
     </div>
@@ -508,6 +622,44 @@ async function logoutSupportAccount() {
   });
   if (payload.supportCookie) {
     supportCookie = payload.supportCookie;
+  }
+  return payload;
+}
+
+async function handleSupportCdkeyAccess(publicKey) {
+  setState(supportAccessResult, "正在验证卡密并尝试自动接码...");
+  resetSupportState({ clearToken: true, clearOtp: true });
+  syncSupportVisibility();
+
+  const payload = await request("/api/public/support/cdkey-auth", {
+    method: "POST",
+    body: JSON.stringify({ publicKey })
+  });
+
+  verifiedKey = payload.publicKey || publicKey;
+  verifiedSiteSlug = payload.siteSlug || null;
+  supportPublicKeyInput.value = payload.publicKey || publicKey;
+
+  setRichState(supportAccessResult, renderSupportAccessResult(payload), "success");
+
+  if (payload.autoAuthorized) {
+    applySupportAuthSession(payload, "已根据卡密自动认证");
+    if (payload.account) {
+      setRichState(supportAccountResult, renderSupportAccountResult(payload.account), "success");
+    } else if (payload.accountError) {
+      setState(supportAccountResult, payload.accountError, "error");
+    }
+    if (payload.otp) {
+      setRichState(supportOtpResult, renderSupportOtpList(payload.otp.otps), "success");
+    } else if (payload.otpError) {
+      setState(supportOtpResult, payload.otpError, "error");
+    }
+    return payload;
+  }
+
+  setState(supportAuthResult, payload.message || "请手动输入临时 token。", payload.hasBoundEmailToken ? "error" : "muted");
+  if (payload.authError) {
+    setState(supportOtpResult, `自动认证失败：${payload.authError}`, "error");
   }
   return payload;
 }
@@ -948,6 +1100,30 @@ verifyForm.addEventListener("submit", async (event) => {
   }
 });
 
+supportAccessResetBtn.addEventListener("click", () => {
+  supportPublicKeyInput.value = "";
+  resetSupportState({ clearToken: true, clearOtp: true });
+  setState(supportAccessResult, "请输入卡密后开始接码验证。");
+});
+
+supportAccessForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const publicKey = supportPublicKeyInput.value.trim();
+  if (!publicKey) {
+    setState(supportAccessResult, "请输入卡密。", "error");
+    return;
+  }
+
+  try {
+    await handleSupportCdkeyAccess(publicKey);
+  } catch (error) {
+    verifiedKey = null;
+    verifiedSiteSlug = null;
+    resetSupportState({ clearOtp: true });
+    setState(supportAccessResult, error.message, "error");
+  }
+});
+
 supportResetBtn.addEventListener("click", () => {
   resetSupportState({ clearToken: true, clearOtp: true });
 });
@@ -955,11 +1131,11 @@ supportResetBtn.addEventListener("click", () => {
 supportAuthForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
-  if (!verifiedKey) {
+  if (!supportNavMode && !verifiedKey) {
     setState(supportAuthResult, "请先完成卡密验证。", "error");
     return;
   }
-  if (!isSupportSiteSlug(verifiedSiteSlug)) {
+  if (!supportNavMode && !isSupportSiteSlug(verifiedSiteSlug)) {
     setState(supportAuthResult, "当前站点不需要前台 token 验证。", "error");
     return;
   }
@@ -985,14 +1161,7 @@ supportAuthForm.addEventListener("submit", async (event) => {
       })
     });
 
-    supportSessionId = payload.sessionId || null;
-    supportCookie = payload.supportCookie || null;
-    supportAuthEmail = payload.email || null;
-    refreshAccountBtn.disabled = false;
-    fetchOtpBtn.disabled = false;
-    supportLogoutBtn.disabled = false;
-
-    setRichState(supportAuthResult, renderSupportAuthResult(payload), "success");
+    applySupportAuthSession(payload);
 
     try {
       await loadSupportAccount();
@@ -1160,3 +1329,10 @@ lookupForm.addEventListener("submit", async (event) => {
     setState(orderResult, error.message, "error");
   }
 });
+
+const initialViewTarget = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
+if (["query", "faq", "support"].includes(initialViewTarget)) {
+  switchView(initialViewTarget);
+} else {
+  updateViewHash("wizard");
+}

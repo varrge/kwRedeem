@@ -24,6 +24,7 @@
           <button class="nav-btn active" data-target="wizard">兑换中心</button>
           <button class="nav-btn" data-target="query">订单查询</button>
           <button class="nav-btn" data-target="faq">常见问题</button>
+          <button class="nav-btn" data-target="support">接码验证</button>
           <button class="nav-btn" data-target="stock">库存监控</button>
           <button class="nav-btn" data-target="subscription">订阅状态</button>
         </nav>
@@ -63,14 +64,35 @@
             <div class="pane-content">
               <div class="section-heading centered">
                 <p class="eyebrow">Step 2</p>
-                <h2>提交信息与前台验证</h2>
-                <p class="panel-desc">如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。</p>
+                <h2 id="step-2-title">提交信息与前台验证</h2>
+                <p id="step-2-desc" class="panel-desc">如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。</p>
+              </div>
+
+              <div id="support-nav-banner" class="support-entry-banner hidden">
+                已切换到接码验证页签。这里可以直接验证临时 token、查看邮箱信息并获取最近验证码邮件。
+              </div>
+
+              <div id="support-access-panel" class="support-access-panel hidden">
+                <div class="support-panel-head">
+                  <h3>卡密直达接码</h3>
+                  <p>输入生成后的卡密。若该卡密在后台已绑定 `email_token`，系统会自动完成认证并加载邮箱、账号信息和最近验证码邮件。</p>
+                </div>
+                <form id="support-access-form" class="stack">
+                  <div class="field">
+                    <input id="support-public-key" name="supportPublicKey" placeholder="请输入生成后的卡密" autocomplete="off" />
+                  </div>
+                  <div class="action-group">
+                    <button type="button" class="ghost-btn" id="support-access-reset">清空卡密</button>
+                    <button type="submit" class="primary-btn">验证卡密并进入接码</button>
+                  </div>
+                </form>
+                <div id="support-access-result" class="result muted">请输入卡密后开始接码验证。</div>
               </div>
 
               <div id="support-panel" class="support-panel hidden">
                 <div class="support-panel-head">
                   <h3>前台 Token 验证</h3>
-                  <p>卡密验证成功后，在这里输入临时 token。验证通过后会显示邮箱，并可继续获取最近的验证码邮件。</p>
+                  <p>若卡密已绑定 `email_token`，系统会优先自动认证；这里保留手动输入临时 token 的兜底方式。</p>
                 </div>
                 <form id="support-auth-form" class="stack">
                   <div class="field">

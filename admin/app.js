@@ -35,6 +35,7 @@ const refs = {
   systemUpdateLog: document.querySelector("#system-update-log"),
   batchSite: document.querySelector("#batch-site"),
   singleSite: document.querySelector("#single-site"),
+  singleEmailToken: document.querySelector("#single-email-token"),
   subCardTypeForm: document.querySelector("#sub-card-type-form"),
   subCtName: document.querySelector("#sub-ct-name"),
   subCtTotal: document.querySelector("#sub-ct-total"),
@@ -127,6 +128,13 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function maskToken(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "-";
+  if (normalized.length <= 12) return normalized;
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 }
 
 function renderStatus(value) {
@@ -356,6 +364,25 @@ window.editSiteCookies = editSiteCookies;
 window.toggleSiteStatus = toggleSiteStatus;
 window.healthCheckSite = healthCheckSite;
 
+async function updateCdkeyEmailToken(id, currentValue) {
+  const value = window.prompt(
+    "输入该卡密关联的 email_token，留空可清除绑定：",
+    currentValue || ""
+  );
+  if (value === null) return;
+  try {
+    await api(`/api/admin/cdkeys/${id}/email-token`, {
+      method: "PATCH",
+      body: JSON.stringify({ emailToken: value })
+    });
+    await refreshCdkeys();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+window.updateCdkeyEmailToken = updateCdkeyEmailToken;
+
 async function refreshBatches() {
   const payload = await api("/api/admin/batches");
   renderTable(refs.batchList, [
@@ -375,6 +402,14 @@ async function refreshCdkeys() {
     { label: "原始卡密", render: (item) => item.source_key ? `<code style="opacity:0.5">${escapeHtml(item.source_key)}</code>` : "-" },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "前缀", render: (item) => item.prefix },
+    { label: "接码Token", render: (item) => `
+      <div style="display:grid;gap:6px;">
+        <span style="font-size:12px;color:var(--muted)">${item.has_email_token ? `<code>${escapeHtml(maskToken(item.email_token))}</code>` : "未绑定"}</span>
+        <button class="ghost-btn small" type="button" onclick='updateCdkeyEmailToken(${JSON.stringify(item.id)}, decodeURIComponent(${JSON.stringify(encodeURIComponent(item.email_token || ""))}))'>
+          ${item.has_email_token ? "编辑接码 Token" : "绑定接码 Token"}
+        </button>
+      </div>
+    ` },
     { label: "状态", render: (item) => renderStatus(item.status) }
   ], payload.items);
 }
@@ -1025,7 +1060,8 @@ refs.singleCdkeyForm.addEventListener("submit", async (event) => {
         sourceKey: document.querySelector("#single-source-key").value.trim(),
         siteId: refs.singleSite.value,
         prefix: document.querySelector("#single-prefix").value.trim(),
-        note: ""
+        note: "",
+        emailToken: refs.singleEmailToken.value.trim()
       })
     });
     refs.singleCdkeyForm.reset();

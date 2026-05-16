@@ -137,6 +137,10 @@
                   <span>混淆前缀</span>
                   <input id="single-prefix" placeholder="例如 GPT" />
                 </label>
+                <label class="field">
+                  <span>email_token（可选）</span>
+                  <textarea id="single-email-token" rows="3" placeholder="绑定后，前台接码页可通过卡密自动完成认证"></textarea>
+                </label>
                 <button type="submit" class="primary-btn">添加卡密</button>
               </form>
               <div id="single-cdkey-result" class="hint"></div>
@@ -163,6 +167,7 @@
                   <span>原始卡密</span>
                   <textarea id="batch-raw-keys" rows="4" placeholder="每行一条原始卡密"></textarea>
                 </label>
+                <div class="hint">可选格式：`原始卡密 | email_token`，未填写 token 时也可仅导入卡密。</div>
                 <button type="submit" class="primary-btn">开始导入</button>
               </form>
               <div id="batch-result" class="hint"></div>

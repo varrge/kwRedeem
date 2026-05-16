@@ -23,6 +23,12 @@ const refreshAccountBtn = document.querySelector("#refresh-account-btn");
 const fetchOtpBtn = document.querySelector("#fetch-otp-btn");
 const supportLogoutBtn = document.querySelector("#support-logout-btn");
 const supportOtpResult = document.querySelector("#support-otp-result");
+const supportExportPanel = document.querySelector("#support-export-panel");
+const supportExportJson = document.querySelector("#support-export-json");
+const fetchSupportExportBtn = document.querySelector("#fetch-support-export-btn");
+const copySupportExportBtn = document.querySelector("#copy-support-export-btn");
+const supportExportResult = document.querySelector("#support-export-result");
+const supportExportFormatButtons = Array.from(document.querySelectorAll(".support-export-format-btn"));
 const supportNavBanner = document.querySelector("#support-nav-banner");
 const stepTwoTitle = document.querySelector("#step-2-title");
 const stepTwoDesc = document.querySelector("#step-2-desc");
@@ -34,6 +40,10 @@ let supportSessionId = null;
 let supportCookie = null;
 let supportAuthEmail = null;
 let supportNavMode = false;
+let supportAccountSnapshot = null;
+let supportOtpSnapshot = [];
+let supportExportFormat = "cpa";
+let supportExportRawData = "";
 
 const LIVE_STATUS_POLL_MS = 2000;
 const SUPPORT_SITE_SLUG = "meimei_site";
@@ -348,6 +358,91 @@ function buildSupportAuthHeaders() {
   return headers;
 }
 
+function normalizeSupportExportText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
+function setActiveSupportExportFormat(format) {
+  supportExportFormat = format;
+  supportExportFormatButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.format === format);
+  });
+}
+
+function hideSupportExport() {
+  supportAccountSnapshot = null;
+  supportOtpSnapshot = [];
+  supportExportRawData = "";
+  supportExportJson.value = "";
+  supportExportPanel.classList.add("hidden");
+  setActiveSupportExportFormat("cpa");
+  setState(supportExportResult, "验证成功后可选择格式并获取导出内容。");
+}
+
+function showSupportExportPanel() {
+  if (!supportAccountSnapshot) {
+    hideSupportExport();
+    return;
+  }
+
+  supportExportPanel.classList.remove("hidden");
+  if (!supportExportRawData.trim()) {
+    supportExportJson.value = "";
+    setState(supportExportResult, "已可使用真实导出接口，请选择格式并获取导出内容。");
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  supportExportJson.focus();
+  supportExportJson.select();
+  supportExportJson.setSelectionRange(0, supportExportJson.value.length);
+  if (!document.execCommand("copy")) {
+    throw new Error("复制失败，请手动选择 JSON 内容复制。");
+  }
+}
+
+async function fetchSupportExport(format = supportExportFormat, { silent = false } = {}) {
+  if (!supportAccountSnapshot) {
+    hideSupportExport();
+    throw new Error("当前还没有可导出的账号信息。");
+  }
+
+  setActiveSupportExportFormat(format);
+  showSupportExportPanel();
+  if (!silent) {
+    setState(supportExportResult, `正在获取 ${format.toUpperCase()} 导出内容...`);
+  }
+
+  const payload = await request("/api/public/support/export", {
+    method: "POST",
+    headers: buildSupportAuthHeaders(),
+    body: JSON.stringify({ format })
+  });
+
+  if (payload.supportCookie) {
+    supportCookie = payload.supportCookie;
+  }
+
+  supportExportRawData = normalizeSupportExportText(payload.data);
+  supportExportJson.value = supportExportRawData;
+  setState(supportExportResult, `${String(payload.format || format).toUpperCase()} 导出内容已更新。`, "success");
+  return payload;
+}
+
 function applySupportAuthSession(payload, title = "前台验证成功") {
   supportSessionId = payload.sessionId || null;
   supportCookie = payload.supportCookie || null;
@@ -363,6 +458,7 @@ function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
   supportSessionId = null;
   supportCookie = null;
   supportAuthEmail = null;
+  hideSupportExport();
   syncSupportVisibility();
   refreshAccountBtn.disabled = true;
   fetchOtpBtn.disabled = true;
@@ -398,13 +494,24 @@ function renderSupportAuthResult(payload = {}) {
           <span>邮箱</span>
           <strong>${escapeHtml(payload.email || supportAuthEmail || "-")}</strong>
         </div>
-        <div class="result-item">
-          <span>Session ID</span>
-          <strong>${escapeHtml(payload.sessionId || "-")}</strong>
-        </div>
       </div>
     </div>
   `;
+}
+
+function formatWarranty(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+
+  if (typeof value === "object") {
+    const type = String(value.type ?? "").trim().toLowerCase();
+    if (type === "first_login") {
+      return "质保首登";
+    }
+  }
+
+  return stringifySupportValue(value);
 }
 
 function renderSupportAccessResult(payload = {}) {
@@ -462,7 +569,7 @@ function renderSupportAccountResult(payload = {}) {
         </div>
         <div class="result-item">
           <span>质保</span>
-          <strong>${escapeHtml(stringifySupportValue(payload.warranty))}</strong>
+          <strong>${escapeHtml(formatWarranty(payload.warranty))}</strong>
         </div>
         <div class="result-item result-item-wide">
           <span>补偿 / 更换</span>
@@ -503,6 +610,8 @@ function extractOtpCode(item = {}) {
 
 function extractOtpTimestamp(item = {}) {
   return [
+    item.time_str,
+    item.timeStr,
     item.received_at,
     item.receivedAt,
     item.created_at,
@@ -590,7 +699,9 @@ async function loadSupportAccount() {
   if (payload.supportCookie) {
     supportCookie = payload.supportCookie;
   }
+  supportAccountSnapshot = payload;
   setRichState(supportAccountResult, renderSupportAccountResult(payload), "success");
+  showSupportExportPanel();
   return payload;
 }
 
@@ -602,7 +713,9 @@ async function loadSupportOtps() {
   if (payload.supportCookie) {
     supportCookie = payload.supportCookie;
   }
+  supportOtpSnapshot = Array.isArray(payload.otps) ? payload.otps : [];
   setRichState(supportOtpResult, renderSupportOtpList(payload.otps), "success");
+  showSupportExportPanel();
   return payload;
 }
 
@@ -636,14 +749,24 @@ async function handleSupportCdkeyAccess(publicKey) {
   if (payload.autoAuthorized) {
     applySupportAuthSession(payload, "已根据接码卡密自动认证");
     if (payload.account) {
+      supportAccountSnapshot = payload.account;
       setRichState(supportAccountResult, renderSupportAccountResult(payload.account), "success");
     } else if (payload.accountError) {
       setState(supportAccountResult, payload.accountError, "error");
     }
     if (payload.otp) {
+      supportOtpSnapshot = Array.isArray(payload.otp.otps) ? payload.otp.otps : [];
       setRichState(supportOtpResult, renderSupportOtpList(payload.otp.otps), "success");
     } else if (payload.otpError) {
       setState(supportOtpResult, payload.otpError, "error");
+    }
+    if (payload.account) {
+      showSupportExportPanel();
+      try {
+        await fetchSupportExport(supportExportFormat, { silent: true });
+      } catch (error) {
+        setState(supportExportResult, error.message, "error");
+      }
     }
     return payload;
   }
@@ -1141,6 +1264,39 @@ supportLogoutBtn.addEventListener("click", async () => {
     supportLogoutBtn.disabled = false;
     setState(supportAuthResult, error.message, "error");
   }
+});
+
+copySupportExportBtn.addEventListener("click", async () => {
+  try {
+    const payload = await fetchSupportExport(supportExportFormat, { silent: true });
+    const exportText = normalizeSupportExportText(payload.data).trim();
+    if (!exportText) {
+      setState(supportExportResult, "当前格式没有可复制的导出内容。", "error");
+      return;
+    }
+    await copyText(exportText);
+    setState(supportExportResult, `${String(payload.format || supportExportFormat).toUpperCase()} 导出内容已复制。`, "success");
+  } catch (error) {
+    setState(supportExportResult, error.message, "error");
+  }
+});
+
+fetchSupportExportBtn.addEventListener("click", async () => {
+  try {
+    await fetchSupportExport(supportExportFormat);
+  } catch (error) {
+    setState(supportExportResult, error.message, "error");
+  }
+});
+
+supportExportFormatButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    try {
+      await fetchSupportExport(button.dataset.format || "cpa");
+    } catch (error) {
+      setState(supportExportResult, error.message, "error");
+    }
+  });
 });
 
 // --- Confirm Modal ---

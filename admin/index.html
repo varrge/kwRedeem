@@ -161,14 +161,26 @@
                   </label>
                 </div>
                 <label class="field">
+                  <span>导入类型</span>
+                  <select id="batch-import-type">
+                    <option value="support" selected>接码卡密（email_token）</option>
+                    <option value="auto">自动识别</option>
+                    <option value="normal">普通卡密</option>
+                  </select>
+                </label>
+                <label class="field">
                   <span>批次名称</span>
                   <input id="batch-name" placeholder="本次导入名称" />
                 </label>
                 <label class="field">
-                  <span>原始卡密</span>
-                  <textarea id="batch-raw-keys" rows="4" placeholder="每行一条原始卡密"></textarea>
+                  <span>导入内容</span>
+                  <textarea id="batch-raw-keys" rows="4" placeholder="按所选导入类型填写，每行一条"></textarea>
                 </label>
-                <div class="hint">可选格式：`原始卡密 | email_token`，未填写 token 时也可仅导入卡密。</div>
+                <div class="hint">
+                  推荐主流程：选择“接码卡密（email_token）”，每行填写 `email_token`，或 `前缀 | email_token`。<br />
+                  自动识别：`原始卡密` 或 `原始卡密 | email_token`。<br />
+                  普通卡密：仅支持 `原始卡密`。
+                </div>
                 <button type="submit" class="primary-btn">开始导入</button>
               </form>
               <div id="batch-result" class="hint"></div>

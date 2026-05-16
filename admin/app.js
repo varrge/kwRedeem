@@ -34,6 +34,7 @@ const refs = {
   systemUpdateHint: document.querySelector("#system-update-hint"),
   systemUpdateLog: document.querySelector("#system-update-log"),
   batchSite: document.querySelector("#batch-site"),
+  batchImportType: document.querySelector("#batch-import-type"),
   singleSite: document.querySelector("#single-site"),
   singleEmailToken: document.querySelector("#single-email-token"),
   subCardTypeForm: document.querySelector("#sub-card-type-form"),
@@ -1093,12 +1094,18 @@ refs.batchForm.addEventListener("submit", async (event) => {
         name: document.querySelector("#batch-name").value.trim(),
         prefix: document.querySelector("#batch-prefix").value.trim(),
         siteId: refs.batchSite.value,
+        importType: refs.batchImportType.value,
         rawKeys: document.querySelector("#batch-raw-keys").value,
         note: ""
       })
     });
     refs.batchForm.reset();
-    setHint(refs.batchResult, `成功导入 ${payload.importedCount} 条`);
+    refs.batchSite.value = "site_preset_meimei_site";
+    refs.batchImportType.value = "support";
+    setHint(
+      refs.batchResult,
+      `成功导入 ${payload.importedCount} 条（接码专用 ${payload.supportOnlyCount || 0} / 普通 ${payload.normalCount || 0}）`
+    );
     await refreshAll();
   } catch (error) {
     setHint(refs.batchResult, error.message);

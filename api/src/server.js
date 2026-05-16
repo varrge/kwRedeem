@@ -1440,6 +1440,48 @@ app.post("/api/public/support/logout", async (request, reply) => {
   };
 });
 
+app.post("/api/public/support/export", async (request, reply) => {
+  const parsedAuth = z.object({
+    token: z.string().optional(),
+    sessionId: z.string().optional(),
+    supportCookie: z.string().optional()
+  }).safeParse(getSupportRequestContext(request));
+  const parsedBody = z.object({
+    format: z.enum(["cpa", "sub2api"])
+  }).safeParse(request.body);
+
+  if (!parsedAuth.success || !parsedBody.success) {
+    return reply.code(400).send({ message: "导出参数不正确" });
+  }
+  if (!parsedAuth.data.token && !parsedAuth.data.sessionId && !parsedAuth.data.supportCookie) {
+    return reply.code(400).send({ message: "缺少 support 鉴权信息，请先完成前台验证" });
+  }
+
+  const upstream = await callSupportApi("/export", {
+    method: "POST",
+    body: { format: parsedBody.data.format },
+    authCandidates: buildSupportAuthCandidates(parsedAuth.data)
+  });
+
+  if (!upstream.ok) {
+    const statusCode = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 400;
+    return reply.code(statusCode).send({
+      message: getSupportApiMessage(upstream),
+      status: upstream.status,
+      authMode: upstream.authMode,
+      raw: upstream.json
+    });
+  }
+
+  return {
+    ok: Boolean(upstream.json?.ok ?? upstream.ok),
+    format: String(upstream.json?.format || parsedBody.data.format),
+    data: upstream.json?.data ?? "",
+    supportCookie: upstream.supportCookie || null,
+    authMode: upstream.authMode
+  };
+});
+
 app.post("/api/public/support/cdkey-auth", async (request, reply) => {
   const schema = z.object({
     publicKey: z.string().min(6)
@@ -2198,6 +2240,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     name: z.string().min(2),
     prefix: z.string().min(1),
     siteId: z.string().min(1),
+    importType: z.enum(["auto", "support", "normal"]).optional().default("auto"),
     rawKeys: z.string().min(2),
     note: z.string().optional().default("")
   });
@@ -2211,33 +2254,89 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     return reply.code(400).send({ message: "网站不存在" });
   }
 
+  const defaultPrefix = parsed.data.prefix.trim();
+  const importType = parsed.data.importType;
   const rawEntries = Array.from(new Map(
     parsed.data.rawKeys
       .split(/\r?\n/)
       .flatMap((line) => {
         const trimmedLine = String(line ?? "").trim();
         if (!trimmedLine) return [];
-        if (trimmedLine.includes("|")) {
-          const [sourceKey, ...tokenParts] = trimmedLine.split("|");
+
+        if (importType === "support") {
+          if (trimmedLine.includes("|")) {
+            const [prefixPart, ...tokenParts] = trimmedLine.split("|");
+            const emailToken = tokenParts.join("|").trim();
+            if (!emailToken) return [];
+            return [{
+              sourceKey: "",
+              emailToken,
+              supportOnly: true,
+              prefix: prefixPart.trim() || defaultPrefix
+            }];
+          }
+
           return [{
-            sourceKey: sourceKey.trim(),
-            emailToken: tokenParts.join("|").trim()
+            sourceKey: "",
+            emailToken: trimmedLine,
+            supportOnly: true,
+            prefix: defaultPrefix
           }];
         }
+
+        if (importType === "normal") {
+          return trimmedLine
+            .split(",")
+            .map((item) => ({
+              sourceKey: item.trim(),
+              emailToken: "",
+              supportOnly: false,
+              prefix: defaultPrefix
+            }))
+            .filter((item) => item.sourceKey);
+        }
+
+        if (trimmedLine.includes("|")) {
+          const [sourceKey, ...tokenParts] = trimmedLine.split("|");
+          const emailToken = tokenParts.join("|").trim();
+          if (!emailToken) {
+            return sourceKey.trim()
+              ? [{
+                sourceKey: sourceKey.trim(),
+                emailToken: "",
+                supportOnly: false,
+                prefix: defaultPrefix
+              }]
+              : [];
+          }
+          return [{
+            sourceKey: sourceKey.trim(),
+            emailToken,
+            supportOnly: true,
+            prefix: defaultPrefix
+          }];
+        }
+
         return trimmedLine
           .split(",")
           .map((item) => ({
             sourceKey: item.trim(),
-            emailToken: ""
+            emailToken: "",
+            supportOnly: false,
+            prefix: defaultPrefix
           }))
           .filter((item) => item.sourceKey);
       })
-      .filter((item) => item.sourceKey)
-      .map((item) => [`${item.sourceKey}::${item.emailToken}`, item])
+      .filter((item) => item.emailToken || item.sourceKey)
+      .map((item) => [`${item.prefix}::${item.sourceKey}::${item.emailToken}::${item.supportOnly ? 1 : 0}`, item])
   ).values());
 
   if (!rawEntries.length) {
     return reply.code(400).send({ message: "没有可导入的卡密" });
+  }
+
+  if (rawEntries.some((item) => item.supportOnly) && String(site.slug || "").trim().toLowerCase() !== MEIMEI_SITE_SLUG) {
+    return reply.code(400).send({ message: "批量导入接码专用卡密时，归属网站必须选择老妹plus" });
   }
 
   const result = withTransaction(() => {
@@ -2271,21 +2370,41 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
     `);
 
+    let supportOnlyCount = 0;
+    let normalCount = 0;
+
     for (const entry of rawEntries) {
+      const supportOnly = Boolean(entry.supportOnly);
+      const sourceKey = String(entry.sourceKey || "").trim();
+      const emailToken = String(entry.emailToken || "").trim();
+      const cardPrefix = String(entry.prefix || defaultPrefix).trim() || defaultPrefix;
+      const storedSourceKey = supportOnly
+        ? (sourceKey || `support-card:${cardPrefix}:${Date.now()}:${nanoid(6)}`)
+        : sourceKey;
+
       insertKey.run(
         nanoid(18),
         batchId,
         site.product_id || "prod_demo",
         site.activation_endpoint_id || "endpoint_demo",
         site.id,
-        encryptText(entry.sourceKey),
-        getUniquePublicKey(parsed.data.prefix),
-        parsed.data.prefix,
+        encryptText(storedSourceKey),
+        getUniquePublicKey(cardPrefix),
+        cardPrefix,
         cdkeyStatuses.active,
-        buildCdkeyMetadata(null, { emailToken: entry.emailToken }),
+        buildCdkeyMetadata(null, {
+          emailToken,
+          supportOnly
+        }),
         now,
         now
       );
+
+      if (supportOnly) {
+        supportOnlyCount += 1;
+      } else {
+        normalCount += 1;
+      }
     }
 
     createAuditLog({
@@ -2296,13 +2415,18 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
       detail: {
         count: rawEntries.length,
         prefix: parsed.data.prefix,
-        siteId: site.id
+        siteId: site.id,
+        importType,
+        supportOnlyCount,
+        normalCount
       }
     });
 
     return {
       batchId,
-      importedCount: rawEntries.length
+      importedCount: rawEntries.length,
+      supportOnlyCount,
+      normalCount
     };
   });
 

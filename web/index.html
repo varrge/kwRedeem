@@ -102,6 +102,36 @@
                   <button type="button" class="ghost-btn danger-btn" id="support-logout-btn" disabled>退出当前账号</button>
                 </div>
                 <div id="support-otp-result" class="result muted">暂未获取验证码邮件。</div>
+                <div id="support-export-panel" class="support-export-panel hidden">
+                  <div class="support-export-head">
+                    <h4>导出账号信息</h4>
+                    <p>调用上游导出接口获取真实导出内容，支持 CPA 与 Sub2API，不显示 `session_id` 或 `email_token`。</p>
+                  </div>
+                  <div class="support-export-tags">
+                    <span class="support-export-tag">真实导出</span>
+                    <span class="support-export-tag">CPA / Sub2API</span>
+                    <span class="support-export-tag">可复制</span>
+                  </div>
+                  <div class="support-export-toolbar">
+                    <div class="support-export-formats" role="tablist" aria-label="导出格式">
+                      <button type="button" class="ghost-btn support-export-format-btn active" data-format="cpa">CPA</button>
+                      <button type="button" class="ghost-btn support-export-format-btn" data-format="sub2api">Sub2API</button>
+                    </div>
+                    <button type="button" class="primary-btn support-export-fetch-btn" id="fetch-support-export-btn">获取导出内容</button>
+                  </div>
+                  <textarea
+                    id="support-export-json"
+                    class="support-export-json"
+                    rows="12"
+                    readonly
+                    spellcheck="false"
+                    placeholder="验证成功并拿到账号信息后，可在这里查看真实导出内容。"
+                  ></textarea>
+                  <div class="action-group support-export-actions">
+                    <button type="button" class="ghost-btn" id="copy-support-export-btn">复制当前导出</button>
+                  </div>
+                  <div id="support-export-result" class="result muted">验证成功后可选择格式并获取导出内容。</div>
+                </div>
               </div>
 
               <div class="quick-nav-group">

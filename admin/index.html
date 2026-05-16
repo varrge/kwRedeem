@@ -123,25 +123,26 @@
           
           <div class="grid grid-2">
             <div class="card">
-              <div class="card-header"><h3>单次添加</h3></div>
+              <div class="card-header"><h3>生成接码卡密</h3></div>
               <form id="single-cdkey-form" class="stack">
                 <label class="field">
                   <span>归属网站</span>
                   <select id="single-site"></select>
                 </label>
                 <label class="field">
-                  <span>原始卡密</span>
-                  <input id="single-source-key" placeholder="输入一条原始卡密" />
+                  <span>email_token（推荐）</span>
+                  <textarea id="single-email-token" rows="3" placeholder="只填 email_token、网站和前缀，即可生成一张新的接码卡密"></textarea>
                 </label>
                 <label class="field">
-                  <span>混淆前缀</span>
+                  <span>原始卡密（兼容模式，可留空）</span>
+                  <input id="single-source-key" placeholder="如需兼容旧流程可填写；接码专用卡密可直接留空" />
+                </label>
+                <label class="field">
+                  <span>卡密前缀</span>
                   <input id="single-prefix" placeholder="例如 GPT" />
                 </label>
-                <label class="field">
-                  <span>email_token（可选）</span>
-                  <textarea id="single-email-token" rows="3" placeholder="绑定后，前台接码页可通过卡密自动完成认证"></textarea>
-                </label>
-                <button type="submit" class="primary-btn">添加卡密</button>
+                <div class="hint">推荐主流程：选择 `老妹plus` 站点，留空原始卡密，只填写 `email_token` 后生成新的接码卡密。</div>
+                <button type="submit" class="primary-btn">生成 / 添加卡密</button>
               </form>
               <div id="single-cdkey-result" class="hint"></div>
             </div>

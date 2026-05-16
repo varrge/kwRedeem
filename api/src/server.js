@@ -932,7 +932,7 @@ function parseCdkeyMetadata(value) {
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 }
 
-function buildCdkeyMetadata(existingValue, { note, emailToken } = {}) {
+function buildCdkeyMetadata(existingValue, { note, emailToken, supportOnly } = {}) {
   const metadata = parseCdkeyMetadata(existingValue);
 
   if (note !== undefined) {
@@ -954,6 +954,14 @@ function buildCdkeyMetadata(existingValue, { note, emailToken } = {}) {
     }
   }
 
+  if (supportOnly !== undefined) {
+    if (supportOnly) {
+      metadata.supportOnly = true;
+    } else {
+      delete metadata.supportOnly;
+    }
+  }
+
   return Object.keys(metadata).length ? JSON.stringify(metadata) : null;
 }
 
@@ -967,6 +975,11 @@ function getCdkeyNote(metadataValue) {
   const metadata = parseCdkeyMetadata(metadataValue);
   const note = metadata.note ?? "";
   return typeof note === "string" ? note.trim() : "";
+}
+
+function isSupportOnlyCdkey(metadataValue) {
+  const metadata = parseCdkeyMetadata(metadataValue);
+  return metadata.supportOnly === true;
 }
 
 function buildSupportAccountPayload(raw = {}, supportCookie = null, authMode = null) {
@@ -1021,15 +1034,18 @@ async function verifyCdkeyForPublic(publicKey) {
     return null;
   }
 
+  const supportOnly = isSupportOnlyCdkey(key.metadata);
   const verifyContext = {
     publicKey: key.public_key,
-    sourceKey: decryptText(key.source_key),
+    sourceKey: supportOnly ? "" : decryptText(key.source_key),
     siteName: key.site_name,
     siteSlug: key.site_slug
   };
 
   let remoteResult = null;
-  let canRedeem = key.status === cdkeyStatuses.active;
+  let canRedeem = key.status === cdkeyStatuses.active && !supportOnly;
+  const canSupportAccess = key.status === cdkeyStatuses.active
+    && String(key.site_slug || "").trim().toLowerCase() === MEIMEI_SITE_SLUG;
 
   if (canRedeem && key.verify_api_url) {
     remoteResult = await callConfiguredApi({
@@ -1062,7 +1078,9 @@ async function verifyCdkeyForPublic(publicKey) {
       siteId: key.site_id,
       siteName: key.site_name || "未命名网站",
       siteSlug: key.site_slug || null,
+      supportOnly,
       canRedeem,
+      canSupportAccess,
       hasBoundEmailToken: Boolean(emailToken),
       remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
       remoteError: typeof remoteResult?.json?.error_msg === "string"
@@ -1437,16 +1455,9 @@ app.post("/api/public/support/cdkey-auth", async (request, reply) => {
     return reply.code(404).send({ message: "卡密不存在" });
   }
 
-  if (!verified.payload.canRedeem) {
+  if (!verified.payload.canSupportAccess) {
     return reply.code(400).send({
-      message: verified.payload.remoteError || "当前卡密未通过验证，暂时无法进入接码页面",
-      ...verified.payload
-    });
-  }
-
-  if (String(verified.payload.siteSlug || "").toLowerCase() !== MEIMEI_SITE_SLUG) {
-    return reply.code(400).send({
-      message: "当前卡密所属站点未启用接码页面",
+      message: verified.payload.remoteError || "当前卡密不可用于接码页面",
       ...verified.payload
     });
   }
@@ -1455,8 +1466,8 @@ app.post("/api/public/support/cdkey-auth", async (request, reply) => {
     return {
       ...verified.payload,
       autoAuthorized: false,
-      requiresManualToken: true,
-      message: "该卡密尚未绑定 email_token，请在后台补录，或在前台手动输入临时 token。"
+      requiresManualToken: false,
+      message: "该卡密尚未绑定接码信息，请联系后台重新生成或补录绑定。"
     };
   }
 
@@ -1465,7 +1476,7 @@ app.post("/api/public/support/cdkey-auth", async (request, reply) => {
     return {
       ...verified.payload,
       autoAuthorized: false,
-      requiresManualToken: true,
+      requiresManualToken: false,
       message: `已读取绑定的 email_token，但自动认证失败：${supportBundle.message}`,
       authError: supportBundle.message
     };
@@ -1528,6 +1539,7 @@ app.post("/api/public/redeem", async (request, reply) => {
       SELECT
         c.id AS cdkey_id,
         c.status AS cdkey_status,
+        c.metadata AS cdkey_metadata,
         c.site_id,
         s.*
       FROM cdkeys c
@@ -1537,6 +1549,9 @@ app.post("/api/public/redeem", async (request, reply) => {
 
     if (!preflight) {
       return reply.code(404).send({ message: "卡密不存在" });
+    }
+    if (isSupportOnlyCdkey(preflight.cdkey_metadata)) {
+      return reply.code(400).send({ message: "该卡密为接码专用卡密，请在接码验证页使用" });
     }
     if (preflight.cdkey_status !== cdkeyStatuses.active) {
       return reply.code(400).send({ message: `当前卡密状态不可兑换：${preflight.cdkey_status}` });
@@ -1556,6 +1571,9 @@ app.post("/api/public/redeem", async (request, reply) => {
 
       if (!cdkey) {
         throw new Error("卡密不存在");
+      }
+      if (isSupportOnlyCdkey(cdkey.metadata)) {
+        throw new Error("该卡密为接码专用卡密，请在接码验证页使用");
       }
       if (cdkey.status !== cdkeyStatuses.active) {
         throw new Error(`当前卡密状态不可兑换：${cdkey.status}`);
@@ -2293,7 +2311,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
 
 app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (request, reply) => {
   const schema = z.object({
-    sourceKey: z.string().min(1),
+    sourceKey: z.string().optional().default(""),
     prefix: z.string().min(1),
     siteId: z.string().min(1),
     note: z.string().optional().default(""),
@@ -2310,9 +2328,20 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     return reply.code(400).send({ message: "网站不存在" });
   }
 
+  const sourceKey = parsed.data.sourceKey.trim();
+  const emailToken = parsed.data.emailToken.trim();
+  const supportOnly = !sourceKey && Boolean(emailToken);
+  if (!sourceKey && !emailToken) {
+    return reply.code(400).send({ message: "请至少填写原始卡密或 email_token" });
+  }
+  if (supportOnly && String(site.slug || "").trim().toLowerCase() !== MEIMEI_SITE_SLUG) {
+    return reply.code(400).send({ message: "接码专用卡密必须绑定到老妹plus站点" });
+  }
+
   const now = nowIso();
   const id = nanoid(18);
   const publicKey = getUniquePublicKey(parsed.data.prefix);
+  const storedSourceKey = sourceKey || `support-card:${publicKey}`;
 
   db.prepare(`
     INSERT INTO cdkeys (
@@ -2325,13 +2354,14 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     site.product_id || "prod_demo",
     site.activation_endpoint_id || "endpoint_demo",
     site.id,
-    encryptText(parsed.data.sourceKey),
+    encryptText(storedSourceKey),
     publicKey,
     parsed.data.prefix,
     cdkeyStatuses.active,
     buildCdkeyMetadata(null, {
       note: parsed.data.note,
-      emailToken: parsed.data.emailToken
+      emailToken,
+      supportOnly
     }),
     now,
     now
@@ -2346,13 +2376,15 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
       siteId: site.id,
       prefix: parsed.data.prefix,
       publicKey,
-      hasEmailToken: Boolean(parsed.data.emailToken?.trim())
+      hasEmailToken: Boolean(emailToken),
+      supportOnly
     }
   });
 
   return {
     id,
-    publicKey
+    publicKey,
+    mode: supportOnly ? "support" : "standard"
   };
 });
 
@@ -2395,10 +2427,11 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   const items = db.prepare(sql).all(...params).map((item) => ({
     ...item,
-    source_key: decryptText(item.source_key),
+    source_key: isSupportOnlyCdkey(item.metadata) ? "" : decryptText(item.source_key),
     note: getCdkeyNote(item.metadata),
     email_token: getCdkeyEmailToken(item.metadata),
-    has_email_token: Boolean(getCdkeyEmailToken(item.metadata))
+    has_email_token: Boolean(getCdkeyEmailToken(item.metadata)),
+    support_only: isSupportOnlyCdkey(item.metadata)
   }));
   return { items };
 });

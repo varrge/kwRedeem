@@ -229,12 +229,17 @@ function renderTable(container, columns, rows, emptyText = "暂无数据") {
 }
 
 function populateSiteSelects(items) {
-  const activeItems = items.filter((item) => item.status === "active");
+  const currentBatch = refs.batchSite.value;
+  const currentSingle = refs.singleSite.value;
   const options = [`<option value="">选择网站</option>`].concat(
-    activeItems.map((item) => `<option value="${item.id}">${item.name}</option>`)
+    items.map((item) => `<option value="${item.id}">${item.name}${item.status === "active" ? "" : "（已禁用）"}</option>`)
   );
   refs.batchSite.innerHTML = options.join("");
   refs.singleSite.innerHTML = options.join("");
+
+  const supportSite = items.find((item) => item.slug === "meimei_site");
+  refs.batchSite.value = currentBatch || supportSite?.id || "";
+  refs.singleSite.value = currentSingle || supportSite?.id || "";
 }
 
 async function refreshDashboard() {
@@ -399,6 +404,7 @@ async function refreshCdkeys() {
   renderTable(refs.cdkeyList, [
     { label: "", render: (item) => `<input type="checkbox" class="cdkey-check" value="${item.id}" />` },
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
+    { label: "类型", render: (item) => item.support_only ? `<span class="table-badge status-pending">接码专用</span>` : `<span class="table-badge status-active">普通</span>` },
     { label: "原始卡密", render: (item) => item.source_key ? `<code style="opacity:0.5">${escapeHtml(item.source_key)}</code>` : "-" },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "前缀", render: (item) => item.prefix },
@@ -1065,7 +1071,13 @@ refs.singleCdkeyForm.addEventListener("submit", async (event) => {
       })
     });
     refs.singleCdkeyForm.reset();
-    setHint(refs.singleCdkeyResult, `成功: ${payload.publicKey}`);
+    refs.singleSite.value = "site_preset_meimei_site";
+    setHint(
+      refs.singleCdkeyResult,
+      payload.mode === "support"
+        ? `已生成接码卡密: ${payload.publicKey}`
+        : `已添加普通卡密: ${payload.publicKey}`
+    );
     await refreshAll();
   } catch (error) {
     setHint(refs.singleCdkeyResult, error.message);

@@ -17,9 +17,6 @@ const supportPublicKeyInput = document.querySelector("#support-public-key");
 const supportAccessResetBtn = document.querySelector("#support-access-reset");
 const supportAccessResult = document.querySelector("#support-access-result");
 const supportPanel = document.querySelector("#support-panel");
-const supportAuthForm = document.querySelector("#support-auth-form");
-const supportTokenInput = document.querySelector("#support-token");
-const supportResetBtn = document.querySelector("#support-reset");
 const supportAuthResult = document.querySelector("#support-auth-result");
 const supportAccountResult = document.querySelector("#support-account-result");
 const refreshAccountBtn = document.querySelector("#refresh-account-btn");
@@ -79,7 +76,7 @@ function updateViewHash(target) {
 }
 
 function shouldShowSupportPanel(siteSlug = verifiedSiteSlug) {
-  return supportNavMode || isSupportSiteSlug(siteSlug);
+  return supportNavMode || (isSupportSiteSlug(siteSlug) && Boolean(supportSessionId || supportCookie || supportAuthEmail));
 }
 
 function setSupportNavMode(enabled) {
@@ -89,7 +86,7 @@ function setSupportNavMode(enabled) {
   supportAccessPanel.classList.toggle("hidden", !enabled);
   stepTwoTitle.textContent = enabled ? "接码验证中心" : "提交信息与前台验证";
   stepTwoDesc.textContent = enabled
-    ? "可直接输入临时 token 完成前台验证，并查看当前邮箱与最近验证码邮件。"
+    ? "输入接码卡密后，系统会优先自动认证并展示当前邮箱、账号信息与最近验证码邮件。"
     : "如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。";
   if (enabled && verifiedKey && !supportPublicKeyInput.value.trim()) {
     supportPublicKeyInput.value = verifiedKey;
@@ -342,10 +339,6 @@ function stringifySupportValue(value) {
 
 function buildSupportAuthHeaders() {
   const headers = {};
-  const token = supportTokenInput?.value?.trim();
-  if (token) {
-    headers["X-Support-Token"] = token;
-  }
   if (supportSessionId) {
     headers["X-Support-Session-Id"] = supportSessionId;
   }
@@ -359,6 +352,7 @@ function applySupportAuthSession(payload, title = "前台验证成功") {
   supportSessionId = payload.sessionId || null;
   supportCookie = payload.supportCookie || null;
   supportAuthEmail = payload.email || null;
+  syncSupportVisibility();
   refreshAccountBtn.disabled = false;
   fetchOtpBtn.disabled = false;
   supportLogoutBtn.disabled = false;
@@ -370,19 +364,16 @@ function resetSupportState({ clearToken = false, clearOtp = false } = {}) {
   supportCookie = null;
   supportAuthEmail = null;
   syncSupportVisibility();
-  if (clearToken && supportTokenInput) {
-    supportTokenInput.value = "";
-  }
   refreshAccountBtn.disabled = true;
   fetchOtpBtn.disabled = true;
   supportLogoutBtn.disabled = true;
   setState(
     supportAuthResult,
     supportNavMode
-      ? "可直接输入临时 token 完成前台验证。"
+      ? "等待接码卡密自动认证。"
       : isSupportSiteSlug(verifiedSiteSlug)
-        ? "卡密验证成功后，请输入临时 token 完成前台验证。"
-        : "当前站点未启用前台 token 验证。"
+        ? "卡密验证成功后，系统会自动加载接码信息。"
+        : "当前卡密未启用接码功能。"
   );
   setState(supportAccountResult, "验证成功后会在这里展示邮箱和账号信息。");
   if (clearOtp) {
@@ -400,7 +391,7 @@ function syncSupportPanel(siteSlug) {
 function renderSupportAuthResult(payload = {}) {
   return `
     <div class="result-card">
-      <div class="result-title">${escapeHtml(payload.title || "前台验证成功")}</div>
+      <div class="result-title">${escapeHtml(payload.title || "自动认证成功")}</div>
       <span class="status-badge active">已认证</span>
       <div class="support-summary-grid">
         <div class="result-item">
@@ -420,8 +411,8 @@ function renderSupportAccessResult(payload = {}) {
   const autoStatus = payload.autoAuthorized
     ? "已自动认证"
     : payload.hasBoundEmailToken
-      ? "已绑定 token"
-      : "未绑定 token";
+      ? "已尝试自动认证"
+      : "未绑定接码 Token";
   return `
     <div class="result-card">
       <div class="result-title">接码卡密验证完成</div>
@@ -628,7 +619,7 @@ async function logoutSupportAccount() {
 
 async function handleSupportCdkeyAccess(publicKey) {
   setState(supportAccessResult, "正在验证卡密并尝试自动接码...");
-  resetSupportState({ clearToken: true, clearOtp: true });
+  resetSupportState({ clearOtp: true });
   syncSupportVisibility();
 
   const payload = await request("/api/public/support/cdkey-auth", {
@@ -643,7 +634,7 @@ async function handleSupportCdkeyAccess(publicKey) {
   setRichState(supportAccessResult, renderSupportAccessResult(payload), "success");
 
   if (payload.autoAuthorized) {
-    applySupportAuthSession(payload, "已根据卡密自动认证");
+    applySupportAuthSession(payload, "已根据接码卡密自动认证");
     if (payload.account) {
       setRichState(supportAccountResult, renderSupportAccountResult(payload.account), "success");
     } else if (payload.accountError) {
@@ -657,7 +648,7 @@ async function handleSupportCdkeyAccess(publicKey) {
     return payload;
   }
 
-  setState(supportAuthResult, payload.message || "请手动输入临时 token。", payload.hasBoundEmailToken ? "error" : "muted");
+  setState(supportAuthResult, payload.message || "该接码卡密暂时无法完成自动认证。", "error");
   if (payload.authError) {
     setState(supportOtpResult, `自动认证失败：${payload.authError}`, "error");
   }
@@ -1102,7 +1093,7 @@ verifyForm.addEventListener("submit", async (event) => {
 
 supportAccessResetBtn.addEventListener("click", () => {
   supportPublicKeyInput.value = "";
-  resetSupportState({ clearToken: true, clearOtp: true });
+  resetSupportState({ clearOtp: true });
   setState(supportAccessResult, "请输入卡密后开始接码验证。");
 });
 
@@ -1121,56 +1112,6 @@ supportAccessForm.addEventListener("submit", async (event) => {
     verifiedSiteSlug = null;
     resetSupportState({ clearOtp: true });
     setState(supportAccessResult, error.message, "error");
-  }
-});
-
-supportResetBtn.addEventListener("click", () => {
-  resetSupportState({ clearToken: true, clearOtp: true });
-});
-
-supportAuthForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  if (!supportNavMode && !verifiedKey) {
-    setState(supportAuthResult, "请先完成卡密验证。", "error");
-    return;
-  }
-  if (!supportNavMode && !isSupportSiteSlug(verifiedSiteSlug)) {
-    setState(supportAuthResult, "当前站点不需要前台 token 验证。", "error");
-    return;
-  }
-
-  const token = supportTokenInput.value.trim();
-  if (!token) {
-    setState(supportAuthResult, "请输入临时 token。", "error");
-    return;
-  }
-
-  setState(supportAuthResult, "正在验证前台 token...");
-  setState(supportAccountResult, "等待账号信息加载...");
-  setState(supportOtpResult, "暂未获取验证码邮件。");
-  refreshAccountBtn.disabled = true;
-  fetchOtpBtn.disabled = true;
-
-  try {
-    const payload = await request("/api/public/support/auth", {
-      method: "POST",
-      body: JSON.stringify({
-        token,
-        type: "single"
-      })
-    });
-
-    applySupportAuthSession(payload);
-
-    try {
-      await loadSupportAccount();
-    } catch (error) {
-      setState(supportAccountResult, error.message, "error");
-    }
-  } catch (error) {
-    resetSupportState();
-    setState(supportAuthResult, error.message, "error");
   }
 });
 
@@ -1194,8 +1135,8 @@ supportLogoutBtn.addEventListener("click", async () => {
   try {
     supportLogoutBtn.disabled = true;
     await logoutSupportAccount();
-    resetSupportState({ clearToken: true, clearOtp: true });
-    setState(supportAuthResult, "已退出当前 support 账号，请重新输入临时 token。", "success");
+    resetSupportState({ clearOtp: true });
+    setState(supportAuthResult, "已退出当前接码会话，请重新验证接码卡密。", "success");
   } catch (error) {
     supportLogoutBtn.disabled = false;
     setState(supportAuthResult, error.message, "error");

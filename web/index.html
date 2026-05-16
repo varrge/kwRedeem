@@ -69,13 +69,13 @@
               </div>
 
               <div id="support-nav-banner" class="support-entry-banner hidden">
-                已切换到接码验证页签。这里可以直接验证临时 token、查看邮箱信息并获取最近验证码邮件。
+                已切换到接码验证页签。输入接码卡密后，系统会优先尝试自动认证并展示邮箱、账号信息和验证码邮件。
               </div>
 
               <div id="support-access-panel" class="support-access-panel hidden">
                 <div class="support-panel-head">
                   <h3>卡密直达接码</h3>
-                  <p>输入生成后的卡密。若该卡密在后台已绑定 `email_token`，系统会自动完成认证并加载邮箱、账号信息和最近验证码邮件。</p>
+                  <p>输入后台新生成的接码卡密。若该卡密已绑定 `email_token`，系统会自动完成认证并加载邮箱、账号信息和最近验证码邮件。</p>
                 </div>
                 <form id="support-access-form" class="stack">
                   <div class="field">
@@ -91,24 +91,10 @@
 
               <div id="support-panel" class="support-panel hidden">
                 <div class="support-panel-head">
-                  <h3>前台 Token 验证</h3>
-                  <p>若卡密已绑定 `email_token`，系统会优先自动认证；这里保留手动输入临时 token 的兜底方式。</p>
+                  <h3>接码结果</h3>
+                  <p>系统会根据接码卡密自动完成认证，并在这里展示当前邮箱、账号信息与验证码邮件。</p>
                 </div>
-                <form id="support-auth-form" class="stack">
-                  <div class="field">
-                    <textarea
-                      id="support-token"
-                      name="supportToken"
-                      rows="4"
-                      placeholder="在此粘贴临时 token..."
-                    ></textarea>
-                  </div>
-                  <div class="action-group">
-                    <button type="button" class="ghost-btn" id="support-reset">清空 Token</button>
-                    <button type="submit" class="primary-btn">验证前台 Token</button>
-                  </div>
-                </form>
-                <div id="support-auth-result" class="result muted">当前站点未启用前台 token 验证。</div>
+                <div id="support-auth-result" class="result muted">等待接码卡密自动认证。</div>
                 <div id="support-account-result" class="result muted">验证成功后会在这里展示邮箱和账号信息。</div>
                 <div class="action-group support-otp-actions">
                   <button type="button" class="ghost-btn" id="refresh-account-btn" disabled>刷新账号信息</button>

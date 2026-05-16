@@ -119,9 +119,11 @@ function applyAuthHeaders(headers, remoteConfig, bodyString) {
 
 function extractFailureMessages(responseInfo = {}) {
   const candidates = [
+    responseInfo.json?.error,
     responseInfo.json?.message,
     responseInfo.json?.msg,
     responseInfo.json?.result,
+    responseInfo.json?.data?.error,
     responseInfo.json?.data?.msg,
     responseInfo.json?.data?.message,
     responseInfo.json?.data?.statusMessage,
@@ -140,12 +142,44 @@ function formatRemoteErrorMessage(responseInfo = {}, fallback = "") {
   const json = responseInfo.json;
   if (json && typeof json === "object") {
     const code = json.code || json.data?.code;
-    const message = json.message || json.msg || json.data?.message || json.data?.msg || json.data?.statusMessage;
+    const message = json.error
+      || json.message
+      || json.msg
+      || json.data?.error
+      || json.data?.message
+      || json.data?.msg
+      || json.data?.statusMessage;
     if (code && message) return `${code}: ${message}`;
     if (message) return String(message);
     if (code) return String(code);
   }
   return fallback || responseInfo.text || `HTTP ${responseInfo.status}`;
+}
+
+function extractTaskIdFromText(text) {
+  const match = String(text ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return match ? match[0] : "";
+}
+
+function extractRemoteTaskId(responseInfo, taskIdPath) {
+  const fromJson = getJsonByPath(responseInfo?.json, taskIdPath || "task_id");
+  if (fromJson) {
+    return String(fromJson);
+  }
+
+  const candidates = [
+    responseInfo?.json?.error,
+    responseInfo?.json?.message,
+    responseInfo?.json?.msg,
+    responseInfo?.text
+  ];
+
+  for (const candidate of candidates) {
+    const taskId = extractTaskIdFromText(candidate);
+    if (taskId) return taskId;
+  }
+
+  return "";
 }
 
 function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
@@ -570,7 +604,16 @@ async function processJob(job) {
 
   if (!failureMatched && successMatched && isPollingEnabled) {
     const taskIdPath = site?.task_id_path || "data";
-    const remoteTaskId = getJsonByPath(responseInfo.json, taskIdPath);
+    const remoteTaskId = extractRemoteTaskId(responseInfo, taskIdPath);
+    if (remoteTaskId) {
+      updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
+      await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId), endpoint);
+      return;
+    }
+  }
+
+  if (isPollingEnabled && Number(responseInfo.status) === 409) {
+    const remoteTaskId = extractRemoteTaskId(responseInfo, site?.task_id_path || "task_id");
     if (remoteTaskId) {
       updateJobPayload(job.id, { remoteTaskId: String(remoteTaskId) });
       await pollRemoteTask(job, order, cdkey, site, String(remoteTaskId), endpoint);

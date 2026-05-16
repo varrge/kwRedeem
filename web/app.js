@@ -22,6 +22,7 @@ const STATUS_LABELS = {
   used: "已使用",
   disabled: "已禁用",
   void: "已作废",
+  unavailable: "不可兑换",
   pending: "排队中",
   processing: "处理中",
   succeeded: "已成功",
@@ -117,6 +118,27 @@ function renderStatusText(status) {
   return escapeHtml(getStatusLabel(status));
 }
 
+function getStockLevelLabel(level) {
+  const normalized = String(level ?? "").trim().toLowerCase();
+  return {
+    high: "库存充足",
+    low: "库存偏少",
+    none: "库存为空"
+  }[normalized] || "-";
+}
+
+function getVerifyBadgeStatus(payload) {
+  if (payload.canRedeem) {
+    return payload.status;
+  }
+
+  if (payload.remoteAvailable === false) {
+    return "unavailable";
+  }
+
+  return payload.status || "unknown";
+}
+
 function stopRedeemStatusPolling() {
   if (redeemStatusTimer) {
     window.clearInterval(redeemStatusTimer);
@@ -204,9 +226,11 @@ function getApiMessage(job = {}) {
   const response = job.lastResponse || {};
   const json = response.json || {};
   const code = json.code || json.data?.code;
-  const message = json.result
+  const message = json.error
+    || json.result
     || json.msg
     || json.message
+    || json.data?.error
     || json.data?.msg
     || json.data?.message
     || "";
@@ -218,26 +242,38 @@ function getApiMessage(job = {}) {
 
 function renderVerifyResult(payload) {
   const title = payload.canRedeem ? "验证成功，正在跳转..." : "卡密验证完成";
+  const badgeStatus = getVerifyBadgeStatus(payload);
+  const verifyMessage = payload.canRedeem
+    ? "远端校验通过"
+    : (payload.remoteError || "远端校验未通过");
   return `
     <div class="result-card">
       <div class="result-title">${title}</div>
-      ${renderStatusBadge(payload.status)}
+      ${renderStatusBadge(badgeStatus)}
       <div class="result-grid">
         <div class="result-item">
           <span>商品</span>
           <strong>${escapeHtml(payload.productTitle)}</strong>
         </div>
         <div class="result-item">
-          <span>激活通道</span>
-          <strong>${escapeHtml(payload.endpointName)}</strong>
+          <span>网站</span>
+          <strong>${escapeHtml(payload.siteName || payload.endpointName)}</strong>
         </div>
         <div class="result-item">
-          <span>当前状态</span>
+          <span>本地状态</span>
           <strong>${renderStatusText(payload.status)}</strong>
+        </div>
+        <div class="result-item">
+          <span>远端校验</span>
+          <strong>${escapeHtml(verifyMessage)}</strong>
         </div>
         <div class="result-item">
           <span>可兑换</span>
           <strong>${payload.canRedeem ? "是" : "否"}</strong>
+        </div>
+        <div class="result-item">
+          <span>库存等级</span>
+          <strong>${escapeHtml(getStockLevelLabel(payload.stockLevel))}</strong>
         </div>
       </div>
     </div>

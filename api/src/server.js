@@ -874,10 +874,14 @@ app.post("/api/public/cdkeys/verify", async (request, reply) => {
     siteName: key.site_name || "未命名网站",
     siteSlug: key.site_slug || null,
     canRedeem,
+    remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
+    remoteError: typeof remoteResult?.json?.error === "string" ? remoteResult.json.error : "",
+    stockLevel: typeof remoteResult?.json?.stock_level === "string" ? remoteResult.json.stock_level : "",
     remoteResult: remoteResult ? {
       ok: remoteResult.ok,
       status: remoteResult.status,
-      text: remoteResult.text
+      text: remoteResult.text,
+      json: remoteResult.json
     } : null
   };
 });

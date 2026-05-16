@@ -441,6 +441,8 @@ input:focus, textarea:focus {
 }
 
 .status-badge.processing, .status-badge.pending { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
+.status-badge.active, .status-badge.completed { color: var(--success); background: rgba(67, 213, 159, 0.1); }
+.status-badge.locked, .status-badge.used, .status-badge.disabled, .status-badge.void, .status-badge.unavailable { color: var(--error); background: rgba(255, 127, 159, 0.1); }
 .status-badge.succeeded { color: var(--success); background: rgba(67, 213, 159, 0.1); }
 .status-badge.failed { color: var(--error); background: rgba(255, 127, 159, 0.1); }
 

@@ -6,3 +6,5 @@ data/*.db-*
 logs/
 web/runtime-config.js
 admin/runtime-config.js
+.kiro
+.vscode

@@ -245,7 +245,17 @@ function isNonRetryableFailure(responseInfo = {}, fallbackMessage = "") {
     "已被使用",
     "cdk_invalid",
     "cdk invalid",
-    "invalid_cdk"
+    "invalid_cdk",
+    // redeemgpt 特有的不可重试错误
+    "cdkey 已充值成功",
+    "cdkey 正在充值中",
+    "session信息或账号异常",
+    "未找到对应cdk",
+    "cdk异常",
+    "cdk已作废",
+    "该账号当前plan为",
+    "无法进行充值",
+    "参数缺少或错误"
   ];
 
   if (exactKeywords.some((keyword) => normalized.includes(keyword))) {

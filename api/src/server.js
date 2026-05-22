@@ -2560,6 +2560,68 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
   return { items };
 });
 
+app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (request) => {
+  const status = request.query.status ? String(request.query.status) : null;
+  const batchId = request.query.batchId ? String(request.query.batchId) : null;
+  const siteId = request.query.siteId ? String(request.query.siteId) : null;
+  const keyword = request.query.q ? `%${String(request.query.q).trim().toUpperCase()}%` : null;
+
+  let sql = `
+    SELECT
+      c.public_key, c.source_key, c.prefix, c.status, c.metadata, c.created_at,
+      b.name AS batch_name,
+      s.name AS site_name
+    FROM cdkeys c
+    LEFT JOIN cdkey_batches b ON b.id = c.batch_id
+    LEFT JOIN sites s ON s.id = c.site_id
+    WHERE 1 = 1
+  `;
+  const params = [];
+
+  if (status) {
+    sql += " AND c.status = ?";
+    params.push(status);
+  }
+  if (batchId) {
+    sql += " AND c.batch_id = ?";
+    params.push(batchId);
+  }
+  if (siteId) {
+    sql += " AND c.site_id = ?";
+    params.push(siteId);
+  }
+  if (keyword) {
+    sql += " AND c.public_key LIKE ?";
+    params.push(keyword);
+  }
+
+  sql += " ORDER BY c.created_at DESC LIMIT 50000";
+
+  const rows = db.prepare(sql).all(...params);
+  const items = rows.map((row) => {
+    let sourceKey = "";
+    if (!isSupportOnlyCdkey(row.metadata)) {
+      try {
+        sourceKey = decryptText(row.source_key) || "";
+      } catch {
+        sourceKey = "";
+      }
+    }
+    return {
+      public_key: row.public_key,
+      source_key: sourceKey,
+      prefix: row.prefix || "",
+      status: row.status,
+      site_name: row.site_name || "",
+      batch_name: row.batch_name || "",
+      email_token: getCdkeyEmailToken(row.metadata),
+      created_at: row.created_at || ""
+    };
+  });
+
+  return { items, total: items.length };
+});
+
 app.patch("/api/admin/cdkeys/:id/email-token", { preHandler: requireAdmin }, async (request, reply) => {
   const schema = z.object({
     emailToken: z.string().optional().default("")
@@ -2641,6 +2703,43 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
   });
 
   return { updated: parsed.data.ids.length };
+});
+
+app.post("/api/admin/cdkeys/export-source-keys", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    ids: z.array(z.string()).min(1).max(200)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "导出参数不正确" });
+  }
+
+  const placeholders = parsed.data.ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT id, source_key, metadata
+    FROM cdkeys
+    WHERE id IN (${placeholders})
+  `).all(...parsed.data.ids);
+
+  const rowMap = new Map(rows.map((row) => [row.id, row]));
+
+  const items = parsed.data.ids
+    .filter((id) => rowMap.has(id))
+    .map((id) => {
+      const row = rowMap.get(id);
+      let sourceKey = "";
+      if (!isSupportOnlyCdkey(row.metadata)) {
+        try {
+          sourceKey = decryptText(row.source_key);
+        } catch (error) {
+          console.warn(`[export-source-keys] 解密失败 id=${id}:`, error.message);
+          sourceKey = "";
+        }
+      }
+      return { id, sourceKey };
+    });
+
+  return { items };
 });
 
 app.get("/api/admin/orders", { preHandler: requireAdmin }, async () => {

@@ -24,7 +24,6 @@
           <button class="nav-btn active" data-target="wizard">兑换中心</button>
           <button class="nav-btn" data-target="query">订单查询</button>
           <button class="nav-btn" data-target="faq">常见问题</button>
-          <button class="nav-btn" data-target="support">接码验证</button>
           <button class="nav-btn" data-target="stock">库存监控</button>
           <button class="nav-btn" data-target="subscription">订阅状态</button>
         </nav>
@@ -64,74 +63,8 @@
             <div class="pane-content">
               <div class="section-heading centered">
                 <p class="eyebrow">Step 2</p>
-                <h2 id="step-2-title">提交信息与前台验证</h2>
-                <p id="step-2-desc" class="panel-desc">如当前站点支持临时 token，可先完成前台验证并查看邮箱 / 验证码；如需继续走老的激活链路，仍可提交 Session JSON。</p>
-              </div>
-
-              <div id="support-nav-banner" class="support-entry-banner hidden">
-                已切换到接码验证页签。输入接码卡密后，系统会优先尝试自动认证并展示邮箱、账号信息和验证码邮件。
-              </div>
-
-              <div id="support-access-panel" class="support-access-panel hidden">
-                <div class="support-panel-head">
-                  <h3>卡密直达接码</h3>
-                  <p>输入后台新生成的接码卡密。若该卡密已绑定 `email_token`，系统会自动完成认证并加载邮箱、账号信息和最近验证码邮件。</p>
-                </div>
-                <form id="support-access-form" class="stack">
-                  <div class="field">
-                    <input id="support-public-key" name="supportPublicKey" placeholder="请输入生成后的卡密" autocomplete="off" />
-                  </div>
-                  <div class="action-group">
-                    <button type="button" class="ghost-btn" id="support-access-reset">清空卡密</button>
-                    <button type="submit" class="primary-btn">验证卡密并进入接码</button>
-                  </div>
-                </form>
-                <div id="support-access-result" class="result muted">请输入卡密后开始接码验证。</div>
-              </div>
-
-              <div id="support-panel" class="support-panel hidden">
-                <div class="support-panel-head">
-                  <h3>接码结果</h3>
-                  <p>系统会根据接码卡密自动完成认证，并在这里展示当前邮箱、账号信息与验证码邮件。</p>
-                </div>
-                <div id="support-auth-result" class="result muted">等待接码卡密自动认证。</div>
-                <div id="support-account-result" class="result muted">验证成功后会在这里展示邮箱和账号信息。</div>
-                <div class="action-group support-otp-actions">
-                  <button type="button" class="ghost-btn" id="refresh-account-btn" disabled>刷新账号信息</button>
-                  <button type="button" class="primary-btn" id="fetch-otp-btn" disabled>获取验证码</button>
-                  <button type="button" class="ghost-btn danger-btn" id="support-logout-btn" disabled>退出当前账号</button>
-                </div>
-                <div id="support-otp-result" class="result muted">暂未获取验证码邮件。</div>
-                <div id="support-export-panel" class="support-export-panel hidden">
-                  <div class="support-export-head">
-                    <h4>导出账号信息</h4>
-                    <p>调用上游导出接口获取真实导出内容，支持 CPA 与 Sub2API，不显示 `session_id` 或 `email_token`。</p>
-                  </div>
-                  <div class="support-export-tags">
-                    <span class="support-export-tag">真实导出</span>
-                    <span class="support-export-tag">CPA / Sub2API</span>
-                    <span class="support-export-tag">可复制</span>
-                  </div>
-                  <div class="support-export-toolbar">
-                    <div class="support-export-formats" role="tablist" aria-label="导出格式">
-                      <button type="button" class="ghost-btn support-export-format-btn active" data-format="cpa">CPA</button>
-                      <button type="button" class="ghost-btn support-export-format-btn" data-format="sub2api">Sub2API</button>
-                    </div>
-                    <button type="button" class="primary-btn support-export-fetch-btn" id="fetch-support-export-btn">获取导出内容</button>
-                  </div>
-                  <textarea
-                    id="support-export-json"
-                    class="support-export-json"
-                    rows="12"
-                    readonly
-                    spellcheck="false"
-                    placeholder="验证成功并拿到账号信息后，可在这里查看真实导出内容。"
-                  ></textarea>
-                  <div class="action-group support-export-actions">
-                    <button type="button" class="ghost-btn" id="copy-support-export-btn">复制当前导出</button>
-                  </div>
-                  <div id="support-export-result" class="result muted">验证成功后可选择格式并获取导出内容。</div>
-                </div>
+                <h2>提交 Session 信息</h2>
+                <p class="panel-desc">请粘贴完整的 Session JSON，系统将为您创建激活任务。</p>
               </div>
 
               <div class="quick-nav-group">
@@ -158,7 +91,7 @@
                 </div>
               </form>
               <div id="redeem-result" class="result muted">等待提交任务...</div>
-              
+
               <div class="intel-box">
                 <h4>获取方式</h4>
                 <div class="intel-actions">

@@ -507,7 +507,7 @@ function seedDefaults(db) {
       abandonSubmitBodyTemplate: '{"cdkey":"{{sourceKey}}","session_info":{{sessionString}},"force":1}',
       authType: null,
       authConfig: null,
-      verifySuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
+      verifySuccessRule: '{"kind":"json_path_equals","path":"data.use_status","value":"0"}',
       verifyFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
       submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
       submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
@@ -515,7 +515,7 @@ function seedDefaults(db) {
       maxRetries: 3,
       productId: "prod_demo",
       activationEndpointId: null,
-      status: "disabled",
+      status: "active",
       createdAt: now,
       updatedAt: now
     },

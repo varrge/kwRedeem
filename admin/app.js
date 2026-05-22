@@ -24,6 +24,9 @@ const refs = {
   cdkeyList: document.querySelector("#cdkey-list"),
   cdkeyAction: document.querySelector("#cdkey-action"),
   cdkeyActionBtn: document.querySelector("#cdkey-action-btn"),
+  cdkeyExportPublicBtn: document.querySelector("#cdkey-export-public-btn"),
+  cdkeyExportSourceBtn: document.querySelector("#cdkey-export-source-btn"),
+  cdkeyExportExcelBtn: document.querySelector("#cdkey-export-excel-btn"),
   orderList: document.querySelector("#order-list"),
   jobList: document.querySelector("#job-list"),
   retryJobsBtn: document.querySelector("#retry-jobs-btn"),
@@ -984,6 +987,130 @@ function getCheckedValues(selector) {
     .map((element) => element.value);
 }
 
+function getSelectedCdkeyIds() {
+  return getCheckedValues(".cdkey-check");
+}
+
+function formatKeysForClipboard(keys) {
+  return keys.map((key) => String(key).trimEnd()).join("\n");
+}
+
+async function exportPublicKeys() {
+  const ids = getSelectedCdkeyIds();
+  if (!ids.length) {
+    alert("请先选择卡密");
+    return;
+  }
+
+  const rows = Array.from(document.querySelectorAll(".cdkey-check"))
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => {
+      const row = checkbox.closest("tr");
+      const codeEl = row?.querySelector("td:nth-child(2) code");
+      return codeEl ? codeEl.textContent : "";
+    })
+    .filter(Boolean);
+
+  const text = formatKeysForClipboard(rows);
+  try {
+    await navigator.clipboard.writeText(text);
+    alert(`已复制 ${rows.length} 条公开卡密`);
+  } catch (_) {
+    alert("导出失败：剪贴板写入被拒绝");
+  }
+}
+
+async function exportSourceKeys() {
+  const ids = getSelectedCdkeyIds();
+  if (!ids.length) {
+    alert("请先选择卡密");
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const payload = await api("/api/admin/cdkeys/export-source-keys", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    const keys = (payload.items || []).map((item) => item.sourceKey);
+    const text = formatKeysForClipboard(keys);
+    await navigator.clipboard.writeText(text);
+    alert(`已复制 ${keys.length} 条原始卡密`);
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error.name === "AbortError") {
+      alert("导出失败：请求超时");
+    } else {
+      alert(`导出失败：${error.message}`);
+    }
+  }
+}
+
+function generateExcelFilename() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `cdkeys_export_${stamp}.xlsx`;
+}
+
+async function exportCdkeysExcel() {
+  const params = new URLSearchParams();
+  const statusEl = document.querySelector("#cdkey-filter-status");
+  const siteEl = document.querySelector("#cdkey-filter-site");
+  const batchEl = document.querySelector("#cdkey-filter-batch");
+  const keywordEl = document.querySelector("#cdkey-filter-keyword");
+
+  if (statusEl && statusEl.value) params.set("status", statusEl.value);
+  if (siteEl && siteEl.value) params.set("siteId", siteEl.value);
+  if (batchEl && batchEl.value) params.set("batchId", batchEl.value);
+  if (keywordEl && keywordEl.value.trim()) params.set("q", keywordEl.value.trim());
+
+  const qs = params.toString();
+  const url = "/api/admin/cdkeys/export-excel" + (qs ? "?" + qs : "");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const payload = await api(url, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!payload.items || !payload.items.length) {
+      alert("无数据可导出");
+      return;
+    }
+
+    const rows = payload.items.map((item) => ({
+      "公开卡密": item.public_key || "",
+      "原始卡密": item.source_key || "",
+      "前缀": item.prefix || "",
+      "状态": item.status || "",
+      "网站": item.site_name || "",
+      "批次": item.batch_name || "",
+      "接码Token": item.email_token || "",
+      "创建时间": item.created_at || ""
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "卡密数据");
+    XLSX.writeFile(wb, generateExcelFilename());
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error.name === "AbortError") {
+      alert("导出失败：请求超时");
+    } else {
+      alert(`导出失败：${error.message}`);
+    }
+  }
+}
+
 async function refreshAll() {
   if (!getToken()) return;
   await Promise.all([
@@ -1124,6 +1251,18 @@ refs.cdkeyActionBtn.addEventListener("click", async () => {
   } catch (error) {
     alert(error.message);
   }
+});
+
+refs.cdkeyExportPublicBtn.addEventListener("click", () => {
+  exportPublicKeys();
+});
+
+refs.cdkeyExportSourceBtn.addEventListener("click", () => {
+  exportSourceKeys();
+});
+
+refs.cdkeyExportExcelBtn.addEventListener("click", () => {
+  exportCdkeysExcel();
 });
 
 refs.retryJobsBtn.addEventListener("click", async () => {

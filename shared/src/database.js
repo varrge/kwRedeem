@@ -348,6 +348,29 @@ function createSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sms_batches (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      imported_count INTEGER DEFAULT 0,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_entries (
+      id TEXT PRIMARY KEY,
+      phone TEXT NOT NULL,
+      sms_url TEXT NOT NULL,
+      public_key TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','locked','used','disabled','void')),
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -389,6 +412,9 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_notify_monitors_due ON notification_monitors(enabled, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_notify_events_monitor ON notification_events(monitor_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_notify_events_created ON notification_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_entries_status ON sms_entries(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_entries_batch ON sms_entries(batch_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_entries_public_key ON sms_entries(public_key);
   `);
 }
 

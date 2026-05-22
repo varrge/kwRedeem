@@ -14,6 +14,7 @@ import { env } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
+import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
@@ -401,6 +402,19 @@ function getUniquePublicKey(prefix) {
   let candidate = generatePublicKey(prefix);
   while (db.prepare("SELECT 1 FROM cdkeys WHERE public_key = ?").get(candidate)) {
     candidate = generatePublicKey(prefix);
+  }
+  return candidate;
+}
+
+function generateSmsPublicKey(prefix) {
+  const normalized = String(prefix || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+  return `${normalized}-${nanoid(10).toUpperCase()}`;
+}
+
+function getUniqueSmsPublicKey(prefix) {
+  let candidate = generateSmsPublicKey(prefix);
+  while (db.prepare("SELECT 1 FROM sms_entries WHERE public_key = ?").get(candidate)) {
+    candidate = generateSmsPublicKey(prefix);
   }
   return candidate;
 }
@@ -3542,6 +3556,280 @@ app.post("/api/admin/subscriptions/requests/:id/review", { preHandler: requireAd
   });
 
   return { id: req.id, status: newStatus };
+});
+
+// ─── 接码管理后台接口 ───────────────────────────────────────────────
+
+// ─── SMS 批量导入接口 ─────────────────────────────────────────────────
+app.post("/api/admin/sms/import", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    batchName: z.string().min(2).max(50),
+    prefix: z.string().min(1).max(10).regex(/^[A-Z0-9_-]+$/i),
+    content: z.string().min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "导入参数不正确" });
+  }
+
+  const { batchName, prefix, content } = parsed.data;
+
+  // 按换行符拆分
+  const allLines = content.split(/\r?\n/);
+
+  // 校验总行数不超过 5000
+  if (allLines.length > 5000) {
+    return reply.code(400).send({ message: "单次导入不能超过 5000 行" });
+  }
+
+  // 使用提取的解析函数
+  const { validEntries, skippedLines } = parseSmsImportContent(content);
+
+  // 若无有效数据
+  if (validEntries.length === 0) {
+    return reply.code(400).send({ message: "无有效数据可导入" });
+  }
+
+  // 使用事务批量插入
+  const result = withTransaction(() => {
+    const batchId = nanoid(16);
+    const now = nowIso();
+
+    db.prepare(`
+      INSERT INTO sms_batches (id, name, prefix, imported_count, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      batchId,
+      batchName,
+      prefix.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
+      validEntries.length,
+      request.admin.username,
+      now,
+      now
+    );
+
+    const insertEntry = db.prepare(`
+      INSERT INTO sms_entries (id, phone, sms_url, public_key, prefix, batch_id, status, note, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)
+    `);
+
+    for (const entry of validEntries) {
+      const publicKey = getUniqueSmsPublicKey(prefix);
+      insertEntry.run(
+        nanoid(16),
+        entry.phone,
+        entry.smsUrl,
+        publicKey,
+        prefix.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
+        batchId,
+        now,
+        now
+      );
+    }
+
+    createAuditLog({
+      action: "sms_import",
+      actor: request.admin.username,
+      resourceType: "sms_batch",
+      resourceId: batchId,
+      detail: {
+        batchName,
+        prefix,
+        importedCount: validEntries.length,
+        skippedCount: skippedLines.length
+      }
+    });
+
+    return { batchId, importedCount: validEntries.length, skippedLines };
+  });
+
+  return result;
+});
+
+app.get("/api/admin/sms/entries", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(request.query.pageSize) || 100)));
+  const offset = (page - 1) * pageSize;
+
+  const total = db.prepare("SELECT COUNT(*) AS count FROM sms_entries").get().count;
+
+  const items = db.prepare(`
+    SELECT
+      e.id, e.phone, e.sms_url, e.public_key, e.prefix, e.batch_id, e.status, e.note, e.created_at,
+      b.name AS batch_name
+    FROM sms_entries e
+    LEFT JOIN sms_batches b ON b.id = e.batch_id
+    ORDER BY e.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(pageSize, offset).map((row) => ({
+    id: row.id,
+    phone: row.phone,
+    smsUrl: row.sms_url,
+    publicKey: row.public_key,
+    prefix: row.prefix,
+    batchId: row.batch_id,
+    batchName: row.batch_name || null,
+    status: row.status,
+    note: row.note || null,
+    createdAt: row.created_at
+  }));
+
+  return { items, total, page, pageSize };
+});
+
+// ─── 接码导出接口 ─────────────────────────────────────────────────────
+app.get("/api/admin/sms/export", { preHandler: requireAdmin }, async () => {
+  const rows = db.prepare(`
+    SELECT
+      e.public_key, e.phone, e.sms_url, e.prefix, e.status, e.created_at,
+      b.name AS batch_name
+    FROM sms_entries e
+    LEFT JOIN sms_batches b ON b.id = e.batch_id
+    ORDER BY e.created_at DESC
+    LIMIT 50000
+  `).all();
+
+  const items = rows.map((row) => ({
+    publicKey: row.public_key,
+    phone: row.phone,
+    smsUrl: row.sms_url,
+    prefix: row.prefix || "",
+    batchName: row.batch_name || "",
+    status: row.status,
+    createdAt: row.created_at || ""
+  }));
+
+  return { items };
+});
+
+// ─── 接码公开查询接口 ───────────────────────────────────────────────
+app.get("/api/public/sms/query", async (request, reply) => {
+  const key = String(request.query.key ?? "").trim();
+  if (!key) {
+    return reply.code(400).send({ message: "卡密格式不正确" });
+  }
+
+  const entry = db.prepare("SELECT phone, sms_url, status FROM sms_entries WHERE public_key = ?").get(key);
+  if (!entry) {
+    return reply.code(404).send({ message: "卡密无效或不存在" });
+  }
+
+  if (entry.status === "disabled" || entry.status === "void") {
+    return reply.code(403).send({ message: "该卡密已停用" });
+  }
+
+  return { phone: entry.phone, smsUrl: entry.sms_url };
+});
+
+// ─── SMS 接码管理：批量状态修改 ───────────────────────────────────────────────
+app.patch("/api/admin/sms/entries/status", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    ids: z.array(z.string()).min(1),
+    status: z.enum(["active", "disabled", "void"])
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确，ids 至少包含一个，status 仅支持 active/disabled/void" });
+  }
+
+  const now = nowIso();
+  let updatedCount = 0;
+
+  for (const id of parsed.data.ids) {
+    const result = db.prepare("UPDATE sms_entries SET status = ?, updated_at = ? WHERE id = ?")
+      .run(parsed.data.status, now, id);
+    if (result.changes > 0) {
+      updatedCount++;
+    }
+  }
+
+  createAuditLog({
+    action: "sms_status_update",
+    actor: request.admin.username,
+    resourceType: "sms_entry",
+    resourceId: null,
+    detail: { ids: parsed.data.ids, status: parsed.data.status, updatedCount }
+  });
+
+  return { updatedCount };
+});
+
+// ─── SMS 单条添加接口 ───────────────────────────────────────────────────────
+app.post("/api/admin/sms/entries", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    phone: z.string().min(1),
+    smsUrl: z.string().min(1),
+    prefix: z.string().min(1).max(10)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    // Determine which validation failed
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    if (fieldErrors.prefix) {
+      return reply.code(400).send({ message: "卡密前缀不正确" });
+    }
+    return reply.code(400).send({ message: "手机号和接码网址不能为空" });
+  }
+
+  const { phone, smsUrl, prefix } = parsed.data;
+
+  const now = nowIso();
+
+  // Find or create a "单条添加" batch for this prefix
+  let batch = db.prepare(
+    "SELECT id FROM sms_batches WHERE name = ? AND prefix = ?"
+  ).get("单条添加", prefix.toUpperCase().replace(/[^A-Z0-9_-]/g, ""));
+
+  if (!batch) {
+    const batchId = nanoid(16);
+    db.prepare(`
+      INSERT INTO sms_batches (id, name, prefix, imported_count, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      batchId,
+      "单条添加",
+      prefix.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
+      0,
+      request.admin.username,
+      now,
+      now
+    );
+    batch = { id: batchId };
+  }
+
+  const id = nanoid(16);
+  const publicKey = getUniqueSmsPublicKey(prefix);
+
+  db.prepare(`
+    INSERT INTO sms_entries (id, phone, sms_url, public_key, prefix, batch_id, status, note, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)
+  `).run(
+    id,
+    phone.trim(),
+    smsUrl.trim(),
+    publicKey,
+    prefix.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
+    batch.id,
+    now,
+    now
+  );
+
+  // Update batch imported_count
+  db.prepare("UPDATE sms_batches SET imported_count = imported_count + 1, updated_at = ? WHERE id = ?")
+    .run(now, batch.id);
+
+  createAuditLog({
+    action: "sms_single_add",
+    actor: request.admin.username,
+    resourceType: "sms_entry",
+    resourceId: id,
+    detail: { phone: phone.trim(), prefix, publicKey }
+  });
+
+  return { id, publicKey };
 });
 
 app.setErrorHandler((error, _request, reply) => {

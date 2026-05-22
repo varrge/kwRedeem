@@ -11,6 +11,10 @@ const lookupForm = document.querySelector("#lookup-form");
 const orderResult = document.querySelector("#order-result");
 const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
+const smsForm = document.querySelector("#sms-form");
+const smsKeyInput = document.querySelector("#sms-key");
+const smsSubmit = document.querySelector("#sms-submit");
+const smsResult = document.querySelector("#sms-result");
 const statusContainer = document.querySelector("#status-container");
 const confirmModal = document.querySelector("#confirm-modal");
 const confirmEmailEl = document.querySelector("#confirm-email");
@@ -569,5 +573,51 @@ lookupForm.addEventListener("submit", async (event) => {
     setRichState(orderResult, renderBatchLookupResults(payload), "success");
   } catch (error) {
     setState(orderResult, error.message, "error");
+  }
+});
+
+// --- SMS Query ---
+
+smsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const key = smsKeyInput.value.trim();
+  if (!key) {
+    setState(smsResult, "请输入卡密", "error");
+    return;
+  }
+
+  smsSubmit.disabled = true;
+  smsSubmit.textContent = "查询中...";
+  setState(smsResult, "正在查询...");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(`${API_BASE}/api/public/sms/query?key=${encodeURIComponent(key)}`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      const payload = await response.json();
+      const phoneHtml = `<div class="result-item"><span>手机号</span><strong>${escapeHtml(payload.phone)}</strong></div>`;
+      const urlHtml = `<div class="result-item"><span>接码网址</span><strong><a href="${escapeHtml(payload.smsUrl)}" target="_blank">${escapeHtml(payload.smsUrl)}</a></strong></div>`;
+      setRichState(smsResult, `<div class="result-card"><div class="result-grid">${phoneHtml}${urlHtml}</div></div>`, "success");
+    } else if (response.status === 404) {
+      setState(smsResult, "卡密无效或不存在", "error");
+    } else if (response.status === 403) {
+      setState(smsResult, "该卡密已停用", "error");
+    } else {
+      const payload = await response.json().catch(() => ({}));
+      setState(smsResult, payload.message || "请求失败，请检查网络连接", "error");
+    }
+  } catch (error) {
+    clearTimeout(timeout);
+    setState(smsResult, "请求失败，请检查网络连接", "error");
+  } finally {
+    smsSubmit.disabled = false;
+    smsSubmit.textContent = "获取验证码";
   }
 });

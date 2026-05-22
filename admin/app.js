@@ -83,6 +83,18 @@ const refs = {
   notifyRefreshBtn: document.querySelector("#notify-refresh-btn"),
   notifyMonitorList: document.querySelector("#notify-monitor-list"),
   notifyEventList: document.querySelector("#notify-event-list"),
+  // SMS panel refs
+  smsBatchForm: document.querySelector("#sms-batch-form"),
+  smsBatchResult: document.querySelector("#sms-batch-result"),
+  smsSingleForm: document.querySelector("#sms-single-form"),
+  smsSingleResult: document.querySelector("#sms-single-result"),
+  smsList: document.querySelector("#sms-list"),
+  smsCopyKeysBtn: document.querySelector("#sms-copy-keys-btn"),
+  smsCopyInfoBtn: document.querySelector("#sms-copy-info-btn"),
+  smsExportExcelBtn: document.querySelector("#sms-export-excel-btn"),
+  smsAction: document.querySelector("#sms-action"),
+  smsActionBtn: document.querySelector("#sms-action-btn"),
+
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
 };
@@ -159,6 +171,9 @@ function switchTab(tabName) {
   refs.tabPanels.forEach((panel) => {
     panel.classList.toggle("hidden", panel.dataset.panel !== tabName);
   });
+  if (tabName === "sms" && getToken()) {
+    refreshSmsEntries().catch(() => {});
+  }
 }
 
 function startAutoRefresh() {
@@ -422,6 +437,20 @@ async function refreshCdkeys() {
     ` },
     { label: "状态", render: (item) => renderStatus(item.status) }
   ], payload.items);
+}
+
+async function refreshSmsEntries() {
+  const payload = await api("/api/admin/sms/entries");
+  renderTable(refs.smsList, [
+    { label: "", render: (item) => `<input type="checkbox" class="sms-check" value="${item.id}" data-public-key="${escapeHtml(item.publicKey)}" data-phone="${escapeHtml(item.phone)}" data-sms-url="${escapeHtml(item.smsUrl)}" />` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
+    { label: "手机号", render: (item) => escapeHtml(item.phone) },
+    { label: "接码网址", render: (item) => `<a href="${escapeHtml(item.smsUrl)}" target="_blank" style="word-break:break-all">${escapeHtml(item.smsUrl)}</a>` },
+    { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
+    { label: "批次名称", render: (item) => escapeHtml(item.batchName || "-") },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
+  ], payload.items || [], "暂无接码记录");
 }
 
 async function refreshOrders() {
@@ -1118,6 +1147,7 @@ async function refreshAll() {
     refreshSites(),
     refreshBatches(),
     refreshCdkeys(),
+    refreshSmsEntries(),
     refreshOrders(),
     refreshJobs(),
     refreshLogs(),
@@ -1458,6 +1488,184 @@ if (refs.notifyMonitorForm) {
     }
   });
 }
+
+// ── SMS Batch Import Form ──
+refs.smsBatchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await api("/api/admin/sms/import", {
+      method: "POST",
+      body: JSON.stringify({
+        batchName: document.querySelector("#sms-batch-name").value.trim(),
+        prefix: document.querySelector("#sms-batch-prefix").value.trim(),
+        content: document.querySelector("#sms-batch-content").value
+      })
+    });
+    refs.smsBatchForm.reset();
+    setHint(refs.smsBatchResult, `成功导入 ${payload.importedCount} 条接码记录`);
+    setTimeout(() => {
+      if (refs.smsBatchResult.textContent.startsWith("成功导入")) {
+        setHint(refs.smsBatchResult, "");
+      }
+    }, 5000);
+    await refreshSmsEntries();
+  } catch (error) {
+    setHint(refs.smsBatchResult, error.message);
+  }
+});
+
+// ── SMS Single Add Form ──
+refs.smsSingleForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await api("/api/admin/sms/entries", {
+      method: "POST",
+      body: JSON.stringify({
+        phone: document.querySelector("#sms-single-phone").value.trim(),
+        smsUrl: document.querySelector("#sms-single-url").value.trim(),
+        prefix: document.querySelector("#sms-single-prefix").value.trim()
+      })
+    });
+    refs.smsSingleForm.reset();
+    setHint(refs.smsSingleResult, `已生成卡密: ${payload.publicKey}`);
+    await refreshSmsEntries();
+  } catch (error) {
+    setHint(refs.smsSingleResult, error.message);
+  }
+});
+
+// ── SMS Copy Public Keys ──
+async function copySmsPublicKeys() {
+  const checkboxes = Array.from(document.querySelectorAll(".sms-check")).filter((cb) => cb.checked);
+  if (!checkboxes.length) {
+    setHint(refs.smsBatchResult, "请先选择记录");
+    return;
+  }
+  const keys = checkboxes.map((cb) => cb.dataset.publicKey);
+  const text = keys.map((k) => String(k).trimEnd()).join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    setHint(refs.smsBatchResult, `已复制 ${keys.length} 条卡密`);
+    setTimeout(() => {
+      if (refs.smsBatchResult.textContent.startsWith("已复制")) {
+        setHint(refs.smsBatchResult, "");
+      }
+    }, 3000);
+  } catch (_) {
+    setHint(refs.smsBatchResult, "复制失败：剪贴板写入被拒绝");
+  }
+}
+
+refs.smsCopyKeysBtn.addEventListener("click", () => {
+  copySmsPublicKeys();
+});
+
+// ── SMS Copy Info ──
+async function copySmsInfo() {
+  const checkboxes = Array.from(document.querySelectorAll(".sms-check")).filter((cb) => cb.checked);
+  if (!checkboxes.length) {
+    setHint(refs.smsBatchResult, "请先选择记录");
+    return;
+  }
+  const lines = checkboxes.map((cb) => {
+    const phone = cb.dataset.phone || "";
+    const smsUrl = cb.dataset.smsUrl || "";
+    return `${phone}----${smsUrl}`;
+  });
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    setHint(refs.smsBatchResult, `已复制 ${lines.length} 条接码信息`);
+    setTimeout(() => {
+      if (refs.smsBatchResult.textContent.startsWith("已复制")) {
+        setHint(refs.smsBatchResult, "");
+      }
+    }, 3000);
+  } catch (_) {
+    setHint(refs.smsBatchResult, "复制失败：剪贴板写入被拒绝");
+  }
+}
+
+refs.smsCopyInfoBtn.addEventListener("click", () => {
+  copySmsInfo();
+});
+
+// ── SMS Export Excel ──
+function generateSmsExcelFilename() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `sms_export_${stamp}.xlsx`;
+}
+
+async function exportSmsExcel() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  setButtonBusy(refs.smsExportExcelBtn, true, "导出中...");
+  try {
+    const payload = await api("/api/admin/sms/export", { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!payload.items || !payload.items.length) {
+      setHint(refs.smsBatchResult, "无数据可导出");
+      return;
+    }
+
+    const rows = payload.items.map((item) => ({
+      "卡密": item.publicKey || "",
+      "手机号": item.phone || "",
+      "接码网址": item.smsUrl || "",
+      "前缀": item.prefix || "",
+      "批次": item.batchName || "",
+      "状态": item.status || "",
+      "创建时间": item.createdAt || ""
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "接码数据");
+    XLSX.writeFile(wb, generateSmsExcelFilename());
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error.name === "AbortError") {
+      setHint(refs.smsBatchResult, "导出失败：请求超时");
+    } else {
+      setHint(refs.smsBatchResult, `导出失败：${error.message}`);
+    }
+  } finally {
+    setButtonBusy(refs.smsExportExcelBtn, false);
+  }
+}
+
+refs.smsExportExcelBtn.addEventListener("click", () => {
+  exportSmsExcel();
+});
+
+// ── SMS Batch Status Update ──
+async function updateSmsStatus() {
+  const checkboxes = Array.from(document.querySelectorAll(".sms-check")).filter((cb) => cb.checked);
+  if (!checkboxes.length) {
+    setHint(refs.smsBatchResult, "请先选择记录");
+    return;
+  }
+  const ids = checkboxes.map((cb) => cb.value);
+  const status = refs.smsAction.value;
+  try {
+    const payload = await api("/api/admin/sms/entries/status", {
+      method: "PATCH",
+      body: JSON.stringify({ ids, status })
+    });
+    setHint(refs.smsBatchResult, `已更新 ${payload.updatedCount} 条记录`);
+    await refreshSmsEntries();
+  } catch (error) {
+    setHint(refs.smsBatchResult, error.message);
+  }
+}
+
+refs.smsActionBtn.addEventListener("click", () => {
+  updateSmsStatus();
+});
 
 refs.refreshBtn.addEventListener("click", () => {
   refreshAll().catch((error) => alert(error.message));

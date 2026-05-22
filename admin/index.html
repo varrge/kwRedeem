@@ -57,6 +57,9 @@
           <button class="nav-item" data-tab="cards">
             <span class="icon">🎫</span> 卡密管理
           </button>
+          <button class="nav-item" data-tab="sms">
+            <span class="icon">📱</span> 接码管理
+          </button>
           <button class="nav-item" data-tab="jobs">
             <span class="icon">⚙️</span> 任务中心
           </button>
@@ -209,6 +212,73 @@
               </div>
             </div>
             <div id="cdkey-list" class="table-wrapper"></div>
+          </div>
+        </section>
+
+        <!-- SMS -->
+        <section class="tab-panel hidden" data-panel="sms">
+          <div class="content-header">
+            <h2>接码管理</h2>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>批量导入</h3></div>
+              <form id="sms-batch-form" class="stack">
+                <label class="field">
+                  <span>批次名称</span>
+                  <input id="sms-batch-name" placeholder="本次导入名称" />
+                </label>
+                <label class="field">
+                  <span>卡密前缀</span>
+                  <input id="sms-batch-prefix" placeholder="例如 SMS" />
+                </label>
+                <label class="field">
+                  <span>导入内容</span>
+                  <textarea id="sms-batch-content" rows="5" placeholder="每行一条，格式：手机号----接码网址"></textarea>
+                </label>
+                <button type="submit" class="primary-btn">开始导入</button>
+              </form>
+              <div id="sms-batch-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>单条添加</h3></div>
+              <form id="sms-single-form" class="stack">
+                <label class="field">
+                  <span>手机号</span>
+                  <input id="sms-single-phone" placeholder="接码平台手机号" />
+                </label>
+                <label class="field">
+                  <span>接码网址</span>
+                  <input id="sms-single-url" placeholder="接码网址" />
+                </label>
+                <label class="field">
+                  <span>卡密前缀</span>
+                  <input id="sms-single-prefix" placeholder="例如 SMS" />
+                </label>
+                <button type="submit" class="primary-btn">添加</button>
+              </form>
+              <div id="sms-single-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>接码记录</h3>
+              <div class="header-actions">
+                <button id="sms-copy-keys-btn" class="ghost-btn small">批量复制卡密</button>
+                <button id="sms-copy-info-btn" class="ghost-btn small">批量复制接码信息</button>
+                <button id="sms-export-excel-btn" class="ghost-btn small">导出 Excel</button>
+                <select id="sms-action" class="small-select">
+                  <option value="active">批量启用</option>
+                  <option value="disabled">批量禁用</option>
+                  <option value="void">批量作废</option>
+                </select>
+                <button id="sms-action-btn" class="primary-btn small">执行</button>
+              </div>
+            </div>
+            <div id="sms-list" class="table-wrapper"></div>
           </div>
         </section>
 

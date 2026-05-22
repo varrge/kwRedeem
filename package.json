@@ -16,7 +16,9 @@
     "serve:admin": "node scripts/static-server.js admin 4174",
     "start:api": "node api/src/server.js",
     "start:worker": "node worker/src/worker.js",
-    "check": "node scripts/check.js"
+    "check": "node scripts/check.js",
+    "test": "node --test tests/",
+    "test:property": "node --test tests/sms-property-*.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
@@ -27,5 +29,8 @@
     "nanoid": "^5.1.6",
     "playwright": "^1.60.0",
     "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "fast-check": "^4.8.0"
   }
 }

@@ -371,6 +371,74 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS quota_source_cards (
+      id TEXT PRIMARY KEY,
+      source_key TEXT NOT NULL,
+      quota INTEGER NOT NULL,
+      remaining INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      import_batch_id TEXT,
+      merged_into_id TEXT,
+      verify_response TEXT,
+      retry_count INTEGER DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quota_import_batches (
+      id TEXT PRIMARY KEY,
+      total_count INTEGER NOT NULL,
+      success_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      merged_card_id TEXT,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quota_sub_cards (
+      id TEXT PRIMARY KEY,
+      card_code TEXT NOT NULL UNIQUE,
+      total_quota INTEGER NOT NULL,
+      used_quota INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      locked_at TEXT,
+      locked_until TEXT,
+      lock_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quota_claim_logs (
+      id TEXT PRIMARY KEY,
+      sub_card_id TEXT NOT NULL,
+      card_code TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      account_count INTEGER,
+      accounts TEXT,
+      warning_ack_id TEXT,
+      source_ip TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quota_rate_limits (
+      id TEXT PRIMARY KEY,
+      sub_card_id TEXT NOT NULL,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      window_start TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS quota_settings (
+      id TEXT PRIMARY KEY,
+      low_stock_threshold INTEGER DEFAULT 5,
+      last_low_stock_notify_at TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -415,6 +483,12 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sms_entries_status ON sms_entries(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_sms_entries_batch ON sms_entries(batch_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_entries_public_key ON sms_entries(public_key);
+    CREATE INDEX IF NOT EXISTS idx_quota_source_cards_status ON quota_source_cards(status);
+    CREATE INDEX IF NOT EXISTS idx_quota_source_cards_batch ON quota_source_cards(import_batch_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_sub_cards_code ON quota_sub_cards(card_code);
+    CREATE INDEX IF NOT EXISTS idx_quota_sub_cards_status ON quota_sub_cards(status);
+    CREATE INDEX IF NOT EXISTS idx_quota_claim_logs_card ON quota_claim_logs(sub_card_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_quota_rate_limits_card ON quota_rate_limits(sub_card_id, window_start);
   `);
 }
 
@@ -744,6 +818,11 @@ function seedDefaults(db) {
       VALUES ('default', NULL, ?, 'system')
     `).run(new Date().toISOString());
   }
+
+  db.prepare(`
+    INSERT OR IGNORE INTO quota_settings (id, low_stock_threshold, updated_at)
+    VALUES ('default', 5, ?)
+  `).run(new Date().toISOString());
 }
 
 export function getDb() {

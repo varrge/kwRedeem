@@ -11,10 +11,12 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses } from "../../shared/src/constants.js";
+import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
+import { verifyExternalCard, mergeExternalCards, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
+import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
@@ -3830,6 +3832,983 @@ app.post("/api/admin/sms/entries", { preHandler: requireAdmin }, async (request,
   });
 
   return { id, publicKey };
+});
+
+// ── Quota Public: Verify Sub-Card ──
+app.post("/api/public/quota/verify", async (request, reply) => {
+  const schema = z.object({
+    cardCode: z.string().min(1)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      message: "请提供 cardCode",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const cardCode = parsed.data.cardCode.trim();
+  const card = db.prepare(`
+    SELECT id, card_code, total_quota, used_quota, status
+    FROM quota_sub_cards
+    WHERE card_code = ?
+  `).get(cardCode);
+
+  if (!card) {
+    return reply.code(401).send({
+      message: "卡密无效",
+      code: quotaErrorCodes.CARD_INVALID
+    });
+  }
+
+  if (card.status === quotaSubCardStatuses.void) {
+    return reply.code(403).send({
+      message: "卡密无效",
+      code: quotaErrorCodes.CARD_INVALID
+    });
+  }
+
+  if (card.status === quotaSubCardStatuses.locked) {
+    return reply.code(429).send({
+      message: "操作过于频繁，请稍后重试",
+      code: quotaErrorCodes.CARD_LOCKED
+    });
+  }
+
+  return {
+    valid: true,
+    cardCode: card.card_code,
+    remaining: card.total_quota - card.used_quota
+  };
+});
+
+// ── Quota Admin: Cards List ──
+app.get("/api/admin/quota/cards", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(request.query.pageSize) || 20)));
+  const offset = (page - 1) * pageSize;
+  const status = request.query.status ? String(request.query.status) : null;
+
+  const validStatuses = ["active", "used", "failed"];
+  const statusFilter = status && validStatuses.includes(status) ? status : null;
+
+  const countSql = statusFilter
+    ? "SELECT COUNT(*) AS count FROM quota_source_cards WHERE status = ?"
+    : "SELECT COUNT(*) AS count FROM quota_source_cards";
+  const total = statusFilter
+    ? db.prepare(countSql).get(statusFilter).count
+    : db.prepare(countSql).get().count;
+
+  const querySql = statusFilter
+    ? `SELECT * FROM quota_source_cards WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    : `SELECT * FROM quota_source_cards ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  const rows = statusFilter
+    ? db.prepare(querySql).all(statusFilter, pageSize, offset)
+    : db.prepare(querySql).all(pageSize, offset);
+
+  const cards = rows.map((row) => {
+    let sourceKeyDisplay = "";
+    try {
+      const decrypted = decryptText(row.source_key);
+      if (decrypted && decrypted.length > 8) {
+        sourceKeyDisplay = decrypted.slice(0, 4) + "****" + decrypted.slice(-4);
+      } else if (decrypted) {
+        sourceKeyDisplay = decrypted.slice(0, 2) + "****";
+      }
+    } catch {
+      // If decryption fails, source_key might be stored in plain text
+      const raw = row.source_key || "";
+      if (raw.length > 8) {
+        sourceKeyDisplay = raw.slice(0, 4) + "****" + raw.slice(-4);
+      } else if (raw.length > 0) {
+        sourceKeyDisplay = raw.slice(0, 2) + "****";
+      }
+    }
+
+    return {
+      id: row.id,
+      sourceKey: sourceKeyDisplay,
+      quota: row.quota,
+      remaining: row.remaining,
+      status: row.status,
+      importBatchId: row.import_batch_id || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+
+  return { cards, total, page, pageSize };
+});
+
+// ── Quota Admin: Import Cards ──
+app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    cards: z.array(z.string().min(1)).min(1).max(100)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      message: "请提供 cards 数组（1-100 张卡密）",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const { cards } = parsed.data;
+  const now = nowIso();
+
+  // 重复卡密检测：检查是否有 source_key 已存在于 quota_source_cards 表中
+  const existingRows = db.prepare("SELECT source_key FROM quota_source_cards").all();
+  const existingKeys = new Set();
+  for (const row of existingRows) {
+    try {
+      existingKeys.add(decryptText(row.source_key));
+    } catch {
+      existingKeys.add(row.source_key);
+    }
+  }
+
+  for (const code of cards) {
+    if (existingKeys.has(code.trim())) {
+      return reply.code(409).send({
+        message: "该卡密已存在",
+        code: quotaErrorCodes.CARD_EXISTS
+      });
+    }
+  }
+
+  // 检查批次内是否有重复
+  const uniqueCards = [...new Set(cards.map(c => c.trim()))];
+  if (uniqueCards.length !== cards.length) {
+    return reply.code(409).send({
+      message: "该卡密已存在",
+      code: quotaErrorCodes.CARD_EXISTS
+    });
+  }
+
+  // 创建导入批次
+  const batchId = nanoid(16);
+  db.prepare(`
+    INSERT INTO quota_import_batches (id, total_count, success_count, failed_count, merged_card_id, status, created_by, created_at, updated_at)
+    VALUES (?, ?, 0, 0, NULL, ?, ?, ?, ?)
+  `).run(batchId, uniqueCards.length, quotaBatchStatuses.pending, request.admin.username, now, now);
+
+  let successCount = 0;
+  let failureCount = 0;
+  const failures = [];
+  const activeCardIds = [];
+  const activeCardCodes = [];
+
+  // 逐一验证卡密
+  for (const cardCode of uniqueCards) {
+    const trimmedCode = cardCode.trim();
+    const cardId = nanoid(16);
+
+    try {
+      const result = await verifyExternalCard(trimmedCode);
+
+      if (result.ok === true && result.remaining > 0) {
+        // 验证成功：插入 quota_source_cards（status=active）
+        db.prepare(`
+          INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, NULL, ?, ?)
+        `).run(
+          cardId,
+          encryptText(trimmedCode),
+          result.quota || result.remaining,
+          result.remaining,
+          quotaCardStatuses.active,
+          batchId,
+          JSON.stringify(result),
+          now,
+          now
+        );
+        successCount++;
+        activeCardIds.push(cardId);
+        activeCardCodes.push(trimmedCode);
+      } else {
+        // 验证失败（ok=false 或 remaining=0）：插入 quota_source_cards（status=failed）并记录错误
+        const reason = result.ok === false
+          ? "卡密无效"
+          : "卡密额度已耗尽";
+
+        db.prepare(`
+          INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?)
+        `).run(
+          cardId,
+          encryptText(trimmedCode),
+          result.quota || 0,
+          result.remaining || 0,
+          quotaCardStatuses.failed,
+          batchId,
+          JSON.stringify(result),
+          reason,
+          now,
+          now
+        );
+        failureCount++;
+        failures.push({ code: trimmedCode, reason });
+      }
+    } catch (error) {
+      // 外部 API 超时或异常
+      const reason = error.message || "外部接口请求失败";
+      db.prepare(`
+        INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
+        VALUES (?, ?, 0, 0, ?, ?, NULL, NULL, 0, ?, ?, ?)
+      `).run(
+        cardId,
+        encryptText(trimmedCode),
+        quotaCardStatuses.failed,
+        batchId,
+        reason,
+        now,
+        now
+      );
+      failureCount++;
+      failures.push({ code: trimmedCode, reason });
+    }
+  }
+
+  // 更新批次状态
+  const batchStatus = successCount > 0 && failureCount === 0
+    ? quotaBatchStatuses.completed
+    : quotaBatchStatuses.partial;
+  db.prepare(`
+    UPDATE quota_import_batches
+    SET success_count = ?, failed_count = ?, status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(successCount, failureCount, batchStatus, now, batchId);
+
+  // 有效卡密 > 2 张时自动触发合并流程（调用 mergeExternalCards）
+  let mergeResult = null;
+  if (activeCardCodes.length > 2) {
+    try {
+      const mergeResponse = await mergeExternalCards(activeCardCodes);
+
+      if (mergeResponse.ok && mergeResponse.newCode) {
+        // 合并成功：创建新 active 卡密记录
+        const mergedCardId = nanoid(16);
+        const mergedNow = nowIso();
+
+        // 计算合并后的总 remaining
+        const totalRemaining = db.prepare(`
+          SELECT COALESCE(SUM(remaining), 0) AS total
+          FROM quota_source_cards
+          WHERE id IN (${activeCardIds.map(() => "?").join(",")})
+        `).get(...activeCardIds).total;
+
+        // 插入合并后的新卡密
+        db.prepare(`
+          INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, NULL, ?, ?)
+        `).run(
+          mergedCardId,
+          encryptText(mergeResponse.newCode),
+          totalRemaining,
+          totalRemaining,
+          quotaCardStatuses.active,
+          batchId,
+          JSON.stringify(mergeResponse),
+          mergedNow,
+          mergedNow
+        );
+
+        // 原卡密标记为 used，更新 merged_into_id
+        const updateStmt = db.prepare(`
+          UPDATE quota_source_cards
+          SET status = ?, merged_into_id = ?, updated_at = ?
+          WHERE id = ?
+        `);
+        for (const id of activeCardIds) {
+          updateStmt.run(quotaCardStatuses.used, mergedCardId, mergedNow, id);
+        }
+
+        // 更新批次的 merged_card_id
+        db.prepare(`
+          UPDATE quota_import_batches
+          SET merged_card_id = ?, updated_at = ?
+          WHERE id = ?
+        `).run(mergedCardId, mergedNow, batchId);
+
+        mergeResult = {
+          success: true,
+          mergedCardId,
+          newCode: mergeResponse.newCode,
+          totalRemaining
+        };
+      } else {
+        // 合并失败：保持原状态不变，在返回结果中包含合并错误信息
+        const errorMsg = mergeResponse.error || "合并接口返回错误";
+        mergeResult = {
+          success: false,
+          error: errorMsg
+        };
+      }
+    } catch (error) {
+      // 合并请求超时或网络不可达：保持原状态不变
+      mergeResult = {
+        success: false,
+        error: error.message || "合并接口连接失败"
+      };
+    }
+  }
+
+  return {
+    successCount,
+    failureCount,
+    failures,
+    mergeResult
+  };
+});
+
+// ── Quota Admin: Merge Cards ──
+app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    cardIds: z.array(z.string().min(1)).min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      message: "请提供 cardIds 数组（非空）",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const { cardIds } = parsed.data;
+
+  // 查找所有指定的卡密记录
+  const placeholders = cardIds.map(() => "?").join(",");
+  const cards = db.prepare(`
+    SELECT id, source_key, remaining, status
+    FROM quota_source_cards
+    WHERE id IN (${placeholders})
+  `).all(...cardIds);
+
+  // 验证所有卡密都存在
+  if (cards.length !== cardIds.length) {
+    return reply.code(400).send({
+      message: "部分卡密 ID 不存在",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  // 验证所有卡密状态为 active
+  const nonActiveCards = cards.filter(c => c.status !== quotaCardStatuses.active);
+  if (nonActiveCards.length > 0) {
+    return reply.code(400).send({
+      message: "所有参与合并的卡密必须为 active 状态",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  // 解密所有卡密的 source_key 获取实际卡密编码
+  const cardCodes = [];
+  for (const card of cards) {
+    try {
+      cardCodes.push(decryptText(card.source_key));
+    } catch {
+      cardCodes.push(card.source_key);
+    }
+  }
+
+  // 调用外部合并接口
+  try {
+    const mergeResponse = await mergeExternalCards(cardCodes);
+
+    if (mergeResponse.ok && mergeResponse.newCode) {
+      // 合并成功：创建新 active 卡密记录
+      const mergedCardId = nanoid(16);
+      const now = nowIso();
+
+      // 计算合并后的总 remaining
+      const totalRemaining = db.prepare(`
+        SELECT COALESCE(SUM(remaining), 0) AS total
+        FROM quota_source_cards
+        WHERE id IN (${placeholders})
+      `).get(...cardIds).total;
+
+      // 插入合并后的新卡密
+      db.prepare(`
+        INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0, NULL, ?, ?)
+      `).run(
+        mergedCardId,
+        encryptText(mergeResponse.newCode),
+        totalRemaining,
+        totalRemaining,
+        quotaCardStatuses.active,
+        JSON.stringify(mergeResponse),
+        now,
+        now
+      );
+
+      // 原卡密标记为 used，更新 merged_into_id
+      const updateStmt = db.prepare(`
+        UPDATE quota_source_cards
+        SET status = ?, merged_into_id = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      for (const id of cardIds) {
+        updateStmt.run(quotaCardStatuses.used, mergedCardId, now, id);
+      }
+
+      // 掩码处理新卡密编码（只显示前4位和后4位）
+      const newCode = mergeResponse.newCode;
+      const maskedCode = newCode.length > 8
+        ? `${newCode.slice(0, 4)}****${newCode.slice(-4)}`
+        : "****";
+
+      return {
+        success: true,
+        mergedCardId,
+        newCode: maskedCode,
+        totalRemaining
+      };
+    } else {
+      // 合并失败：保持原状态不变，返回错误信息
+      const errorMsg = mergeResponse.error || "合并接口返回错误";
+      return reply.code(400).send({
+        success: false,
+        error: errorMsg,
+        code: quotaErrorCodes.EXTERNAL_API_ERROR
+      });
+    }
+  } catch (error) {
+    // 合并请求超时或网络不可达：保持原状态不变
+    return reply.code(400).send({
+      success: false,
+      error: error.message || "合并接口连接失败",
+      code: quotaErrorCodes.EXTERNAL_API_ERROR
+    });
+  }
+});
+
+// ── Quota Admin: Dashboard ──
+app.get("/api/admin/quota/dashboard", { preHandler: requireAdmin }, async () => {
+  const totalQuota = getTotalQuota(db);
+  const allocatedQuota = getAllocatedQuota(db);
+  const availableQuota = getAvailableQuota(db);
+
+  const activeSubCards = db.prepare(
+    "SELECT COUNT(*) AS count FROM quota_sub_cards WHERE status = 'active'"
+  ).get().count;
+
+  const totalClaims = db.prepare(
+    "SELECT COUNT(*) AS count FROM quota_claim_logs"
+  ).get().count;
+
+  return {
+    totalQuota,
+    allocatedQuota,
+    availableQuota,
+    activeSubCards,
+    totalClaims
+  };
+});
+
+// ── Quota Admin: Create Sub-Cards ──
+app.post("/api/admin/quota/sub-cards", { preHandler: requireAdmin }, async (request, reply) => {
+  const { quota, count } = request.body || {};
+
+  // Validate input
+  if (
+    !Number.isInteger(quota) || quota < 1 || quota > 999999 ||
+    !Number.isInteger(count) || count < 1 || count > 100
+  ) {
+    return reply.code(400).send({
+      message: "输入不合法：quota 必须为 1-999999 的整数，count 必须为 1-100 的整数",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  // Check available quota
+  const availableQuota = getAvailableQuota(db);
+  const totalRequired = quota * count;
+  if (totalRequired > availableQuota) {
+    return reply.code(400).send({
+      message: `额度不足，当前可分配额度为 ${availableQuota}`,
+      code: quotaErrorCodes.QUOTA_INSUFFICIENT
+    });
+  }
+
+  // Create sub-cards in a transaction
+  const now = nowIso();
+  const cards = [];
+
+  const insertStmt = db.prepare(`
+    INSERT INTO quota_sub_cards (id, card_code, total_quota, used_quota, status, created_at, updated_at)
+    VALUES (?, ?, ?, 0, 'active', ?, ?)
+  `);
+
+  const createCards = db.transaction(() => {
+    for (let i = 0; i < count; i++) {
+      const id = nanoid(16);
+      const cardCode = getUniqueSubCardCode(db);
+      insertStmt.run(id, cardCode, quota, now, now);
+      cards.push({
+        id,
+        cardCode,
+        totalQuota: quota,
+        status: "active",
+        createdAt: now
+      });
+    }
+  });
+
+  createCards();
+
+  return { success: true, cards, count };
+});
+
+// ── Quota Admin: Sub-Cards List ──
+app.get("/api/admin/quota/sub-cards", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(request.query.pageSize) || 20)));
+  const offset = (page - 1) * pageSize;
+  const status = request.query.status ? String(request.query.status) : null;
+
+  const validStatuses = ["active", "locked", "void"];
+  const statusFilter = status && validStatuses.includes(status) ? status : null;
+
+  const countSql = statusFilter
+    ? "SELECT COUNT(*) AS count FROM quota_sub_cards WHERE status = ?"
+    : "SELECT COUNT(*) AS count FROM quota_sub_cards";
+  const total = statusFilter
+    ? db.prepare(countSql).get(statusFilter).count
+    : db.prepare(countSql).get().count;
+
+  const querySql = statusFilter
+    ? `SELECT * FROM quota_sub_cards WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    : `SELECT * FROM quota_sub_cards ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  const rows = statusFilter
+    ? db.prepare(querySql).all(statusFilter, pageSize, offset)
+    : db.prepare(querySql).all(pageSize, offset);
+
+  const subCards = rows.map((row) => ({
+    id: row.id,
+    cardCode: row.card_code,
+    totalQuota: row.total_quota,
+    usedQuota: row.used_quota,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+
+  return { subCards, total, page, pageSize };
+});
+
+// ── Quota Admin: Sub-Card Detail ──
+app.get("/api/admin/quota/sub-cards/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const { id } = request.params;
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE id = ?").get(id);
+  if (!row) {
+    return reply.code(404).send({ message: "子卡密不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  return {
+    id: row.id,
+    cardCode: row.card_code,
+    totalQuota: row.total_quota,
+    usedQuota: row.used_quota,
+    remaining: row.total_quota - row.used_quota,
+    status: row.status,
+    lockedAt: row.locked_at,
+    lockedUntil: row.locked_until,
+    lockReason: row.lock_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+});
+
+// ── Quota Admin: Sub-Card History ──
+app.get("/api/admin/quota/sub-cards/:id/history", { preHandler: requireAdmin }, async (request, reply) => {
+  const { id } = request.params;
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE id = ?").get(id);
+  if (!row) {
+    return reply.code(404).send({ message: "子卡密不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  const logs = db.prepare(`
+    SELECT id, amount, account_count, accounts, warning_ack_id, source_ip, created_at
+    FROM quota_claim_logs
+    WHERE sub_card_id = ?
+    ORDER BY created_at DESC
+  `).all(id);
+
+  const history = logs.map(log => ({
+    id: log.id,
+    amount: log.amount,
+    accountCount: log.account_count,
+    accounts: log.accounts ? JSON.parse(log.accounts) : [],
+    warningAckId: log.warning_ack_id,
+    sourceIp: log.source_ip,
+    createdAt: log.created_at
+  }));
+
+  return { history };
+});
+
+// ── Quota Admin: Cancel Sub-Card ──
+app.post("/api/admin/quota/sub-cards/:id/cancel", { preHandler: requireAdmin }, async (request, reply) => {
+  const { id } = request.params;
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE id = ?").get(id);
+  if (!row) {
+    return reply.code(404).send({ message: "子卡密不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  if (row.status === quotaSubCardStatuses.locked) {
+    return reply.code(409).send({ message: "该卡密正在使用中，无法取消", code: quotaErrorCodes.CANCEL_DENIED });
+  }
+
+  if (row.status === quotaSubCardStatuses.void) {
+    return reply.code(400).send({ message: "该卡密已被取消" });
+  }
+
+  const remaining = row.total_quota - row.used_quota;
+  const now = nowIso();
+
+  db.prepare(`
+    UPDATE quota_sub_cards
+    SET status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(quotaSubCardStatuses.void, now, id);
+
+  createAuditLog({
+    action: "quota_sub_card_cancel",
+    actor: request.admin.username,
+    resourceType: "quota_sub_card",
+    resourceId: id,
+    detail: {
+      card_code: row.card_code,
+      returned_quota: remaining,
+      operator: request.admin.username
+    }
+  });
+
+  return {
+    success: true,
+    returnedQuota: remaining,
+    cardCode: row.card_code,
+    newStatus: quotaSubCardStatuses.void
+  };
+});
+
+// ── Quota Admin: Get Settings ──
+app.get("/api/admin/quota/settings", { preHandler: requireAdmin }, async () => {
+  const row = db.prepare(
+    "SELECT low_stock_threshold, updated_at, updated_by FROM quota_settings WHERE id = 'default'"
+  ).get();
+  return {
+    lowStockThreshold: row?.low_stock_threshold ?? 5,
+    updatedAt: row?.updated_at || null,
+    updatedBy: row?.updated_by || null
+  };
+});
+
+// ── Quota Admin: Update Settings ──
+app.patch("/api/admin/quota/settings", { preHandler: requireAdmin }, async (request, reply) => {
+  const { low_stock_threshold } = request.body || {};
+
+  if (
+    low_stock_threshold === undefined ||
+    !Number.isInteger(low_stock_threshold) ||
+    low_stock_threshold < 1
+  ) {
+    return reply.code(400).send({
+      message: "low_stock_threshold 必须为正整数（>= 1）",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE quota_settings
+    SET low_stock_threshold = ?, updated_at = ?, updated_by = ?
+    WHERE id = 'default'
+  `).run(low_stock_threshold, now, request.admin.username);
+
+  return {
+    id: "default",
+    lowStockThreshold: low_stock_threshold,
+    updatedAt: now,
+    updatedBy: request.admin.username
+  };
+});
+
+// ── Quota Public: Get Card Info ──
+app.get("/api/public/quota/info", async (request, reply) => {
+  const cardCode = String(request.query.cardCode || "").trim();
+  if (!cardCode) {
+    return reply.code(400).send({ message: "缺少 cardCode 参数", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE card_code = ?").get(cardCode);
+  if (!row || row.status === quotaSubCardStatuses.void) {
+    return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  if (row.status === quotaSubCardStatuses.locked) {
+    return reply.code(429).send({ message: "卡密已被锁定，请稍后重试", code: quotaErrorCodes.CARD_LOCKED });
+  }
+
+  const remaining = row.total_quota - row.used_quota;
+  const availableStock = getAvailableQuota(db);
+
+  return {
+    remaining,
+    totalQuota: row.total_quota,
+    usedQuota: row.used_quota,
+    availableStock
+  };
+});
+
+// ── Quota Public: Claim History ──
+app.get("/api/public/quota/history", async (request, reply) => {
+  const cardCode = String(request.query.cardCode || "").trim();
+  if (!cardCode) {
+    return reply.code(400).send({ message: "缺少 cardCode 参数", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE card_code = ?").get(cardCode);
+  if (!row || row.status === quotaSubCardStatuses.void) {
+    return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  const logs = db.prepare(`
+    SELECT id, amount, account_count, accounts, created_at
+    FROM quota_claim_logs
+    WHERE card_code = ?
+    ORDER BY created_at DESC
+  `).all(cardCode);
+
+  const history = logs.map(log => ({
+    id: log.id,
+    amount: log.amount,
+    accountCount: log.account_count,
+    accounts: log.accounts ? JSON.parse(log.accounts) : [],
+    createdAt: log.created_at
+  }));
+
+  return { history };
+});
+
+// ── Quota Public: Claim History Download ──
+app.get("/api/public/quota/history/download", async (request, reply) => {
+  const cardCode = String(request.query.cardCode || "").trim();
+  if (!cardCode) {
+    return reply.code(400).send({ message: "缺少 cardCode 参数", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE card_code = ?").get(cardCode);
+  if (!row || row.status === quotaSubCardStatuses.void) {
+    return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  const logs = db.prepare(`
+    SELECT amount, created_at
+    FROM quota_claim_logs
+    WHERE card_code = ?
+    ORDER BY created_at DESC
+  `).all(cardCode);
+
+  const content = generateExportText(cardCode, logs);
+
+  reply.header("Content-Type", "text/plain; charset=utf-8");
+  reply.header("Content-Disposition", `attachment; filename="quota-history-${cardCode}.txt"`);
+  return reply.send(content);
+});
+
+// ── Quota Public: Claim Warning ──
+app.get("/api/public/quota/claim-warning", async () => {
+  try {
+    const response = await fetchClaimWarning();
+    if (response && response.warning && response.warning.id) {
+      return {
+        warning: {
+          id: response.warning.id,
+          title: response.warning.title,
+          message: response.warning.message
+        }
+      };
+    }
+    return { warning: null };
+  } catch {
+    return { warning: null };
+  }
+});
+
+// ── Quota Public: Claim ──
+app.post("/api/public/quota/claim", async (request, reply) => {
+  const schema = z.object({
+    cardCode: z.string().min(1),
+    count: z.number().int().min(1),
+    warningAckId: z.string().default("")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      message: "请提供 cardCode、count 和 warningAckId",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const { cardCode, count, warningAckId } = parsed.data;
+  const sourceIp = request.ip || request.headers["x-forwarded-for"] || "";
+
+  // Step 1: Look up sub-card by card_code, validate status is 'active'
+  const subCard = db.prepare("SELECT * FROM quota_sub_cards WHERE card_code = ?").get(cardCode);
+  if (!subCard || subCard.status === quotaSubCardStatuses.void) {
+    return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  // Check if card is locked but lock has expired (auto-unlock)
+  if (subCard.status === quotaSubCardStatuses.locked) {
+    if (subCard.locked_until && new Date(subCard.locked_until) <= new Date()) {
+      // Auto-unlock: lock duration has passed
+      db.prepare(`
+        UPDATE quota_sub_cards
+        SET status = 'active', locked_at = NULL, locked_until = NULL, lock_reason = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(nowIso(), subCard.id);
+      subCard.status = quotaSubCardStatuses.active;
+    } else {
+      return reply.code(429).send({
+        message: "操作过于频繁，请稍后重试",
+        code: quotaErrorCodes.RATE_LIMITED
+      });
+    }
+  }
+
+  // Step 2: Check rate limit
+  const windowStart = new Date(Date.now() - QUOTA_RATE_LIMIT_WINDOW * 1000).toISOString();
+  const rateRow = db.prepare(`
+    SELECT id, request_count FROM quota_rate_limits
+    WHERE sub_card_id = ? AND window_start > ?
+    ORDER BY window_start DESC
+    LIMIT 1
+  `).get(subCard.id, windowStart);
+
+  if (rateRow && rateRow.request_count >= QUOTA_RATE_LIMIT_MAX) {
+    // Lock the card for 30 minutes
+    const now = nowIso();
+    const lockedUntil = new Date(Date.now() + QUOTA_LOCK_DURATION_MINUTES * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE quota_sub_cards
+      SET status = 'locked', locked_at = ?, locked_until = ?, lock_reason = 'rate_limit', updated_at = ?
+      WHERE id = ?
+    `).run(now, lockedUntil, now, subCard.id);
+
+    return reply.code(429).send({
+      message: "操作过于频繁，请稍后重试",
+      code: quotaErrorCodes.RATE_LIMITED
+    });
+  }
+
+  // Step 3: Increment rate limit counter
+  const now = nowIso();
+  if (rateRow) {
+    db.prepare("UPDATE quota_rate_limits SET request_count = request_count + 1 WHERE id = ?").run(rateRow.id);
+  } else {
+    db.prepare(`
+      INSERT INTO quota_rate_limits (id, sub_card_id, request_count, window_start, created_at)
+      VALUES (?, ?, 1, ?, ?)
+    `).run(nanoid(16), subCard.id, now, now);
+  }
+
+  // Step 4: Check remaining quota
+  const remaining = subCard.total_quota - subCard.used_quota;
+  if (remaining < count) {
+    return reply.code(403).send({
+      message: "额度已用完",
+      code: quotaErrorCodes.CARD_EXHAUSTED
+    });
+  }
+
+  // Step 5: Find the active source card (merged card) to get the actual card code for external API call
+  const sourceCard = db.prepare(`
+    SELECT id, source_key FROM quota_source_cards
+    WHERE status = 'active'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get();
+
+  if (!sourceCard) {
+    return reply.code(500).send({
+      message: "系统无可用源卡密",
+      code: quotaErrorCodes.EXTERNAL_API_ERROR
+    });
+  }
+
+  let sourceCardCode;
+  try {
+    sourceCardCode = decryptText(sourceCard.source_key);
+  } catch {
+    return reply.code(500).send({
+      message: "源卡密解密失败",
+      code: quotaErrorCodes.EXTERNAL_API_ERROR
+    });
+  }
+
+  // Step 6: Call external claim API
+  let externalResult;
+  try {
+    externalResult = await claimFromExternal(sourceCardCode, count, warningAckId);
+  } catch (error) {
+    // External API failed: don't modify local state
+    return reply.code(502).send({
+      message: error.message || "外部接口请求失败",
+      code: quotaErrorCodes.EXTERNAL_API_ERROR
+    });
+  }
+
+  // Step 7: If external API returns ok=true, update local state
+  if (externalResult && externalResult.ok === true) {
+    const chargedQuota = externalResult.chargedQuota || count;
+    const accounts = externalResult.accounts || [];
+    const accountCount = accounts.length;
+
+    // Atomic update: used_quota += chargedQuota, insert claim_log
+    db.prepare(`
+      UPDATE quota_sub_cards
+      SET used_quota = used_quota + ?, updated_at = ?
+      WHERE id = ?
+    `).run(chargedQuota, nowIso(), subCard.id);
+
+    db.prepare(`
+      INSERT INTO quota_claim_logs (id, sub_card_id, card_code, amount, account_count, accounts, warning_ack_id, source_ip, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      nanoid(16),
+      subCard.id,
+      cardCode,
+      chargedQuota,
+      accountCount,
+      JSON.stringify(accounts),
+      warningAckId,
+      sourceIp,
+      nowIso()
+    );
+
+    const newRemaining = subCard.total_quota - subCard.used_quota - chargedQuota;
+
+    return {
+      success: true,
+      remaining: newRemaining,
+      chargedQuota,
+      accounts
+    };
+  }
+
+  // Step 8: External API returned ok=false or unexpected response
+  return reply.code(502).send({
+    message: externalResult?.message || externalResult?.error || "外部接口返回失败",
+    code: quotaErrorCodes.EXTERNAL_API_ERROR
+  });
 });
 
 app.setErrorHandler((error, _request, reply) => {

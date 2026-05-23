@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KaWang 提号系统 - 客户提号</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .quota-panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 32px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+        margin-bottom: 24px;
+      }
+
+      .quota-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .quota-stat-card {
+        padding: 20px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--line);
+        text-align: center;
+      }
+
+      .quota-stat-card .label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+      }
+
+      .quota-stat-card .value {
+        font-size: 28px;
+        font-weight: 800;
+        background: linear-gradient(135deg, #fff, #b2c5ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .quota-stat-card .value.exhausted {
+        background: linear-gradient(135deg, var(--error), #ff5577);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .warning-box {
+        padding: 16px 20px;
+        border-radius: 16px;
+        background: rgba(255, 213, 138, 0.08);
+        border: 1px solid rgba(255, 213, 138, 0.25);
+        margin-bottom: 20px;
+        display: none;
+      }
+
+      .warning-box.visible {
+        display: block;
+      }
+
+      .warning-box .warning-title {
+        font-weight: 700;
+        color: #ffd58a;
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+
+      .warning-box .warning-message {
+        color: #e8d5a8;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .claim-form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: end;
+      }
+
+      .claim-form input {
+        border-radius: 16px;
+      }
+
+      .claim-form .primary-btn {
+        white-space: nowrap;
+        padding: 16px 28px;
+      }
+
+      .status-message {
+        margin-top: 16px;
+        padding: 14px 18px;
+        border-radius: 14px;
+        font-size: 14px;
+        font-weight: 600;
+        text-align: center;
+      }
+
+      .status-message.exhausted {
+        background: rgba(255, 127, 159, 0.08);
+        border: 1px solid rgba(255, 127, 159, 0.2);
+        color: var(--error);
+      }
+
+      .status-message.no-stock {
+        background: rgba(255, 213, 138, 0.08);
+        border: 1px solid rgba(255, 213, 138, 0.2);
+        color: #ffd58a;
+      }
+
+      .accounts-panel {
+        margin-top: 24px;
+        display: none;
+      }
+
+      .accounts-panel.visible {
+        display: block;
+      }
+
+      .accounts-panel .accounts-title {
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 12px;
+        color: var(--success);
+      }
+
+      .account-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--line);
+        margin-bottom: 8px;
+        gap: 12px;
+      }
+
+      .account-row .account-text {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 14px;
+        color: var(--text);
+        word-break: break-all;
+        flex: 1;
+      }
+
+      .copy-btn {
+        background: rgba(94, 120, 200, 0.12);
+        border: 1px solid rgba(125, 154, 255, 0.2);
+        color: var(--primary);
+        padding: 6px 14px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+      }
+
+      .copy-btn:hover {
+        background: rgba(94, 120, 200, 0.2);
+        border-color: var(--primary);
+      }
+
+      .copy-btn.copied {
+        background: rgba(67, 213, 159, 0.15);
+        border-color: var(--success);
+        color: var(--success);
+      }
+
+      .history-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .history-title {
+        font-size: 18px;
+        font-weight: 700;
+        margin: 0;
+        color: var(--text);
+      }
+
+      .history-actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .history-btn {
+        padding: 10px 18px !important;
+        font-size: 13px !important;
+        border-radius: 12px !important;
+      }
+
+      .history-empty {
+        text-align: center;
+        padding: 32px 16px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .history-record {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 18px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--line);
+        margin-bottom: 10px;
+        transition: background 0.2s;
+      }
+
+      .history-record:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .history-record:last-child {
+        margin-bottom: 0;
+      }
+
+      .history-time {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .history-amount {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--primary);
+        white-space: nowrap;
+      }
+
+      .history-accounts {
+        font-size: 13px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      @media (max-width: 600px) {
+        .quota-stats { grid-template-columns: 1fr; }
+        .claim-form { grid-template-columns: 1fr; }
+        .quota-panel { padding: 20px; }
+        .quota-stat-card .value { font-size: 22px; }
+        .history-header { flex-direction: column; align-items: flex-start; }
+        .history-record { grid-template-columns: 1fr; gap: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="bg-grid"></div>
+
+    <main class="page">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <span class="brand-mark">K</span>
+          <span class="brand-copy">
+            <strong>KaWang</strong>
+            <small>Quota Portal</small>
+          </span>
+        </a>
+        <nav class="topnav">
+          <a href="./index.html" class="nav-btn">兑换中心</a>
+          <button class="nav-btn active">提号系统</button>
+        </nav>
+      </header>
+
+      <!-- Verify Section -->
+      <section id="verify-section" class="quota-panel">
+        <div class="section-heading centered">
+          <p class="eyebrow">提号系统</p>
+          <h2>验证卡密</h2>
+          <p class="panel-desc">输入您的卡密编码，验证后即可进行提号操作。</p>
+        </div>
+        <form id="verify-form" class="stack">
+          <div class="field">
+            <input id="card-code-input" name="cardCode" placeholder="请输入卡密编码" autocomplete="off" />
+          </div>
+          <button type="submit" id="verify-btn" class="primary-btn">验证卡密</button>
+        </form>
+        <div id="verify-result" class="result muted">请输入卡密并点击验证。</div>
+      </section>
+
+      <!-- Quota Info + Claim Section (hidden until verified) -->
+      <section id="claim-section" class="hidden">
+        <!-- Quota Stats -->
+        <div class="quota-panel">
+          <div class="quota-stats">
+            <div class="quota-stat-card">
+              <div class="label">剩余可提</div>
+              <div class="value" id="remaining-value">-</div>
+            </div>
+            <div class="quota-stat-card">
+              <div class="label">当前库存</div>
+              <div class="value" id="stock-value">-</div>
+            </div>
+          </div>
+
+          <!-- Status Messages -->
+          <div id="status-exhausted" class="status-message exhausted hidden">已提完</div>
+          <div id="status-no-stock" class="status-message no-stock hidden">联系管理员补货</div>
+
+          <!-- Warning Display -->
+          <div id="warning-box" class="warning-box">
+            <div class="warning-title" id="warning-title"></div>
+            <div class="warning-message" id="warning-message"></div>
+          </div>
+
+          <!-- Claim Form -->
+          <div id="claim-area">
+            <div class="claim-form">
+              <input type="number" id="claim-count" min="1" placeholder="提取数量" />
+              <button type="button" id="claim-btn" class="primary-btn">提取</button>
+            </div>
+          </div>
+
+          <!-- Claim Result -->
+          <div id="claim-result" class="result muted hidden"></div>
+        </div>
+
+        <!-- Accounts Display -->
+        <div id="accounts-panel" class="accounts-panel">
+          <div class="quota-panel">
+            <div class="accounts-title">提取成功 - 账号列表</div>
+            <div id="accounts-list"></div>
+          </div>
+        </div>
+
+        <!-- History Section -->
+        <div class="quota-panel" id="history-panel">
+          <div class="history-header">
+            <h3 class="history-title">提取历史</h3>
+            <div class="history-actions">
+              <button type="button" class="ghost-btn history-btn" id="refresh-history-btn">刷新历史</button>
+              <button type="button" class="ghost-btn history-btn" id="download-history-btn">下载记录</button>
+            </div>
+          </div>
+          <div id="history-list">
+            <div class="history-empty" id="history-empty">暂无提取记录</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
+
+      // --- State ---
+      let verifiedCardCode = null;
+      let warningAckId = "";
+      let warningPollTimer = null;
+
+      // --- DOM ---
+      const verifyForm = document.getElementById("verify-form");
+      const cardCodeInput = document.getElementById("card-code-input");
+      const verifyBtn = document.getElementById("verify-btn");
+      const verifyResult = document.getElementById("verify-result");
+      const verifySection = document.getElementById("verify-section");
+      const claimSection = document.getElementById("claim-section");
+      const remainingValue = document.getElementById("remaining-value");
+      const stockValue = document.getElementById("stock-value");
+      const statusExhausted = document.getElementById("status-exhausted");
+      const statusNoStock = document.getElementById("status-no-stock");
+      const warningBox = document.getElementById("warning-box");
+      const warningTitle = document.getElementById("warning-title");
+      const warningMessage = document.getElementById("warning-message");
+      const claimCount = document.getElementById("claim-count");
+      const claimBtn = document.getElementById("claim-btn");
+      const claimResult = document.getElementById("claim-result");
+      const accountsPanel = document.getElementById("accounts-panel");
+      const accountsList = document.getElementById("accounts-list");
+
+      // --- Utilities ---
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function setState(el, message, type) {
+        el.className = `result ${type}`;
+        el.textContent = message;
+        el.classList.remove("hidden");
+      }
+
+      // --- API Helpers ---
+      async function apiRequest(path, options = {}) {
+        const { headers = {}, ...rest } = options;
+        const response = await fetch(`${API_BASE}${path}`, {
+          headers: { "Content-Type": "application/json", ...headers },
+          ...rest
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || "请求失败");
+        }
+        return payload;
+      }
+
+      // --- Verify ---
+      verifyForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const code = cardCodeInput.value.trim();
+        if (!code) {
+          setState(verifyResult, "请输入卡密编码", "error");
+          return;
+        }
+
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = "验证中...";
+        setState(verifyResult, "正在验证卡密...", "muted");
+
+        try {
+          const result = await apiRequest("/api/public/quota/verify", {
+            method: "POST",
+            body: JSON.stringify({ cardCode: code })
+          });
+
+          if (result.valid) {
+            verifiedCardCode = code;
+            setState(verifyResult, "验证成功", "success");
+            showClaimSection();
+          }
+        } catch (error) {
+          setState(verifyResult, error.message, "error");
+        } finally {
+          verifyBtn.disabled = false;
+          verifyBtn.textContent = "验证卡密";
+        }
+      });
+
+      // --- Show Claim Section ---
+      async function showClaimSection() {
+        claimSection.classList.remove("hidden");
+        await refreshQuotaInfo();
+        startWarningPolling();
+        await loadHistory();
+      }
+
+      // --- Refresh Quota Info ---
+      async function refreshQuotaInfo() {
+        if (!verifiedCardCode) return;
+
+        try {
+          const info = await apiRequest(`/api/public/quota/info?cardCode=${encodeURIComponent(verifiedCardCode)}`);
+          const remaining = info.remaining;
+          const availableStock = info.availableStock;
+
+          remainingValue.textContent = `${remaining} 货`;
+          stockValue.textContent = `${availableStock} 货`;
+
+          // Handle exhausted state
+          if (remaining <= 0) {
+            remainingValue.classList.add("exhausted");
+            statusExhausted.classList.remove("hidden");
+            claimBtn.disabled = true;
+            claimCount.disabled = true;
+          } else {
+            remainingValue.classList.remove("exhausted");
+            statusExhausted.classList.add("hidden");
+            claimBtn.disabled = false;
+            claimCount.disabled = false;
+          }
+
+          // Handle no stock state
+          if (availableStock <= 0) {
+            stockValue.classList.add("exhausted");
+            statusNoStock.classList.remove("hidden");
+            claimBtn.disabled = true;
+            claimCount.disabled = true;
+          } else {
+            stockValue.classList.remove("exhausted");
+            statusNoStock.classList.add("hidden");
+          }
+        } catch (error) {
+          setState(claimResult, error.message, "error");
+        }
+      }
+
+      // --- Warning Polling ---
+      function startWarningPolling() {
+        pollWarning();
+        warningPollTimer = setInterval(pollWarning, 5000);
+      }
+
+      function stopWarningPolling() {
+        if (warningPollTimer) {
+          clearInterval(warningPollTimer);
+          warningPollTimer = null;
+        }
+      }
+
+      async function pollWarning() {
+        try {
+          const data = await apiRequest("/api/public/quota/claim-warning");
+          if (data.warning && data.warning.id) {
+            warningAckId = data.warning.id;
+            warningTitle.textContent = data.warning.title || "";
+            warningMessage.textContent = data.warning.message || "";
+            warningBox.classList.add("visible");
+          } else {
+            warningBox.classList.remove("visible");
+          }
+        } catch {
+          // Silently ignore warning poll errors
+        }
+      }
+
+      // --- Claim ---
+      claimBtn.addEventListener("click", async () => {
+        const count = parseInt(claimCount.value, 10);
+        if (!count || count < 1) {
+          setState(claimResult, "请输入有效的提取数量", "error");
+          return;
+        }
+
+        claimBtn.disabled = true;
+        claimBtn.textContent = "提取中...";
+        accountsPanel.classList.remove("visible");
+        setState(claimResult, "正在提取...", "muted");
+
+        try {
+          const result = await apiRequest("/api/public/quota/claim", {
+            method: "POST",
+            body: JSON.stringify({
+              cardCode: verifiedCardCode,
+              count,
+              warningAckId: warningAckId || ""
+            })
+          });
+
+          if (result.success) {
+            setState(claimResult, `提取成功，消耗 ${result.chargedQuota} 货，剩余 ${result.remaining} 货`, "success");
+            renderAccounts(result.accounts || []);
+            await refreshQuotaInfo();
+            await loadHistory();
+          }
+        } catch (error) {
+          setState(claimResult, error.message, "error");
+        } finally {
+          claimBtn.disabled = false;
+          claimBtn.textContent = "提取";
+          // Re-check if should be disabled
+          const remainingText = remainingValue.textContent;
+          if (remainingText.startsWith("0")) {
+            claimBtn.disabled = true;
+            claimCount.disabled = true;
+          }
+        }
+      });
+
+      // --- Render Accounts ---
+      function renderAccounts(accounts) {
+        if (!accounts.length) {
+          accountsPanel.classList.remove("visible");
+          return;
+        }
+
+        accountsPanel.classList.add("visible");
+        accountsList.innerHTML = accounts.map((account, index) => `
+          <div class="account-row">
+            <span class="account-text">${escapeHtml(account)}</span>
+            <button class="copy-btn" data-account="${escapeHtml(account)}" onclick="copyAccount(this)">复制</button>
+          </div>
+        `).join("");
+      }
+
+      // --- Copy Account ---
+      function copyAccount(btn) {
+        const text = btn.getAttribute("data-account");
+        navigator.clipboard.writeText(text).then(() => {
+          btn.textContent = "已复制";
+          btn.classList.add("copied");
+          setTimeout(() => {
+            btn.textContent = "复制";
+            btn.classList.remove("copied");
+          }, 2000);
+        }).catch(() => {
+          // Fallback for older browsers
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.style.position = "fixed";
+          textarea.style.opacity = "0";
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textarea);
+          btn.textContent = "已复制";
+          btn.classList.add("copied");
+          setTimeout(() => {
+            btn.textContent = "复制";
+            btn.classList.remove("copied");
+          }, 2000);
+        });
+      }
+
+      // Make copyAccount available globally for onclick handler
+      window.copyAccount = copyAccount;
+
+      // --- History ---
+      const historyList = document.getElementById("history-list");
+      const historyEmpty = document.getElementById("history-empty");
+      const refreshHistoryBtn = document.getElementById("refresh-history-btn");
+      const downloadHistoryBtn = document.getElementById("download-history-btn");
+
+      async function loadHistory() {
+        if (!verifiedCardCode) return;
+
+        try {
+          const data = await apiRequest(`/api/public/quota/history?cardCode=${encodeURIComponent(verifiedCardCode)}`);
+          const history = data.history || [];
+
+          if (history.length === 0) {
+            historyList.innerHTML = '<div class="history-empty">暂无提取记录</div>';
+            return;
+          }
+
+          historyList.innerHTML = history.map(record => {
+            const time = formatTime(record.createdAt);
+            const amount = record.amount ?? 0;
+            const accountCount = record.accountCount ?? 0;
+            return `
+              <div class="history-record">
+                <span class="history-time">${escapeHtml(time)}</span>
+                <span class="history-amount">${escapeHtml(amount)} 货</span>
+                <span class="history-accounts">${escapeHtml(accountCount)} 个账号</span>
+              </div>
+            `;
+          }).join("");
+        } catch (error) {
+          historyList.innerHTML = '<div class="history-empty">暂无提取记录</div>';
+        }
+      }
+
+      function formatTime(isoString) {
+        if (!isoString) return "-";
+        try {
+          const date = new Date(isoString);
+          return date.toLocaleString("zh-CN", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+          });
+        } catch {
+          return isoString;
+        }
+      }
+
+      function downloadHistory() {
+        if (!verifiedCardCode) return;
+        const url = `${API_BASE}/api/public/quota/history/download?cardCode=${encodeURIComponent(verifiedCardCode)}`;
+        window.open(url, "_blank");
+      }
+
+      refreshHistoryBtn.addEventListener("click", () => {
+        loadHistory();
+      });
+
+      downloadHistoryBtn.addEventListener("click", () => {
+        downloadHistory();
+      });
+    </script>
+  </body>
+</html>

@@ -72,6 +72,9 @@
           <button class="nav-item" data-tab="notifications">
             <span class="icon">🔔</span> 通知监听
           </button>
+          <button class="nav-item" data-tab="quota">
+            <span class="icon">💰</span> 提号系统
+          </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
@@ -536,6 +539,85 @@
           <div class="card mt-24">
             <div class="card-header"><h3>最近通知事件</h3></div>
             <div id="notify-event-list" class="table-wrapper"></div>
+          </div>
+        </section>
+
+        <!-- Quota System -->
+        <section class="tab-panel hidden" data-panel="quota">
+          <div class="content-header">
+            <h2>提号系统</h2>
+            <p>额度管理与卡密导入</p>
+          </div>
+
+          <section class="stats" id="quota-stats"></section>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>卡密导入</h3></div>
+            <form id="quota-import-form" class="stack">
+              <label class="field">
+                <span>卡密内容（每行一张卡密，支持批量导入）</span>
+                <textarea id="quota-import-codes" rows="5" placeholder="每行输入一张卡密编码，最多 100 张"></textarea>
+              </label>
+              <button type="submit" class="primary-btn">导入卡密</button>
+            </form>
+            <div id="quota-import-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24 hidden" id="quota-import-detail-card">
+            <div class="card-header"><h3>导入结果</h3></div>
+            <div id="quota-import-detail" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>创建子卡密</h3></div>
+            <form id="quota-sub-card-form" class="stack">
+              <div class="grid grid-2">
+                <label class="field">
+                  <span>单张额度</span>
+                  <input id="quota-sub-card-quota" type="number" min="1" max="999999" placeholder="1 ~ 999999" />
+                </label>
+                <label class="field">
+                  <span>创建数量</span>
+                  <input id="quota-sub-card-count" type="number" min="1" max="100" placeholder="1 ~ 100" />
+                </label>
+              </div>
+              <button type="submit" class="primary-btn">创建子卡密</button>
+            </form>
+            <div id="quota-sub-card-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>子卡密列表</h3>
+              <div class="header-actions">
+                <button id="quota-sub-card-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="quota-sub-card-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24 hidden" id="quota-sub-card-detail-card">
+            <div class="card-header">
+              <h3>子卡密详情</h3>
+              <div class="header-actions">
+                <button id="quota-sub-card-detail-close" class="ghost-btn small">关闭</button>
+              </div>
+            </div>
+            <div id="quota-sub-card-detail" class="table-wrapper"></div>
+            <div class="card-header mt-24"><h3>提取历史</h3></div>
+            <div id="quota-sub-card-history" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>系统设置</h3></div>
+            <form id="quota-settings-form" class="stack">
+              <label class="field">
+                <span>低库存阈值</span>
+                <input id="quota-low-stock-threshold" type="number" min="1" placeholder="默认 5" />
+              </label>
+              <button type="submit" class="primary-btn">保存设置</button>
+            </form>
+            <div id="quota-settings-result" class="hint"></div>
           </div>
         </section>
 

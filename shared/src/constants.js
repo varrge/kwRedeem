@@ -74,3 +74,40 @@ export const notificationEventTypes = {
   sendOk: "send_ok",
   test: "test"
 };
+
+// ─── 提号系统常量 ───────────────────────────────────────────
+
+export const quotaCardStatuses = {
+  active: "active",
+  used: "used",
+  failed: "failed"
+};
+
+export const quotaSubCardStatuses = {
+  active: "active",
+  locked: "locked",
+  void: "void"
+};
+
+export const quotaBatchStatuses = {
+  pending: "pending",
+  completed: "completed",
+  partial: "partial"
+};
+
+export const quotaErrorCodes = {
+  CARD_EXISTS: "CARD_EXISTS",
+  CARD_INVALID: "CARD_INVALID",
+  CARD_EXHAUSTED: "CARD_EXHAUSTED",
+  QUOTA_INSUFFICIENT: "QUOTA_INSUFFICIENT",
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  RATE_LIMITED: "RATE_LIMITED",
+  CARD_LOCKED: "CARD_LOCKED",
+  EXTERNAL_API_ERROR: "EXTERNAL_API_ERROR",
+  CANCEL_DENIED: "CANCEL_DENIED"
+};
+
+// 频率限制默认值
+export const QUOTA_RATE_LIMIT_WINDOW = 60;
+export const QUOTA_RATE_LIMIT_MAX = 10;
+export const QUOTA_LOCK_DURATION_MINUTES = 30;

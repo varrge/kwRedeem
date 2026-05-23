@@ -13,6 +13,7 @@ import {
   sendFeishuMarkdown,
   summarizeResponseInfo
 } from "../../shared/src/notifications.js";
+import { getAvailableQuota } from "../../shared/src/quota-calc.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
@@ -948,6 +949,90 @@ async function notificationTick() {
   }
 }
 
+// ── Quota sub-card auto-unlock ──
+
+const QUOTA_UNLOCK_INTERVAL_MS = 60 * 1000; // 每分钟检查一次
+
+function quotaUnlockTick() {
+  const now = nowIso();
+  const expiredCards = db.prepare(`
+    SELECT id FROM quota_sub_cards
+    WHERE status = 'locked' AND locked_until < ?
+  `).all(now);
+
+  if (expiredCards.length === 0) return;
+
+  const updateStmt = db.prepare(`
+    UPDATE quota_sub_cards
+    SET status = 'active', locked_at = NULL, locked_until = NULL, lock_reason = NULL, updated_at = ?
+    WHERE id = ?
+  `);
+
+  for (const card of expiredCards) {
+    updateStmt.run(now, card.id);
+  }
+
+  console.log(`[KaWang worker] quota-unlock: unlocked ${expiredCards.length} expired sub-card(s)`);
+}
+
+// ── Quota low stock notification ──
+
+const QUOTA_LOW_STOCK_INTERVAL_MS = 5 * 60 * 1000; // 每 5 分钟检查一次
+const QUOTA_LOW_STOCK_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 小时内不重复发送
+
+async function quotaLowStockTick() {
+  const settings = db.prepare(
+    "SELECT low_stock_threshold, last_low_stock_notify_at FROM quota_settings WHERE id = 'default'"
+  ).get();
+
+  if (!settings) return;
+
+  const threshold = settings.low_stock_threshold ?? 5;
+  const availableQuota = getAvailableQuota(db);
+
+  if (availableQuota >= threshold) return;
+
+  // Check 24-hour cooldown
+  if (settings.last_low_stock_notify_at) {
+    const lastNotifyMs = Date.parse(settings.last_low_stock_notify_at);
+    if (Number.isFinite(lastNotifyMs) && (Date.now() - lastNotifyMs) < QUOTA_LOW_STOCK_COOLDOWN_MS) {
+      return;
+    }
+  }
+
+  // Get feishu webhook URL (use global notification webhook)
+  const webhookUrl = getNotificationGlobalWebhook();
+  if (!webhookUrl) {
+    console.log("[KaWang worker] quota-low-stock: 低库存告警触发但未配置飞书 Webhook");
+    return;
+  }
+
+  // Send notification
+  const now = nowIso();
+  const message = {
+    title: "KaWang 低库存警告",
+    content: [
+      `**触发时间**：${now}`,
+      `**当前可分配额度**：${availableQuota}`,
+      `**低库存阈值**：${threshold}`,
+      "",
+      "可分配额度已低于设定阈值，请及时补充卡密。"
+    ].join("\n")
+  };
+
+  const result = await sendFeishuMarkdown(webhookUrl, message);
+
+  if (result.ok) {
+    // Update last_low_stock_notify_at
+    db.prepare(
+      "UPDATE quota_settings SET last_low_stock_notify_at = ?, updated_at = ? WHERE id = 'default'"
+    ).run(now, now);
+    console.log(`[KaWang worker] quota-low-stock: 低库存通知已发送 (available=${availableQuota}, threshold=${threshold})`);
+  } else {
+    console.error(`[KaWang worker] quota-low-stock: 飞书通知发送失败 - ${result.text || result.status}`);
+  }
+}
+
 console.log(`[KaWang worker] started with poll interval ${env.workerPollMs}ms`);
 
 setInterval(() => {
@@ -962,10 +1047,34 @@ setInterval(() => {
   });
 }, NOTIFICATION_TICK_INTERVAL_MS);
 
+setInterval(() => {
+  try {
+    quotaUnlockTick();
+  } catch (error) {
+    console.error("[KaWang worker] quota-unlock", error);
+  }
+}, QUOTA_UNLOCK_INTERVAL_MS);
+
+setInterval(() => {
+  quotaLowStockTick().catch((error) => {
+    console.error("[KaWang worker] quota-low-stock", error);
+  });
+}, QUOTA_LOW_STOCK_INTERVAL_MS);
+
 tick().catch((error) => {
   console.error("[KaWang worker]", error);
 });
 
 notificationTick().catch((error) => {
   console.error("[KaWang worker] notification", error);
+});
+
+try {
+  quotaUnlockTick();
+} catch (error) {
+  console.error("[KaWang worker] quota-unlock", error);
+}
+
+quotaLowStockTick().catch((error) => {
+  console.error("[KaWang worker] quota-low-stock", error);
 });

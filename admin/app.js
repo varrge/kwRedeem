@@ -94,6 +94,26 @@ const refs = {
   smsExportExcelBtn: document.querySelector("#sms-export-excel-btn"),
   smsAction: document.querySelector("#sms-action"),
   smsActionBtn: document.querySelector("#sms-action-btn"),
+  // Quota system refs
+  quotaStats: document.querySelector("#quota-stats"),
+  quotaImportForm: document.querySelector("#quota-import-form"),
+  quotaImportCodes: document.querySelector("#quota-import-codes"),
+  quotaImportResult: document.querySelector("#quota-import-result"),
+  quotaImportDetailCard: document.querySelector("#quota-import-detail-card"),
+  quotaImportDetail: document.querySelector("#quota-import-detail"),
+  quotaSettingsForm: document.querySelector("#quota-settings-form"),
+  quotaLowStockThreshold: document.querySelector("#quota-low-stock-threshold"),
+  quotaSettingsResult: document.querySelector("#quota-settings-result"),
+  quotaSubCardForm: document.querySelector("#quota-sub-card-form"),
+  quotaSubCardQuota: document.querySelector("#quota-sub-card-quota"),
+  quotaSubCardCount: document.querySelector("#quota-sub-card-count"),
+  quotaSubCardResult: document.querySelector("#quota-sub-card-result"),
+  quotaSubCardList: document.querySelector("#quota-sub-card-list"),
+  quotaSubCardRefreshBtn: document.querySelector("#quota-sub-card-refresh-btn"),
+  quotaSubCardDetailCard: document.querySelector("#quota-sub-card-detail-card"),
+  quotaSubCardDetail: document.querySelector("#quota-sub-card-detail"),
+  quotaSubCardHistory: document.querySelector("#quota-sub-card-history"),
+  quotaSubCardDetailClose: document.querySelector("#quota-sub-card-detail-close"),
 
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
@@ -173,6 +193,11 @@ function switchTab(tabName) {
   });
   if (tabName === "sms" && getToken()) {
     refreshSmsEntries().catch(() => {});
+  }
+  if (tabName === "quota" && getToken()) {
+    refreshQuotaDashboard().catch(() => {});
+    refreshQuotaSubCards().catch(() => {});
+    loadQuotaSettings().catch(() => {});
   }
 }
 
@@ -1140,6 +1165,145 @@ async function exportCdkeysExcel() {
   }
 }
 
+// ── Quota System ──
+
+async function refreshQuotaDashboard() {
+  if (!refs.quotaStats) return;
+  try {
+    const payload = await api("/api/admin/quota/dashboard");
+    const cards = [
+      ["总额度", payload.totalQuota ?? 0],
+      ["可分配额度", payload.availableQuota ?? 0],
+      ["已分配额度", payload.allocatedQuota ?? 0],
+      ["活跃子卡密数", payload.activeSubCards ?? 0]
+    ];
+    refs.quotaStats.innerHTML = cards.map(([label, value]) => `
+      <article class="stat">
+        <span>${label}</span>
+        <strong>${value}</strong>
+      </article>
+    `).join("");
+  } catch (error) {
+    refs.quotaStats.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderQuotaImportResults(result) {
+  if (!refs.quotaImportDetailCard || !refs.quotaImportDetail) return;
+  refs.quotaImportDetailCard.classList.remove("hidden");
+
+  const summaryHtml = `
+    <div style="margin-bottom:16px;">
+      <span class="table-badge status-active">成功 ${result.successCount ?? 0}</span>
+      <span class="table-badge status-failed" style="margin-left:8px">失败 ${result.failedCount ?? 0}</span>
+    </div>
+  `;
+
+  if (!result.failures || result.failures.length === 0) {
+    refs.quotaImportDetail.innerHTML = summaryHtml + `<p class="hint centered">全部导入成功</p>`;
+    return;
+  }
+
+  const failRows = result.failures.map((f) => `
+    <tr>
+      <td><code>${escapeHtml(f.code || f.cardCode || "-")}</code></td>
+      <td>${escapeHtml(f.reason || f.error || "未知原因")}</td>
+    </tr>
+  `).join("");
+
+  refs.quotaImportDetail.innerHTML = summaryHtml + `
+    <table>
+      <thead><tr><th>卡密</th><th>失败原因</th></tr></thead>
+      <tbody>${failRows}</tbody>
+    </table>
+  `;
+}
+
+// ── Quota Sub-Card Management ──
+
+async function refreshQuotaSubCards() {
+  if (!refs.quotaSubCardList) return;
+  try {
+    const payload = await api("/api/admin/quota/sub-cards");
+    const items = payload.items || [];
+    renderTable(refs.quotaSubCardList, [
+      { label: "编码", render: (item) => `<code>${escapeHtml(item.card_code || item.cardCode)}</code>` },
+      { label: "总额度", render: (item) => item.total_quota ?? item.totalQuota ?? 0 },
+      { label: "已用额度", render: (item) => item.used_quota ?? item.usedQuota ?? 0 },
+      { label: "剩余", render: (item) => {
+        const total = item.total_quota ?? item.totalQuota ?? 0;
+        const used = item.used_quota ?? item.usedQuota ?? 0;
+        return total - used;
+      }},
+      { label: "状态", render: (item) => renderStatus(item.status) },
+      { label: "操作", render: (item) => `
+        <button class="primary-btn small" type="button" onclick="viewQuotaSubCardDetail('${escapeHtml(item.id)}')">详情</button>
+        ${item.status === "active" ? `<button class="ghost-btn small" style="padding:6px 12px;font-size:12px;color:var(--error)" type="button" onclick="cancelQuotaSubCard('${escapeHtml(item.id)}')">取消</button>` : ""}
+      ` }
+    ], items, "暂无子卡密");
+  } catch (error) {
+    refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function viewQuotaSubCardDetail(id) {
+  if (!refs.quotaSubCardDetailCard || !refs.quotaSubCardDetail || !refs.quotaSubCardHistory) return;
+  refs.quotaSubCardDetailCard.classList.remove("hidden");
+
+  try {
+    const detail = await api(`/api/admin/quota/sub-cards/${id}`);
+    const total = detail.total_quota ?? detail.totalQuota ?? 0;
+    const used = detail.used_quota ?? detail.usedQuota ?? 0;
+    const remaining = total - used;
+
+    refs.quotaSubCardDetail.innerHTML = `
+      <table>
+        <thead><tr><th>编码</th><th>总额度</th><th>已用额度</th><th>剩余额度</th><th>状态</th><th>创建时间</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>${escapeHtml(detail.card_code || detail.cardCode)}</code></td>
+            <td>${total}</td>
+            <td>${used}</td>
+            <td>${remaining}</td>
+            <td>${renderStatus(detail.status)}</td>
+            <td><span style="font-size:12px">${escapeHtml(detail.created_at || detail.createdAt || "-")}</span></td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  } catch (error) {
+    refs.quotaSubCardDetail.innerHTML = `<p class="hint centered">加载详情失败：${escapeHtml(error.message)}</p>`;
+  }
+
+  try {
+    const historyPayload = await api(`/api/admin/quota/sub-cards/${id}/history`);
+    const history = historyPayload.history || historyPayload.items || [];
+    renderTable(refs.quotaSubCardHistory, [
+      { label: "提取时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.created_at || item.createdAt || item.claimedAt || "-")}</span>` },
+      { label: "提取数量", render: (item) => item.amount ?? item.chargedQuota ?? 0 },
+      { label: "账号数量", render: (item) => item.account_count ?? item.accountCount ?? 0 }
+    ], history, "暂无提取记录");
+  } catch (error) {
+    refs.quotaSubCardHistory.innerHTML = `<p class="hint centered">加载历史失败：${escapeHtml(error.message)}</p>`;
+  }
+
+  refs.quotaSubCardDetailCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function cancelQuotaSubCard(id) {
+  if (!window.confirm("确认取消该子卡密？取消后剩余额度将归还到可分配额度池中。")) return;
+  try {
+    await api(`/api/admin/quota/sub-cards/${id}/cancel`, { method: "POST", body: JSON.stringify({}) });
+    await refreshQuotaSubCards();
+    await refreshQuotaDashboard();
+  } catch (error) {
+    alert(`取消失败：${error.message}`);
+  }
+}
+
+window.viewQuotaSubCardDetail = viewQuotaSubCardDetail;
+window.cancelQuotaSubCard = cancelQuotaSubCard;
+
 async function refreshAll() {
   if (!getToken()) return;
   await Promise.all([
@@ -1153,7 +1317,9 @@ async function refreshAll() {
     refreshLogs(),
     refreshSystemVersion(),
     refreshSubscriptions(),
-    refreshNotifications()
+    refreshNotifications(),
+    refreshQuotaDashboard(),
+    refreshQuotaSubCards()
   ]);
 }
 
@@ -1666,6 +1832,121 @@ async function updateSmsStatus() {
 refs.smsActionBtn.addEventListener("click", () => {
   updateSmsStatus();
 });
+
+// ── Quota Import Form ──
+if (refs.quotaImportForm) {
+  refs.quotaImportForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const raw = refs.quotaImportCodes.value.trim();
+    if (!raw) {
+      setHint(refs.quotaImportResult, "请输入至少一张卡密");
+      return;
+    }
+    const codes = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    if (codes.length === 0) {
+      setHint(refs.quotaImportResult, "请输入至少一张卡密");
+      return;
+    }
+    if (codes.length > 100) {
+      setHint(refs.quotaImportResult, "单次最多导入 100 张卡密");
+      return;
+    }
+    try {
+      setHint(refs.quotaImportResult, "正在导入，请稍候...");
+      const payload = await api("/api/admin/quota/cards/import", {
+        method: "POST",
+        body: JSON.stringify({ cards: codes })
+      });
+      setHint(refs.quotaImportResult, `导入完成：成功 ${payload.successCount ?? 0}，失败 ${payload.failedCount ?? 0}`);
+      renderQuotaImportResults(payload);
+      refs.quotaImportCodes.value = "";
+      await refreshQuotaDashboard();
+    } catch (error) {
+      setHint(refs.quotaImportResult, `导入失败：${error.message}`);
+    }
+  });
+}
+
+// ── Quota Settings Form ──
+async function loadQuotaSettings() {
+  if (!refs.quotaLowStockThreshold) return;
+  try {
+    const payload = await api("/api/admin/quota/settings");
+    refs.quotaLowStockThreshold.value = payload.lowStockThreshold ?? 5;
+  } catch (_) {
+    // silently ignore load errors
+  }
+}
+
+if (refs.quotaSettingsForm) {
+  refs.quotaSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const value = parseInt(refs.quotaLowStockThreshold.value, 10);
+    if (!Number.isInteger(value) || value < 1) {
+      setHint(refs.quotaSettingsResult, "低库存阈值必须为正整数（>= 1）");
+      return;
+    }
+    try {
+      await api("/api/admin/quota/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ low_stock_threshold: value })
+      });
+      setHint(refs.quotaSettingsResult, "设置已保存");
+    } catch (error) {
+      setHint(refs.quotaSettingsResult, `保存失败：${error.message}`);
+    }
+  });
+}
+
+// ── Quota Sub-Card Create Form ──
+if (refs.quotaSubCardForm) {
+  refs.quotaSubCardForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const quota = parseInt(refs.quotaSubCardQuota.value, 10);
+    const count = parseInt(refs.quotaSubCardCount.value, 10);
+    if (!quota || quota < 1 || quota > 999999) {
+      setHint(refs.quotaSubCardResult, "额度必须为 1 ~ 999999 的正整数");
+      return;
+    }
+    if (!count || count < 1 || count > 100) {
+      setHint(refs.quotaSubCardResult, "数量必须为 1 ~ 100 的正整数");
+      return;
+    }
+    try {
+      setHint(refs.quotaSubCardResult, "正在创建，请稍候...");
+      const payload = await api("/api/admin/quota/sub-cards", {
+        method: "POST",
+        body: JSON.stringify({ quota, count })
+      });
+      setHint(refs.quotaSubCardResult, `成功创建 ${payload.createdCount ?? count} 张子卡密`);
+      refs.quotaSubCardForm.reset();
+      await refreshQuotaSubCards();
+      await refreshQuotaDashboard();
+    } catch (error) {
+      setHint(refs.quotaSubCardResult, `创建失败：${error.message}`);
+    }
+  });
+}
+
+// ── Quota Sub-Card Refresh Button ──
+if (refs.quotaSubCardRefreshBtn) {
+  refs.quotaSubCardRefreshBtn.addEventListener("click", () => {
+    refreshQuotaSubCards().catch((error) => {
+      if (refs.quotaSubCardList) {
+        refs.quotaSubCardList.innerHTML = `<p class="hint centered">刷新失败：${escapeHtml(error.message)}</p>`;
+      }
+    });
+  });
+}
+
+// ── Quota Sub-Card Detail Close Button ──
+if (refs.quotaSubCardDetailClose) {
+  refs.quotaSubCardDetailClose.addEventListener("click", () => {
+    if (refs.quotaSubCardDetailCard) {
+      refs.quotaSubCardDetailCard.classList.add("hidden");
+    }
+  });
+}
 
 refs.refreshBtn.addEventListener("click", () => {
   refreshAll().catch((error) => alert(error.message));

@@ -4080,9 +4080,9 @@ app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (r
     WHERE id = ?
   `).run(successCount, failureCount, batchStatus, now, batchId);
 
-  // 有效卡密 > 2 张时自动触发合并流程（调用 mergeExternalCards）
+  // 有效卡密 >= 2 张时自动触发合并流程（调用 mergeExternalCards）
   let mergeResult = null;
-  if (activeCardCodes.length > 2) {
+  if (activeCardCodes.length >= 2) {
     try {
       const mergeResponse = await mergeExternalCards(activeCardCodes);
 
@@ -4281,6 +4281,67 @@ app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (re
       success: false,
       error: error.message || "合并接口连接失败",
       code: quotaErrorCodes.EXTERNAL_API_ERROR
+    });
+  }
+});
+
+// ── Quota Admin: Verify (Refresh) Merged Card Quota ──
+// Read-only proxy that wraps shared/src/quota-api.js#verifyExternalCard so the
+// admin browser never talks directly to the external host. We look up the
+// card by id (the merged card id surfaced by the import / merge response),
+// decrypt source_key, and pass through { ok, quota, remaining, used }. We do
+// NOT modify any DB status — verify is purely informational (preservation
+// 3.10).
+app.post("/api/admin/quota/cards/verify", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    cardId: z.string().min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      ok: false,
+      error: "请提供 cardId",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  const card = db.prepare(`
+    SELECT id, source_key
+    FROM quota_source_cards
+    WHERE id = ?
+  `).get(parsed.data.cardId);
+
+  if (!card) {
+    return reply.code(404).send({
+      ok: false,
+      error: "卡密不存在",
+      code: quotaErrorCodes.CARD_INVALID
+    });
+  }
+
+  let cardCode;
+  try {
+    cardCode = decryptText(card.source_key);
+  } catch {
+    return reply.code(500).send({
+      ok: false,
+      error: "卡密解密失败"
+    });
+  }
+
+  try {
+    const result = await verifyExternalCard(cardCode);
+    return {
+      ok: Boolean(result?.ok),
+      quota: result?.quota ?? null,
+      remaining: result?.remaining ?? null,
+      used: Boolean(result?.used)
+    };
+  } catch (error) {
+    return reply.code(502).send({
+      ok: false,
+      error: error.message || "外部接口请求失败"
     });
   }
 });

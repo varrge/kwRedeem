@@ -1201,23 +1201,116 @@ function renderQuotaImportResults(result) {
 
   if (!result.failures || result.failures.length === 0) {
     refs.quotaImportDetail.innerHTML = summaryHtml + `<p class="hint centered">全部导入成功</p>`;
-    return;
-  }
-
-  const failRows = result.failures.map((f) => `
+  } else {
+    const failRows = result.failures.map((f) => `
     <tr>
       <td><code>${escapeHtml(f.code || f.cardCode || "-")}</code></td>
       <td>${escapeHtml(f.reason || f.error || "未知原因")}</td>
     </tr>
   `).join("");
 
-  refs.quotaImportDetail.innerHTML = summaryHtml + `
+    refs.quotaImportDetail.innerHTML = summaryHtml + `
     <table>
       <thead><tr><th>卡密</th><th>失败原因</th></tr></thead>
       <tbody>${failRows}</tbody>
     </table>
   `;
+  }
+
+  // Bug B fix: when the response carries mergeResult (alias: `merge`), append a
+  // "合并后的卡密" section. When it is null/undefined, the DOM above is left
+  // byte-identical to the original implementation (preservation 3.9).
+  const mergeResult = result.mergeResult ?? result.merge ?? null;
+  if (mergeResult == null) return;
+
+  let mergedHtml;
+  if (mergeResult.success === true) {
+    const newCode = String(mergeResult.newCode ?? "");
+    const masked = newCode.length > 8
+      ? `${newCode.slice(0, 4)}...${newCode.slice(-4)}`
+      : (newCode || "-");
+    const mergedCardId = String(mergeResult.mergedCardId ?? "");
+    const totalRemaining = mergeResult.totalRemaining ?? 0;
+    mergedHtml = `
+    <div class="quota-merged-section" style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
+      <h4 style="margin:0 0 8px 0;">合并后的卡密</h4>
+      <p><span class="table-badge status-active">合并成功</span></p>
+      <p>新卡密：<code title="${escapeHtml(newCode)}">${escapeHtml(masked)}</code></p>
+      <p>总剩余额度：${escapeHtml(String(totalRemaining))}</p>
+      <p>当前额度：<span class="merged-quota">-</span> / 剩余：<span class="merged-remaining">-</span> / 状态：<span class="merged-used">-</span></p>
+      <button class="primary-btn small" type="button" data-merged-card-id="${escapeHtml(mergedCardId)}">刷新额度</button>
+    </div>
+  `;
+  } else {
+    const errorMsg = mergeResult.error || "未知错误";
+    mergedHtml = `
+    <div class="quota-merged-section" style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
+      <h4 style="margin:0 0 8px 0;">合并后的卡密</h4>
+      <p>合并失败：${escapeHtml(errorMsg)}</p>
+    </div>
+  `;
+  }
+
+  refs.quotaImportDetail.insertAdjacentHTML("beforeend", mergedHtml);
+
+  // Wire refresh button click. The handler is introduced by Task 3.4
+  // (handleMergedCardRefresh); guard so this renderer remains usable on its own.
+  if (mergeResult.success === true && typeof handleMergedCardRefresh === "function") {
+    const button = refs.quotaImportDetail.querySelector("[data-merged-card-id]");
+    if (button) button.addEventListener("click", handleMergedCardRefresh);
+  }
 }
+
+// Bug C fix: 通过 admin 后端代理接口刷新合并卡密的最新 quota / remaining / used。
+// 浏览器只命中 /api/admin/quota/cards/verify，外部域名由后端代理屏蔽
+// (preservation §2 — admin 浏览器代码不得包含外部主机字面量)。
+async function handleMergedCardRefresh(event) {
+  const button = event.currentTarget;
+  if (!button) return;
+
+  const cardId = button.dataset.mergedCardId;
+  if (!cardId) return;
+
+  const section = button.closest(".quota-merged-section") || refs.quotaImportDetail;
+
+  // Clean up any previous error message before the new attempt.
+  if (section) {
+    const existingError = section.querySelector(".merged-refresh-error");
+    if (existingError) existingError.remove();
+  }
+
+  setButtonBusy(button, true, "刷新中...");
+  try {
+    const payload = await api("/api/admin/quota/cards/verify", {
+      method: "POST",
+      body: JSON.stringify({ cardId })
+    });
+
+    if (section) {
+      const quotaEl = section.querySelector(".merged-quota");
+      const remainingEl = section.querySelector(".merged-remaining");
+      const usedEl = section.querySelector(".merged-used");
+      if (quotaEl) quotaEl.textContent = payload.quota ?? "-";
+      if (remainingEl) remainingEl.textContent = payload.remaining ?? "-";
+      if (usedEl) usedEl.textContent = payload.used ? "已使用" : "未使用";
+    }
+  } catch (error) {
+    if (section) {
+      const errorEl = document.createElement("p");
+      errorEl.className = "merged-refresh-error hint";
+      errorEl.style.color = "var(--danger, #b00020)";
+      errorEl.style.marginTop = "8px";
+      errorEl.textContent = `刷新失败：${error.message || "未知错误"}`;
+      button.insertAdjacentElement("afterend", errorEl);
+    }
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+// Expose for inline onclick-style discovery and so renderQuotaImportResults'
+// `typeof handleMergedCardRefresh === "function"` guard always succeeds.
+window.handleMergedCardRefresh = handleMergedCardRefresh;
 
 // ── Quota Sub-Card Management ──
 
@@ -1225,14 +1318,14 @@ async function refreshQuotaSubCards() {
   if (!refs.quotaSubCardList) return;
   try {
     const payload = await api("/api/admin/quota/sub-cards");
-    const items = payload.items || [];
+    const items = payload.subCards || [];
     renderTable(refs.quotaSubCardList, [
-      { label: "编码", render: (item) => `<code>${escapeHtml(item.card_code || item.cardCode)}</code>` },
-      { label: "总额度", render: (item) => item.total_quota ?? item.totalQuota ?? 0 },
-      { label: "已用额度", render: (item) => item.used_quota ?? item.usedQuota ?? 0 },
+      { label: "编码", render: (item) => `<code>${escapeHtml(item.cardCode)}</code>` },
+      { label: "总额度", render: (item) => item.totalQuota ?? 0 },
+      { label: "已用额度", render: (item) => item.usedQuota ?? 0 },
       { label: "剩余", render: (item) => {
-        const total = item.total_quota ?? item.totalQuota ?? 0;
-        const used = item.used_quota ?? item.usedQuota ?? 0;
+        const total = item.totalQuota ?? 0;
+        const used = item.usedQuota ?? 0;
         return total - used;
       }},
       { label: "状态", render: (item) => renderStatus(item.status) },

@@ -132,6 +132,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     const target = btn.dataset.target;
     if (target === "stock") { window.location.href = "./stock.html"; return; }
     if (target === "subscription") { window.location.href = "./subscription.html"; return; }
+    if (target === "quota") { window.location.href = "./quota.html"; return; }
     if (target) switchView(target);
   });
 });

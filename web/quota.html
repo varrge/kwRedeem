@@ -249,6 +249,25 @@
         white-space: nowrap;
       }
 
+      .history-record-accounts {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .history-account-item {
+        font-size: 12px;
+        font-family: "JetBrains Mono", monospace;
+        color: var(--text);
+        word-break: break-all;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
       @media (max-width: 600px) {
         .quota-stats { grid-template-columns: 1fr; }
         .claim-form { grid-template-columns: 1fr; }
@@ -640,11 +659,18 @@
             const time = formatTime(record.createdAt);
             const amount = record.amount ?? 0;
             const accountCount = record.accountCount ?? 0;
+            const accounts = record.accounts || [];
+            const accountsHtml = accounts.length
+              ? `<div class="history-record-accounts">${accounts.map(a => `<code class="history-account-item">${escapeHtml(a)}</code>`).join("")}</div>`
+              : "";
             return `
-              <div class="history-record">
-                <span class="history-time">${escapeHtml(time)}</span>
-                <span class="history-amount">${escapeHtml(amount)} 货</span>
-                <span class="history-accounts">${escapeHtml(accountCount)} 个账号</span>
+              <div class="history-record" style="grid-template-columns:1fr;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                  <span class="history-time">${escapeHtml(time)}</span>
+                  <span class="history-amount">${escapeHtml(amount)} 货</span>
+                  <span class="history-accounts">${escapeHtml(accountCount)} 个账号</span>
+                </div>
+                ${accountsHtml}
               </div>
             `;
           }).join("");

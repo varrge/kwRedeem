@@ -76,6 +76,10 @@ export function generateExportText(cardCode, history) {
   let content = `卡密编码: ${cardCode}\n提取记录:\n`;
   for (const record of history) {
     content += `---\n时间: ${record.created_at}\n提取数量: ${record.amount}\n`;
+    const accounts = record.accounts ? (typeof record.accounts === 'string' ? JSON.parse(record.accounts) : record.accounts) : [];
+    if (accounts.length) {
+      content += `账号:\n${accounts.join("\n")}\n`;
+    }
   }
   return content;
 }

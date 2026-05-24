@@ -4654,13 +4654,15 @@ app.get("/api/public/quota/info", async (request, reply) => {
   }
 
   const remaining = row.total_quota - row.used_quota;
-  const availableStock = getAvailableQuota(db);
+  const activeSubCardCount = db.prepare(`
+    SELECT COUNT(*) AS cnt FROM quota_sub_cards WHERE status = 'active'
+  `).get().cnt;
 
   return {
     remaining,
     totalQuota: row.total_quota,
     usedQuota: row.used_quota,
-    availableStock
+    availableStock: activeSubCardCount
   };
 });
 
@@ -4707,7 +4709,7 @@ app.get("/api/public/quota/history/download", async (request, reply) => {
   }
 
   const logs = db.prepare(`
-    SELECT amount, created_at
+    SELECT amount, account_count, accounts, created_at
     FROM quota_claim_logs
     WHERE card_code = ?
     ORDER BY created_at DESC

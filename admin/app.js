@@ -1464,7 +1464,12 @@ async function viewQuotaSubCardDetail(id) {
     renderTable(refs.quotaSubCardHistory, [
       { label: "提取时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.created_at || item.createdAt || item.claimedAt || "-")}</span>` },
       { label: "提取数量", render: (item) => item.amount ?? item.chargedQuota ?? 0 },
-      { label: "账号数量", render: (item) => item.account_count ?? item.accountCount ?? 0 }
+      { label: "账号数量", render: (item) => item.account_count ?? item.accountCount ?? 0 },
+      { label: "提取内容", render: (item) => {
+        const accounts = item.accounts || [];
+        if (!accounts.length) return `<span style="color:var(--muted)">-</span>`;
+        return `<code style="font-size:11px;word-break:break-all;white-space:pre-wrap">${escapeHtml(accounts.join("\n"))}</code>`;
+      }}
     ], history, "暂无提取记录");
   } catch (error) {
     refs.quotaSubCardHistory.innerHTML = `<p class="hint centered">加载历史失败：${escapeHtml(error.message)}</p>`;

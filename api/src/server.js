@@ -4213,21 +4213,52 @@ app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (re
     }
   }
 
-  // 调用外部合并接口
+  // 合并前先 verify 每张卡，写回 remaining，过滤掉耗尽卡
+  const eligibleCards = [];
+  const eligibleCardCodes = [];
+  const writeBackStmt = db.prepare(`UPDATE quota_source_cards SET remaining = ?, updated_at = ? WHERE id = ?`);
+
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    const code = cardCodes[i];
+    try {
+      const result = await verifyExternalCard(code);
+      if (result.ok === true && typeof result.remaining === 'number' && result.remaining >= 0) {
+        // 写回外部真实 remaining
+        writeBackStmt.run(result.remaining, nowIso(), card.id);
+        if (result.remaining > 0) {
+          // eligible: remaining > 0
+          eligibleCards.push({ ...card, remaining: result.remaining });
+          eligibleCardCodes.push(code);
+        }
+        // remaining === 0 → ineligible, 不加入合并集合
+      }
+      // ok=false → 不写回、不加入合并集合（保守）
+    } catch {
+      // verify 抛错 → 不写回、不加入合并集合（保守）
+    }
+  }
+
+  // 过滤后 eligible 数量 < 2 → 返回 400
+  if (eligibleCardCodes.length < 2) {
+    return reply.code(400).send({
+      success: false,
+      error: "没有足够的有效卡密可合并",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  // 调用外部合并接口（仅用 eligible 卡）
   try {
-    const mergeResponse = await mergeExternalCards(cardCodes);
+    const mergeResponse = await mergeExternalCards(eligibleCardCodes);
 
     if (mergeResponse.ok && mergeResponse.newCode) {
       // 合并成功：创建新 active 卡密记录
       const mergedCardId = nanoid(16);
       const now = nowIso();
 
-      // 计算合并后的总 remaining
-      const totalRemaining = db.prepare(`
-        SELECT COALESCE(SUM(remaining), 0) AS total
-        FROM quota_source_cards
-        WHERE id IN (${placeholders})
-      `).get(...cardIds).total;
+      // 计算合并后的总 remaining（从 eligible 卡的已写回 remaining 值汇总）
+      const totalRemaining = eligibleCards.reduce((sum, c) => sum + c.remaining, 0);
 
       // 插入合并后的新卡密
       db.prepare(`
@@ -4244,14 +4275,14 @@ app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (re
         now
       );
 
-      // 原卡密标记为 used，更新 merged_into_id
+      // 仅把实际参与合并的 eligible 卡标记为 used
       const updateStmt = db.prepare(`
         UPDATE quota_source_cards
         SET status = ?, merged_into_id = ?, updated_at = ?
         WHERE id = ?
       `);
-      for (const id of cardIds) {
-        updateStmt.run(quotaCardStatuses.used, mergedCardId, now, id);
+      for (const ec of eligibleCards) {
+        updateStmt.run(quotaCardStatuses.used, mergedCardId, now, ec.id);
       }
 
       // 掩码处理新卡密编码（只显示前4位和后4位）
@@ -4286,12 +4317,11 @@ app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (re
 });
 
 // ── Quota Admin: Verify (Refresh) Merged Card Quota ──
-// Read-only proxy that wraps shared/src/quota-api.js#verifyExternalCard so the
-// admin browser never talks directly to the external host. We look up the
-// card by id (the merged card id surfaced by the import / merge response),
-// decrypt source_key, and pass through { ok, quota, remaining, used }. We do
-// NOT modify any DB status — verify is purely informational (preservation
-// 3.10).
+// Proxy that wraps shared/src/quota-api.js#verifyExternalCard so the admin
+// browser never talks directly to the external host. We look up the card by
+// id, decrypt source_key, call external verify, and on ok=true write back
+// the external remaining to quota_source_cards so local data stays in sync.
+// Pass through { ok, quota, remaining, used } to the caller.
 app.post("/api/admin/quota/cards/verify", { preHandler: requireAdmin }, async (request, reply) => {
   const schema = z.object({
     cardId: z.string().min(1)
@@ -4332,6 +4362,12 @@ app.post("/api/admin/quota/cards/verify", { preHandler: requireAdmin }, async (r
 
   try {
     const result = await verifyExternalCard(cardCode);
+
+    // Write back external remaining to local DB when verify succeeds
+    if (result.ok === true && typeof result.remaining === 'number' && result.remaining >= 0) {
+      db.prepare('UPDATE quota_source_cards SET remaining = ?, updated_at = ? WHERE id = ?').run(result.remaining, nowIso(), card.id);
+    }
+
     return {
       ok: Boolean(result?.ok),
       quota: result?.quota ?? null,
@@ -4854,6 +4890,11 @@ app.post("/api/public/quota/claim", async (request, reply) => {
       sourceIp,
       nowIso()
     );
+
+    // Bug C fix: write back source card remaining from external response
+    if (typeof externalResult.remaining === 'number' && externalResult.remaining >= 0) {
+      db.prepare('UPDATE quota_source_cards SET remaining = ?, updated_at = ? WHERE id = ?').run(externalResult.remaining, nowIso(), sourceCard.id);
+    }
 
     const newRemaining = subCard.total_quota - subCard.used_quota - chargedQuota;
 

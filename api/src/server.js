@@ -4790,11 +4790,11 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     });
   }
 
-  // Step 5: Find the active source card (merged card) to get the actual card code for external API call
+  // Step 5: 选取一张本地仍有库存的 active 源卡密（FIFO，先排空旧卡）
   const sourceCard = db.prepare(`
     SELECT id, source_key FROM quota_source_cards
-    WHERE status = 'active'
-    ORDER BY created_at DESC
+    WHERE status = 'active' AND remaining > 0
+    ORDER BY created_at ASC
     LIMIT 1
   `).get();
 

@@ -101,6 +101,10 @@ const refs = {
   quotaImportResult: document.querySelector("#quota-import-result"),
   quotaImportDetailCard: document.querySelector("#quota-import-detail-card"),
   quotaImportDetail: document.querySelector("#quota-import-detail"),
+  quotaSourceCardList: document.querySelector("#quota-source-card-list"),
+  quotaSourceCardsRefreshBtn: document.querySelector("#quota-source-cards-refresh-btn"),
+  quotaSourceCardsMergeBtn: document.querySelector("#quota-source-cards-merge-btn"),
+  quotaSourceCardsMergeResult: document.querySelector("#quota-source-cards-merge-result"),
   quotaSettingsForm: document.querySelector("#quota-settings-form"),
   quotaLowStockThreshold: document.querySelector("#quota-low-stock-threshold"),
   quotaSettingsResult: document.querySelector("#quota-settings-result"),
@@ -197,6 +201,7 @@ function switchTab(tabName) {
   if (tabName === "quota" && getToken()) {
     refreshQuotaDashboard().catch(() => {});
     refreshQuotaSubCards().catch(() => {});
+    refreshQuotaSourceCards().catch(() => {});
     loadQuotaSettings().catch(() => {});
   }
 }
@@ -1312,6 +1317,91 @@ async function handleMergedCardRefresh(event) {
 // `typeof handleMergedCardRefresh === "function"` guard always succeeds.
 window.handleMergedCardRefresh = handleMergedCardRefresh;
 
+// ── Quota Source-Card Manual Merge ──
+// 用于补救历史导入未自动合并的情况：列出 active 源卡密，选 >=2 张调用
+// /api/admin/quota/cards/merge，复用 renderQuotaImportResults 展示合并结果
+// （包含掩码 newCode、totalRemaining、刷新额度按钮）。
+
+function syncQuotaSourceCardsMergeButton() {
+  if (!refs.quotaSourceCardList || !refs.quotaSourceCardsMergeBtn) return;
+  const checked = refs.quotaSourceCardList.querySelectorAll(
+    "input[type=checkbox][data-source-card-id]:checked"
+  );
+  refs.quotaSourceCardsMergeBtn.disabled = checked.length < 2;
+}
+
+async function refreshQuotaSourceCards() {
+  if (!refs.quotaSourceCardList) return;
+  try {
+    const payload = await api("/api/admin/quota/cards?status=active&pageSize=100");
+    const items = payload.cards || payload.items || [];
+    if (!items.length) {
+      refs.quotaSourceCardList.innerHTML = `<p class="hint centered">暂无 active 源卡密</p>`;
+    } else {
+      renderTable(refs.quotaSourceCardList, [
+        {
+          label: "选择",
+          render: (item) => `<input type="checkbox" data-source-card-id="${escapeHtml(item.id)}" />`,
+        },
+        { label: "卡密", render: (item) => `<code>${escapeHtml(item.sourceKey || item.id)}</code>` },
+        { label: "总额度", render: (item) => item.quota ?? 0 },
+        { label: "剩余额度", render: (item) => item.remaining ?? 0 },
+        {
+          label: "创建时间",
+          render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>`,
+        },
+        { label: "状态", render: (item) => renderStatus(item.status) },
+      ], items, "暂无 active 源卡密");
+      // Wire change listeners after each render so the button enables only
+      // when >=2 boxes are checked.
+      refs.quotaSourceCardList
+        .querySelectorAll("input[type=checkbox][data-source-card-id]")
+        .forEach((cb) => cb.addEventListener("change", syncQuotaSourceCardsMergeButton));
+    }
+  } catch (error) {
+    refs.quotaSourceCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+  }
+  syncQuotaSourceCardsMergeButton();
+}
+
+async function handleQuotaSourceCardsMerge() {
+  if (!refs.quotaSourceCardList || !refs.quotaSourceCardsMergeBtn) return;
+  const cardIds = Array.from(
+    refs.quotaSourceCardList.querySelectorAll("input[type=checkbox][data-source-card-id]:checked")
+  ).map((cb) => cb.dataset.sourceCardId);
+  if (cardIds.length < 2) {
+    setHint(refs.quotaSourceCardsMergeResult, "至少选择 2 张卡密");
+    return;
+  }
+  if (!window.confirm(`确认合并 ${cardIds.length} 张 active 卡密？原卡密会被标记为 used，新建一张合并卡密。`)) {
+    return;
+  }
+  setButtonBusy(refs.quotaSourceCardsMergeBtn, true, "合并中...");
+  setHint(refs.quotaSourceCardsMergeResult, "");
+  try {
+    const payload = await api("/api/admin/quota/cards/merge", {
+      method: "POST",
+      body: JSON.stringify({ cardIds }),
+    });
+    // 复用导入流程的渲染（自带掩码 newCode / totalRemaining / 刷新额度按钮），
+    // payload 形如 { success, mergedCardId, newCode, totalRemaining }，
+    // 包装为 renderQuotaImportResults 期望的 { mergeResult, ... } 形状。
+    renderQuotaImportResults({
+      successCount: cardIds.length,
+      failedCount: 0,
+      failures: [],
+      mergeResult: payload,
+    });
+    setHint(refs.quotaSourceCardsMergeResult, "合并成功");
+    await refreshQuotaSourceCards();
+    await refreshQuotaDashboard();
+  } catch (error) {
+    setHint(refs.quotaSourceCardsMergeResult, `合并失败：${error.message}`);
+  } finally {
+    setButtonBusy(refs.quotaSourceCardsMergeBtn, false);
+  }
+}
+
 // ── Quota Sub-Card Management ──
 
 async function refreshQuotaSubCards() {
@@ -2029,6 +2119,18 @@ if (refs.quotaSubCardRefreshBtn) {
         refs.quotaSubCardList.innerHTML = `<p class="hint centered">刷新失败：${escapeHtml(error.message)}</p>`;
       }
     });
+  });
+}
+
+// ── Quota Source-Card Refresh + Merge Buttons ──
+if (refs.quotaSourceCardsRefreshBtn) {
+  refs.quotaSourceCardsRefreshBtn.addEventListener("click", () => {
+    refreshQuotaSourceCards().catch(() => {});
+  });
+}
+if (refs.quotaSourceCardsMergeBtn) {
+  refs.quotaSourceCardsMergeBtn.addEventListener("click", () => {
+    handleQuotaSourceCardsMerge().catch(() => {});
   });
 }
 

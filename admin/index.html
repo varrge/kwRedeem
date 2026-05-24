@@ -569,6 +569,19 @@
           </div>
 
           <div class="card mt-24">
+            <div class="card-header">
+              <h3>源卡密合并</h3>
+              <div class="header-actions">
+                <button id="quota-source-cards-refresh-btn" class="ghost-btn small">刷新</button>
+                <button id="quota-source-cards-merge-btn" class="primary-btn small" disabled>合并所选</button>
+              </div>
+            </div>
+            <p class="hint">勾选 2 张及以上 active 源卡密合并为一张；用于补救历史导入未自动合并的情况。</p>
+            <div id="quota-source-card-list" class="table-wrapper"></div>
+            <div id="quota-source-cards-merge-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
             <div class="card-header"><h3>创建子卡密</h3></div>
             <form id="quota-sub-card-form" class="stack">
               <div class="grid grid-2">

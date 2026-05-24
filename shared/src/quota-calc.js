@@ -15,15 +15,15 @@ export function getTotalQuota(db) {
 }
 
 /**
- * 获取已分配额度：所有非 void 状态子卡密的 total_quota 之和
+ * 获取已分配额度：所有 active 状态子卡密的剩余额度之和（total_quota - used_quota）
  * @param {import('better-sqlite3').Database} db
  * @returns {number}
  */
 export function getAllocatedQuota(db) {
   const row = db.prepare(`
-    SELECT COALESCE(SUM(total_quota), 0) AS allocated
+    SELECT COALESCE(SUM(total_quota - used_quota), 0) AS allocated
     FROM quota_sub_cards
-    WHERE status != 'void'
+    WHERE status = 'active'
   `).get();
   return row.allocated;
 }

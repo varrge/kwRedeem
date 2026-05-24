@@ -85,6 +85,7 @@ export const quotaCardStatuses = {
 
 export const quotaSubCardStatuses = {
   active: "active",
+  used: "used",
   locked: "locked",
   void: "void"
 };

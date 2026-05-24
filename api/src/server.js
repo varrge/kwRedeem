@@ -4765,6 +4765,10 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
   }
 
+  if (subCard.status === quotaSubCardStatuses.used) {
+    return reply.code(403).send({ message: "额度已用完", code: quotaErrorCodes.CARD_EXHAUSTED });
+  }
+
   // Check if card is locked but lock has expired (auto-unlock)
   if (subCard.status === quotaSubCardStatuses.locked) {
     if (subCard.locked_until && new Date(subCard.locked_until) <= new Date()) {
@@ -4899,6 +4903,11 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     }
 
     const newRemaining = subCard.total_quota - subCard.used_quota - chargedQuota;
+
+    // Auto-transition: sub-card exhausted → mark as used
+    if (newRemaining <= 0) {
+      db.prepare(`UPDATE quota_sub_cards SET status = 'used', updated_at = ? WHERE id = ?`).run(nowIso(), subCard.id);
+    }
 
     return {
       success: true,

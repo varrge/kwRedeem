@@ -110,6 +110,8 @@ async function request(path, options = {}) {
 // --- Navigation ---
 
 function switchView(target) {
+  // 切换页签时清理 SMS 轮询
+  stopSmsPolling();
   document.querySelectorAll(".view-section").forEach((section) => {
     section.classList.toggle("hidden", section.id !== `${target}-container`);
   });
@@ -579,8 +581,62 @@ lookupForm.addEventListener("submit", async (event) => {
 
 // --- SMS Query ---
 
+let smsPollingInterval = null;
+
+function stopSmsPolling() {
+  if (smsPollingInterval) {
+    clearInterval(smsPollingInterval);
+    smsPollingInterval = null;
+  }
+}
+
+function startSmsPolling(key) {
+  stopSmsPolling();
+  smsPollingInterval = setInterval(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/public/sms/query?key=${encodeURIComponent(key)}`);
+      if (response.ok) {
+        const payload = await response.json();
+        const displayEl = document.querySelector("#sms-verification-display");
+        if (displayEl) {
+          displayEl.innerHTML = renderVerificationStatus(payload);
+        }
+        if (payload.verificationStatus === "ready" || payload.verificationStatus === "timeout") {
+          stopSmsPolling();
+        }
+      }
+    } catch (error) {
+      // 轮询请求失败时不中断，下一周期继续
+    }
+  }, 5000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopSmsPolling();
+  }
+});
+
+function renderVerificationStatus(payload) {
+  switch (payload.verificationStatus) {
+    case "ready":
+      return escapeHtml(payload.verificationCode);
+    case "pending":
+      return "暂无收到验证码";
+    case "timeout":
+      return "获取验证码超时，请重试";
+    case "busy":
+      return "系统繁忙，请稍后重试";
+    default:
+      return "暂无收到验证码";
+  }
+}
+
 smsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+
+  // 清理旧轮询（用户重新查询时）
+  stopSmsPolling();
 
   const key = smsKeyInput.value.trim();
   if (!key) {
@@ -604,8 +660,13 @@ smsForm.addEventListener("submit", async (event) => {
     if (response.ok) {
       const payload = await response.json();
       const phoneHtml = `<div class="result-item"><span>手机号</span><strong>${escapeHtml(payload.phone)}</strong></div>`;
-      const urlHtml = `<div class="result-item"><span>接码网址</span><strong><a href="${escapeHtml(payload.smsUrl)}" target="_blank">${escapeHtml(payload.smsUrl)}</a></strong></div>`;
-      setRichState(smsResult, `<div class="result-card"><div class="result-grid">${phoneHtml}${urlHtml}</div></div>`, "success");
+      const verificationHtml = `<div class="result-item"><span>验证信息</span><strong id="sms-verification-display">${renderVerificationStatus(payload)}</strong></div>`;
+      setRichState(smsResult, `<div class="result-card"><div class="result-grid">${phoneHtml}${verificationHtml}</div></div>`, "success");
+
+      // 当 verificationStatus 为 "pending" 时启动自动轮询
+      if (payload.verificationStatus === "pending") {
+        startSmsPolling(key);
+      }
     } else if (response.status === 404) {
       setState(smsResult, "卡密无效或不存在", "error");
     } else if (response.status === 403) {

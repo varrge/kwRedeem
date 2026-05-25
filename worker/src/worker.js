@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
 import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { decryptText } from "../../shared/src/secure.js";
@@ -1032,6 +1033,213 @@ async function quotaLowStockTick() {
     console.error(`[KaWang worker] quota-low-stock: 飞书通知发送失败 - ${result.text || result.status}`);
   }
 }
+
+// ── SMS Poll Task Manager ──
+
+const activePollTasks = new Map(); // publicKey → PollTask
+const MAX_ACTIVE_POLLS = 100;
+const POLL_INTERVAL_MS = 5000;
+const POLL_TIMEOUT_MS = 300000; // 5 分钟
+const POLL_HTTP_TIMEOUT_MS = 10000; // 10 秒
+
+/**
+ * Submit a successfully fetched verification code to the API Server's internal endpoint.
+ */
+async function submitVerification(publicKey, code, smsEntryId) {
+  const url = `${env.apiUrl}/api/internal/sms/verification`;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": env.internalSecret
+      },
+      body: JSON.stringify({ publicKey, verificationCode: code, smsEntryId }),
+      signal: AbortSignal.timeout(POLL_HTTP_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      console.error(`[SMS Poll] submitVerification failed for ${publicKey}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    console.error(`[SMS Poll] submitVerification error for ${publicKey}:`, error.message);
+  }
+}
+
+/**
+ * Report a poll timeout to the API Server's internal endpoint.
+ */
+async function reportTimeout(publicKey) {
+  const url = `${env.apiUrl}/api/internal/sms/timeout`;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": env.internalSecret
+      },
+      body: JSON.stringify({ publicKey }),
+      signal: AbortSignal.timeout(POLL_HTTP_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      console.error(`[SMS Poll] reportTimeout failed for ${publicKey}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    console.error(`[SMS Poll] reportTimeout error for ${publicKey}:`, error.message);
+  }
+}
+
+class PollTask {
+  constructor(publicKey, smsUrl, smsEntryId) {
+    this.publicKey = publicKey;
+    this.smsUrl = smsUrl;
+    this.smsEntryId = smsEntryId;
+    this.startedAt = Date.now();
+    this.intervalId = null;
+    this.attemptCount = 0;
+  }
+
+  start() {
+    this.poll(); // 立即执行第一次
+    this.intervalId = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+  }
+
+  stop() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    activePollTasks.delete(this.publicKey);
+  }
+
+  async poll() {
+    this.attemptCount++;
+
+    // 超时检查
+    if (Date.now() - this.startedAt >= POLL_TIMEOUT_MS) {
+      await reportTimeout(this.publicKey);
+      this.stop();
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), POLL_HTTP_TIMEOUT_MS);
+
+      const response = await fetch(this.smsUrl, {
+        signal: controller.signal,
+        headers: { "User-Agent": BROWSER_UA }
+      });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const text = (await response.text()).trim();
+        if (text) {
+          await submitVerification(this.publicKey, text, this.smsEntryId);
+          this.stop();
+          return;
+        }
+      }
+    } catch (error) {
+      console.error(`[SMS Poll] ${this.publicKey} attempt ${this.attemptCount} failed:`, error.message);
+    }
+  }
+}
+
+/**
+ * Start a new poll task for the given publicKey.
+ * Deduplication: ignores if a task for the same publicKey is already active.
+ * Capacity check: rejects if active tasks have reached MAX_ACTIVE_POLLS.
+ */
+function startPollTask(publicKey, smsUrl, smsEntryId) {
+  // 去重：同一 publicKey 已有活跃任务时忽略
+  if (activePollTasks.has(publicKey)) {
+    return { accepted: false, reason: "already_polling" };
+  }
+  // 容量检查
+  if (activePollTasks.size >= MAX_ACTIVE_POLLS) {
+    return { accepted: false, reason: "capacity_full" };
+  }
+  const task = new PollTask(publicKey, smsUrl, smsEntryId);
+  activePollTasks.set(publicKey, task);
+  task.start();
+  return { accepted: true };
+}
+
+// Export for testing
+export { PollTask, activePollTasks, MAX_ACTIVE_POLLS, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, POLL_HTTP_TIMEOUT_MS, submitVerification, reportTimeout, startPollTask };
+
+// ── Worker Internal HTTP Service ──
+
+/**
+ * Lightweight HTTP server that listens for poll trigger requests from the API Server.
+ * Exposes POST /api/internal/sms/poll to receive {publicKey, smsUrl, smsEntryId}.
+ * Uses X-Internal-Secret header for authentication.
+ */
+function createWorkerHttpServer() {
+  const server = http.createServer((req, res) => {
+    // Only accept POST /api/internal/sms/poll
+    if (req.method !== "POST" || req.url !== "/api/internal/sms/poll") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "not found" }));
+      return;
+    }
+
+    // Auth check
+    const secret = req.headers["x-internal-secret"];
+    if (secret !== env.internalSecret) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "unauthorized" }));
+      return;
+    }
+
+    // Parse request body
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "invalid JSON" }));
+        return;
+      }
+
+      const { publicKey, smsUrl, smsEntryId } = parsed;
+      if (!publicKey || !smsUrl || !smsEntryId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "参数不正确" }));
+        return;
+      }
+
+      const result = startPollTask(publicKey, smsUrl, smsEntryId);
+
+      if (result.accepted) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accepted: true }));
+      } else if (result.reason === "already_polling") {
+        res.writeHead(409, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accepted: false, reason: "already_polling" }));
+      } else if (result.reason === "capacity_full") {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accepted: false, reason: "capacity_full" }));
+      } else {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accepted: false, reason: "unknown" }));
+      }
+    });
+  });
+
+  return server;
+}
+
+// Start the internal HTTP server
+const workerHttpServer = createWorkerHttpServer();
+workerHttpServer.listen(env.workerInternalPort, "127.0.0.1", () => {
+  console.log(`[KaWang worker] internal HTTP server listening on 127.0.0.1:${env.workerInternalPort}`);
+});
+
+export { createWorkerHttpServer, workerHttpServer };
 
 console.log(`[KaWang worker] started with poll interval ${env.workerPollMs}ms`);
 

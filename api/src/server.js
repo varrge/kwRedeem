@@ -52,6 +52,55 @@ const updateState = {
   error: null
 };
 
+// --- Verification Cache ---
+const verificationCache = new Map();
+const CACHE_TTL_MS = 300000; // 5 分钟
+const CACHE_CLEANUP_INTERVAL_MS = 60000; // 60 秒
+
+function setCacheEntry(publicKey, verificationCode, smsEntryId) {
+  verificationCache.set(publicKey, {
+    verificationCode,
+    fetchedAt: new Date().toISOString(),
+    smsEntryId,
+    status: "ready"
+  });
+}
+
+function setTimeoutEntry(publicKey) {
+  verificationCache.set(publicKey, {
+    verificationCode: null,
+    fetchedAt: new Date().toISOString(),
+    smsEntryId: null,
+    status: "timeout"
+  });
+}
+
+function getCacheEntry(publicKey) {
+  const entry = verificationCache.get(publicKey);
+  if (!entry) return null;
+
+  // TTL 检查
+  const age = Date.now() - new Date(entry.fetchedAt).getTime();
+  if (age > CACHE_TTL_MS) {
+    verificationCache.delete(publicKey);
+    return null;
+  }
+  return entry;
+}
+
+function cleanupExpiredEntries() {
+  const now = Date.now();
+  for (const [key, entry] of verificationCache) {
+    const age = now - new Date(entry.fetchedAt).getTime();
+    if (age > CACHE_TTL_MS) {
+      verificationCache.delete(key);
+    }
+  }
+}
+
+setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
+// --- End Verification Cache ---
+
 await app.register(cors, {
   origin: true,
   credentials: true,
@@ -220,6 +269,13 @@ async function requireAdmin(request, reply) {
     return;
   } catch {
     return reply.code(401).send({ message: "登录态已失效" });
+  }
+}
+
+async function requireInternalSecret(request, reply) {
+  const secret = request.headers["x-internal-secret"];
+  if (secret !== env.internalSecret) {
+    return reply.code(401).send({ message: "unauthorized" });
   }
 }
 
@@ -3712,7 +3768,7 @@ app.get("/api/public/sms/query", async (request, reply) => {
     return reply.code(400).send({ message: "卡密格式不正确" });
   }
 
-  const entry = db.prepare("SELECT phone, sms_url, status FROM sms_entries WHERE public_key = ?").get(key);
+  const entry = db.prepare("SELECT id, phone, sms_url, status FROM sms_entries WHERE public_key = ?").get(key);
   if (!entry) {
     return reply.code(404).send({ message: "卡密无效或不存在" });
   }
@@ -3721,7 +3777,105 @@ app.get("/api/public/sms/query", async (request, reply) => {
     return reply.code(403).send({ message: "该卡密已停用" });
   }
 
-  return { phone: entry.phone, smsUrl: entry.sms_url };
+  // 查询验证码缓存
+  const cacheEntry = getCacheEntry(key);
+  let verificationStatus = "pending";
+  let verificationCode = null;
+
+  if (cacheEntry) {
+    if (cacheEntry.status === "ready") {
+      verificationStatus = "ready";
+      verificationCode = cacheEntry.verificationCode;
+    } else if (cacheEntry.status === "timeout") {
+      verificationStatus = "timeout";
+      verificationCode = null;
+    }
+  }
+
+  // 当缓存中无条目且状态为 pending 时，触发 Worker 轮询
+  if (verificationStatus === "pending" && entry.sms_url) {
+    try {
+      const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
+      const pollResponse = await fetch(workerUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Secret": env.internalSecret
+        },
+        body: JSON.stringify({
+          publicKey: key,
+          smsUrl: entry.sms_url,
+          smsEntryId: String(entry.id)
+        }),
+        signal: AbortSignal.timeout(5000)
+      });
+
+      // 若 Worker 返回 503 (capacity_full)，设置 verificationStatus 为 "busy"
+      if (pollResponse.status === 503) {
+        verificationStatus = "busy";
+      }
+      // 409 (already_polling) 和 200 (accepted) 保持 verificationStatus 为 "pending"
+    } catch (error) {
+      // Worker 不可达时不阻塞响应，保持 pending 状态
+      console.error("[SMS Query] Failed to trigger poll:", error.message);
+    }
+  }
+
+  return {
+    phone: entry.phone,
+    smsUrl: entry.sms_url,
+    verificationStatus,
+    verificationCode
+  };
+});
+
+// ─── SMS 内部接口 ─────────────────────────────────────────────────────────────
+app.post("/api/internal/sms/verification", { preHandler: [requireInternalSecret] }, async (request, reply) => {
+  const schema = z.object({
+    publicKey: z.string().min(1),
+    verificationCode: z.string().min(1),
+    smsEntryId: z.string().min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const { publicKey, verificationCode, smsEntryId } = parsed.data;
+  setCacheEntry(publicKey, verificationCode, smsEntryId);
+  return { stored: true };
+});
+
+app.post("/api/internal/sms/timeout", { preHandler: [requireInternalSecret] }, async (request, reply) => {
+  const schema = z.object({
+    publicKey: z.string().min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const { publicKey } = parsed.data;
+  setTimeoutEntry(publicKey);
+  return { marked: true };
+});
+
+app.post("/api/internal/sms/poll", { preHandler: [requireInternalSecret] }, async (request, reply) => {
+  const schema = z.object({
+    publicKey: z.string().min(1),
+    smsUrl: z.string().min(1),
+    smsEntryId: z.string().min(1)
+  });
+
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  // Stub: accept the poll request. Actual poll task management is handled by the Worker (Task 4).
+  return { accepted: true };
 });
 
 // ─── SMS 接码管理：批量状态修改 ───────────────────────────────────────────────
@@ -4938,3 +5092,13 @@ app.listen({
   console.error(error);
   process.exit(1);
 });
+
+export {
+  verificationCache,
+  CACHE_TTL_MS,
+  CACHE_CLEANUP_INTERVAL_MS,
+  setCacheEntry,
+  setTimeoutEntry,
+  getCacheEntry,
+  cleanupExpiredEntries
+};

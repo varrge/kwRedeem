@@ -5013,10 +5013,20 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     });
   }
 
-  // Step 6: Call external claim API
+  // Step 6: Call external claim API — fetch warningAckText first
+  let warningAckText = "";
+  if (warningAckId) {
+    try {
+      const warningResp = await fetchClaimWarning();
+      warningAckText = warningResp?.warning?.requiredText || "我已知晓";
+    } catch {
+      warningAckText = "我已知晓";
+    }
+  }
+
   let externalResult;
   try {
-    externalResult = await claimFromExternal(sourceCardCode, count, warningAckId);
+    externalResult = await claimFromExternal(sourceCardCode, count, warningAckId, warningAckText);
   } catch (error) {
     // External API failed: don't modify local state
     return reply.code(502).send({

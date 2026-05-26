@@ -116,26 +116,7 @@ export async function fetchClaimWarning() {
  * @param {string} warningAckId - The warning acknowledgment ID from claim-warning
  * @returns {Promise<object>} Claim result
  */
-export async function claimFromExternal(cardCode, count, warningAckId) {
-  // Fetch the required acknowledgment text dynamically from claim-warning
-  let warningAckText = "";
-  if (warningAckId) {
-    try {
-      const warningResp = await safeFetch(
-        `${EXTERNAL_BASE_URL}/api/claim-warning`,
-        { method: "GET" },
-        5_000
-      );
-      warningAckText = warningResp?.warning?.requiredText || "";
-    } catch {
-      // If we can't fetch the warning text, proceed without it
-    }
-    // Fallback: if remote didn't return requiredText, use known default
-    if (!warningAckText) {
-      warningAckText = "我已知晓";
-    }
-  }
-
+export async function claimFromExternal(cardCode, count, warningAckId, warningAckText = "") {
   return safeFetch(
     `${EXTERNAL_BASE_URL}/api/claim`,
     {

@@ -4886,7 +4886,8 @@ app.get("/api/public/quota/claim-warning", async () => {
         warning: {
           id: response.warning.id,
           title: response.warning.title,
-          message: response.warning.message
+          message: response.warning.message,
+          requiredText: response.warning.requiredText || ""
         }
       };
     }
@@ -5111,6 +5112,118 @@ app.get("/api/admin/5sim/balance", { preHandler: requireAdmin }, async (request,
   } catch (error) {
     return reply.code(502).send({ message: `5sim 余额查询失败: ${error.message}` });
   }
+});
+
+// ── 5sim SMS Config ──
+const smsConfigSchema = z.object({
+  sms_provider: z.string().max(50).optional(),
+  sms_api_key: z.string().max(512).optional(),
+  sms_country: z.string().max(100).optional(),
+  sms_service: z.string().max(100).optional(),
+  sms_operator: z.string().max(100).optional(),
+  sms_poll_interval_ms: z.number().int().min(1000).optional(),
+  sms_poll_timeout_ms: z.number().int().min(5000).optional(),
+  sms_submit_phone_template: z.string().max(4096).optional(),
+  sms_submit_code_template: z.string().max(4096).optional(),
+}).strict();
+
+app.patch("/api/admin/sites/:id/sms-config", { preHandler: requireAdmin }, async (request, reply) => {
+  const siteId = request.params.id;
+  const site = db.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
+  if (!site) {
+    return reply.code(404).send({ message: "站点不存在" });
+  }
+
+  if (!request.body || Object.keys(request.body).length === 0) {
+    return reply.code(400).send({ message: "请求体不能为空" });
+  }
+
+  const parsed = smsConfigSchema.safeParse(request.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    return reply.code(400).send({ message: `字段 ${firstError.path.join(".")} 无效: ${firstError.message}` });
+  }
+
+  const fields = parsed.data;
+  if (Object.keys(fields).length === 0) {
+    return reply.code(400).send({ message: "请求体不能为空" });
+  }
+
+  // Encrypt sms_api_key if provided
+  if (fields.sms_api_key) {
+    fields.sms_api_key = encryptText(fields.sms_api_key);
+  }
+
+  // Build dynamic UPDATE
+  const setClauses = Object.keys(fields).map((k) => `${k} = ?`);
+  const values = Object.values(fields);
+  const now = nowIso();
+  setClauses.push("updated_at = ?");
+  values.push(now);
+  values.push(siteId);
+
+  db.prepare(`UPDATE sites SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
+
+  // Audit log
+  createAuditLog({
+    action: "site.sms_config_update",
+    actor: request.admin.username,
+    resourceType: "site",
+    resourceId: siteId,
+    detail: { fields: Object.keys(parsed.data) },
+  });
+
+  // Return updated config with masked api key
+  const updated = db.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
+  const smsFields = {
+    sms_provider: updated.sms_provider || null,
+    sms_api_key: maskApiKey(updated.sms_api_key),
+    sms_country: updated.sms_country || null,
+    sms_service: updated.sms_service || null,
+    sms_operator: updated.sms_operator || null,
+    sms_poll_interval_ms: updated.sms_poll_interval_ms ?? null,
+    sms_poll_timeout_ms: updated.sms_poll_timeout_ms ?? null,
+    sms_submit_phone_template: updated.sms_submit_phone_template || null,
+    sms_submit_code_template: updated.sms_submit_code_template || null,
+  };
+  return smsFields;
+});
+
+function maskApiKey(val) {
+  if (!val || val.length <= 12) return val || null;
+  return val.slice(0, 6) + "..." + val.slice(-4);
+}
+
+// ── 5sim Jobs ──
+app.get("/api/admin/5sim/jobs", { preHandler: requireAdmin }, async (request, reply) => {
+  const rows = db.prepare(`
+    SELECT j.id, j.status, j.payload, j.updated_at,
+           o.order_no, s.name AS site_name
+    FROM activation_jobs j
+    LEFT JOIN redeem_orders o ON o.id = j.order_id
+    LEFT JOIN sites s ON s.id = j.site_id
+    WHERE j.payload LIKE '%fivesimOrderId%'
+    ORDER BY j.updated_at DESC
+    LIMIT 100
+  `).all();
+
+  const items = rows.map((row) => {
+    const payload = safeParseJson(row.payload, {});
+    return {
+      id: row.id,
+      order_no: row.order_no || null,
+      site_name: row.site_name || null,
+      status: row.status,
+      fivesimOrderId: payload.fivesimOrderId || null,
+      fivesimPhone: payload.fivesimPhone || null,
+      fivesimCode: payload.fivesimCode || null,
+      fivesimStatus: payload.fivesimStatus || null,
+      fivesimPollCount: payload.fivesimPollCount ?? null,
+      updated_at: row.updated_at
+    };
+  });
+
+  return { items };
 });
 
 app.setErrorHandler((error, _request, reply) => {

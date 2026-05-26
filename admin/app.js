@@ -94,6 +94,16 @@ const refs = {
   smsExportExcelBtn: document.querySelector("#sms-export-excel-btn"),
   smsAction: document.querySelector("#sms-action"),
   smsActionBtn: document.querySelector("#sms-action-btn"),
+  // 5sim panel refs
+  fivesimSiteSelect: document.querySelector("#fivesim-site-select"),
+  fivesimBalanceBtn: document.querySelector("#fivesim-balance-btn"),
+  fivesimBalanceDisplay: document.querySelector("#fivesim-balance-display"),
+  fivesimBalanceResult: document.querySelector("#fivesim-balance-result"),
+  fivesimConfigForm: document.querySelector("#fivesim-config-form"),
+  fivesimConfigResult: document.querySelector("#fivesim-config-result"),
+  fivesimJobList: document.querySelector("#fivesim-job-list"),
+  fivesimJobsRefreshBtn: document.querySelector("#fivesim-jobs-refresh-btn"),
+  fivesimJobsResult: document.querySelector("#fivesim-jobs-result"),
   // Quota system refs
   quotaStats: document.querySelector("#quota-stats"),
   quotaImportForm: document.querySelector("#quota-import-form"),
@@ -197,6 +207,9 @@ function switchTab(tabName) {
   });
   if (tabName === "sms" && getToken()) {
     refreshSmsEntries().catch(() => {});
+  }
+  if (tabName === "fivesim" && getToken()) {
+    refreshFivesimTab().catch(() => {});
   }
   if (tabName === "quota" && getToken()) {
     refreshQuotaDashboard().catch(() => {});
@@ -2146,6 +2159,201 @@ if (refs.quotaSubCardDetailClose) {
       refs.quotaSubCardDetailCard.classList.add("hidden");
     }
   });
+}
+
+// ── 5sim Panel Functions ──
+let fivesimSitesCache = [];
+
+function formatBalance(value) {
+  const num = Number(value);
+  if (isNaN(num)) return "- RUB";
+  return num.toFixed(2) + " RUB";
+}
+
+function maskPhone(phone) {
+  const str = String(phone || "");
+  if (str.length <= 4) return "*".repeat(str.length);
+  return "*".repeat(str.length - 4) + str.slice(-4);
+}
+
+function maskApiKeyDisplay(val) {
+  if (!val || val.length <= 12) return val || "";
+  return val.slice(0, 6) + "..." + val.slice(-4);
+}
+
+function renderFivesimStatus(status) {
+  const colors = {
+    waiting: "yellow",
+    code_received: "blue",
+    completed: "green",
+    cancelled: "grey",
+    error: "red"
+  };
+  const color = colors[status] || "grey";
+  return `<span class="table-badge status-${color}">${escapeHtml(status || "-")}</span>`;
+}
+
+function populateFivesimSiteSelect(sites) {
+  fivesimSitesCache = sites || [];
+  if (!refs.fivesimSiteSelect) return;
+
+  if (!fivesimSitesCache.length) {
+    refs.fivesimSiteSelect.innerHTML = `<option value="">暂无站点</option>`;
+    if (refs.fivesimBalanceBtn) refs.fivesimBalanceBtn.disabled = true;
+    return;
+  }
+
+  if (refs.fivesimBalanceBtn) refs.fivesimBalanceBtn.disabled = false;
+
+  const options = fivesimSitesCache.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+  refs.fivesimSiteSelect.innerHTML = options.join("");
+
+  // Default to first site with sms_provider
+  const defaultSite = fivesimSitesCache.find((s) => s.sms_provider) || fivesimSitesCache[0];
+  if (defaultSite) {
+    refs.fivesimSiteSelect.value = defaultSite.id;
+    loadFivesimSiteConfig(defaultSite);
+  }
+}
+
+function loadFivesimSiteConfig(site) {
+  if (!refs.fivesimConfigForm || !site) return;
+  const el = (id) => document.querySelector(id);
+  el("#fivesim-sms-provider").value = site.sms_provider || "";
+  el("#fivesim-sms-api-key").value = "";
+  el("#fivesim-sms-api-key").placeholder = maskApiKeyDisplay(site.sms_api_key) || "API Key（已加密存储）";
+  el("#fivesim-sms-country").value = site.sms_country || "";
+  el("#fivesim-sms-service").value = site.sms_service || "";
+  el("#fivesim-sms-operator").value = site.sms_operator || "";
+  el("#fivesim-sms-poll-interval").value = site.sms_poll_interval_ms || "";
+  el("#fivesim-sms-poll-timeout").value = site.sms_poll_timeout_ms || "";
+  el("#fivesim-sms-phone-tpl").value = site.sms_submit_phone_template || "";
+  el("#fivesim-sms-code-tpl").value = site.sms_submit_code_template || "";
+}
+
+async function queryFivesimBalance() {
+  const siteId = refs.fivesimSiteSelect?.value;
+  if (!siteId) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  setButtonBusy(refs.fivesimBalanceBtn, true, "查询中...");
+  setStatusMessage(refs.fivesimBalanceResult, "");
+
+  try {
+    const payload = await api(`/api/admin/5sim/balance?siteId=${siteId}`, { signal: controller.signal });
+    if (refs.fivesimBalanceDisplay) {
+      refs.fivesimBalanceDisplay.innerHTML = `<article class="stat"><span>余额</span><strong>${formatBalance(payload.balance)}</strong></article>`;
+    }
+  } catch (error) {
+    setStatusMessage(refs.fivesimBalanceResult, error.message, "error");
+  } finally {
+    clearTimeout(timeout);
+    setButtonBusy(refs.fivesimBalanceBtn, false);
+  }
+}
+
+// ── 5sim Panel Event Wiring ──
+if (refs.fivesimBalanceBtn) {
+  refs.fivesimBalanceBtn.addEventListener("click", () => {
+    queryFivesimBalance().catch(() => {});
+  });
+}
+
+if (refs.fivesimSiteSelect) {
+  refs.fivesimSiteSelect.addEventListener("change", () => {
+    const siteId = refs.fivesimSiteSelect.value;
+    const site = fivesimSitesCache.find((s) => s.id === siteId);
+    if (site) loadFivesimSiteConfig(site);
+  });
+}
+
+async function saveFivesimConfig() {
+  const siteId = refs.fivesimSiteSelect?.value;
+  if (!siteId) return;
+
+  const fields = {};
+  const provider = document.querySelector("#fivesim-sms-provider").value.trim();
+  const apiKey = document.querySelector("#fivesim-sms-api-key").value.trim();
+  const country = document.querySelector("#fivesim-sms-country").value.trim();
+  const service = document.querySelector("#fivesim-sms-service").value.trim();
+  const operator = document.querySelector("#fivesim-sms-operator").value.trim();
+  const pollInterval = document.querySelector("#fivesim-sms-poll-interval").value.trim();
+  const pollTimeout = document.querySelector("#fivesim-sms-poll-timeout").value.trim();
+  const phoneTpl = document.querySelector("#fivesim-sms-phone-tpl").value.trim();
+  const codeTpl = document.querySelector("#fivesim-sms-code-tpl").value.trim();
+
+  if (provider) fields.sms_provider = provider;
+  if (apiKey) fields.sms_api_key = apiKey;
+  if (country) fields.sms_country = country;
+  if (service) fields.sms_service = service;
+  if (operator) fields.sms_operator = operator;
+  if (pollInterval) fields.sms_poll_interval_ms = parseInt(pollInterval, 10);
+  if (pollTimeout) fields.sms_poll_timeout_ms = parseInt(pollTimeout, 10);
+  if (phoneTpl) fields.sms_submit_phone_template = phoneTpl;
+  if (codeTpl) fields.sms_submit_code_template = codeTpl;
+
+  if (Object.keys(fields).length === 0) {
+    setStatusMessage(refs.fivesimConfigResult, "请至少填写一个字段", "error");
+    return;
+  }
+
+  try {
+    await api(`/api/admin/sites/${siteId}/sms-config`, {
+      method: "PATCH",
+      body: JSON.stringify(fields)
+    });
+    setStatusMessage(refs.fivesimConfigResult, "配置已保存", "success");
+  } catch (error) {
+    setStatusMessage(refs.fivesimConfigResult, error.message, "error");
+  }
+}
+
+if (refs.fivesimConfigForm) {
+  refs.fivesimConfigForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveFivesimConfig().catch(() => {});
+  });
+}
+
+async function refreshFivesimJobs() {
+  if (!refs.fivesimJobList) return;
+  setButtonBusy(refs.fivesimJobsRefreshBtn, true, "刷新中...");
+  setStatusMessage(refs.fivesimJobsResult, "");
+
+  try {
+    const payload = await api("/api/admin/5sim/jobs");
+    renderTable(refs.fivesimJobList, [
+      { label: "订单号", render: (item) => escapeHtml(item.order_no || "-") },
+      { label: "站点", render: (item) => escapeHtml(item.site_name || "-") },
+      { label: "5sim 状态", render: (item) => renderFivesimStatus(item.fivesimStatus) },
+      { label: "手机号", render: (item) => escapeHtml(maskPhone(item.fivesimPhone)) },
+      { label: "验证码", render: (item) => escapeHtml(item.fivesimCode || "-") },
+      { label: "轮询次数", render: (item) => item.fivesimPollCount ?? "-" },
+      { label: "更新时间", render: (item) => escapeHtml(item.updated_at || "-") }
+    ], payload.items || [], "暂无 5sim 任务");
+  } catch (error) {
+    setStatusMessage(refs.fivesimJobsResult, error.message, "error");
+  } finally {
+    setButtonBusy(refs.fivesimJobsRefreshBtn, false);
+  }
+}
+
+if (refs.fivesimJobsRefreshBtn) {
+  refs.fivesimJobsRefreshBtn.addEventListener("click", () => {
+    refreshFivesimJobs().catch(() => {});
+  });
+}
+
+async function refreshFivesimTab() {
+  try {
+    const payload = await api("/api/admin/sites");
+    populateFivesimSiteSelect(payload.items || []);
+  } catch (_) {
+    // silently ignore
+  }
+  refreshFivesimJobs().catch(() => {});
 }
 
 refs.refreshBtn.addEventListener("click", () => {

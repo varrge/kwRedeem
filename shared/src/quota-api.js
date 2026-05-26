@@ -117,12 +117,27 @@ export async function fetchClaimWarning() {
  * @returns {Promise<object>} Claim result
  */
 export async function claimFromExternal(cardCode, count, warningAckId) {
+  // Fetch the required acknowledgment text dynamically from claim-warning
+  let warningAckText = "";
+  if (warningAckId) {
+    try {
+      const warningResp = await safeFetch(
+        `${EXTERNAL_BASE_URL}/api/claim-warning`,
+        { method: "GET" },
+        5_000
+      );
+      warningAckText = warningResp?.warning?.requiredText || "";
+    } catch {
+      // If we can't fetch the warning text, proceed without it
+    }
+  }
+
   return safeFetch(
     `${EXTERNAL_BASE_URL}/api/claim`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: cardCode, count, warningAckId }),
+      body: JSON.stringify({ code: cardCode, count, warningAckId, warningAckText }),
     },
     15_000
   );

@@ -5,6 +5,7 @@ import { env } from "../../shared/src/env.js";
 import { decryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
+import { getNumber, getStatus, setStatus } from "../../shared/src/fivesim-client.js";
 import {
   buildFeishuMarkdown,
   clampIntervalSeconds,
@@ -493,6 +494,336 @@ function updateJobPayload(jobId, extraFields) {
     .run(JSON.stringify(merged), nowIso(), jobId);
 }
 
+/**
+ * 5sim SMS 验证流程处理函数
+ * 流程: 购买号码 → 提交手机号到目标 → 轮询验证码 → 提交验证码到目标 → 完成
+ */
+async function processFiveSimJob(job, order, cdkey, site) {
+  const maxAttempts = site?.max_retries || job.max_attempts || 3;
+  const apiKey = decryptText(site.sms_api_key);
+
+  // Build base context from existing helper
+  const baseContext = buildRequestContext(job, order, cdkey, site, null);
+
+  // ── Step 1: Purchase phone number ──
+  let fivesimOrderId;
+  let fivesimPhone;
+
+  try {
+    const result = await getNumber(
+      apiKey,
+      site.sms_service,
+      site.sms_country || "china",
+      site.sms_operator || "any"
+    );
+    fivesimOrderId = result.id;
+    fivesimPhone = result.number;
+  } catch (err) {
+    const errMsg = err.message || "unknown error";
+
+    // Error-to-action mapping for getNumber failures
+    if (errMsg === "NO_BALANCE") {
+      updateJobPayload(job.id, { fivesimStatus: "error", fivesimError: "5sim: 余额不足" });
+      markFailed(job.id, order.id, cdkey.id, "5sim: 余额不足", null);
+      return;
+    }
+    if (errMsg === "BAD_KEY") {
+      updateJobPayload(job.id, { fivesimStatus: "error", fivesimError: "5sim: API Key 无效" });
+      markFailed(job.id, order.id, cdkey.id, "5sim: API Key 无效", null);
+      return;
+    }
+    if (errMsg === "BAD_SERVICE") {
+      updateJobPayload(job.id, { fivesimStatus: "error", fivesimError: "5sim: 服务名称无效" });
+      markFailed(job.id, order.id, cdkey.id, "5sim: 服务名称无效", null);
+      return;
+    }
+
+    // NO_NUMBERS and network errors are retryable
+    let retryMessage;
+    if (errMsg === "NO_NUMBERS") {
+      retryMessage = "5sim: 暂无可用号码";
+    } else if (errMsg.includes("failed:")) {
+      // Network error from fetchApi (e.g., "GET /path failed: timeout after 15000ms")
+      retryMessage = `5sim: network: ${errMsg}`;
+    } else {
+      retryMessage = `5sim: ${errMsg}`;
+    }
+
+    updateJobPayload(job.id, { fivesimStatus: "error", fivesimError: retryMessage });
+
+    if (job.attempt_count + 1 >= maxAttempts) {
+      markFailed(job.id, order.id, cdkey.id, retryMessage, null);
+    } else {
+      markRetry(job, order.id, retryMessage, null, maxAttempts);
+    }
+    return;
+  }
+
+  // Store order info in payload
+  updateJobPayload(job.id, {
+    fivesimOrderId,
+    fivesimPhone,
+    fivesimStatus: "waiting"
+  });
+
+  // Build extended template context with SMS-specific variables
+  const phone = fivesimPhone.startsWith("+") ? fivesimPhone.slice(1) : fivesimPhone;
+  const phoneWithPrefix = fivesimPhone.startsWith("+") ? fivesimPhone : `+${fivesimPhone}`;
+
+  const smsContext = {
+    ...baseContext,
+    phone,
+    phoneWithPrefix,
+    smsCode: "",
+    fivesimOrderId
+  };
+
+  // ── Step 2: Submit phone number to target service ──
+  const phoneTemplate = site.sms_submit_phone_template || site.submit_body_template || '{}';
+  const phoneHeaders = site.submit_headers_template || "{}";
+  const phoneUrl = site.submit_api_url;
+  const phoneMethod = site.submit_http_method || "POST";
+
+  const renderedPhoneHeaders = renderJsonTemplate(phoneHeaders, smsContext);
+  const renderedPhoneBody = renderJsonTemplate(phoneTemplate, smsContext);
+  const parsedPhoneHeaders = typeof renderedPhoneHeaders === "string"
+    ? safeParseJson(renderedPhoneHeaders, {})
+    : renderedPhoneHeaders;
+  const parsedPhoneBody = typeof renderedPhoneBody === "string"
+    ? safeParseJson(renderedPhoneBody, renderedPhoneBody)
+    : renderedPhoneBody;
+  const phoneBodyString = phoneMethod === "GET" ? "" : JSON.stringify(parsedPhoneBody);
+
+  applyAuthHeaders(parsedPhoneHeaders, {
+    url: phoneUrl,
+    authType: site.auth_type,
+    authConfig: site.auth_config
+  }, phoneBodyString);
+
+  let phoneResponse;
+  try {
+    const origin = getUrlOrigin(phoneUrl);
+    const fetchHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": origin ? `${origin}/` : undefined,
+      "Origin": origin || undefined,
+      "Content-Type": "application/json",
+      ...parsedPhoneHeaders
+    };
+    if (site?.request_cookies) {
+      fetchHeaders.Cookie = site.request_cookies;
+    }
+    const resp = await fetch(phoneUrl, {
+      method: phoneMethod,
+      headers: fetchHeaders,
+      body: phoneMethod === "GET" ? undefined : phoneBodyString,
+      signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
+    });
+    const text = await resp.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    phoneResponse = { ok: resp.ok, status: resp.status, text, json };
+  } catch (error) {
+    phoneResponse = { ok: false, status: 599, text: error.message, json: null };
+  }
+
+  // Evaluate phone submission success
+  const phoneSuccessRule = site.submit_success_rule;
+  const phoneSuccess = phoneSuccessRule
+    ? evaluateRule(phoneSuccessRule, phoneResponse)
+    : phoneResponse.ok;
+
+  if (!phoneSuccess) {
+    // Phone submission failed — cancel 5sim order and retry
+    try {
+      await setStatus(apiKey, fivesimOrderId, "cancel");
+    } catch (cancelErr) {
+      console.error(`[KaWang worker] 5sim cancel failed after phone submit error:`, cancelErr.message);
+    }
+    updateJobPayload(job.id, { fivesimStatus: "cancelled" });
+
+    const errorMessage = formatRemoteErrorMessage(phoneResponse, phoneResponse.text || `HTTP ${phoneResponse.status}`);
+    if (job.attempt_count + 1 >= maxAttempts) {
+      markFailed(job.id, order.id, cdkey.id, errorMessage, phoneResponse);
+    } else {
+      markRetry(job, order.id, errorMessage, phoneResponse, maxAttempts);
+    }
+    return;
+  }
+
+  // ── Step 3: Poll for verification code ──
+  const pollIntervalMs = Number(site.sms_poll_interval_ms) || 5000;
+  const pollTimeoutMs = Number(site.sms_poll_timeout_ms) || 300000;
+  const maxPollRounds = Math.floor(pollTimeoutMs / pollIntervalMs);
+
+  let smsCode = null;
+
+  for (let round = 0; round < maxPollRounds; round++) {
+    if (round > 0) await sleep(pollIntervalMs);
+
+    // Increment poll count in payload
+    const currentPayload = safeParseJson(
+      db.prepare("SELECT payload FROM activation_jobs WHERE id = ?").get(job.id)?.payload,
+      {}
+    );
+    updateJobPayload(job.id, { fivesimPollCount: (currentPayload.fivesimPollCount || 0) + 1 });
+
+    let statusResult;
+    try {
+      statusResult = await getStatus(apiKey, fivesimOrderId);
+    } catch (err) {
+      // Network error during polling — retry the job
+      const errMsg = err.message || "unknown error";
+      let retryMessage;
+      if (errMsg.includes("failed:")) {
+        retryMessage = `5sim: network: ${errMsg}`;
+      } else {
+        retryMessage = `5sim: ${errMsg}`;
+      }
+
+      try {
+        await setStatus(apiKey, fivesimOrderId, "cancel");
+      } catch (cancelErr) {
+        console.error(`[KaWang worker] 5sim cancel failed after poll error:`, cancelErr.message);
+      }
+      updateJobPayload(job.id, { fivesimStatus: "cancelled" });
+
+      if (job.attempt_count + 1 >= maxAttempts) {
+        markFailed(job.id, order.id, cdkey.id, retryMessage, null);
+      } else {
+        markRetry(job, order.id, retryMessage, null, maxAttempts);
+      }
+      return;
+    }
+
+    if (statusResult.status === "cancelled") {
+      // 5sim order was cancelled externally
+      updateJobPayload(job.id, { fivesimStatus: "cancelled" });
+      if (job.attempt_count + 1 >= maxAttempts) {
+        markFailed(job.id, order.id, cdkey.id, "5sim: 订单已被取消", null);
+      } else {
+        markRetry(job, order.id, "5sim: 订单已被取消", null, maxAttempts);
+      }
+      return;
+    }
+
+    if (statusResult.status === "ok" && statusResult.code) {
+      smsCode = statusResult.code;
+      updateJobPayload(job.id, { fivesimCode: smsCode, fivesimStatus: "code_received" });
+      break;
+    }
+
+    // status === "waiting" — continue polling
+  }
+
+  // ── Step 4: Handle poll timeout ──
+  if (!smsCode) {
+    // Timed out waiting for code — cancel and retry
+    try {
+      await setStatus(apiKey, fivesimOrderId, "cancel");
+    } catch (cancelErr) {
+      console.error(`[KaWang worker] 5sim cancel failed after poll timeout:`, cancelErr.message);
+    }
+    updateJobPayload(job.id, { fivesimStatus: "cancelled" });
+
+    if (job.attempt_count + 1 >= maxAttempts) {
+      markFailed(job.id, order.id, cdkey.id, "5sim: 验证码接收超时", null);
+    } else {
+      markRetry(job, order.id, "5sim: 验证码接收超时", null, maxAttempts);
+    }
+    return;
+  }
+
+  // ── Step 5: Submit verification code to target service ──
+  const codeContext = {
+    ...baseContext,
+    phone,
+    phoneWithPrefix,
+    smsCode,
+    fivesimOrderId
+  };
+
+  const codeTemplate = site.sms_submit_code_template || site.submit_body_template || '{}';
+  const codeHeaders = site.submit_headers_template || "{}";
+  const codeUrl = site.submit_api_url;
+  const codeMethod = site.submit_http_method || "POST";
+
+  const renderedCodeHeaders = renderJsonTemplate(codeHeaders, codeContext);
+  const renderedCodeBody = renderJsonTemplate(codeTemplate, codeContext);
+  const parsedCodeHeaders = typeof renderedCodeHeaders === "string"
+    ? safeParseJson(renderedCodeHeaders, {})
+    : renderedCodeHeaders;
+  const parsedCodeBody = typeof renderedCodeBody === "string"
+    ? safeParseJson(renderedCodeBody, renderedCodeBody)
+    : renderedCodeBody;
+  const codeBodyString = codeMethod === "GET" ? "" : JSON.stringify(parsedCodeBody);
+
+  applyAuthHeaders(parsedCodeHeaders, {
+    url: codeUrl,
+    authType: site.auth_type,
+    authConfig: site.auth_config
+  }, codeBodyString);
+
+  let codeResponse;
+  try {
+    const origin = getUrlOrigin(codeUrl);
+    const fetchHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": origin ? `${origin}/` : undefined,
+      "Origin": origin || undefined,
+      "Content-Type": "application/json",
+      ...parsedCodeHeaders
+    };
+    if (site?.request_cookies) {
+      fetchHeaders.Cookie = site.request_cookies;
+    }
+    const resp = await fetch(codeUrl, {
+      method: codeMethod,
+      headers: fetchHeaders,
+      body: codeMethod === "GET" ? undefined : codeBodyString,
+      signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
+    });
+    const text = await resp.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    codeResponse = { ok: resp.ok, status: resp.status, text, json };
+  } catch (error) {
+    codeResponse = { ok: false, status: 599, text: error.message, json: null };
+  }
+
+  // Evaluate code submission success
+  const codeSuccessRule = site.submit_success_rule;
+  const codeSuccess = codeSuccessRule
+    ? evaluateRule(codeSuccessRule, codeResponse)
+    : codeResponse.ok;
+
+  if (!codeSuccess) {
+    // Code submission failed — cancel-before-fail: attempt to cancel 5sim order
+    try {
+      await setStatus(apiKey, fivesimOrderId, "cancel");
+    } catch (cancelErr) {
+      console.error(`[KaWang worker] 5sim cancel failed after code submit error:`, cancelErr.message);
+    }
+    updateJobPayload(job.id, { fivesimStatus: "cancelled" });
+
+    // Mark as failed (code is consumed, cannot retry)
+    const errorMessage = formatRemoteErrorMessage(codeResponse, codeResponse.text || `HTTP ${codeResponse.status}`);
+    markFailed(job.id, order.id, cdkey.id, errorMessage, codeResponse);
+    return;
+  }
+
+  // ── Step 6: Complete 5sim order and mark success ──
+  try {
+    await setStatus(apiKey, fivesimOrderId, "finish");
+  } catch (finishErr) {
+    console.error(`[KaWang worker] 5sim finish call failed:`, finishErr.message);
+  }
+  updateJobPayload(job.id, { fivesimStatus: "completed" });
+  markSuccess(job.id, order.id, cdkey.id, codeResponse);
+}
+
 async function queryRemoteTask(queryUrl, site, context) {
   try {
     const method = (site?.query_http_method || "GET").toUpperCase();
@@ -622,6 +953,11 @@ async function processJob(job) {
 
   if (!order || !cdkey || (!site && !endpoint)) {
     markFailed(job.id, job.order_id, job.cdkey_id, "任务依赖数据不存在", null);
+    return;
+  }
+
+  if (site?.sms_provider === "5sim") {
+    await processFiveSimJob(job, order, cdkey, site);
     return;
   }
 
@@ -1166,7 +1502,7 @@ function startPollTask(publicKey, smsUrl, smsEntryId) {
 }
 
 // Export for testing
-export { PollTask, activePollTasks, MAX_ACTIVE_POLLS, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, POLL_HTTP_TIMEOUT_MS, submitVerification, reportTimeout, startPollTask };
+export { PollTask, activePollTasks, MAX_ACTIVE_POLLS, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, POLL_HTTP_TIMEOUT_MS, submitVerification, reportTimeout, startPollTask, processFiveSimJob };
 
 // ── Worker Internal HTTP Service ──
 

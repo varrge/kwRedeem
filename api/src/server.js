@@ -17,6 +17,7 @@ import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson }
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { verifyExternalCard, mergeExternalCards, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
+import { getBalance } from "../../shared/src/fivesim-client.js";
 import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
@@ -5076,6 +5077,40 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     message: externalResult?.message || externalResult?.error || "外部接口返回失败",
     code: quotaErrorCodes.EXTERNAL_API_ERROR
   });
+});
+
+// ── 5sim Balance ──
+app.get("/api/admin/5sim/balance", { preHandler: requireAdmin }, async (request, reply) => {
+  const siteId = request.query.siteId ? String(request.query.siteId).trim() : "";
+  if (!siteId) {
+    return reply.code(400).send({ message: "缺少 siteId 参数" });
+  }
+
+  const site = db.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
+  if (!site) {
+    return reply.code(400).send({ message: "站点不存在" });
+  }
+
+  if (!site.sms_api_key) {
+    return reply.code(400).send({ message: "该站点未配置 5sim API Key" });
+  }
+
+  let decryptedKey;
+  try {
+    decryptedKey = decryptText(site.sms_api_key);
+  } catch {
+    return reply.code(400).send({ message: "API Key 解密失败" });
+  }
+
+  try {
+    const balance = await Promise.race([
+      getBalance(decryptedKey),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000))
+    ]);
+    return { balance, currency: "RUB" };
+  } catch (error) {
+    return reply.code(502).send({ message: `5sim 余额查询失败: ${error.message}` });
+  }
 });
 
 app.setErrorHandler((error, _request, reply) => {

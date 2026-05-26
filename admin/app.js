@@ -2141,9 +2141,36 @@ if (refs.quotaSubCardRefreshBtn) {
 }
 
 // ── Quota Source-Card Refresh + Merge Buttons ──
+const _verifiedZeroCardIds = new Set();
+
 if (refs.quotaSourceCardsRefreshBtn) {
-  refs.quotaSourceCardsRefreshBtn.addEventListener("click", () => {
-    refreshQuotaSourceCards().catch(() => {});
+  refs.quotaSourceCardsRefreshBtn.addEventListener("click", async () => {
+    refs.quotaSourceCardsRefreshBtn.disabled = true;
+    refs.quotaSourceCardsRefreshBtn.textContent = "同步中...";
+    try {
+      const payload = await api("/api/admin/quota/cards?status=active&pageSize=100");
+      const items = payload.cards || payload.items || [];
+      for (const item of items) {
+        if (_verifiedZeroCardIds.has(item.id)) continue;
+        try {
+          const result = await api("/api/admin/quota/cards/verify", {
+            method: "POST",
+            body: JSON.stringify({ cardId: item.id }),
+          });
+          if (result.ok && result.remaining === 0) {
+            _verifiedZeroCardIds.add(item.id);
+          }
+        } catch {
+          // Ignore individual verify failures
+        }
+      }
+      await refreshQuotaSourceCards();
+    } catch {
+      await refreshQuotaSourceCards().catch(() => {});
+    } finally {
+      refs.quotaSourceCardsRefreshBtn.disabled = false;
+      refs.quotaSourceCardsRefreshBtn.textContent = "刷新";
+    }
   });
 }
 if (refs.quotaSourceCardsMergeBtn) {

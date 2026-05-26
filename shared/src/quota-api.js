@@ -130,6 +130,10 @@ export async function claimFromExternal(cardCode, count, warningAckId) {
     } catch {
       // If we can't fetch the warning text, proceed without it
     }
+    // Fallback: if remote didn't return requiredText, use known default
+    if (!warningAckText) {
+      warningAckText = "我已知晓";
+    }
   }
 
   return safeFetch(

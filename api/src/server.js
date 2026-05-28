@@ -15,7 +15,7 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEven
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
-import { verifyExternalCard, mergeExternalCards, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
+import { verifyExternalCard, mergeExternalCards, fetchClaimWarning, fetchExternalStatus, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import {
@@ -4894,6 +4894,30 @@ app.get("/api/public/quota/claim-warning", async () => {
     return { warning: null };
   } catch {
     return { warning: null };
+  }
+});
+
+// ── Quota Public: External Status ──
+app.get("/api/public/quota/status", async () => {
+  try {
+    const response = await fetchExternalStatus();
+    return {
+      available: response?.available || "未知",
+      recentClaimed: Number(response?.recentClaimed) || 0,
+      recentWindowMinutes: Number(response?.recentWindowMinutes) || 0,
+      cachedAt: response?.cachedAt || "",
+      cacheTtlSeconds: Number(response?.cacheTtlSeconds) || 0,
+      warning: response?.warning || null
+    };
+  } catch {
+    return {
+      available: "未知",
+      recentClaimed: 0,
+      recentWindowMinutes: 0,
+      cachedAt: "",
+      cacheTtlSeconds: 0,
+      warning: null
+    };
   }
 });
 

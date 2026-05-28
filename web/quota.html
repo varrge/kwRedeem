@@ -16,9 +16,22 @@
         margin-bottom: 24px;
       }
 
+      .stock-banner {
+        margin-bottom: 24px;
+      }
+
+      .stock-banner .stock-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
       .quota-stats {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr;
         gap: 16px;
         margin-bottom: 24px;
       }
@@ -332,6 +345,18 @@
         </nav>
       </header>
 
+      <section class="quota-panel stock-banner">
+        <div class="section-heading centered">
+          <p class="eyebrow">实时库存</p>
+          <h2 id="stock-status-value">加载中...</h2>
+          <p class="panel-desc" id="stock-status-desc">正在获取最新库存状态</p>
+        </div>
+        <div class="stock-meta">
+          <span>最近 <strong id="stock-window-value">-</strong> 分钟提取：<strong id="stock-claimed-value">-</strong></span>
+          <span>缓存时间：<strong id="stock-cached-at">-</strong></span>
+        </div>
+      </section>
+
       <!-- Verify Section -->
       <section id="verify-section" class="quota-panel">
         <div class="section-heading centered">
@@ -356,10 +381,6 @@
             <div class="quota-stat-card">
               <div class="label">剩余可提</div>
               <div class="value" id="remaining-value">-</div>
-            </div>
-            <div class="quota-stat-card">
-              <div class="label">当前库存</div>
-              <div class="value" id="stock-value">-</div>
             </div>
           </div>
 
@@ -430,6 +451,7 @@
       let verifiedCardCode = null;
       let warningAckId = "";
       let warningPollTimer = null;
+      let stockStatusTimer = null;
       let autoClaimTimer = null;
       let autoClaimRunning = false;
       let autoClaimInFlight = false;
@@ -437,6 +459,11 @@
       let autoClaimClaimedTotal = 0;
 
       // --- DOM ---
+      const stockStatusValue = document.getElementById("stock-status-value");
+      const stockStatusDesc = document.getElementById("stock-status-desc");
+      const stockWindowValue = document.getElementById("stock-window-value");
+      const stockClaimedValue = document.getElementById("stock-claimed-value");
+      const stockCachedAt = document.getElementById("stock-cached-at");
       const verifyForm = document.getElementById("verify-form");
       const cardCodeInput = document.getElementById("card-code-input");
       const verifyBtn = document.getElementById("verify-btn");
@@ -444,7 +471,6 @@
       const verifySection = document.getElementById("verify-section");
       const claimSection = document.getElementById("claim-section");
       const remainingValue = document.getElementById("remaining-value");
-      const stockValue = document.getElementById("stock-value");
       const statusExhausted = document.getElementById("status-exhausted");
       const statusNoStock = document.getElementById("status-no-stock");
       const warningBox = document.getElementById("warning-box");
@@ -485,8 +511,29 @@
       }
 
       function getAvailableStockValue() {
-        const match = stockValue.textContent.match(/\d+/);
-        return match ? Number.parseInt(match[0], 10) : null;
+        const availableText = stockStatusValue.textContent.trim();
+        if (!availableText || availableText === "加载中..." || availableText === "未知") {
+          return null;
+        }
+        if (availableText.includes("无") || availableText.includes("售罄") || availableText.includes("0")) {
+          return 0;
+        }
+        return 1;
+      }
+
+      function formatDateTime(value) {
+        if (!value) return "-";
+        try {
+          return new Date(value).toLocaleString("zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+          });
+        } catch {
+          return value;
+        }
       }
 
       function updateAutoClaimStatus(message, type = "muted") {
@@ -517,6 +564,36 @@
           updateAutoClaimStatus(reason, type);
         }
         syncClaimControls();
+      }
+
+      async function refreshStockStatus() {
+        try {
+          const status = await apiRequest("/api/public/quota/status");
+          stockStatusValue.textContent = status.available || "未知";
+          stockStatusDesc.textContent = status.warning?.message || "每 5 秒自动刷新一次库存状态";
+          stockWindowValue.textContent = status.recentWindowMinutes || 0;
+          stockClaimedValue.textContent = status.recentClaimed || 0;
+          stockCachedAt.textContent = formatDateTime(status.cachedAt);
+          syncClaimControls();
+        } catch {
+          stockStatusValue.textContent = "未知";
+          stockStatusDesc.textContent = "库存状态获取失败，5 秒后自动重试";
+          stockWindowValue.textContent = "-";
+          stockClaimedValue.textContent = "-";
+          stockCachedAt.textContent = "-";
+        }
+      }
+
+      function startStockStatusPolling() {
+        refreshStockStatus();
+        stockStatusTimer = setInterval(refreshStockStatus, 5000);
+      }
+
+      function stopStockStatusPolling() {
+        if (stockStatusTimer) {
+          clearInterval(stockStatusTimer);
+          stockStatusTimer = null;
+        }
       }
 
       // --- API Helpers ---
@@ -565,6 +642,8 @@
         }
       });
 
+      startStockStatusPolling();
+
       // --- Show Claim Section ---
       async function showClaimSection() {
         claimSection.classList.remove("hidden");
@@ -580,10 +659,8 @@
         try {
           const info = await apiRequest(`/api/public/quota/info?cardCode=${encodeURIComponent(verifiedCardCode)}`);
           const remaining = info.remaining;
-          const availableStock = info.availableStock;
 
           remainingValue.textContent = `${remaining} 货`;
-          stockValue.textContent = `${availableStock} 货`;
 
           // Handle exhausted state
           if (remaining <= 0) {
@@ -597,15 +674,13 @@
             statusExhausted.classList.add("hidden");
           }
 
-          // Handle no stock state
-          if (availableStock <= 0) {
-            stockValue.classList.add("exhausted");
+          const availableStock = getAvailableStockValue();
+          if (availableStock !== null && availableStock <= 0) {
             statusNoStock.classList.remove("hidden");
             if (autoClaimRunning) {
               stopAutoClaim("自动提取已停止：当前库存不足", "error");
             }
           } else {
-            stockValue.classList.remove("exhausted");
             statusNoStock.classList.add("hidden");
           }
 
@@ -911,6 +986,7 @@
 
       window.addEventListener("beforeunload", () => {
         stopWarningPolling();
+        stopStockStatusPolling();
         stopAutoClaim();
       });
     </script>

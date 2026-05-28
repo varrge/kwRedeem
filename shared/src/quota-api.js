@@ -105,6 +105,14 @@ export async function fetchClaimWarning() {
   );
 }
 
+export async function fetchExternalStatus() {
+  return safeFetch(
+    `${EXTERNAL_BASE_URL}/api/status`,
+    { method: "GET" },
+    5_000
+  );
+}
+
 /**
  * 执行提取操作
  * POST https://gpt.kedaya.xyz/api/claim

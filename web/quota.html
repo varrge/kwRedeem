@@ -540,15 +540,13 @@
 
       function syncClaimControls() {
         const remainingQuota = getRemainingQuotaValue();
-        const availableStock = getAvailableStockValue();
         const quotaDepleted = remainingQuota !== null && remainingQuota <= 0;
-        const stockDepleted = availableStock !== null && availableStock <= 0;
-        const shouldDisable = autoClaimRunning || quotaDepleted || stockDepleted;
+        const shouldDisable = autoClaimRunning || quotaDepleted;
         claimBtn.disabled = shouldDisable;
-        claimBatchCount.disabled = autoClaimRunning || quotaDepleted || stockDepleted;
-        claimCount.disabled = autoClaimRunning || quotaDepleted || stockDepleted;
+        claimBatchCount.disabled = autoClaimRunning || quotaDepleted;
+        claimCount.disabled = autoClaimRunning || quotaDepleted;
         autoClaimBtn.textContent = autoClaimRunning ? "停止自动提取" : "自动提取";
-        autoClaimBtn.disabled = quotaDepleted || stockDepleted;
+        autoClaimBtn.disabled = quotaDepleted;
       }
 
       function stopAutoClaim(reason, type = "muted") {
@@ -672,11 +670,6 @@
             statusExhausted.classList.add("hidden");
           }
 
-          const availableStock = getAvailableStockValue();
-          if (availableStock !== null && availableStock <= 0 && autoClaimRunning) {
-            stopAutoClaim("自动提取已停止：当前库存不足", "error");
-          }
-
           syncClaimControls();
         } catch (error) {
           setState(claimResult, error.message, "error");
@@ -763,13 +756,8 @@
         }
 
         const remainingQuota = getRemainingQuotaValue();
-        const availableStock = getAvailableStockValue();
         if (remainingQuota !== null && remainingQuota <= 0) {
           stopAutoClaim("自动提取已停止：卡密额度已用完", "error");
-          return;
-        }
-        if (availableStock !== null && availableStock <= 0) {
-          stopAutoClaim("自动提取已停止：当前库存不足", "error");
           return;
         }
 

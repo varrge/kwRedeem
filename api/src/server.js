@@ -11,7 +11,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
+import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
@@ -476,6 +476,120 @@ function getUniqueSmsPublicKey(prefix) {
     candidate = generateSmsPublicKey(prefix);
   }
   return candidate;
+}
+
+function generateSmsCardKey(prefix) {
+  const normalized = String(prefix || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+  return `${normalized}-${nanoid(10).toUpperCase()}`;
+}
+
+function getUniqueSmsCardKey(prefix) {
+  let candidate = generateSmsCardKey(prefix);
+  while (db.prepare("SELECT 1 FROM sms_cards WHERE card_key = ?").get(candidate)) {
+    candidate = generateSmsCardKey(prefix);
+  }
+  return candidate;
+}
+
+function generateSmsOrderNo() {
+  return `SMS-${nanoid(12).toUpperCase()}`;
+}
+
+function getLatestSmsOrderByCardId(cardId) {
+  return db.prepare(`
+    SELECT o.*, s.name AS site_name, s.slug AS site_slug
+    FROM sms_orders o
+    LEFT JOIN sms_sites s ON s.id = o.site_id
+    WHERE o.card_id = ?
+    ORDER BY o.created_at DESC
+    LIMIT 1
+  `).get(cardId);
+}
+
+function getSmsCardDetail(cardKey) {
+  return db.prepare(`
+    SELECT c.*, s.name AS site_name, s.slug AS site_slug, s.status AS site_status
+    FROM sms_cards c
+    LEFT JOIN sms_sites s ON s.id = c.site_id
+    WHERE c.card_key = ?
+  `).get(cardKey);
+}
+
+function createSmsOrderEvent(orderId, eventType, detail = null) {
+  db.prepare(`
+    INSERT INTO sms_order_events (id, order_id, event_type, detail, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(nanoid(16), orderId, eventType, detail ? JSON.stringify(detail) : null, nowIso());
+}
+
+function releaseSmsCard(cardId, status = smsCardStatuses.active) {
+  db.prepare(`
+    UPDATE sms_cards
+    SET status = ?, current_order_id = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(status, nowIso(), cardId);
+}
+
+function reserveSmsEntryForOrder() {
+  return db.prepare(`
+    SELECT id, phone, sms_url
+    FROM sms_entries
+    WHERE status = 'active'
+    ORDER BY created_at ASC
+    LIMIT 1
+  `).get();
+}
+
+function readSmsOrderVerification(order) {
+  if (!order?.sms_entry_id) {
+    return {
+      verificationStatus: order?.status === smsOrderStatuses.ready ? "ready" : "pending",
+      verificationCode: order?.verification_code || null
+    };
+  }
+
+  const cacheEntry = getCacheEntry(order.sms_entry_id);
+  if (!cacheEntry) {
+    return {
+      verificationStatus: order?.status === smsOrderStatuses.timeout ? "timeout" : (order?.status === smsOrderStatuses.ready ? "ready" : "pending"),
+      verificationCode: order?.verification_code || null
+    };
+  }
+
+  if (cacheEntry.status === "ready") {
+    return {
+      verificationStatus: "ready",
+      verificationCode: cacheEntry.verificationCode
+    };
+  }
+
+  if (cacheEntry.status === "timeout") {
+    return {
+      verificationStatus: "timeout",
+      verificationCode: null
+    };
+  }
+
+  return {
+    verificationStatus: "pending",
+    verificationCode: null
+  };
+}
+
+function mapSmsOrderForPublic(order) {
+  const verification = readSmsOrderVerification(order);
+  return {
+    orderNo: order.order_no,
+    siteName: order.site_name || null,
+    siteSlug: order.site_slug || null,
+    phone: order.phone || "",
+    status: verification.verificationStatus === "ready" ? smsOrderStatuses.ready : order.status,
+    verificationStatus: verification.verificationStatus,
+    verificationCode: verification.verificationCode,
+    errorMessage: order.error_message || null,
+    createdAt: order.created_at,
+    updatedAt: order.updated_at
+  };
 }
 
 function extractLiveTaskInfo(lastResponse, pollingEnabled) {
@@ -3762,11 +3876,226 @@ app.get("/api/admin/sms/export", { preHandler: requireAdmin }, async () => {
   return { items };
 });
 
-// ─── 接码公开查询接口 ───────────────────────────────────────────────
+// ─── SMS Public: Card Verify / Order Flow ───────────────────────────────
+app.post("/api/public/sms/cards/verify", async (request, reply) => {
+  const schema = z.object({
+    cardKey: z.string().min(1)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供 cardKey" });
+  }
+
+  const card = getSmsCardDetail(parsed.data.cardKey.trim());
+  if (!card) {
+    return reply.code(404).send({ message: "接码卡密无效或不存在" });
+  }
+  if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(card.status)) {
+    return reply.code(403).send({ message: "该接码卡密已停用" });
+  }
+  if (card.site_status !== smsSiteStatuses.active) {
+    return reply.code(403).send({ message: "该接码站点暂不可用" });
+  }
+
+  const latestOrder = getLatestSmsOrderByCardId(card.id);
+  return {
+    valid: true,
+    cardKey: card.card_key,
+    site: {
+      id: card.site_id,
+      name: card.site_name,
+      slug: card.site_slug
+    },
+    status: card.status,
+    hasActiveOrder: Boolean(card.current_order_id),
+    latestOrder: latestOrder ? mapSmsOrderForPublic(latestOrder) : null
+  };
+});
+
+app.post("/api/public/sms/orders", async (request, reply) => {
+  const schema = z.object({
+    cardKey: z.string().min(1)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供 cardKey" });
+  }
+
+  const card = getSmsCardDetail(parsed.data.cardKey.trim());
+  if (!card) {
+    return reply.code(404).send({ message: "接码卡密无效或不存在" });
+  }
+  if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(card.status)) {
+    return reply.code(403).send({ message: "该接码卡密已停用" });
+  }
+  if (card.site_status !== smsSiteStatuses.active) {
+    return reply.code(403).send({ message: "该接码站点暂不可用" });
+  }
+
+  if (card.current_order_id) {
+    const currentOrder = db.prepare(`
+      SELECT o.*, s.name AS site_name, s.slug AS site_slug
+      FROM sms_orders o
+      LEFT JOIN sms_sites s ON s.id = o.site_id
+      WHERE o.id = ?
+    `).get(card.current_order_id);
+    if (currentOrder) {
+      return mapSmsOrderForPublic(currentOrder);
+    }
+  }
+
+  const smsEntry = reserveSmsEntryForOrder();
+  if (!smsEntry) {
+    return reply.code(409).send({ message: "当前没有可分配的号码库存" });
+  }
+
+  const now = nowIso();
+  const orderId = nanoid(16);
+  const orderNo = generateSmsOrderNo();
+  db.prepare(`
+    INSERT INTO sms_orders (
+      id, order_no, site_id, card_id, sms_entry_id, phone, sms_url,
+      verification_code, status, error_message, provider_payload, refunded_at,
+      expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?, ?)
+  `).run(
+    orderId,
+    orderNo,
+    card.site_id,
+    card.id,
+    smsEntry.id,
+    smsEntry.phone,
+    smsEntry.sms_url,
+    smsOrderStatuses.waiting_code,
+    JSON.stringify({ source: "sms_entries" }),
+    new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    now,
+    now
+  );
+
+  db.prepare(`
+    UPDATE sms_cards
+    SET status = ?, current_order_id = ?, resource_entry_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(smsCardStatuses.in_use, orderId, smsEntry.id, now, card.id);
+
+  db.prepare(`
+    UPDATE sms_entries
+    SET status = 'locked', updated_at = ?
+    WHERE id = ?
+  `).run(now, smsEntry.id);
+
+  createSmsOrderEvent(orderId, "number_reserved", { smsEntryId: smsEntry.id, phone: smsEntry.phone });
+
+  try {
+    const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
+    await fetch(workerUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": env.internalSecret
+      },
+      body: JSON.stringify({
+        publicKey: String(smsEntry.id),
+        smsUrl: smsEntry.sms_url,
+        smsEntryId: String(smsEntry.id)
+      }),
+      signal: AbortSignal.timeout(5000)
+    });
+  } catch {
+    // Worker 不可达时保持 waiting_code，由前台轮询继续读取状态
+  }
+
+  const createdOrder = db.prepare(`
+    SELECT o.*, s.name AS site_name, s.slug AS site_slug
+    FROM sms_orders o
+    LEFT JOIN sms_sites s ON s.id = o.site_id
+    WHERE o.id = ?
+  `).get(orderId);
+  return mapSmsOrderForPublic(createdOrder);
+});
+
+app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
+  const orderNo = String(request.params.orderNo || "").trim();
+  const order = db.prepare(`
+    SELECT o.*, s.name AS site_name, s.slug AS site_slug
+    FROM sms_orders o
+    LEFT JOIN sms_sites s ON s.id = o.site_id
+    WHERE o.order_no = ?
+  `).get(orderNo);
+  if (!order) {
+    return reply.code(404).send({ message: "接码订单不存在" });
+  }
+
+  const verification = readSmsOrderVerification(order);
+  if (verification.verificationStatus === "ready" && order.status !== smsOrderStatuses.ready) {
+    db.prepare(`
+      UPDATE sms_orders
+      SET status = ?, verification_code = ?, updated_at = ?
+      WHERE id = ?
+    `).run(smsOrderStatuses.ready, verification.verificationCode, nowIso(), order.id);
+    releaseSmsCard(order.card_id, smsCardStatuses.used);
+    db.prepare(`UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ?`).run(nowIso(), order.sms_entry_id);
+    createSmsOrderEvent(order.id, "verification_ready", { verificationCode: verification.verificationCode });
+    order.status = smsOrderStatuses.ready;
+    order.verification_code = verification.verificationCode;
+  }
+
+  if (verification.verificationStatus === "timeout" && ![smsOrderStatuses.timeout, smsOrderStatuses.refunded, smsOrderStatuses.ready].includes(order.status)) {
+    db.prepare(`
+      UPDATE sms_orders
+      SET status = ?, refunded_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(smsOrderStatuses.refunded, nowIso(), nowIso(), order.id);
+    releaseSmsCard(order.card_id, smsCardStatuses.active);
+    db.prepare(`UPDATE sms_entries SET status = 'active', updated_at = ? WHERE id = ?`).run(nowIso(), order.sms_entry_id);
+    createSmsOrderEvent(order.id, "timeout_refunded", null);
+    order.status = smsOrderStatuses.refunded;
+  }
+
+  return mapSmsOrderForPublic(order);
+});
+
+// 兼容旧前台查询入口：优先走新 sms_cards，其次回退到旧 sms_entries public_key 查询
 app.get("/api/public/sms/query", async (request, reply) => {
   const key = String(request.query.key ?? "").trim();
   if (!key) {
     return reply.code(400).send({ message: "卡密格式不正确" });
+  }
+
+  const smsCard = getSmsCardDetail(key);
+  if (smsCard) {
+    if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(smsCard.status)) {
+      return reply.code(403).send({ message: "该接码卡密已停用" });
+    }
+    let order = smsCard.current_order_id
+      ? db.prepare(`
+          SELECT o.*, s.name AS site_name, s.slug AS site_slug
+          FROM sms_orders o
+          LEFT JOIN sms_sites s ON s.id = o.site_id
+          WHERE o.id = ?
+        `).get(smsCard.current_order_id)
+      : getLatestSmsOrderByCardId(smsCard.id);
+    if (!order) {
+      return {
+        phone: "",
+        smsUrl: "",
+        verificationStatus: "pending",
+        verificationCode: null,
+        cardStatus: smsCard.status,
+        siteName: smsCard.site_name || ""
+      };
+    }
+    const payload = mapSmsOrderForPublic(order);
+    return {
+      phone: payload.phone,
+      smsUrl: order.sms_url || "",
+      verificationStatus: payload.verificationStatus,
+      verificationCode: payload.verificationCode,
+      orderNo: payload.orderNo,
+      siteName: payload.siteName,
+      cardStatus: smsCard.status
+    };
   }
 
   const entry = db.prepare("SELECT id, phone, sms_url, status FROM sms_entries WHERE public_key = ?").get(key);
@@ -3778,7 +4107,6 @@ app.get("/api/public/sms/query", async (request, reply) => {
     return reply.code(403).send({ message: "该卡密已停用" });
   }
 
-  // 查询验证码缓存
   const cacheEntry = getCacheEntry(key);
   let verificationStatus = "pending";
   let verificationCode = null;
@@ -3793,7 +4121,6 @@ app.get("/api/public/sms/query", async (request, reply) => {
     }
   }
 
-  // 当缓存中无条目且状态为 pending 时，触发 Worker 轮询
   if (verificationStatus === "pending" && entry.sms_url) {
     try {
       const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
@@ -3811,13 +4138,10 @@ app.get("/api/public/sms/query", async (request, reply) => {
         signal: AbortSignal.timeout(5000)
       });
 
-      // 若 Worker 返回 503 (capacity_full)，设置 verificationStatus 为 "busy"
       if (pollResponse.status === 503) {
         verificationStatus = "busy";
       }
-      // 409 (already_polling) 和 200 (accepted) 保持 verificationStatus 为 "pending"
     } catch (error) {
-      // Worker 不可达时不阻塞响应，保持 pending 状态
       console.error("[SMS Query] Failed to trigger poll:", error.message);
     }
   }
@@ -3845,6 +4169,17 @@ app.post("/api/internal/sms/verification", { preHandler: [requireInternalSecret]
 
   const { publicKey, verificationCode, smsEntryId } = parsed.data;
   setCacheEntry(publicKey, verificationCode, smsEntryId);
+
+  const smsOrder = db.prepare("SELECT id, card_id FROM sms_orders WHERE sms_entry_id = ? AND status IN (?, ?)")
+    .get(smsEntryId, smsOrderStatuses.waiting_code, smsOrderStatuses.number_reserved);
+  if (smsOrder) {
+    db.prepare("UPDATE sms_orders SET status = ?, verification_code = ?, updated_at = ? WHERE id = ?")
+      .run(smsOrderStatuses.ready, verificationCode, nowIso(), smsOrder.id);
+    releaseSmsCard(smsOrder.card_id, smsCardStatuses.used);
+    db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ?").run(nowIso(), smsEntryId);
+    createSmsOrderEvent(smsOrder.id, "verification_ready", { verificationCode });
+  }
+
   return { stored: true };
 });
 
@@ -3860,6 +4195,17 @@ app.post("/api/internal/sms/timeout", { preHandler: [requireInternalSecret] }, a
 
   const { publicKey } = parsed.data;
   setTimeoutEntry(publicKey);
+
+  const smsOrder = db.prepare("SELECT id, card_id, sms_entry_id FROM sms_orders WHERE sms_entry_id = ? AND status IN (?, ?)")
+    .get(publicKey, smsOrderStatuses.waiting_code, smsOrderStatuses.number_reserved);
+  if (smsOrder) {
+    db.prepare("UPDATE sms_orders SET status = ?, refunded_at = ?, updated_at = ? WHERE id = ?")
+      .run(smsOrderStatuses.refunded, nowIso(), nowIso(), smsOrder.id);
+    releaseSmsCard(smsOrder.card_id, smsCardStatuses.active);
+    db.prepare("UPDATE sms_entries SET status = 'active', updated_at = ? WHERE id = ?").run(nowIso(), smsOrder.sms_entry_id);
+    createSmsOrderEvent(smsOrder.id, "timeout_refunded", null);
+  }
+
   return { marked: true };
 });
 
@@ -3911,6 +4257,187 @@ app.patch("/api/admin/sms/entries/status", { preHandler: requireAdmin }, async (
   });
 
   return { updatedCount };
+});
+
+// ─── SMS 站点 / 卡密 / 订单管理 ───────────────────────────────────────────────
+app.get("/api/admin/sms/sites", { preHandler: requireAdmin }, async () => {
+  const items = db.prepare(`
+    SELECT s.*, COUNT(c.id) AS card_count
+    FROM sms_sites s
+    LEFT JOIN sms_cards c ON c.site_id = s.id
+    GROUP BY s.id
+    ORDER BY s.created_at DESC
+  `).all().map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    inventorySource: row.inventory_source,
+    status: row.status,
+    note: row.note || "",
+    cardCount: Number(row.card_count) || 0,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+  return { items };
+});
+
+app.post("/api/admin/sms/sites", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    name: z.string().min(1),
+    slug: z.string().min(1),
+    note: z.string().optional().default("")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供有效的站点名称和 slug" });
+  }
+
+  const { name, slug, note } = parsed.data;
+  const normalizedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const exists = db.prepare("SELECT id FROM sms_sites WHERE slug = ?").get(normalizedSlug);
+  if (exists) {
+    return reply.code(409).send({ message: "该接码站点 slug 已存在" });
+  }
+
+  const now = nowIso();
+  const id = nanoid(16);
+  db.prepare(`
+    INSERT INTO sms_sites (id, name, slug, inventory_source, status, note, created_at, updated_at)
+    VALUES (?, ?, ?, 'sms_entries', ?, ?, ?, ?)
+  `).run(id, name.trim(), normalizedSlug, smsSiteStatuses.active, note.trim(), now, now);
+
+  createAuditLog({
+    action: "sms_site_create",
+    actor: request.admin.username,
+    resourceType: "sms_site",
+    resourceId: id,
+    detail: { name: name.trim(), slug: normalizedSlug }
+  });
+
+  return { id, name: name.trim(), slug: normalizedSlug };
+});
+
+app.get("/api/admin/sms/cards", { preHandler: requireAdmin }, async () => {
+  const items = db.prepare(`
+    SELECT c.*, s.name AS site_name, s.slug AS site_slug
+    FROM sms_cards c
+    LEFT JOIN sms_sites s ON s.id = c.site_id
+    ORDER BY c.created_at DESC
+  `).all().map((row) => ({
+    id: row.id,
+    cardKey: row.card_key,
+    prefix: row.prefix,
+    status: row.status,
+    siteId: row.site_id,
+    siteName: row.site_name || "-",
+    siteSlug: row.site_slug || "-",
+    currentOrderId: row.current_order_id || null,
+    resourceEntryId: row.resource_entry_id || null,
+    note: row.note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+  return { items };
+});
+
+app.post("/api/admin/sms/cards", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    siteId: z.string().min(1),
+    prefix: z.string().min(1).max(20),
+    count: z.number().int().min(1).max(200),
+    note: z.string().optional().default("")
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供有效的站点、前缀和数量" });
+  }
+
+  const site = db.prepare("SELECT id, name, slug, status FROM sms_sites WHERE id = ?").get(parsed.data.siteId);
+  if (!site) {
+    return reply.code(404).send({ message: "接码站点不存在" });
+  }
+
+  const now = nowIso();
+  const batchId = nanoid(16);
+  const normalizedPrefix = parsed.data.prefix.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+  db.prepare(`
+    INSERT INTO sms_card_batches (id, site_id, prefix, total_count, note, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(batchId, site.id, normalizedPrefix, parsed.data.count, parsed.data.note.trim(), request.admin.username, now, now);
+
+  const cards = [];
+  for (let i = 0; i < parsed.data.count; i += 1) {
+    const id = nanoid(16);
+    const cardKey = getUniqueSmsCardKey(normalizedPrefix);
+    db.prepare(`
+      INSERT INTO sms_cards (id, site_id, batch_id, card_key, prefix, status, current_order_id, resource_entry_id, note, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+    `).run(id, site.id, batchId, cardKey, normalizedPrefix, smsCardStatuses.active, parsed.data.note.trim(), now, now);
+    cards.push({ id, cardKey });
+  }
+
+  createAuditLog({
+    action: "sms_card_batch_create",
+    actor: request.admin.username,
+    resourceType: "sms_card_batch",
+    resourceId: batchId,
+    detail: { siteId: site.id, count: parsed.data.count, prefix: normalizedPrefix }
+  });
+
+  return { batchId, cards };
+});
+
+app.patch("/api/admin/sms/cards/status", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    ids: z.array(z.string()).min(1),
+    status: z.enum([smsCardStatuses.active, smsCardStatuses.disabled, smsCardStatuses.void])
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const now = nowIso();
+  let updatedCount = 0;
+  for (const id of parsed.data.ids) {
+    const result = db.prepare("UPDATE sms_cards SET status = ?, updated_at = ? WHERE id = ?")
+      .run(parsed.data.status, now, id);
+    if (result.changes > 0) updatedCount += 1;
+  }
+
+  createAuditLog({
+    action: "sms_card_status_update",
+    actor: request.admin.username,
+    resourceType: "sms_card",
+    resourceId: null,
+    detail: { ids: parsed.data.ids, status: parsed.data.status, updatedCount }
+  });
+
+  return { updatedCount };
+});
+
+app.get("/api/admin/sms/orders", { preHandler: requireAdmin }, async () => {
+  const items = db.prepare(`
+    SELECT o.*, c.card_key, s.name AS site_name
+    FROM sms_orders o
+    LEFT JOIN sms_cards c ON c.id = o.card_id
+    LEFT JOIN sms_sites s ON s.id = o.site_id
+    ORDER BY o.created_at DESC
+    LIMIT 200
+  `).all().map((row) => ({
+    id: row.id,
+    orderNo: row.order_no,
+    cardKey: row.card_key || "-",
+    siteName: row.site_name || "-",
+    phone: row.phone || "",
+    verificationCode: row.verification_code || "",
+    status: row.status,
+    errorMessage: row.error_message || "",
+    refundedAt: row.refunded_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+  return { items };
 });
 
 // ─── SMS 单条添加接口 ───────────────────────────────────────────────────────

@@ -84,6 +84,22 @@ const refs = {
   notifyMonitorList: document.querySelector("#notify-monitor-list"),
   notifyEventList: document.querySelector("#notify-event-list"),
   // SMS panel refs
+  smsSiteForm: document.querySelector("#sms-site-form"),
+  smsSiteName: document.querySelector("#sms-site-name"),
+  smsSiteSlug: document.querySelector("#sms-site-slug"),
+  smsSiteNote: document.querySelector("#sms-site-note"),
+  smsSiteResult: document.querySelector("#sms-site-result"),
+  smsSiteList: document.querySelector("#sms-site-list"),
+  smsCardForm: document.querySelector("#sms-card-form"),
+  smsCardSite: document.querySelector("#sms-card-site"),
+  smsCardPrefix: document.querySelector("#sms-card-prefix"),
+  smsCardCount: document.querySelector("#sms-card-count"),
+  smsCardNote: document.querySelector("#sms-card-note"),
+  smsCardResult: document.querySelector("#sms-card-result"),
+  smsCardList: document.querySelector("#sms-card-list"),
+  smsCardAction: document.querySelector("#sms-card-action"),
+  smsCardActionBtn: document.querySelector("#sms-card-action-btn"),
+  smsOrderList: document.querySelector("#sms-order-list"),
   smsBatchForm: document.querySelector("#sms-batch-form"),
   smsBatchResult: document.querySelector("#sms-batch-result"),
   smsSingleForm: document.querySelector("#sms-single-form"),
@@ -94,16 +110,6 @@ const refs = {
   smsExportExcelBtn: document.querySelector("#sms-export-excel-btn"),
   smsAction: document.querySelector("#sms-action"),
   smsActionBtn: document.querySelector("#sms-action-btn"),
-  // 5sim panel refs
-  fivesimSiteSelect: document.querySelector("#fivesim-site-select"),
-  fivesimBalanceBtn: document.querySelector("#fivesim-balance-btn"),
-  fivesimBalanceDisplay: document.querySelector("#fivesim-balance-display"),
-  fivesimBalanceResult: document.querySelector("#fivesim-balance-result"),
-  fivesimConfigForm: document.querySelector("#fivesim-config-form"),
-  fivesimConfigResult: document.querySelector("#fivesim-config-result"),
-  fivesimJobList: document.querySelector("#fivesim-job-list"),
-  fivesimJobsRefreshBtn: document.querySelector("#fivesim-jobs-refresh-btn"),
-  fivesimJobsResult: document.querySelector("#fivesim-jobs-result"),
   // Quota system refs
   quotaStats: document.querySelector("#quota-stats"),
   quotaImportForm: document.querySelector("#quota-import-form"),
@@ -206,10 +212,7 @@ function switchTab(tabName) {
     panel.classList.toggle("hidden", panel.dataset.panel !== tabName);
   });
   if (tabName === "sms" && getToken()) {
-    refreshSmsEntries().catch(() => {});
-  }
-  if (tabName === "fivesim" && getToken()) {
-    refreshFivesimTab().catch(() => {});
+    refreshSmsConsole().catch(() => {});
   }
   if (tabName === "quota" && getToken()) {
     refreshQuotaDashboard().catch(() => {});
@@ -482,18 +485,70 @@ async function refreshCdkeys() {
   ], payload.items);
 }
 
+async function refreshSmsSites() {
+  const payload = await api("/api/admin/sms/sites");
+  const items = payload.items || [];
+  if (refs.smsCardSite) {
+    refs.smsCardSite.innerHTML = items.length
+      ? items.map((item) => `<option value="${item.id}">${escapeHtml(item.name)} (${escapeHtml(item.slug)})</option>`).join("")
+      : `<option value="">暂无站点</option>`;
+  }
+  renderTable(refs.smsSiteList, [
+    { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
+    { label: "资源来源", render: (item) => escapeHtml(item.inventorySource) },
+    { label: "卡密数", render: (item) => item.cardCount },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "备注", render: (item) => escapeHtml(item.note || "-") }
+  ], items, "暂无接码站点");
+}
+
+async function refreshSmsCards() {
+  const payload = await api("/api/admin/sms/cards");
+  renderTable(refs.smsCardList, [
+    { label: "", render: (item) => `<input type="checkbox" class="sms-card-check" value="${item.id}" />` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.cardKey)}</code>` },
+    { label: "站点", render: (item) => escapeHtml(item.siteName) },
+    { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "当前订单", render: (item) => item.currentOrderId ? `<code>${escapeHtml(item.currentOrderId)}</code>` : "-" },
+    { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
+  ], payload.items || [], "暂无接码卡密");
+}
+
+async function refreshSmsOrders() {
+  const payload = await api("/api/admin/sms/orders");
+  renderTable(refs.smsOrderList, [
+    { label: "订单号", render: (item) => `<code>${escapeHtml(item.orderNo)}</code>` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.cardKey)}</code>` },
+    { label: "站点", render: (item) => escapeHtml(item.siteName) },
+    { label: "手机号", render: (item) => escapeHtml(item.phone || "-") },
+    { label: "验证码", render: (item) => escapeHtml(item.verificationCode || "-") },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "退款时间", render: (item) => escapeHtml(item.refundedAt || "-") }
+  ], payload.items || [], "暂无接码订单");
+}
+
 async function refreshSmsEntries() {
   const payload = await api("/api/admin/sms/entries");
   renderTable(refs.smsList, [
     { label: "", render: (item) => `<input type="checkbox" class="sms-check" value="${item.id}" data-public-key="${escapeHtml(item.publicKey)}" data-phone="${escapeHtml(item.phone)}" data-sms-url="${escapeHtml(item.smsUrl)}" />` },
-    { label: "卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
+    { label: "库存卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
     { label: "手机号", render: (item) => escapeHtml(item.phone) },
     { label: "接码网址", render: (item) => `<a href="${escapeHtml(item.smsUrl)}" target="_blank" style="word-break:break-all">${escapeHtml(item.smsUrl)}</a>` },
     { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
     { label: "批次名称", render: (item) => escapeHtml(item.batchName || "-") },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
-  ], payload.items || [], "暂无接码记录");
+  ], payload.items || [], "暂无静态库存记录");
+}
+
+async function refreshSmsConsole() {
+  await Promise.all([
+    refreshSmsSites(),
+    refreshSmsCards(),
+    refreshSmsOrders(),
+    refreshSmsEntries()
+  ]);
 }
 
 async function refreshOrders() {
@@ -1856,6 +1911,45 @@ if (refs.notifyMonitorForm) {
   });
 }
 
+refs.smsSiteForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/admin/sms/sites", {
+      method: "POST",
+      body: JSON.stringify({
+        name: refs.smsSiteName.value.trim(),
+        slug: refs.smsSiteSlug.value.trim(),
+        note: refs.smsSiteNote.value.trim()
+      })
+    });
+    refs.smsSiteForm.reset();
+    setHint(refs.smsSiteResult, "接码站点已创建");
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsSiteResult, error.message);
+  }
+});
+
+refs.smsCardForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await api("/api/admin/sms/cards", {
+      method: "POST",
+      body: JSON.stringify({
+        siteId: refs.smsCardSite.value,
+        prefix: refs.smsCardPrefix.value.trim(),
+        count: Number(refs.smsCardCount.value || 1),
+        note: refs.smsCardNote.value.trim()
+      })
+    });
+    refs.smsCardForm.reset();
+    setHint(refs.smsCardResult, `已生成 ${payload.cards.length} 张接码卡密`);
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsCardResult, error.message);
+  }
+});
+
 // ── SMS Batch Import Form ──
 refs.smsBatchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1869,7 +1963,7 @@ refs.smsBatchForm.addEventListener("submit", async (event) => {
       })
     });
     refs.smsBatchForm.reset();
-    setHint(refs.smsBatchResult, `成功导入 ${payload.importedCount} 条接码记录`);
+    setHint(refs.smsBatchResult, `成功导入 ${payload.importedCount} 条静态库存记录`);
     setTimeout(() => {
       if (refs.smsBatchResult.textContent.startsWith("成功导入")) {
         setHint(refs.smsBatchResult, "");
@@ -1894,7 +1988,7 @@ refs.smsSingleForm.addEventListener("submit", async (event) => {
       })
     });
     refs.smsSingleForm.reset();
-    setHint(refs.smsSingleResult, `已生成卡密: ${payload.publicKey}`);
+    setHint(refs.smsSingleResult, `已添加库存卡密: ${payload.publicKey}`);
     await refreshSmsEntries();
   } catch (error) {
     setHint(refs.smsSingleResult, error.message);
@@ -2030,8 +2124,32 @@ async function updateSmsStatus() {
   }
 }
 
+async function updateSmsCardStatus() {
+  const ids = Array.from(document.querySelectorAll(".sms-card-check"))
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.value);
+  if (!ids.length) {
+    setHint(refs.smsCardResult, "请先选择接码卡密");
+    return;
+  }
+  try {
+    const payload = await api("/api/admin/sms/cards/status", {
+      method: "PATCH",
+      body: JSON.stringify({ ids, status: refs.smsCardAction.value })
+    });
+    setHint(refs.smsCardResult, `已更新 ${payload.updatedCount} 张接码卡密`);
+    await refreshSmsCards();
+  } catch (error) {
+    setHint(refs.smsCardResult, error.message);
+  }
+}
+
 refs.smsActionBtn.addEventListener("click", () => {
   updateSmsStatus();
+});
+
+refs.smsCardActionBtn?.addEventListener("click", () => {
+  updateSmsCardStatus();
 });
 
 // ── Quota Import Form ──

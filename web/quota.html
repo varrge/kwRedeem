@@ -386,7 +386,6 @@
 
           <!-- Status Messages -->
           <div id="status-exhausted" class="status-message exhausted hidden">已提完</div>
-          <div id="status-no-stock" class="status-message no-stock hidden">联系管理员补货</div>
 
           <!-- Warning Display -->
           <div id="warning-box" class="warning-box">
@@ -472,7 +471,6 @@
       const claimSection = document.getElementById("claim-section");
       const remainingValue = document.getElementById("remaining-value");
       const statusExhausted = document.getElementById("status-exhausted");
-      const statusNoStock = document.getElementById("status-no-stock");
       const warningBox = document.getElementById("warning-box");
       const warningTitle = document.getElementById("warning-title");
       const warningMessage = document.getElementById("warning-message");
@@ -675,13 +673,8 @@
           }
 
           const availableStock = getAvailableStockValue();
-          if (availableStock !== null && availableStock <= 0) {
-            statusNoStock.classList.remove("hidden");
-            if (autoClaimRunning) {
-              stopAutoClaim("自动提取已停止：当前库存不足", "error");
-            }
-          } else {
-            statusNoStock.classList.add("hidden");
+          if (availableStock !== null && availableStock <= 0 && autoClaimRunning) {
+            stopAutoClaim("自动提取已停止：当前库存不足", "error");
           }
 
           syncClaimControls();

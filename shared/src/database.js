@@ -371,6 +371,68 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sms_sites (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      inventory_source TEXT NOT NULL DEFAULT 'sms_entries',
+      status TEXT NOT NULL DEFAULT 'active',
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_card_batches (
+      id TEXT PRIMARY KEY,
+      site_id TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      note TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_cards (
+      id TEXT PRIMARY KEY,
+      site_id TEXT NOT NULL,
+      batch_id TEXT,
+      card_key TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      current_order_id TEXT,
+      resource_entry_id TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_orders (
+      id TEXT PRIMARY KEY,
+      order_no TEXT NOT NULL UNIQUE,
+      site_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      sms_entry_id TEXT,
+      phone TEXT,
+      sms_url TEXT,
+      verification_code TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error_message TEXT,
+      provider_payload TEXT,
+      refunded_at TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_order_events (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS quota_source_cards (
       id TEXT PRIMARY KEY,
       source_key TEXT NOT NULL,
@@ -492,6 +554,12 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sms_entries_status ON sms_entries(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_sms_entries_batch ON sms_entries(batch_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_entries_public_key ON sms_entries(public_key);
+    CREATE INDEX IF NOT EXISTS idx_sms_sites_status ON sms_sites(status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_cards_key ON sms_cards(card_key);
+    CREATE INDEX IF NOT EXISTS idx_sms_cards_site_status ON sms_cards(site_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_orders_card_status ON sms_orders(card_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_orders_site_status ON sms_orders(site_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_order_events_order ON sms_order_events(order_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_quota_source_cards_status ON quota_source_cards(status);
     CREATE INDEX IF NOT EXISTS idx_quota_source_cards_batch ON quota_source_cards(import_batch_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_sub_cards_code ON quota_sub_cards(card_code);

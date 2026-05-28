@@ -81,18 +81,46 @@
 
       .claim-form {
         display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 12px;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
         align-items: end;
+      }
+
+      .claim-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .claim-form .field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .claim-form .field-label {
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 600;
       }
 
       .claim-form input {
         border-radius: 16px;
       }
 
-      .claim-form .primary-btn {
+      .claim-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .claim-actions button {
         white-space: nowrap;
         padding: 16px 28px;
+      }
+
+      .auto-claim-status {
+        margin-top: 12px;
       }
 
       .status-message {
@@ -271,6 +299,9 @@
       @media (max-width: 600px) {
         .quota-stats { grid-template-columns: 1fr; }
         .claim-form { grid-template-columns: 1fr; }
+        .claim-fields { grid-template-columns: 1fr; }
+        .claim-actions { width: 100%; }
+        .claim-actions button { width: 100%; }
         .quota-panel { padding: 20px; }
         .quota-stat-card .value { font-size: 22px; }
         .history-header { flex-direction: column; align-items: flex-start; }
@@ -345,9 +376,22 @@
           <!-- Claim Form -->
           <div id="claim-area">
             <div class="claim-form">
-              <input type="number" id="claim-count" min="1" placeholder="提取数量" />
-              <button type="button" id="claim-btn" class="primary-btn">提取</button>
+              <div class="claim-fields">
+                <label class="field">
+                  <span class="field-label">每次提取数量</span>
+                  <input type="number" id="claim-batch-count" min="1" value="1" placeholder="每次提取数量" />
+                </label>
+                <label class="field">
+                  <span class="field-label">目标提取总量</span>
+                  <input type="number" id="claim-count" min="1" placeholder="提取总数量" />
+                </label>
+              </div>
+              <div class="claim-actions">
+                <button type="button" id="claim-btn" class="primary-btn">提取</button>
+                <button type="button" id="auto-claim-btn" class="ghost-btn">自动提取</button>
+              </div>
             </div>
+            <div id="auto-claim-status" class="result muted auto-claim-status hidden"></div>
           </div>
 
           <!-- Claim Result -->
@@ -386,6 +430,11 @@
       let verifiedCardCode = null;
       let warningAckId = "";
       let warningPollTimer = null;
+      let autoClaimTimer = null;
+      let autoClaimRunning = false;
+      let autoClaimInFlight = false;
+      let autoClaimTargetTotal = 0;
+      let autoClaimClaimedTotal = 0;
 
       // --- DOM ---
       const verifyForm = document.getElementById("verify-form");
@@ -401,8 +450,11 @@
       const warningBox = document.getElementById("warning-box");
       const warningTitle = document.getElementById("warning-title");
       const warningMessage = document.getElementById("warning-message");
+      const claimBatchCount = document.getElementById("claim-batch-count");
       const claimCount = document.getElementById("claim-count");
       const claimBtn = document.getElementById("claim-btn");
+      const autoClaimBtn = document.getElementById("auto-claim-btn");
+      const autoClaimStatus = document.getElementById("auto-claim-status");
       const claimResult = document.getElementById("claim-result");
       const accountsPanel = document.getElementById("accounts-panel");
       const accountsList = document.getElementById("accounts-list");
@@ -421,6 +473,50 @@
         el.className = `result ${type}`;
         el.textContent = message;
         el.classList.remove("hidden");
+      }
+
+      function getNumericValue(input) {
+        return Number.parseInt(input.value, 10);
+      }
+
+      function getRemainingQuotaValue() {
+        const match = remainingValue.textContent.match(/\d+/);
+        return match ? Number.parseInt(match[0], 10) : null;
+      }
+
+      function getAvailableStockValue() {
+        const match = stockValue.textContent.match(/\d+/);
+        return match ? Number.parseInt(match[0], 10) : null;
+      }
+
+      function updateAutoClaimStatus(message, type = "muted") {
+        setState(autoClaimStatus, message, type);
+      }
+
+      function syncClaimControls() {
+        const remainingQuota = getRemainingQuotaValue();
+        const availableStock = getAvailableStockValue();
+        const quotaDepleted = remainingQuota !== null && remainingQuota <= 0;
+        const stockDepleted = availableStock !== null && availableStock <= 0;
+        const shouldDisable = autoClaimRunning || quotaDepleted || stockDepleted;
+        claimBtn.disabled = shouldDisable;
+        claimBatchCount.disabled = autoClaimRunning || quotaDepleted || stockDepleted;
+        claimCount.disabled = autoClaimRunning || quotaDepleted || stockDepleted;
+        autoClaimBtn.textContent = autoClaimRunning ? "停止自动提取" : "自动提取";
+        autoClaimBtn.disabled = quotaDepleted || stockDepleted;
+      }
+
+      function stopAutoClaim(reason, type = "muted") {
+        if (autoClaimTimer) {
+          clearInterval(autoClaimTimer);
+          autoClaimTimer = null;
+        }
+        autoClaimRunning = false;
+        autoClaimInFlight = false;
+        if (reason) {
+          updateAutoClaimStatus(reason, type);
+        }
+        syncClaimControls();
       }
 
       // --- API Helpers ---
@@ -493,25 +589,27 @@
           if (remaining <= 0) {
             remainingValue.classList.add("exhausted");
             statusExhausted.classList.remove("hidden");
-            claimBtn.disabled = true;
-            claimCount.disabled = true;
+            if (autoClaimRunning) {
+              stopAutoClaim("自动提取已停止：卡密额度已用完", "error");
+            }
           } else {
             remainingValue.classList.remove("exhausted");
             statusExhausted.classList.add("hidden");
-            claimBtn.disabled = false;
-            claimCount.disabled = false;
           }
 
           // Handle no stock state
           if (availableStock <= 0) {
             stockValue.classList.add("exhausted");
             statusNoStock.classList.remove("hidden");
-            claimBtn.disabled = true;
-            claimCount.disabled = true;
+            if (autoClaimRunning) {
+              stopAutoClaim("自动提取已停止：当前库存不足", "error");
+            }
           } else {
             stockValue.classList.remove("exhausted");
             statusNoStock.classList.add("hidden");
           }
+
+          syncClaimControls();
         } catch (error) {
           setState(claimResult, error.message, "error");
         }
@@ -539,6 +637,7 @@
             warningMessage.textContent = data.warning.message || "";
             warningBox.classList.add("visible");
           } else {
+            warningAckId = "";
             warningBox.classList.remove("visible");
           }
         } catch {
@@ -547,46 +646,146 @@
       }
 
       // --- Claim ---
+      async function performClaim(count, options = {}) {
+        const { isAuto = false } = options;
+        if (!verifiedCardCode) {
+          throw new Error("请先验证卡密");
+        }
+
+        accountsPanel.classList.remove("visible");
+        setState(claimResult, isAuto ? `自动提取中，正在尝试提取 ${count} 货...` : "正在提取...", "muted");
+
+        const result = await apiRequest("/api/public/quota/claim", {
+          method: "POST",
+          body: JSON.stringify({
+            cardCode: verifiedCardCode,
+            count,
+            warningAckId: warningAckId || ""
+          })
+        });
+
+        if (result.success) {
+          setState(claimResult, `提取成功，消耗 ${result.chargedQuota} 货，剩余 ${result.remaining} 货`, "success");
+          renderAccounts(result.accounts || []);
+          await refreshQuotaInfo();
+          await loadHistory();
+        }
+
+        return result;
+      }
+
+      function getNextAutoClaimCount() {
+        const batchCount = getNumericValue(claimBatchCount);
+        const targetCount = getNumericValue(claimCount);
+        if (!batchCount || batchCount < 1) {
+          throw new Error("请输入有效的每次提取数量");
+        }
+        if (!targetCount || targetCount < 1) {
+          throw new Error("请输入有效的目标提取总量");
+        }
+        const remainingTarget = autoClaimTargetTotal - autoClaimClaimedTotal;
+        return Math.min(batchCount, remainingTarget);
+      }
+
+      async function runAutoClaimAttempt() {
+        if (!autoClaimRunning || autoClaimInFlight) return;
+        if (autoClaimClaimedTotal >= autoClaimTargetTotal) {
+          stopAutoClaim(`自动提取已完成：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "success");
+          return;
+        }
+
+        const remainingQuota = getRemainingQuotaValue();
+        const availableStock = getAvailableStockValue();
+        if (remainingQuota !== null && remainingQuota <= 0) {
+          stopAutoClaim("自动提取已停止：卡密额度已用完", "error");
+          return;
+        }
+        if (availableStock !== null && availableStock <= 0) {
+          stopAutoClaim("自动提取已停止：当前库存不足", "error");
+          return;
+        }
+
+        let nextCount;
+        try {
+          nextCount = getNextAutoClaimCount();
+        } catch (error) {
+          stopAutoClaim(error.message, "error");
+          return;
+        }
+
+        autoClaimInFlight = true;
+        updateAutoClaimStatus(`自动提取进行中：已累计 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货，正在尝试 ${nextCount} 货`, "muted");
+
+        try {
+          const result = await performClaim(nextCount, { isAuto: true });
+          const chargedQuota = Number(result?.chargedQuota) || nextCount;
+          autoClaimClaimedTotal += chargedQuota;
+          if (autoClaimClaimedTotal >= autoClaimTargetTotal) {
+            stopAutoClaim(`自动提取已完成：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "success");
+          } else {
+            updateAutoClaimStatus(`自动提取进行中：已累计 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货，6 秒后继续`, "success");
+          }
+        } catch (error) {
+          setState(claimResult, error.message, "error");
+          updateAutoClaimStatus(`自动提取遇到错误：${error.message}，6 秒后继续重试`, "error");
+        } finally {
+          autoClaimInFlight = false;
+        }
+      }
+
+      function startAutoClaim() {
+        if (autoClaimRunning) {
+          stopAutoClaim(`自动提取已手动停止：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "muted");
+          return;
+        }
+
+        if (!verifiedCardCode) {
+          setState(claimResult, "请先验证卡密", "error");
+          return;
+        }
+
+        const batchCount = getNumericValue(claimBatchCount);
+        const targetCount = getNumericValue(claimCount);
+        if (!batchCount || batchCount < 1) {
+          setState(claimResult, "请输入有效的每次提取数量", "error");
+          return;
+        }
+        if (!targetCount || targetCount < 1) {
+          setState(claimResult, "请输入有效的目标提取总量", "error");
+          return;
+        }
+
+        autoClaimTargetTotal = targetCount;
+        autoClaimClaimedTotal = 0;
+        autoClaimRunning = true;
+        autoClaimInFlight = false;
+        updateAutoClaimStatus(`自动提取已启动：目标 ${autoClaimTargetTotal} 货，每次 ${batchCount} 货`, "muted");
+        syncClaimControls();
+        runAutoClaimAttempt();
+        autoClaimTimer = setInterval(runAutoClaimAttempt, 6000);
+      }
+
       claimBtn.addEventListener("click", async () => {
-        const count = parseInt(claimCount.value, 10);
+        const count = getNumericValue(claimBatchCount);
         if (!count || count < 1) {
-          setState(claimResult, "请输入有效的提取数量", "error");
+          setState(claimResult, "请输入有效的每次提取数量", "error");
           return;
         }
 
         claimBtn.disabled = true;
-        claimBtn.textContent = "提取中...";
-        accountsPanel.classList.remove("visible");
-        setState(claimResult, "正在提取...", "muted");
+        autoClaimBtn.disabled = true;
 
         try {
-          const result = await apiRequest("/api/public/quota/claim", {
-            method: "POST",
-            body: JSON.stringify({
-              cardCode: verifiedCardCode,
-              count,
-              warningAckId: warningAckId || ""
-            })
-          });
-
-          if (result.success) {
-            setState(claimResult, `提取成功，消耗 ${result.chargedQuota} 货，剩余 ${result.remaining} 货`, "success");
-            renderAccounts(result.accounts || []);
-            await refreshQuotaInfo();
-            await loadHistory();
-          }
+          await performClaim(count);
         } catch (error) {
           setState(claimResult, error.message, "error");
         } finally {
-          claimBtn.disabled = false;
-          claimBtn.textContent = "提取";
-          // Re-check if should be disabled
-          const remainingText = remainingValue.textContent;
-          if (remainingText.startsWith("0")) {
-            claimBtn.disabled = true;
-            claimCount.disabled = true;
-          }
+          syncClaimControls();
         }
+      });
+
+      autoClaimBtn.addEventListener("click", () => {
+        startAutoClaim();
       });
 
       // --- Render Accounts ---
@@ -708,6 +907,11 @@
 
       downloadHistoryBtn.addEventListener("click", () => {
         downloadHistory();
+      });
+
+      window.addEventListener("beforeunload", () => {
+        stopWarningPolling();
+        stopAutoClaim();
       });
     </script>
   </body>

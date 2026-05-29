@@ -23,9 +23,10 @@ function ensureColumn(db, tableName, columnName, definition) {
   }
 }
 
-function upsertSite(db, site) {
-  const exists = db.prepare("SELECT id FROM sites WHERE slug = ?").get(site.slug);
-  if (exists) {
+function upsertSite(db, site, options = {}) {
+  const existingSite = db.prepare("SELECT id, status FROM sites WHERE slug = ?").get(site.slug);
+  if (existingSite) {
+    const status = options.preserveExistingStatus ? existingSite.status : site.status;
     db.prepare(`
       UPDATE sites
       SET name = ?, verify_api_url = ?, submit_api_url = ?, verify_http_method = ?, submit_http_method = ?,
@@ -69,7 +70,7 @@ function upsertSite(db, site) {
       site.queryHttpMethod || null,
       site.queryHeadersTemplate || null,
       site.queryBodyTemplate || null,
-      site.status,
+      status,
       site.updatedAt,
       site.slug
     );
@@ -861,7 +862,7 @@ function seedDefaults(db) {
   ];
 
   for (const presetSite of presetSites) {
-    upsertSite(db, presetSite);
+    upsertSite(db, presetSite, { preserveExistingStatus: true });
   }
 
   db.prepare(`

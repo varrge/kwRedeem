@@ -13,6 +13,7 @@ const publicKeyInput = document.querySelector("#public-key");
 const orderNoInput = document.querySelector("#order-no");
 const smsForm = document.querySelector("#sms-form");
 const smsKeyInput = document.querySelector("#sms-key");
+const smsVerifyBtn = document.querySelector("#sms-verify-btn");
 const smsSubmit = document.querySelector("#sms-submit");
 const smsResult = document.querySelector("#sms-result");
 const statusContainer = document.querySelector("#status-container");
@@ -29,6 +30,8 @@ let verifiedKey = null;
 let verifiedSiteSlug = null;
 let redeemStatusTimer = null;
 let pendingRedeemData = null;
+let verifiedSmsCard = null;
+let currentSmsOrderNo = null;
 
 // --- Constants ---
 
@@ -110,6 +113,8 @@ async function request(path, options = {}) {
 // --- Navigation ---
 
 function switchView(target) {
+  // 切换页签时清理 SMS 轮询
+  stopSmsPolling();
   document.querySelectorAll(".view-section").forEach((section) => {
     section.classList.toggle("hidden", section.id !== `${target}-container`);
   });
@@ -579,46 +584,122 @@ lookupForm.addEventListener("submit", async (event) => {
 
 // --- SMS Query ---
 
+let smsPollingInterval = null;
+
+function stopSmsPolling() {
+  if (smsPollingInterval) {
+    clearInterval(smsPollingInterval);
+    smsPollingInterval = null;
+  }
+}
+
+function startSmsPolling(orderNo) {
+  stopSmsPolling();
+  smsPollingInterval = setInterval(async () => {
+    try {
+      const payload = await request(`/api/public/sms/orders/${encodeURIComponent(orderNo)}`);
+      setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
+      if (["ready", "timeout"].includes(payload.verificationStatus) || ["ready", "refunded", "failed", "cancelled"].includes(String(payload.status || "").toLowerCase())) {
+        stopSmsPolling();
+        smsSubmit.disabled = false;
+        currentSmsOrderNo = payload.orderNo || null;
+      }
+    } catch (error) {
+      // 轮询请求失败时不中断，下一周期继续
+    }
+  }, 5000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopSmsPolling();
+  }
+});
+
+function renderVerificationStatus(payload) {
+  switch (payload.verificationStatus) {
+    case "ready":
+      return escapeHtml(payload.verificationCode);
+    case "pending":
+      return "暂无收到验证码";
+    case "timeout":
+      return "获取验证码超时，请重试";
+    case "busy":
+      return "系统繁忙，请稍后重试";
+    default:
+      return "暂无收到验证码";
+  }
+}
+
+function renderSmsOrderResult(payload) {
+  const phoneHtml = `<div class="result-item"><span>手机号</span><strong>${escapeHtml(payload.phone || "-")}</strong></div>`;
+  const verificationHtml = `<div class="result-item"><span>验证码</span><strong id="sms-verification-display">${renderVerificationStatus(payload)}</strong></div>`;
+  const siteHtml = `<div class="result-item"><span>接码站点</span><strong>${escapeHtml(payload.siteName || verifiedSmsCard?.site?.name || "-")}</strong></div>`;
+  const orderHtml = `<div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo || currentSmsOrderNo || "-")}</strong></div>`;
+  return `<div class="result-card"><div class="result-grid">${siteHtml}${orderHtml}${phoneHtml}${verificationHtml}</div></div>`;
+}
+
 smsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  stopSmsPolling();
 
   const key = smsKeyInput.value.trim();
   if (!key) {
-    setState(smsResult, "请输入卡密", "error");
+    setState(smsResult, "请输入接码卡密", "error");
+    return;
+  }
+
+  smsVerifyBtn.disabled = true;
+  smsSubmit.disabled = true;
+  setState(smsResult, "正在验证接码卡密...");
+
+  try {
+    const payload = await request("/api/public/sms/cards/verify", {
+      method: "POST",
+      body: JSON.stringify({ cardKey: key })
+    });
+    verifiedSmsCard = payload;
+    currentSmsOrderNo = payload.latestOrder?.orderNo || null;
+    smsSubmit.disabled = false;
+    setRichState(smsResult, `<div class="result-card"><div class="result-grid"><div class="result-item"><span>接码站点</span><strong>${escapeHtml(payload.site?.name || "-")}</strong></div><div class="result-item"><span>卡密状态</span><strong>${renderStatusText(payload.status)}</strong></div></div></div>`, "success");
+    if (payload.latestOrder) {
+      setRichState(smsResult, renderSmsOrderResult(payload.latestOrder), payload.latestOrder.verificationStatus === "ready" ? "success" : "muted");
+      if (payload.latestOrder.verificationStatus === "pending") {
+        startSmsPolling(payload.latestOrder.orderNo);
+      }
+    }
+  } catch (error) {
+    verifiedSmsCard = null;
+    currentSmsOrderNo = null;
+    setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
+  } finally {
+    smsVerifyBtn.disabled = false;
+  }
+});
+
+smsSubmit.addEventListener("click", async () => {
+  if (!verifiedSmsCard?.cardKey) {
+    setState(smsResult, "请先验证接码卡密", "error");
     return;
   }
 
   smsSubmit.disabled = true;
-  smsSubmit.textContent = "查询中...";
-  setState(smsResult, "正在查询...");
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  setState(smsResult, "正在分配手机号并创建接码订单...");
 
   try {
-    const response = await fetch(`${API_BASE}/api/public/sms/query?key=${encodeURIComponent(key)}`, {
-      signal: controller.signal
+    const payload = await request("/api/public/sms/orders", {
+      method: "POST",
+      body: JSON.stringify({ cardKey: verifiedSmsCard.cardKey })
     });
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      const payload = await response.json();
-      const phoneHtml = `<div class="result-item"><span>手机号</span><strong>${escapeHtml(payload.phone)}</strong></div>`;
-      const urlHtml = `<div class="result-item"><span>接码网址</span><strong><a href="${escapeHtml(payload.smsUrl)}" target="_blank">${escapeHtml(payload.smsUrl)}</a></strong></div>`;
-      setRichState(smsResult, `<div class="result-card"><div class="result-grid">${phoneHtml}${urlHtml}</div></div>`, "success");
-    } else if (response.status === 404) {
-      setState(smsResult, "卡密无效或不存在", "error");
-    } else if (response.status === 403) {
-      setState(smsResult, "该卡密已停用", "error");
+    currentSmsOrderNo = payload.orderNo;
+    setRichState(smsResult, renderSmsOrderResult(payload), "success");
+    if (payload.verificationStatus === "pending") {
+      startSmsPolling(payload.orderNo);
     } else {
-      const payload = await response.json().catch(() => ({}));
-      setState(smsResult, payload.message || "请求失败，请检查网络连接", "error");
+      smsSubmit.disabled = false;
     }
   } catch (error) {
-    clearTimeout(timeout);
-    setState(smsResult, "请求失败，请检查网络连接", "error");
-  } finally {
     smsSubmit.disabled = false;
-    smsSubmit.textContent = "获取验证码";
+    setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
   }
 });

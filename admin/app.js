@@ -84,6 +84,22 @@ const refs = {
   notifyMonitorList: document.querySelector("#notify-monitor-list"),
   notifyEventList: document.querySelector("#notify-event-list"),
   // SMS panel refs
+  smsSiteForm: document.querySelector("#sms-site-form"),
+  smsSiteName: document.querySelector("#sms-site-name"),
+  smsSiteSlug: document.querySelector("#sms-site-slug"),
+  smsSiteNote: document.querySelector("#sms-site-note"),
+  smsSiteResult: document.querySelector("#sms-site-result"),
+  smsSiteList: document.querySelector("#sms-site-list"),
+  smsCardForm: document.querySelector("#sms-card-form"),
+  smsCardSite: document.querySelector("#sms-card-site"),
+  smsCardPrefix: document.querySelector("#sms-card-prefix"),
+  smsCardCount: document.querySelector("#sms-card-count"),
+  smsCardNote: document.querySelector("#sms-card-note"),
+  smsCardResult: document.querySelector("#sms-card-result"),
+  smsCardList: document.querySelector("#sms-card-list"),
+  smsCardAction: document.querySelector("#sms-card-action"),
+  smsCardActionBtn: document.querySelector("#sms-card-action-btn"),
+  smsOrderList: document.querySelector("#sms-order-list"),
   smsBatchForm: document.querySelector("#sms-batch-form"),
   smsBatchResult: document.querySelector("#sms-batch-result"),
   smsSingleForm: document.querySelector("#sms-single-form"),
@@ -198,7 +214,7 @@ function switchTab(tabName) {
     panel.classList.toggle("hidden", panel.dataset.panel !== tabName);
   });
   if (tabName === "sms" && getToken()) {
-    refreshSmsEntries().catch(() => {});
+    refreshSmsConsole().catch(() => {});
   }
   if (tabName === "quota" && getToken()) {
     refreshQuotaDashboard().catch(() => {});
@@ -471,18 +487,70 @@ async function refreshCdkeys() {
   ], payload.items);
 }
 
+async function refreshSmsSites() {
+  const payload = await api("/api/admin/sms/sites");
+  const items = payload.items || [];
+  if (refs.smsCardSite) {
+    refs.smsCardSite.innerHTML = items.length
+      ? items.map((item) => `<option value="${item.id}">${escapeHtml(item.name)} (${escapeHtml(item.slug)})</option>`).join("")
+      : `<option value="">暂无站点</option>`;
+  }
+  renderTable(refs.smsSiteList, [
+    { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
+    { label: "资源来源", render: (item) => escapeHtml(item.inventorySource) },
+    { label: "卡密数", render: (item) => item.cardCount },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "备注", render: (item) => escapeHtml(item.note || "-") }
+  ], items, "暂无接码站点");
+}
+
+async function refreshSmsCards() {
+  const payload = await api("/api/admin/sms/cards");
+  renderTable(refs.smsCardList, [
+    { label: "", render: (item) => `<input type="checkbox" class="sms-card-check" value="${item.id}" />` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.cardKey)}</code>` },
+    { label: "站点", render: (item) => escapeHtml(item.siteName) },
+    { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "当前订单", render: (item) => item.currentOrderId ? `<code>${escapeHtml(item.currentOrderId)}</code>` : "-" },
+    { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
+  ], payload.items || [], "暂无接码卡密");
+}
+
+async function refreshSmsOrders() {
+  const payload = await api("/api/admin/sms/orders");
+  renderTable(refs.smsOrderList, [
+    { label: "订单号", render: (item) => `<code>${escapeHtml(item.orderNo)}</code>` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.cardKey)}</code>` },
+    { label: "站点", render: (item) => escapeHtml(item.siteName) },
+    { label: "手机号", render: (item) => escapeHtml(item.phone || "-") },
+    { label: "验证码", render: (item) => escapeHtml(item.verificationCode || "-") },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "退款时间", render: (item) => escapeHtml(item.refundedAt || "-") }
+  ], payload.items || [], "暂无接码订单");
+}
+
 async function refreshSmsEntries() {
   const payload = await api("/api/admin/sms/entries");
   renderTable(refs.smsList, [
     { label: "", render: (item) => `<input type="checkbox" class="sms-check" value="${item.id}" data-public-key="${escapeHtml(item.publicKey)}" data-phone="${escapeHtml(item.phone)}" data-sms-url="${escapeHtml(item.smsUrl)}" />` },
-    { label: "卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
+    { label: "库存卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
     { label: "手机号", render: (item) => escapeHtml(item.phone) },
     { label: "接码网址", render: (item) => `<a href="${escapeHtml(item.smsUrl)}" target="_blank" style="word-break:break-all">${escapeHtml(item.smsUrl)}</a>` },
     { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
     { label: "批次名称", render: (item) => escapeHtml(item.batchName || "-") },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
-  ], payload.items || [], "暂无接码记录");
+  ], payload.items || [], "暂无静态库存记录");
+}
+
+async function refreshSmsConsole() {
+  await Promise.all([
+    refreshSmsSites(),
+    refreshSmsCards(),
+    refreshSmsOrders(),
+    refreshSmsEntries()
+  ]);
 }
 
 async function refreshOrders() {
@@ -1846,6 +1914,45 @@ if (refs.notifyMonitorForm) {
   });
 }
 
+refs.smsSiteForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/admin/sms/sites", {
+      method: "POST",
+      body: JSON.stringify({
+        name: refs.smsSiteName.value.trim(),
+        slug: refs.smsSiteSlug.value.trim(),
+        note: refs.smsSiteNote.value.trim()
+      })
+    });
+    refs.smsSiteForm.reset();
+    setHint(refs.smsSiteResult, "接码站点已创建");
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsSiteResult, error.message);
+  }
+});
+
+refs.smsCardForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await api("/api/admin/sms/cards", {
+      method: "POST",
+      body: JSON.stringify({
+        siteId: refs.smsCardSite.value,
+        prefix: refs.smsCardPrefix.value.trim(),
+        count: Number(refs.smsCardCount.value || 1),
+        note: refs.smsCardNote.value.trim()
+      })
+    });
+    refs.smsCardForm.reset();
+    setHint(refs.smsCardResult, `已生成 ${payload.cards.length} 张接码卡密`);
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsCardResult, error.message);
+  }
+});
+
 // ── SMS Batch Import Form ──
 refs.smsBatchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1859,7 +1966,7 @@ refs.smsBatchForm.addEventListener("submit", async (event) => {
       })
     });
     refs.smsBatchForm.reset();
-    setHint(refs.smsBatchResult, `成功导入 ${payload.importedCount} 条接码记录`);
+    setHint(refs.smsBatchResult, `成功导入 ${payload.importedCount} 条静态库存记录`);
     setTimeout(() => {
       if (refs.smsBatchResult.textContent.startsWith("成功导入")) {
         setHint(refs.smsBatchResult, "");
@@ -1884,7 +1991,7 @@ refs.smsSingleForm.addEventListener("submit", async (event) => {
       })
     });
     refs.smsSingleForm.reset();
-    setHint(refs.smsSingleResult, `已生成卡密: ${payload.publicKey}`);
+    setHint(refs.smsSingleResult, `已添加库存卡密: ${payload.publicKey}`);
     await refreshSmsEntries();
   } catch (error) {
     setHint(refs.smsSingleResult, error.message);
@@ -2020,8 +2127,32 @@ async function updateSmsStatus() {
   }
 }
 
+async function updateSmsCardStatus() {
+  const ids = Array.from(document.querySelectorAll(".sms-card-check"))
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.value);
+  if (!ids.length) {
+    setHint(refs.smsCardResult, "请先选择接码卡密");
+    return;
+  }
+  try {
+    const payload = await api("/api/admin/sms/cards/status", {
+      method: "PATCH",
+      body: JSON.stringify({ ids, status: refs.smsCardAction.value })
+    });
+    setHint(refs.smsCardResult, `已更新 ${payload.updatedCount} 张接码卡密`);
+    await refreshSmsCards();
+  } catch (error) {
+    setHint(refs.smsCardResult, error.message);
+  }
+}
+
 refs.smsActionBtn.addEventListener("click", () => {
   updateSmsStatus();
+});
+
+refs.smsCardActionBtn?.addEventListener("click", () => {
+  updateSmsCardStatus();
 });
 
 // ── Quota Import Form ──
@@ -2206,9 +2337,36 @@ if (refs.quotaSubCardExportBtn) {
 }
 
 // ── Quota Source-Card Refresh + Merge Buttons ──
+const _verifiedZeroCardIds = new Set();
+
 if (refs.quotaSourceCardsRefreshBtn) {
-  refs.quotaSourceCardsRefreshBtn.addEventListener("click", () => {
-    refreshQuotaSourceCards().catch(() => {});
+  refs.quotaSourceCardsRefreshBtn.addEventListener("click", async () => {
+    refs.quotaSourceCardsRefreshBtn.disabled = true;
+    refs.quotaSourceCardsRefreshBtn.textContent = "同步中...";
+    try {
+      const payload = await api("/api/admin/quota/cards?status=active&pageSize=100");
+      const items = payload.cards || payload.items || [];
+      for (const item of items) {
+        if (_verifiedZeroCardIds.has(item.id)) continue;
+        try {
+          const result = await api("/api/admin/quota/cards/verify", {
+            method: "POST",
+            body: JSON.stringify({ cardId: item.id }),
+          });
+          if (result.ok && result.remaining === 0) {
+            _verifiedZeroCardIds.add(item.id);
+          }
+        } catch {
+          // Ignore individual verify failures
+        }
+      }
+      await refreshQuotaSourceCards();
+    } catch {
+      await refreshQuotaSourceCards().catch(() => {});
+    } finally {
+      refs.quotaSourceCardsRefreshBtn.disabled = false;
+      refs.quotaSourceCardsRefreshBtn.textContent = "刷新";
+    }
   });
 }
 if (refs.quotaSourceCardsMergeBtn) {
@@ -2224,6 +2382,201 @@ if (refs.quotaSubCardDetailClose) {
       refs.quotaSubCardDetailCard.classList.add("hidden");
     }
   });
+}
+
+// ── 5sim Panel Functions ──
+let fivesimSitesCache = [];
+
+function formatBalance(value) {
+  const num = Number(value);
+  if (isNaN(num)) return "- RUB";
+  return num.toFixed(2) + " RUB";
+}
+
+function maskPhone(phone) {
+  const str = String(phone || "");
+  if (str.length <= 4) return "*".repeat(str.length);
+  return "*".repeat(str.length - 4) + str.slice(-4);
+}
+
+function maskApiKeyDisplay(val) {
+  if (!val || val.length <= 12) return val || "";
+  return val.slice(0, 6) + "..." + val.slice(-4);
+}
+
+function renderFivesimStatus(status) {
+  const colors = {
+    waiting: "yellow",
+    code_received: "blue",
+    completed: "green",
+    cancelled: "grey",
+    error: "red"
+  };
+  const color = colors[status] || "grey";
+  return `<span class="table-badge status-${color}">${escapeHtml(status || "-")}</span>`;
+}
+
+function populateFivesimSiteSelect(sites) {
+  fivesimSitesCache = sites || [];
+  if (!refs.fivesimSiteSelect) return;
+
+  if (!fivesimSitesCache.length) {
+    refs.fivesimSiteSelect.innerHTML = `<option value="">暂无站点</option>`;
+    if (refs.fivesimBalanceBtn) refs.fivesimBalanceBtn.disabled = true;
+    return;
+  }
+
+  if (refs.fivesimBalanceBtn) refs.fivesimBalanceBtn.disabled = false;
+
+  const options = fivesimSitesCache.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+  refs.fivesimSiteSelect.innerHTML = options.join("");
+
+  // Default to first site with sms_provider
+  const defaultSite = fivesimSitesCache.find((s) => s.sms_provider) || fivesimSitesCache[0];
+  if (defaultSite) {
+    refs.fivesimSiteSelect.value = defaultSite.id;
+    loadFivesimSiteConfig(defaultSite);
+  }
+}
+
+function loadFivesimSiteConfig(site) {
+  if (!refs.fivesimConfigForm || !site) return;
+  const el = (id) => document.querySelector(id);
+  el("#fivesim-sms-provider").value = site.sms_provider || "";
+  el("#fivesim-sms-api-key").value = "";
+  el("#fivesim-sms-api-key").placeholder = maskApiKeyDisplay(site.sms_api_key) || "API Key（已加密存储）";
+  el("#fivesim-sms-country").value = site.sms_country || "";
+  el("#fivesim-sms-service").value = site.sms_service || "";
+  el("#fivesim-sms-operator").value = site.sms_operator || "";
+  el("#fivesim-sms-poll-interval").value = site.sms_poll_interval_ms || "";
+  el("#fivesim-sms-poll-timeout").value = site.sms_poll_timeout_ms || "";
+  el("#fivesim-sms-phone-tpl").value = site.sms_submit_phone_template || "";
+  el("#fivesim-sms-code-tpl").value = site.sms_submit_code_template || "";
+}
+
+async function queryFivesimBalance() {
+  const siteId = refs.fivesimSiteSelect?.value;
+  if (!siteId) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  setButtonBusy(refs.fivesimBalanceBtn, true, "查询中...");
+  setStatusMessage(refs.fivesimBalanceResult, "");
+
+  try {
+    const payload = await api(`/api/admin/5sim/balance?siteId=${siteId}`, { signal: controller.signal });
+    if (refs.fivesimBalanceDisplay) {
+      refs.fivesimBalanceDisplay.innerHTML = `<article class="stat"><span>余额</span><strong>${formatBalance(payload.balance)}</strong></article>`;
+    }
+  } catch (error) {
+    setStatusMessage(refs.fivesimBalanceResult, error.message, "error");
+  } finally {
+    clearTimeout(timeout);
+    setButtonBusy(refs.fivesimBalanceBtn, false);
+  }
+}
+
+// ── 5sim Panel Event Wiring ──
+if (refs.fivesimBalanceBtn) {
+  refs.fivesimBalanceBtn.addEventListener("click", () => {
+    queryFivesimBalance().catch(() => {});
+  });
+}
+
+if (refs.fivesimSiteSelect) {
+  refs.fivesimSiteSelect.addEventListener("change", () => {
+    const siteId = refs.fivesimSiteSelect.value;
+    const site = fivesimSitesCache.find((s) => s.id === siteId);
+    if (site) loadFivesimSiteConfig(site);
+  });
+}
+
+async function saveFivesimConfig() {
+  const siteId = refs.fivesimSiteSelect?.value;
+  if (!siteId) return;
+
+  const fields = {};
+  const provider = document.querySelector("#fivesim-sms-provider").value.trim();
+  const apiKey = document.querySelector("#fivesim-sms-api-key").value.trim();
+  const country = document.querySelector("#fivesim-sms-country").value.trim();
+  const service = document.querySelector("#fivesim-sms-service").value.trim();
+  const operator = document.querySelector("#fivesim-sms-operator").value.trim();
+  const pollInterval = document.querySelector("#fivesim-sms-poll-interval").value.trim();
+  const pollTimeout = document.querySelector("#fivesim-sms-poll-timeout").value.trim();
+  const phoneTpl = document.querySelector("#fivesim-sms-phone-tpl").value.trim();
+  const codeTpl = document.querySelector("#fivesim-sms-code-tpl").value.trim();
+
+  if (provider) fields.sms_provider = provider;
+  if (apiKey) fields.sms_api_key = apiKey;
+  if (country) fields.sms_country = country;
+  if (service) fields.sms_service = service;
+  if (operator) fields.sms_operator = operator;
+  if (pollInterval) fields.sms_poll_interval_ms = parseInt(pollInterval, 10);
+  if (pollTimeout) fields.sms_poll_timeout_ms = parseInt(pollTimeout, 10);
+  if (phoneTpl) fields.sms_submit_phone_template = phoneTpl;
+  if (codeTpl) fields.sms_submit_code_template = codeTpl;
+
+  if (Object.keys(fields).length === 0) {
+    setStatusMessage(refs.fivesimConfigResult, "请至少填写一个字段", "error");
+    return;
+  }
+
+  try {
+    await api(`/api/admin/sites/${siteId}/sms-config`, {
+      method: "PATCH",
+      body: JSON.stringify(fields)
+    });
+    setStatusMessage(refs.fivesimConfigResult, "配置已保存", "success");
+  } catch (error) {
+    setStatusMessage(refs.fivesimConfigResult, error.message, "error");
+  }
+}
+
+if (refs.fivesimConfigForm) {
+  refs.fivesimConfigForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveFivesimConfig().catch(() => {});
+  });
+}
+
+async function refreshFivesimJobs() {
+  if (!refs.fivesimJobList) return;
+  setButtonBusy(refs.fivesimJobsRefreshBtn, true, "刷新中...");
+  setStatusMessage(refs.fivesimJobsResult, "");
+
+  try {
+    const payload = await api("/api/admin/5sim/jobs");
+    renderTable(refs.fivesimJobList, [
+      { label: "订单号", render: (item) => escapeHtml(item.order_no || "-") },
+      { label: "站点", render: (item) => escapeHtml(item.site_name || "-") },
+      { label: "5sim 状态", render: (item) => renderFivesimStatus(item.fivesimStatus) },
+      { label: "手机号", render: (item) => escapeHtml(maskPhone(item.fivesimPhone)) },
+      { label: "验证码", render: (item) => escapeHtml(item.fivesimCode || "-") },
+      { label: "轮询次数", render: (item) => item.fivesimPollCount ?? "-" },
+      { label: "更新时间", render: (item) => escapeHtml(item.updated_at || "-") }
+    ], payload.items || [], "暂无 5sim 任务");
+  } catch (error) {
+    setStatusMessage(refs.fivesimJobsResult, error.message, "error");
+  } finally {
+    setButtonBusy(refs.fivesimJobsRefreshBtn, false);
+  }
+}
+
+if (refs.fivesimJobsRefreshBtn) {
+  refs.fivesimJobsRefreshBtn.addEventListener("click", () => {
+    refreshFivesimJobs().catch(() => {});
+  });
+}
+
+async function refreshFivesimTab() {
+  try {
+    const payload = await api("/api/admin/sites");
+    populateFivesimSiteSelect(payload.items || []);
+  } catch (_) {
+    // silently ignore
+  }
+  refreshFivesimJobs().catch(() => {});
 }
 
 refs.refreshBtn.addEventListener("click", () => {

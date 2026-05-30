@@ -90,10 +90,8 @@ npm run db:init
 log "生成前后台运行时配置..."
 npm run config:runtime
 
-log "重启 Worker..."
-pm2 restart kawang-worker
-
-log "重启 API..."
-pm2 restart kawang-api
+log "重启服务（PM2）..."
+# Use startOrGracefulReload with ecosystem file so processes are created if missing.
+pm2 startOrGracefulReload ecosystem.config.cjs --update-env
 
 log "在线更新完成。"

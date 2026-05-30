@@ -112,3 +112,27 @@ export const quotaErrorCodes = {
 export const QUOTA_RATE_LIMIT_WINDOW = 60;
 export const QUOTA_RATE_LIMIT_MAX = 10;
 export const QUOTA_LOCK_DURATION_MINUTES = 30;
+
+export const smsSiteStatuses = {
+  active: "active",
+  disabled: "disabled"
+};
+
+export const smsCardStatuses = {
+  active: "active",
+  in_use: "in_use",
+  used: "used",
+  disabled: "disabled",
+  void: "void"
+};
+
+export const smsOrderStatuses = {
+  pending: "pending",
+  number_reserved: "number_reserved",
+  waiting_code: "waiting_code",
+  ready: "ready",
+  timeout: "timeout",
+  failed: "failed",
+  cancelled: "cancelled",
+  refunded: "refunded"
+};

@@ -58,7 +58,7 @@
             <span class="icon">🎫</span> 卡密管理
           </button>
           <button class="nav-item" data-tab="sms">
-            <span class="icon">📱</span> 接码管理
+            <span class="icon">📱</span> 接码系统
           </button>
           <button class="nav-item" data-tab="jobs">
             <span class="icon">⚙️</span> 任务中心
@@ -221,12 +221,61 @@
         <!-- SMS -->
         <section class="tab-panel hidden" data-panel="sms">
           <div class="content-header">
-            <h2>接码管理</h2>
+            <h2>接码系统</h2>
+            <p>独立管理接码站点、接码卡密、静态库存与接码订单。</p>
           </div>
 
           <div class="grid grid-2">
             <div class="card">
-              <div class="card-header"><h3>批量导入</h3></div>
+              <div class="card-header"><h3>新增接码站点</h3></div>
+              <form id="sms-site-form" class="stack">
+                <label class="field">
+                  <span>站点名称</span>
+                  <input id="sms-site-name" placeholder="例如 OpenAI 接码" />
+                </label>
+                <label class="field">
+                  <span>站点 slug</span>
+                  <input id="sms-site-slug" placeholder="例如 openai-sms" />
+                </label>
+                <label class="field">
+                  <span>备注</span>
+                  <textarea id="sms-site-note" rows="2" placeholder="站点说明"></textarea>
+                </label>
+                <button type="submit" class="primary-btn">创建站点</button>
+              </form>
+              <div id="sms-site-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>生成接码卡密</h3></div>
+              <form id="sms-card-form" class="stack">
+                <label class="field">
+                  <span>绑定站点</span>
+                  <select id="sms-card-site"></select>
+                </label>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>卡密前缀</span>
+                    <input id="sms-card-prefix" placeholder="例如 SMS" />
+                  </label>
+                  <label class="field">
+                    <span>生成数量</span>
+                    <input id="sms-card-count" type="number" min="1" max="200" value="1" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>备注</span>
+                  <textarea id="sms-card-note" rows="2" placeholder="批次备注"></textarea>
+                </label>
+                <button type="submit" class="primary-btn">生成卡密</button>
+              </form>
+              <div id="sms-card-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>静态库存导入</h3></div>
+            <div class="grid grid-2">
               <form id="sms-batch-form" class="stack">
                 <label class="field">
                   <span>批次名称</span>
@@ -242,11 +291,6 @@
                 </label>
                 <button type="submit" class="primary-btn">开始导入</button>
               </form>
-              <div id="sms-batch-result" class="hint"></div>
-            </div>
-
-            <div class="card">
-              <div class="card-header"><h3>单条添加</h3></div>
               <form id="sms-single-form" class="stack">
                 <label class="field">
                   <span>手机号</span>
@@ -260,15 +304,41 @@
                   <span>卡密前缀</span>
                   <input id="sms-single-prefix" placeholder="例如 SMS" />
                 </label>
-                <button type="submit" class="primary-btn">添加</button>
+                <button type="submit" class="primary-btn">添加库存</button>
               </form>
-              <div id="sms-single-result" class="hint"></div>
             </div>
+            <div id="sms-batch-result" class="hint"></div>
+            <div id="sms-single-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>接码站点</h3></div>
+            <div id="sms-site-list" class="table-wrapper"></div>
           </div>
 
           <div class="card mt-24">
             <div class="card-header">
-              <h3>接码记录</h3>
+              <h3>接码卡密</h3>
+              <div class="header-actions">
+                <select id="sms-card-action" class="small-select">
+                  <option value="active">批量启用</option>
+                  <option value="disabled">批量禁用</option>
+                  <option value="void">批量作废</option>
+                </select>
+                <button id="sms-card-action-btn" class="primary-btn small">执行</button>
+              </div>
+            </div>
+            <div id="sms-card-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>接码订单</h3></div>
+            <div id="sms-order-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>静态库存记录</h3>
               <div class="header-actions">
                 <button id="sms-copy-keys-btn" class="ghost-btn small">批量复制卡密</button>
                 <button id="sms-copy-info-btn" class="ghost-btn small">批量复制接码信息</button>

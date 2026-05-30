@@ -23,9 +23,10 @@ function ensureColumn(db, tableName, columnName, definition) {
   }
 }
 
-function upsertSite(db, site) {
-  const exists = db.prepare("SELECT id FROM sites WHERE slug = ?").get(site.slug);
-  if (exists) {
+function upsertSite(db, site, options = {}) {
+  const existingSite = db.prepare("SELECT id, status FROM sites WHERE slug = ?").get(site.slug);
+  if (existingSite) {
+    const status = options.preserveExistingStatus ? existingSite.status : site.status;
     db.prepare(`
       UPDATE sites
       SET name = ?, verify_api_url = ?, submit_api_url = ?, verify_http_method = ?, submit_http_method = ?,
@@ -69,7 +70,7 @@ function upsertSite(db, site) {
       site.queryHttpMethod || null,
       site.queryHeadersTemplate || null,
       site.queryBodyTemplate || null,
-      site.status,
+      status,
       site.updatedAt,
       site.slug
     );
@@ -371,6 +372,68 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sms_sites (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      inventory_source TEXT NOT NULL DEFAULT 'sms_entries',
+      status TEXT NOT NULL DEFAULT 'active',
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_card_batches (
+      id TEXT PRIMARY KEY,
+      site_id TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      note TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_cards (
+      id TEXT PRIMARY KEY,
+      site_id TEXT NOT NULL,
+      batch_id TEXT,
+      card_key TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      current_order_id TEXT,
+      resource_entry_id TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_orders (
+      id TEXT PRIMARY KEY,
+      order_no TEXT NOT NULL UNIQUE,
+      site_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      sms_entry_id TEXT,
+      phone TEXT,
+      sms_url TEXT,
+      verification_code TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error_message TEXT,
+      provider_payload TEXT,
+      refunded_at TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sms_order_events (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS quota_source_cards (
       id TEXT PRIMARY KEY,
       source_key TEXT NOT NULL,
@@ -461,6 +524,15 @@ function createSchema(db) {
   ensureColumn(db, "sites", "query_body_template", "TEXT");
   ensureColumn(db, "sites", "poll_interval_ms", "INTEGER NOT NULL DEFAULT 5000");
   ensureColumn(db, "sites", "poll_max_rounds", "INTEGER NOT NULL DEFAULT 6");
+  ensureColumn(db, "sites", "sms_provider", "TEXT");
+  ensureColumn(db, "sites", "sms_api_key", "TEXT");
+  ensureColumn(db, "sites", "sms_country", "TEXT");
+  ensureColumn(db, "sites", "sms_service", "TEXT");
+  ensureColumn(db, "sites", "sms_operator", "TEXT");
+  ensureColumn(db, "sites", "sms_poll_interval_ms", "INTEGER NOT NULL DEFAULT 5000");
+  ensureColumn(db, "sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 300000");
+  ensureColumn(db, "sites", "sms_submit_phone_template", "TEXT");
+  ensureColumn(db, "sites", "sms_submit_code_template", "TEXT");
   ensureColumn(db, "notification_monitors", "monitor_type", "TEXT NOT NULL DEFAULT 'http'");
   ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");
@@ -483,6 +555,12 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sms_entries_status ON sms_entries(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_sms_entries_batch ON sms_entries(batch_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_entries_public_key ON sms_entries(public_key);
+    CREATE INDEX IF NOT EXISTS idx_sms_sites_status ON sms_sites(status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_cards_key ON sms_cards(card_key);
+    CREATE INDEX IF NOT EXISTS idx_sms_cards_site_status ON sms_cards(site_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_orders_card_status ON sms_orders(card_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_orders_site_status ON sms_orders(site_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sms_order_events_order ON sms_order_events(order_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_quota_source_cards_status ON quota_source_cards(status);
     CREATE INDEX IF NOT EXISTS idx_quota_source_cards_batch ON quota_source_cards(import_batch_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_sub_cards_code ON quota_sub_cards(card_code);
@@ -784,7 +862,7 @@ function seedDefaults(db) {
   ];
 
   for (const presetSite of presetSites) {
-    upsertSite(db, presetSite);
+    upsertSite(db, presetSite, { preserveExistingStatus: true });
   }
 
   db.prepare(`

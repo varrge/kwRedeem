@@ -105,6 +105,14 @@ export async function fetchClaimWarning() {
   );
 }
 
+export async function fetchExternalStatus() {
+  return safeFetch(
+    `${EXTERNAL_BASE_URL}/api/status`,
+    { method: "GET" },
+    5_000
+  );
+}
+
 /**
  * 执行提取操作
  * POST https://gpt.kedaya.xyz/api/claim
@@ -116,13 +124,13 @@ export async function fetchClaimWarning() {
  * @param {string} warningAckId - The warning acknowledgment ID from claim-warning
  * @returns {Promise<object>} Claim result
  */
-export async function claimFromExternal(cardCode, count, warningAckId) {
+export async function claimFromExternal(cardCode, count, warningAckId, warningAckText = "") {
   return safeFetch(
     `${EXTERNAL_BASE_URL}/api/claim`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: cardCode, count, warningAckId }),
+      body: JSON.stringify({ code: cardCode, count, warningAckId, warningAckText }),
     },
     15_000
   );

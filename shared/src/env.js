@@ -20,7 +20,9 @@ export const env = {
   jwtSecret: process.env.JWT_SECRET ?? "replace-with-a-long-random-string",
   adminUsername: process.env.ADMIN_USERNAME ?? "admin",
   adminPassword: process.env.ADMIN_PASSWORD ?? "change-this-password",
-  requestTimeoutMs: Number(process.env.DEFAULT_REQUEST_TIMEOUT_MS ?? 15000)
+  requestTimeoutMs: Number(process.env.DEFAULT_REQUEST_TIMEOUT_MS ?? 15000),
+  internalSecret: process.env.INTERNAL_SECRET ?? "",
+  workerInternalPort: Number(process.env.WORKER_INTERNAL_PORT ?? 4301)
 };
 
 export function resolveProjectPath(...parts) {

@@ -114,6 +114,8 @@ const refs = {
   quotaSubCardResult: document.querySelector("#quota-sub-card-result"),
   quotaSubCardList: document.querySelector("#quota-sub-card-list"),
   quotaSubCardRefreshBtn: document.querySelector("#quota-sub-card-refresh-btn"),
+  quotaSubCardCopyBtn: document.querySelector("#quota-sub-card-copy-btn"),
+  quotaSubCardExportBtn: document.querySelector("#quota-sub-card-export-btn"),
   quotaSubCardDetailCard: document.querySelector("#quota-sub-card-detail-card"),
   quotaSubCardDetail: document.querySelector("#quota-sub-card-detail"),
   quotaSubCardHistory: document.querySelector("#quota-sub-card-history"),
@@ -1410,6 +1412,7 @@ async function refreshQuotaSubCards() {
     const payload = await api("/api/admin/quota/sub-cards");
     const items = payload.subCards || [];
     renderTable(refs.quotaSubCardList, [
+      { label: "", render: (item) => `<input type="checkbox" class="quota-sub-check" value="${escapeHtml(item.id)}" data-code="${escapeHtml(item.cardCode)}" data-total="${item.totalQuota ?? 0}" data-used="${item.usedQuota ?? 0}" data-status="${escapeHtml(item.status)}" />` },
       { label: "编码", render: (item) => `<code>${escapeHtml(item.cardCode)}</code>` },
       { label: "总额度", render: (item) => item.totalQuota ?? 0 },
       { label: "已用额度", render: (item) => item.usedQuota ?? 0 },
@@ -2124,6 +2127,81 @@ if (refs.quotaSubCardRefreshBtn) {
         refs.quotaSubCardList.innerHTML = `<p class="hint centered">刷新失败：${escapeHtml(error.message)}</p>`;
       }
     });
+  });
+}
+
+// ── Quota Sub-Card Batch Actions ──
+function getSelectedSubCards() {
+  const checks = document.querySelectorAll(".quota-sub-check:checked");
+  return Array.from(checks).map(el => ({
+    id: el.value,
+    code: el.dataset.code,
+    total: Number(el.dataset.total),
+    used: Number(el.dataset.used),
+    status: el.dataset.status
+  }));
+}
+
+if (refs.quotaSubCardCopyBtn) {
+  refs.quotaSubCardCopyBtn.addEventListener("click", () => {
+    let selected = getSelectedSubCards();
+    if (!selected.length) {
+      // If none selected, copy all visible
+      const allChecks = document.querySelectorAll(".quota-sub-check");
+      selected = Array.from(allChecks).map(el => ({
+        id: el.value,
+        code: el.dataset.code,
+        total: Number(el.dataset.total),
+        used: Number(el.dataset.used),
+        status: el.dataset.status
+      }));
+    }
+    if (!selected.length) return;
+    const text = selected.map(s => s.code).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setStatusMessage(refs.quotaSubCardResult, `已复制 ${selected.length} 张卡密编码`, "success");
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setStatusMessage(refs.quotaSubCardResult, `已复制 ${selected.length} 张卡密编码`, "success");
+    });
+  });
+}
+
+if (refs.quotaSubCardExportBtn) {
+  refs.quotaSubCardExportBtn.addEventListener("click", () => {
+    let selected = getSelectedSubCards();
+    if (!selected.length) {
+      const allChecks = document.querySelectorAll(".quota-sub-check");
+      selected = Array.from(allChecks).map(el => ({
+        id: el.value,
+        code: el.dataset.code,
+        total: Number(el.dataset.total),
+        used: Number(el.dataset.used),
+        status: el.dataset.status
+      }));
+    }
+    if (!selected.length) return;
+    const lines = ["编码,总额度,已用额度,剩余,状态"];
+    for (const s of selected) {
+      lines.push(`${s.code},${s.total},${s.used},${s.total - s.used},${s.status}`);
+    }
+    const csv = lines.join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quota-sub-cards-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatusMessage(refs.quotaSubCardResult, `已导出 ${selected.length} 张子卡密`, "success");
   });
 }
 

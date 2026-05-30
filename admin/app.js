@@ -1082,7 +1082,7 @@ async function toggleNotifyMonitor(id, nextEnabled) {
 async function deleteNotifyMonitor(id) {
   if (!window.confirm("确认删除该监听项？删除后历史事件仍会保留。")) return;
   try {
-    await api(`/api/admin/notifications/monitors/${id}`, { method: "DELETE" });
+    await api(`/api/admin/notifications/monitors/${id}`, { method: "DELETE", body: JSON.stringify({}) });
     if (refs.notifyEditId.value === id) resetNotifyForm();
     await refreshNotifications();
   } catch (error) {
@@ -1534,7 +1534,7 @@ async function editQuotaSourceCard(id) {
 async function deleteQuotaSourceCard(id) {
   if (!window.confirm("确认删除这个 API 密钥？删除后将不再作为提号源。")) return;
   try {
-    await api(`/api/admin/quota/cards/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await api(`/api/admin/quota/cards/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({}) });
     setHint(refs.quotaSourceCardsMergeResult, "API 密钥已删除");
     await refreshQuotaSourceCards();
     await refreshQuotaDashboard();

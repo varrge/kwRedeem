@@ -112,6 +112,9 @@ const refs = {
   smsActionBtn: document.querySelector("#sms-action-btn"),
   // Quota system refs
   quotaStats: document.querySelector("#quota-stats"),
+  quotaApiKeyForm: document.querySelector("#quota-api-key-form"),
+  quotaApiKeyInput: document.querySelector("#quota-api-key-input"),
+  quotaApiKeyResult: document.querySelector("#quota-api-key-result"),
   quotaImportForm: document.querySelector("#quota-import-form"),
   quotaImportCodes: document.querySelector("#quota-import-codes"),
   quotaImportResult: document.querySelector("#quota-import-result"),
@@ -1409,24 +1412,15 @@ async function refreshQuotaSourceCards() {
       refs.quotaSourceCardList.innerHTML = `<p class="hint centered">暂无 active 源卡密</p>`;
     } else {
       renderTable(refs.quotaSourceCardList, [
-        {
-          label: "选择",
-          render: (item) => `<input type="checkbox" data-source-card-id="${escapeHtml(item.id)}" />`,
-        },
-        { label: "卡密", render: (item) => `<code>${escapeHtml(item.sourceKey || item.id)}</code>` },
-        { label: "总额度", render: (item) => item.quota ?? 0 },
+        { label: "API Key", render: (item) => `<code>${escapeHtml(item.sourceKey || item.id)}</code>` },
+        { label: "总余额", render: (item) => item.quota ?? 0 },
         { label: "剩余额度", render: (item) => item.remaining ?? 0 },
         {
-          label: "创建时间",
+          label: "保存时间",
           render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>`,
         },
         { label: "状态", render: (item) => renderStatus(item.status) },
-      ], items, "暂无 active 源卡密");
-      // Wire change listeners after each render so the button enables only
-      // when >=2 boxes are checked.
-      refs.quotaSourceCardList
-        .querySelectorAll("input[type=checkbox][data-source-card-id]")
-        .forEach((cb) => cb.addEventListener("change", syncQuotaSourceCardsMergeButton));
+      ], items, "暂无 active API 密钥");
     }
   } catch (error) {
     refs.quotaSourceCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
@@ -2156,6 +2150,37 @@ refs.smsCardActionBtn?.addEventListener("click", () => {
 });
 
 // ── Quota Import Form ──
+if (refs.quotaApiKeyForm) {
+  refs.quotaApiKeyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const apiKey = refs.quotaApiKeyInput?.value.trim() || "";
+    if (!apiKey) {
+      setHint(refs.quotaApiKeyResult, "请输入 API 密钥");
+      return;
+    }
+    try {
+      setHint(refs.quotaApiKeyResult, "正在验证并保存...");
+      const payload = await api("/api/admin/quota/cards/import", {
+        method: "POST",
+        body: JSON.stringify({ cards: [apiKey] })
+      });
+      if ((payload.successCount ?? 0) < 1) {
+        const reason = payload.failures?.[0]?.reason || "API 密钥验证失败";
+        setHint(refs.quotaApiKeyResult, `保存失败：${reason}`);
+        renderQuotaImportResults(payload);
+        return;
+      }
+      setHint(refs.quotaApiKeyResult, "API 密钥已保存");
+      refs.quotaApiKeyInput.value = "";
+      renderQuotaImportResults(payload);
+      await refreshQuotaDashboard();
+      await refreshQuotaSourceCards();
+    } catch (error) {
+      setHint(refs.quotaApiKeyResult, `保存失败：${error.message}`);
+    }
+  });
+}
+
 if (refs.quotaImportForm) {
   refs.quotaImportForm.addEventListener("submit", async (event) => {
     event.preventDefault();

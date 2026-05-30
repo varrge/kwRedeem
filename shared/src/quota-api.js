@@ -1,17 +1,14 @@
 /**
- * External API Proxy Module for Card Quota System
+ * External API proxy module for the quota claim system.
  *
- * All calls to the external card platform are encapsulated here.
- * Error messages are sanitized to never expose the external API address.
+ * The current upstream API uses Bearer API keys:
+ * - GET /api/auth/me verifies a key and returns account balance.
+ * - POST /api/user-claim claims accounts for that key.
  */
 
 const EXTERNAL_BASE_URL = "https://gpt.kedaya.xyz";
+const CLAIM_WARNING_ID = "claim-warranty-first-login-1h-20260530";
 
-/**
- * Sanitize error messages to remove any reference to the external API address.
- * @param {string} message - The original error message
- * @returns {string} Sanitized message
- */
 function sanitizeError(message) {
   if (!message) return "外部接口请求失败";
   return message
@@ -19,13 +16,6 @@ function sanitizeError(message) {
     .replaceAll("gpt.kedaya.xyz", "[external-api]");
 }
 
-/**
- * Internal helper to perform fetch with timeout and error sanitization.
- * @param {string} url - Full URL to fetch
- * @param {object} options - Fetch options (method, headers, body, etc.)
- * @param {number} timeoutMs - Timeout in milliseconds
- * @returns {Promise<object>} Parsed JSON response
- */
 async function safeFetch(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -36,11 +26,22 @@ async function safeFetch(url, options, timeoutMs) {
       signal: controller.signal,
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = data?.error || data?.message || `外部接口请求失败 (${response.status})`;
+      const wrapped = new Error(sanitizeError(error));
+      wrapped.status = response.status;
+      wrapped.retryAfterSeconds = data?.retryAfterSeconds;
+      wrapped.warning = data?.warning;
+      throw wrapped;
+    }
     return data;
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error("外部接口请求超时");
+    }
+    if (error.status) {
+      throw error;
     }
     throw new Error(sanitizeError(error.message || "外部接口请求失败"));
   } finally {
@@ -48,61 +49,48 @@ async function safeFetch(url, options, timeoutMs) {
   }
 }
 
-/**
- * 验证卡密信息
- * POST https://gpt.kedaya.xyz/api/card-info
- * Body: { code: "[card_code]" }
- * Response: { ok: boolean, quota: number, remaining: number, used: boolean }
- *
- * @param {string} cardCode - The card code to verify
- * @returns {Promise<object>} Verification result
- */
+function bearerHeaders(apiKey) {
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
 export async function verifyExternalCard(cardCode) {
-  return safeFetch(
-    `${EXTERNAL_BASE_URL}/api/card-info`,
+  const result = await safeFetch(
+    `${EXTERNAL_BASE_URL}/api/auth/me`,
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: cardCode }),
+      method: "GET",
+      headers: bearerHeaders(cardCode),
     },
     15_000
   );
+
+  const balance = Number(result?.user?.balance ?? 0);
+  const authed = result?.authed === true;
+  return {
+    ok: authed,
+    quota: balance,
+    remaining: balance,
+    used: authed ? balance <= 0 : true,
+    raw: result
+  };
 }
 
-/**
- * 合并卡密
- * POST https://gpt.kedaya.xyz/api/merge-cards
- * Body: { codes: "code1\ncode2\ncode3" }
- * Response: { ok: boolean, newCode: string, ... } or { error: string }
- *
- * @param {string[]} cardCodes - Array of card codes to merge
- * @returns {Promise<object>} Merge result
- */
 export async function mergeExternalCards(cardCodes) {
-  return safeFetch(
-    `${EXTERNAL_BASE_URL}/api/merge-cards`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codes: cardCodes.join("\n") }),
-    },
-    30_000
-  );
+  return {
+    ok: false,
+    error: "新版 API 不支持合并源卡密，请直接保留多个 API key 源卡使用",
+    ignoredCount: Array.isArray(cardCodes) ? cardCodes.length : 0
+  };
 }
 
-/**
- * 获取提取警告（需每5秒轮询）
- * GET https://gpt.kedaya.xyz/api/claim-warning
- * Response: { warning: { id: string, title: string, message: string } }
- *
- * @returns {Promise<object>} Warning object with id, title, message
- */
 export async function fetchClaimWarning() {
-  return safeFetch(
-    `${EXTERNAL_BASE_URL}/api/claim-warning`,
-    { method: "GET" },
-    5_000
-  );
+  return {
+    warning: {
+      id: CLAIM_WARNING_ID,
+      title: "提号须知",
+      message: "仅质保提号，且仅限首登后 1 小时内。",
+      requiredText: ""
+    }
+  };
 }
 
 export async function fetchExternalStatus() {
@@ -113,41 +101,33 @@ export async function fetchExternalStatus() {
   );
 }
 
-/**
- * 执行提取操作
- * POST https://gpt.kedaya.xyz/api/claim
- * Body: { code: "[merged_card_code]", count: number, warningAckId: string }
- * Response: { ok: boolean, quota: number, remaining: number, chargedQuota: number, accounts: string[] }
- *
- * @param {string} cardCode - The merged card code
- * @param {number} count - Number of accounts to claim
- * @param {string} warningAckId - The warning acknowledgment ID from claim-warning
- * @returns {Promise<object>} Claim result
- */
-export async function claimFromExternal(cardCode, count, warningAckId, warningAckText = "") {
+export async function claimFromExternal(cardCode, count, warningAckId = CLAIM_WARNING_ID, maxPriceTenths) {
+  const body = { count, warningAckId };
+  if (Number.isInteger(maxPriceTenths)) {
+    body.maxPriceTenths = maxPriceTenths;
+  }
+
   return safeFetch(
-    `${EXTERNAL_BASE_URL}/api/claim`,
+    `${EXTERNAL_BASE_URL}/api/user-claim`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: cardCode, count, warningAckId, warningAckText }),
+      headers: {
+        "Content-Type": "application/json",
+        ...bearerHeaders(cardCode)
+      },
+      body: JSON.stringify(body),
     },
     15_000
   );
 }
 
-/**
- * 获取提取历史
- * GET https://gpt.kedaya.xyz/api/claim-history?cardCode=[code]
- * Response: { history: [{ id, cardCode, accountCount, chargedQuota, accounts, hasAccounts, claimedAt }] }
- *
- * @param {string} cardCode - The card code to query history for
- * @returns {Promise<object>} History result
- */
 export async function fetchClaimHistory(cardCode) {
   return safeFetch(
-    `${EXTERNAL_BASE_URL}/api/claim-history?cardCode=${encodeURIComponent(cardCode)}`,
-    { method: "GET" },
+    `${EXTERNAL_BASE_URL}/api/user-history?limit=500&includeAccounts=1`,
+    {
+      method: "GET",
+      headers: bearerHeaders(cardCode),
+    },
     15_000
   );
 }

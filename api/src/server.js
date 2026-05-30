@@ -15,7 +15,7 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEven
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
-import { verifyExternalCard, mergeExternalCards, fetchClaimWarning, fetchExternalStatus, claimFromExternal } from "../../shared/src/quota-api.js";
+import { verifyExternalCard, fetchClaimWarning, fetchExternalStatus, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import {
@@ -4678,7 +4678,6 @@ app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (r
   let successCount = 0;
   let failureCount = 0;
   const failures = [];
-  const activeCardIds = [];
   const activeCardCodes = [];
 
   // 逐一验证卡密
@@ -4706,7 +4705,6 @@ app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (r
           now
         );
         successCount++;
-        activeCardIds.push(cardId);
         activeCardCodes.push(trimmedCode);
       } else {
         // 验证失败（ok=false 或 remaining=0）：插入 quota_source_cards（status=failed）并记录错误
@@ -4762,80 +4760,14 @@ app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (r
     WHERE id = ?
   `).run(successCount, failureCount, batchStatus, now, batchId);
 
-  // 有效卡密 >= 2 张时自动触发合并流程（调用 mergeExternalCards）
-  let mergeResult = null;
-  if (activeCardCodes.length >= 2) {
-    try {
-      const mergeResponse = await mergeExternalCards(activeCardCodes);
-
-      if (mergeResponse.ok && mergeResponse.newCode) {
-        // 合并成功：创建新 active 卡密记录
-        const mergedCardId = nanoid(16);
-        const mergedNow = nowIso();
-
-        // 计算合并后的总 remaining
-        const totalRemaining = db.prepare(`
-          SELECT COALESCE(SUM(remaining), 0) AS total
-          FROM quota_source_cards
-          WHERE id IN (${activeCardIds.map(() => "?").join(",")})
-        `).get(...activeCardIds).total;
-
-        // 插入合并后的新卡密
-        db.prepare(`
-          INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, NULL, ?, ?)
-        `).run(
-          mergedCardId,
-          encryptText(mergeResponse.newCode),
-          totalRemaining,
-          totalRemaining,
-          quotaCardStatuses.active,
-          batchId,
-          JSON.stringify(mergeResponse),
-          mergedNow,
-          mergedNow
-        );
-
-        // 原卡密标记为 used，更新 merged_into_id
-        const updateStmt = db.prepare(`
-          UPDATE quota_source_cards
-          SET status = ?, merged_into_id = ?, updated_at = ?
-          WHERE id = ?
-        `);
-        for (const id of activeCardIds) {
-          updateStmt.run(quotaCardStatuses.used, mergedCardId, mergedNow, id);
-        }
-
-        // 更新批次的 merged_card_id
-        db.prepare(`
-          UPDATE quota_import_batches
-          SET merged_card_id = ?, updated_at = ?
-          WHERE id = ?
-        `).run(mergedCardId, mergedNow, batchId);
-
-        mergeResult = {
-          success: true,
-          mergedCardId,
-          newCode: mergeResponse.newCode,
-          totalRemaining
-        };
-      } else {
-        // 合并失败：保持原状态不变，在返回结果中包含合并错误信息
-        const errorMsg = mergeResponse.error || "合并接口返回错误";
-        mergeResult = {
-          success: false,
-          error: errorMsg
-        };
-      }
-    } catch (error) {
-      // 合并请求超时或网络不可达：保持原状态不变
-      mergeResult = {
+  // The new upstream API no longer supports source-card merging; keep imported API keys active.
+  const mergeResult = activeCardCodes.length >= 2
+    ? {
         success: false,
-        error: error.message || "合并接口连接失败"
-      };
-    }
-  }
-
+        skipped: true,
+        error: "新版 API 不支持合并源卡密，已保留为多张 active API key 源卡"
+      }
+    : null;
   return {
     successCount,
     failureCount,
@@ -4846,156 +4778,11 @@ app.post("/api/admin/quota/cards/import", { preHandler: requireAdmin }, async (r
 
 // ── Quota Admin: Merge Cards ──
 app.post("/api/admin/quota/cards/merge", { preHandler: requireAdmin }, async (request, reply) => {
-  const schema = z.object({
-    cardIds: z.array(z.string().min(1)).min(1)
+  return reply.code(410).send({
+    success: false,
+    error: "新版 API 不支持合并源卡密，请直接保留多个 API key 源卡使用",
+    code: quotaErrorCodes.EXTERNAL_API_ERROR
   });
-
-  const parsed = schema.safeParse(request.body);
-  if (!parsed.success) {
-    return reply.code(400).send({
-      message: "请提供 cardIds 数组（非空）",
-      code: quotaErrorCodes.VALIDATION_ERROR
-    });
-  }
-
-  const { cardIds } = parsed.data;
-
-  // 查找所有指定的卡密记录
-  const placeholders = cardIds.map(() => "?").join(",");
-  const cards = db.prepare(`
-    SELECT id, source_key, remaining, status
-    FROM quota_source_cards
-    WHERE id IN (${placeholders})
-  `).all(...cardIds);
-
-  // 验证所有卡密都存在
-  if (cards.length !== cardIds.length) {
-    return reply.code(400).send({
-      message: "部分卡密 ID 不存在",
-      code: quotaErrorCodes.VALIDATION_ERROR
-    });
-  }
-
-  // 验证所有卡密状态为 active
-  const nonActiveCards = cards.filter(c => c.status !== quotaCardStatuses.active);
-  if (nonActiveCards.length > 0) {
-    return reply.code(400).send({
-      message: "所有参与合并的卡密必须为 active 状态",
-      code: quotaErrorCodes.VALIDATION_ERROR
-    });
-  }
-
-  // 解密所有卡密的 source_key 获取实际卡密编码
-  const cardCodes = [];
-  for (const card of cards) {
-    try {
-      cardCodes.push(decryptText(card.source_key));
-    } catch {
-      cardCodes.push(card.source_key);
-    }
-  }
-
-  // 合并前先 verify 每张卡，写回 remaining，过滤掉耗尽卡
-  const eligibleCards = [];
-  const eligibleCardCodes = [];
-  const writeBackStmt = db.prepare(`UPDATE quota_source_cards SET remaining = ?, updated_at = ? WHERE id = ?`);
-
-  for (let i = 0; i < cards.length; i++) {
-    const card = cards[i];
-    const code = cardCodes[i];
-    try {
-      const result = await verifyExternalCard(code);
-      if (result.ok === true && typeof result.remaining === 'number' && result.remaining >= 0) {
-        // 写回外部真实 remaining
-        writeBackStmt.run(result.remaining, nowIso(), card.id);
-        if (result.remaining > 0) {
-          // eligible: remaining > 0
-          eligibleCards.push({ ...card, remaining: result.remaining });
-          eligibleCardCodes.push(code);
-        }
-        // remaining === 0 → ineligible, 不加入合并集合
-      }
-      // ok=false → 不写回、不加入合并集合（保守）
-    } catch {
-      // verify 抛错 → 不写回、不加入合并集合（保守）
-    }
-  }
-
-  // 过滤后 eligible 数量 < 2 → 返回 400
-  if (eligibleCardCodes.length < 2) {
-    return reply.code(400).send({
-      success: false,
-      error: "没有足够的有效卡密可合并",
-      code: quotaErrorCodes.VALIDATION_ERROR
-    });
-  }
-
-  // 调用外部合并接口（仅用 eligible 卡）
-  try {
-    const mergeResponse = await mergeExternalCards(eligibleCardCodes);
-
-    if (mergeResponse.ok && mergeResponse.newCode) {
-      // 合并成功：创建新 active 卡密记录
-      const mergedCardId = nanoid(16);
-      const now = nowIso();
-
-      // 计算合并后的总 remaining（从 eligible 卡的已写回 remaining 值汇总）
-      const totalRemaining = eligibleCards.reduce((sum, c) => sum + c.remaining, 0);
-
-      // 插入合并后的新卡密
-      db.prepare(`
-        INSERT INTO quota_source_cards (id, source_key, quota, remaining, status, import_batch_id, merged_into_id, verify_response, retry_count, last_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0, NULL, ?, ?)
-      `).run(
-        mergedCardId,
-        encryptText(mergeResponse.newCode),
-        totalRemaining,
-        totalRemaining,
-        quotaCardStatuses.active,
-        JSON.stringify(mergeResponse),
-        now,
-        now
-      );
-
-      // 仅把实际参与合并的 eligible 卡标记为 used
-      const updateStmt = db.prepare(`
-        UPDATE quota_source_cards
-        SET status = ?, merged_into_id = ?, updated_at = ?
-        WHERE id = ?
-      `);
-      for (const ec of eligibleCards) {
-        updateStmt.run(quotaCardStatuses.used, mergedCardId, now, ec.id);
-      }
-
-      // 掩码处理新卡密编码（只显示前4位和后4位）
-      const newCode = mergeResponse.newCode;
-      const maskedCode = newCode.length > 8
-        ? `${newCode.slice(0, 4)}****${newCode.slice(-4)}`
-        : "****";
-
-      return {
-        success: true,
-        mergedCardId,
-        newCode: maskedCode,
-        totalRemaining
-      };
-    } else {
-      // 合并失败：保持原状态不变，返回错误信息
-      const errorMsg = mergeResponse.error || "合并接口返回错误";
-      return reply.code(400).send({
-        success: false,
-        error: errorMsg,
-        code: quotaErrorCodes.EXTERNAL_API_ERROR
-      });
-    }
-  } catch (error) {
-    // 合并请求超时或网络不可达：保持原状态不变
-    return reply.code(400).send({
-      success: false,
-      error: error.message || "合并接口连接失败",
-      code: quotaErrorCodes.EXTERNAL_API_ERROR
-    });
-  }
 });
 
 // ── Quota Admin: Verify (Refresh) Merged Card Quota ──
@@ -5564,20 +5351,9 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     });
   }
 
-  // Step 6: Call external claim API — fetch warningAckText first
-  let warningAckText = "";
-  if (warningAckId) {
-    try {
-      const warningResp = await fetchClaimWarning();
-      warningAckText = warningResp?.warning?.requiredText || "我已知晓";
-    } catch {
-      warningAckText = "我已知晓";
-    }
-  }
-
   let externalResult;
   try {
-    externalResult = await claimFromExternal(sourceCardCode, count, warningAckId, warningAckText);
+    externalResult = await claimFromExternal(sourceCardCode, count, warningAckId);
   } catch (error) {
     // External API failed: don't modify local state
     return reply.code(502).send({

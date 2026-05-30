@@ -122,6 +122,8 @@ const refs = {
   quotaImportDetail: document.querySelector("#quota-import-detail"),
   quotaSourceCardList: document.querySelector("#quota-source-card-list"),
   quotaSourceCardsRefreshBtn: document.querySelector("#quota-source-cards-refresh-btn"),
+  quotaSourceCardsExportBtn: document.querySelector("#quota-source-cards-export-btn"),
+  quotaSourceCardsExportAllBtn: document.querySelector("#quota-source-cards-export-all-btn"),
   quotaSourceCardsMergeBtn: document.querySelector("#quota-source-cards-merge-btn"),
   quotaSourceCardsMergeResult: document.querySelector("#quota-source-cards-merge-result"),
   quotaSettingsForm: document.querySelector("#quota-settings-form"),
@@ -1412,6 +1414,7 @@ async function refreshQuotaSourceCards() {
       refs.quotaSourceCardList.innerHTML = `<p class="hint centered">暂无 active 源卡密</p>`;
     } else {
       renderTable(refs.quotaSourceCardList, [
+        { label: "", render: (item) => `<input type="checkbox" class="quota-source-card-check" value="${escapeHtml(item.id)}" />` },
         { label: "API Key", render: (item) => `<code>${escapeHtml(item.sourceKey || item.id)}</code>` },
         { label: "总余额", render: (item) => item.quota ?? 0 },
         { label: "剩余额度", render: (item) => item.remaining ?? 0 },
@@ -1420,6 +1423,10 @@ async function refreshQuotaSourceCards() {
           render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>`,
         },
         { label: "状态", render: (item) => renderStatus(item.status) },
+        {
+          label: "操作",
+          render: (item) => `<button class="ghost-btn small" type="button" onclick="editQuotaSourceCard('${escapeHtml(item.id)}')">修改</button> <button class="ghost-btn small" type="button" onclick="deleteQuotaSourceCard('${escapeHtml(item.id)}')">删除</button>`,
+        },
       ], items, "暂无 active API 密钥");
     }
   } catch (error) {
@@ -1467,6 +1474,77 @@ async function handleQuotaSourceCardsMerge() {
 }
 
 // ── Quota Sub-Card Management ──
+
+function getSelectedQuotaSourceCardIds() {
+  return getCheckedValues(".quota-source-card-check");
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function exportQuotaSourceCards(exportAll = false) {
+  const ids = exportAll ? [] : getSelectedQuotaSourceCardIds();
+  if (!exportAll && !ids.length) {
+    setHint(refs.quotaSourceCardsMergeResult, "请先选择要导出的 API 密钥");
+    return;
+  }
+  try {
+    const payload = await api("/api/admin/quota/cards/export", {
+      method: "POST",
+      body: JSON.stringify(exportAll ? { all: true } : { ids })
+    });
+    const keys = (payload.items || []).map((item) => item.apiKey).filter(Boolean);
+    downloadTextFile(`quota-api-keys-${new Date().toISOString().slice(0, 10)}.txt`, keys.join("\n"));
+    setHint(refs.quotaSourceCardsMergeResult, `已导出 ${keys.length} 个 API 密钥`);
+  } catch (error) {
+    setHint(refs.quotaSourceCardsMergeResult, `导出失败：${error.message}`);
+  }
+}
+
+async function editQuotaSourceCard(id) {
+  const apiKey = window.prompt("请输入新的 API 密钥：");
+  if (apiKey === null) return;
+  const trimmed = apiKey.trim();
+  if (!trimmed) {
+    setHint(refs.quotaSourceCardsMergeResult, "API 密钥不能为空");
+    return;
+  }
+  try {
+    await api(`/api/admin/quota/cards/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ apiKey: trimmed })
+    });
+    setHint(refs.quotaSourceCardsMergeResult, "API 密钥已修改");
+    await refreshQuotaSourceCards();
+    await refreshQuotaDashboard();
+  } catch (error) {
+    setHint(refs.quotaSourceCardsMergeResult, `修改失败：${error.message}`);
+  }
+}
+
+async function deleteQuotaSourceCard(id) {
+  if (!window.confirm("确认删除这个 API 密钥？删除后将不再作为提号源。")) return;
+  try {
+    await api(`/api/admin/quota/cards/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setHint(refs.quotaSourceCardsMergeResult, "API 密钥已删除");
+    await refreshQuotaSourceCards();
+    await refreshQuotaDashboard();
+  } catch (error) {
+    setHint(refs.quotaSourceCardsMergeResult, `删除失败：${error.message}`);
+  }
+}
+
+window.editQuotaSourceCard = editQuotaSourceCard;
+window.deleteQuotaSourceCard = deleteQuotaSourceCard;
 
 async function refreshQuotaSubCards() {
   if (!refs.quotaSubCardList) return;
@@ -2392,6 +2470,16 @@ if (refs.quotaSourceCardsRefreshBtn) {
       refs.quotaSourceCardsRefreshBtn.disabled = false;
       refs.quotaSourceCardsRefreshBtn.textContent = "刷新";
     }
+  });
+}
+if (refs.quotaSourceCardsExportBtn) {
+  refs.quotaSourceCardsExportBtn.addEventListener("click", () => {
+    exportQuotaSourceCards(false).catch(() => {});
+  });
+}
+if (refs.quotaSourceCardsExportAllBtn) {
+  refs.quotaSourceCardsExportAllBtn.addEventListener("click", () => {
+    exportQuotaSourceCards(true).catch(() => {});
   });
 }
 if (refs.quotaSourceCardsMergeBtn) {

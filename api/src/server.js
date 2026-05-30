@@ -15,7 +15,7 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEven
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
-import { verifyExternalCard, fetchClaimWarning, fetchExternalStatus, claimFromExternal } from "../../shared/src/quota-api.js";
+import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import {
@@ -4852,6 +4852,117 @@ app.post("/api/admin/quota/cards/verify", { preHandler: requireAdmin }, async (r
 });
 
 // ── Quota Admin: Dashboard ──
+app.patch("/api/admin/quota/cards/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const apiKey = String(request.body?.apiKey || "").trim();
+  if (!id || !apiKey) {
+    return reply.code(400).send({ message: "请提供 id 和 apiKey", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const existing = db.prepare("SELECT id FROM quota_source_cards WHERE id = ?").get(id);
+  if (!existing) {
+    return reply.code(404).send({ message: "API 密钥不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  const rows = db.prepare("SELECT id, source_key FROM quota_source_cards WHERE id <> ?").all(id);
+  for (const row of rows) {
+    try {
+      if (decryptText(row.source_key) === apiKey) {
+        return reply.code(409).send({ message: "API 密钥已存在", code: quotaErrorCodes.CARD_EXISTS });
+      }
+    } catch {
+      if (row.source_key === apiKey) {
+        return reply.code(409).send({ message: "API 密钥已存在", code: quotaErrorCodes.CARD_EXISTS });
+      }
+    }
+  }
+
+  let result;
+  try {
+    result = await verifyExternalCard(apiKey);
+  } catch (error) {
+    return reply.code(502).send({ message: error.message || "外部接口请求失败", code: quotaErrorCodes.EXTERNAL_API_ERROR });
+  }
+
+  if (result.ok !== true || !(result.remaining > 0)) {
+    return reply.code(400).send({ message: "API 密钥无效或余额已耗尽", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE quota_source_cards
+    SET source_key = ?, quota = ?, remaining = ?, status = ?, verify_response = ?, last_error = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(
+    encryptText(apiKey),
+    result.quota || result.remaining,
+    result.remaining,
+    quotaCardStatuses.active,
+    JSON.stringify(result),
+    now,
+    id
+  );
+
+  createAuditLog({
+    action: "quota_source_card_update",
+    actor: request.admin.username,
+    resourceType: "quota_source_card",
+    resourceId: id
+  });
+
+  return { success: true, id, quota: result.quota, remaining: result.remaining, updatedAt: now };
+});
+
+app.delete("/api/admin/quota/cards/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const row = db.prepare("SELECT id FROM quota_source_cards WHERE id = ?").get(id);
+  if (!row) {
+    return reply.code(404).send({ message: "API 密钥不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  db.prepare("DELETE FROM quota_source_cards WHERE id = ?").run(id);
+  createAuditLog({
+    action: "quota_source_card_delete",
+    actor: request.admin.username,
+    resourceType: "quota_source_card",
+    resourceId: id
+  });
+
+  return { success: true, id };
+});
+
+app.post("/api/admin/quota/cards/export", { preHandler: requireAdmin }, async (request, reply) => {
+  const ids = Array.isArray(request.body?.ids) ? request.body.ids.map((id) => String(id).trim()).filter(Boolean) : [];
+  const exportAll = request.body?.all === true;
+  if (!exportAll && ids.length === 0) {
+    return reply.code(400).send({ message: "请选择要导出的 API 密钥", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const rows = exportAll
+    ? db.prepare("SELECT id, source_key, quota, remaining, status, created_at, updated_at FROM quota_source_cards ORDER BY created_at DESC").all()
+    : db.prepare(`SELECT id, source_key, quota, remaining, status, created_at, updated_at FROM quota_source_cards WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`).all(...ids);
+
+  const items = rows.map((row) => {
+    let apiKey = "";
+    try {
+      apiKey = decryptText(row.source_key);
+    } catch {
+      apiKey = row.source_key || "";
+    }
+    return {
+      id: row.id,
+      apiKey,
+      quota: row.quota,
+      remaining: row.remaining,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+
+  return { items };
+});
+
 app.get("/api/admin/quota/dashboard", { preHandler: requireAdmin }, async () => {
   const totalQuota = getTotalQuota(db);
   const allocatedQuota = getAllocatedQuota(db);
@@ -5213,26 +5324,21 @@ app.get("/api/public/quota/claim-warning", async () => {
 
 // ── Quota Public: External Status ──
 app.get("/api/public/quota/status", async () => {
-  try {
-    const response = await fetchExternalStatus();
-    return {
-      available: response?.available || "未知",
-      recentClaimed: Number(response?.recentClaimed) || 0,
-      recentWindowMinutes: Number(response?.recentWindowMinutes) || 0,
-      cachedAt: response?.cachedAt || "",
-      cacheTtlSeconds: Number(response?.cacheTtlSeconds) || 0,
-      warning: response?.warning || null
-    };
-  } catch {
-    return {
-      available: "未知",
-      recentClaimed: 0,
-      recentWindowMinutes: 0,
-      cachedAt: "",
-      cacheTtlSeconds: 0,
-      warning: null
-    };
+  const availableQuota = getAvailableQuota(db);
+  let available = "无货";
+  if (availableQuota > 1000) {
+    available = "1000多";
+  } else if (availableQuota > 100) {
+    available = "100多";
+  } else if (availableQuota > 0) {
+    available = "小于100";
   }
+
+  return {
+    available,
+    availableQuota,
+    cachedAt: nowIso()
+  };
 });
 
 // ── Quota Public: Claim ──

@@ -110,7 +110,7 @@ export const quotaErrorCodes = {
 
 // 频率限制默认值
 export const QUOTA_RATE_LIMIT_WINDOW = 60;
-export const QUOTA_RATE_LIMIT_MAX = 10;
+export const QUOTA_RATE_LIMIT_MAX = 60;
 export const QUOTA_LOCK_DURATION_MINUTES = 30;
 
 export const smsSiteStatuses = {

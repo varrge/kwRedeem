@@ -5176,6 +5176,39 @@ app.post("/api/admin/quota/sub-cards/:id/cancel", { preHandler: requireAdmin }, 
 });
 
 // ── Quota Admin: Get Settings ──
+app.post("/api/admin/quota/sub-cards/:id/unlock", { preHandler: requireAdmin }, async (request, reply) => {
+  const { id } = request.params;
+
+  const row = db.prepare("SELECT * FROM quota_sub_cards WHERE id = ?").get(id);
+  if (!row) {
+    return reply.code(404).send({ message: "子卡密不存在", code: quotaErrorCodes.CARD_INVALID });
+  }
+
+  if (row.status !== quotaSubCardStatuses.locked) {
+    return reply.code(400).send({ message: "该子卡密不是 locked 状态", code: quotaErrorCodes.VALIDATION_ERROR });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE quota_sub_cards
+    SET status = 'active', locked_at = NULL, locked_until = NULL, lock_reason = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(now, id);
+
+  createAuditLog({
+    action: "quota_sub_card_unlock",
+    actor: request.admin.username,
+    resourceType: "quota_sub_card",
+    resourceId: id,
+    detail: {
+      card_code: row.card_code,
+      operator: request.admin.username
+    }
+  });
+
+  return { success: true, id, newStatus: quotaSubCardStatuses.active };
+});
+
 app.get("/api/admin/quota/settings", { preHandler: requireAdmin }, async () => {
   const row = db.prepare(
     "SELECT low_stock_threshold, updated_at, updated_by FROM quota_settings WHERE id = 'default'"

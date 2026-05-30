@@ -1565,6 +1565,7 @@ async function refreshQuotaSubCards() {
       { label: "操作", render: (item) => `
         <button class="primary-btn small" type="button" onclick="viewQuotaSubCardDetail('${escapeHtml(item.id)}')">详情</button>
         ${item.status === "active" ? `<button class="ghost-btn small" style="padding:6px 12px;font-size:12px;color:var(--error)" type="button" onclick="cancelQuotaSubCard('${escapeHtml(item.id)}')">取消</button>` : ""}
+        ${item.status === "locked" ? `<button class="ghost-btn small" style="padding:6px 12px;font-size:12px" type="button" onclick="unlockQuotaSubCard('${escapeHtml(item.id)}')">恢复</button>` : ""}
       ` }
     ], items, "暂无子卡密");
   } catch (error) {
@@ -1632,8 +1633,20 @@ async function cancelQuotaSubCard(id) {
   }
 }
 
+async function unlockQuotaSubCard(id) {
+  if (!window.confirm("确认恢复该 locked 子卡密为 active？")) return;
+  try {
+    await api(`/api/admin/quota/sub-cards/${id}/unlock`, { method: "POST", body: JSON.stringify({}) });
+    setHint(refs.quotaSubCardResult, "子卡密已恢复为 active");
+    await refreshQuotaSubCards();
+  } catch (error) {
+    setHint(refs.quotaSubCardResult, `恢复失败：${error.message}`);
+  }
+}
+
 window.viewQuotaSubCardDetail = viewQuotaSubCardDetail;
 window.cancelQuotaSubCard = cancelQuotaSubCard;
+window.unlockQuotaSubCard = unlockQuotaSubCard;
 
 async function refreshAll() {
   if (!getToken()) return;

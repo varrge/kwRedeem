@@ -610,6 +610,24 @@ function startSmsPolling(orderNo) {
   }, 5000);
 }
 
+function startSmsLegacyPolling(cardKey) {
+  stopSmsPolling();
+  smsPollingInterval = setInterval(async () => {
+    try {
+      const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(cardKey)}`);
+      setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
+      if (["ready", "timeout"].includes(payload.verificationStatus)) {
+        stopSmsPolling();
+        smsSubmit.disabled = false;
+      }
+    } catch (error) {
+      stopSmsPolling();
+      smsSubmit.disabled = false;
+      setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
+    }
+  }, 5000);
+}
+
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopSmsPolling();
@@ -687,6 +705,18 @@ smsSubmit.addEventListener("click", async () => {
   setState(smsResult, "正在分配手机号并创建接码订单...");
 
   try {
+    if (verifiedSmsCard.legacyStaticEntry) {
+      const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(verifiedSmsCard.cardKey)}`);
+      currentSmsOrderNo = null;
+      setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
+      if (["pending", "busy"].includes(payload.verificationStatus)) {
+        startSmsLegacyPolling(verifiedSmsCard.cardKey);
+      } else {
+        smsSubmit.disabled = false;
+      }
+      return;
+    }
+
     const payload = await request("/api/public/sms/orders", {
       method: "POST",
       body: JSON.stringify({ cardKey: verifiedSmsCard.cardKey })

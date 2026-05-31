@@ -3920,7 +3920,26 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
 
   const card = getSmsCardDetail(parsed.data.cardKey.trim());
   if (!card) {
-    return reply.code(404).send({ message: "接码卡密无效或不存在" });
+    const entry = db.prepare("SELECT id, phone, sms_url, public_key, status FROM sms_entries WHERE public_key = ?").get(parsed.data.cardKey.trim());
+    if (!entry) {
+      return reply.code(404).send({ message: "接码卡密无效或不存在" });
+    }
+    if (["disabled", "void", "used"].includes(entry.status)) {
+      return reply.code(403).send({ message: "该接码卡密已停用" });
+    }
+    return {
+      valid: true,
+      legacyStaticEntry: true,
+      cardKey: entry.public_key,
+      site: {
+        id: "legacy_static",
+        name: "静态库存",
+        slug: "legacy_static"
+      },
+      status: entry.status,
+      hasActiveOrder: false,
+      latestOrder: null
+    };
   }
   if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(card.status)) {
     return reply.code(403).send({ message: "该接码卡密已停用" });
@@ -4223,7 +4242,7 @@ app.get("/api/public/sms/query", async (request, reply) => {
     return reply.code(404).send({ message: "卡密无效或不存在" });
   }
 
-  if (entry.status === "disabled" || entry.status === "void") {
+  if (entry.status === "disabled" || entry.status === "void" || entry.status === "used") {
     return reply.code(403).send({ message: "该卡密已停用" });
   }
 
@@ -4266,11 +4285,18 @@ app.get("/api/public/sms/query", async (request, reply) => {
     }
   }
 
+  if (verificationStatus === "ready" || verificationStatus === "timeout") {
+    db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ? AND status != 'used'")
+      .run(nowIso(), entry.id);
+  }
+
   return {
     phone: entry.phone,
     smsUrl: entry.sms_url,
     verificationStatus,
-    verificationCode
+    verificationCode,
+    siteName: "静态库存",
+    legacyStaticEntry: true
   };
 });
 
@@ -4289,6 +4315,8 @@ app.post("/api/internal/sms/verification", { preHandler: [requireInternalSecret]
 
   const { publicKey, verificationCode, smsEntryId } = parsed.data;
   setCacheEntry(publicKey, verificationCode, smsEntryId);
+  db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ? AND status != 'used'")
+    .run(nowIso(), smsEntryId);
 
   const smsOrder = db.prepare("SELECT id, card_id FROM sms_orders WHERE sms_entry_id = ? AND status IN (?, ?)")
     .get(smsEntryId, smsOrderStatuses.waiting_code, smsOrderStatuses.number_reserved);
@@ -4315,6 +4343,8 @@ app.post("/api/internal/sms/timeout", { preHandler: [requireInternalSecret] }, a
 
   const { publicKey } = parsed.data;
   setTimeoutEntry(publicKey);
+  db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE (id = ? OR public_key = ?) AND status != 'used'")
+    .run(nowIso(), publicKey, publicKey);
 
   const smsOrder = db.prepare("SELECT id, card_id, sms_entry_id FROM sms_orders WHERE sms_entry_id = ? AND status IN (?, ?)")
     .get(publicKey, smsOrderStatuses.waiting_code, smsOrderStatuses.number_reserved);

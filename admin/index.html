@@ -238,6 +238,31 @@
                   <input id="sms-site-slug" placeholder="例如 openai-sms" />
                 </label>
                 <label class="field">
+                  <span>资源来源</span>
+                  <select id="sms-site-inventory-source">
+                    <option value="sms_entries">静态库存</option>
+                    <option value="nexsms">NexSMS 动态买号</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>NexSMS API Key</span>
+                  <input id="sms-site-api-key" type="password" autocomplete="off" placeholder="仅 NexSMS 站点需要" />
+                </label>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>appId</span>
+                    <input id="sms-site-app-id" placeholder="项目 ID" />
+                  </label>
+                  <label class="field">
+                    <span>type</span>
+                    <input id="sms-site-card-type" type="number" min="1" max="3" value="1" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>expiry</span>
+                  <input id="sms-site-expiry" type="number" min="0" max="6" value="0" />
+                </label>
+                <label class="field">
                   <span>备注</span>
                   <textarea id="sms-site-note" rows="2" placeholder="站点说明"></textarea>
                 </label>

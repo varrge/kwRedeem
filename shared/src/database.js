@@ -529,10 +529,23 @@ function createSchema(db) {
   ensureColumn(db, "sites", "sms_country", "TEXT");
   ensureColumn(db, "sites", "sms_service", "TEXT");
   ensureColumn(db, "sites", "sms_operator", "TEXT");
+  ensureColumn(db, "sites", "sms_app_id", "TEXT");
+  ensureColumn(db, "sites", "sms_card_type", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "sites", "sms_expiry", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "sites", "sms_prefix_filter", "TEXT");
+  ensureColumn(db, "sites", "sms_exclude_prefix", "TEXT");
   ensureColumn(db, "sites", "sms_poll_interval_ms", "INTEGER NOT NULL DEFAULT 5000");
   ensureColumn(db, "sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 300000");
   ensureColumn(db, "sites", "sms_submit_phone_template", "TEXT");
   ensureColumn(db, "sites", "sms_submit_code_template", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_provider", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_api_key", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_app_id", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_card_type", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "sms_sites", "sms_expiry", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "sms_sites", "sms_prefix_filter", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_exclude_prefix", "TEXT");
+  ensureColumn(db, "sms_sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 300000");
   ensureColumn(db, "notification_monitors", "monitor_type", "TEXT NOT NULL DEFAULT 'http'");
   ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");
@@ -901,6 +914,17 @@ function seedDefaults(db) {
     INSERT OR IGNORE INTO quota_settings (id, low_stock_threshold, updated_at)
     VALUES ('default', 5, ?)
   `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO sms_sites (id, name, slug, inventory_source, status, note, created_at, updated_at)
+    VALUES ('sms_site_laoyou', '佬友站点', 'laoyou_site', 'nexsms', 'active', 'NexSMS Activate Pro 动态接码站点', ?, ?)
+  `).run(new Date().toISOString(), new Date().toISOString());
+
+  db.prepare(`
+    UPDATE sms_sites
+    SET sms_provider = COALESCE(sms_provider, 'nexsms')
+    WHERE id = 'sms_site_laoyou'
+  `).run();
 }
 
 export function getDb() {

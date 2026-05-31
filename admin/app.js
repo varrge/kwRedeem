@@ -87,6 +87,11 @@ const refs = {
   smsSiteForm: document.querySelector("#sms-site-form"),
   smsSiteName: document.querySelector("#sms-site-name"),
   smsSiteSlug: document.querySelector("#sms-site-slug"),
+  smsSiteInventorySource: document.querySelector("#sms-site-inventory-source"),
+  smsSiteApiKey: document.querySelector("#sms-site-api-key"),
+  smsSiteAppId: document.querySelector("#sms-site-app-id"),
+  smsSiteCardType: document.querySelector("#sms-site-card-type"),
+  smsSiteExpiry: document.querySelector("#sms-site-expiry"),
   smsSiteNote: document.querySelector("#sms-site-note"),
   smsSiteResult: document.querySelector("#sms-site-result"),
   smsSiteList: document.querySelector("#sms-site-list"),
@@ -502,13 +507,33 @@ async function refreshSmsSites() {
   }
   renderTable(refs.smsSiteList, [
     { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
-    { label: "资源来源", render: (item) => escapeHtml(item.inventorySource) },
+    { label: "资源来源", render: (item) => `${escapeHtml(item.inventorySource)}${item.smsProvider ? `<br/><code>${escapeHtml(item.smsProvider)} app:${escapeHtml(item.smsAppId || "-")} type:${escapeHtml(item.smsCardType || "-")} expiry:${escapeHtml(item.smsExpiry ?? "-")}</code>` : ""}` },
     { label: "卡密数", render: (item) => item.cardCount },
     { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "备注", render: (item) => escapeHtml(item.note || "-") }
+    { label: "备注", render: (item) => escapeHtml(item.note || "-") },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick="configNexSmsSite('${escapeHtml(item.id)}')">配置</button>` }
   ], items, "暂无接码站点");
 }
 
+async function configNexSmsSite(id) {
+  const apiKey = window.prompt("NexSMS API Key（留空则保留原密钥）：") || "";
+  const appId = window.prompt("NexSMS appId：");
+  if (!appId) return;
+  const cardType = Number(window.prompt("type（1首卡/2重启/3续费）：", "1") || 1);
+  const expiry = Number(window.prompt("expiry（0随机，1-6按文档）：", "0") || 0);
+  try {
+    await api(`/api/admin/sms/sites/${encodeURIComponent(id)}/nexsms`, {
+      method: "PATCH",
+      body: JSON.stringify({ apiKey: apiKey.trim(), appId: appId.trim(), cardType, expiry })
+    });
+    setHint(refs.smsSiteResult, "NexSMS 配置已保存");
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsSiteResult, error.message);
+  }
+}
+
+window.configNexSmsSite = configNexSmsSite;
 async function refreshSmsCards() {
   const payload = await api("/api/admin/sms/cards");
   renderTable(refs.smsCardList, [
@@ -2007,6 +2032,11 @@ refs.smsSiteForm?.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         name: refs.smsSiteName.value.trim(),
         slug: refs.smsSiteSlug.value.trim(),
+        inventorySource: refs.smsSiteInventorySource.value,
+        apiKey: refs.smsSiteApiKey.value.trim(),
+        appId: refs.smsSiteAppId.value.trim(),
+        cardType: Number(refs.smsSiteCardType.value || 1),
+        expiry: Number(refs.smsSiteExpiry.value || 0),
         note: refs.smsSiteNote.value.trim()
       })
     });

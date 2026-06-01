@@ -19,6 +19,7 @@ import { purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/ne
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
+import { isSmsCardStopped } from "../../shared/src/sms-status.js";
 import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
@@ -3924,7 +3925,7 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
     if (!entry) {
       return reply.code(404).send({ message: "接码卡密无效或不存在" });
     }
-    if (["disabled", "void", "used"].includes(entry.status)) {
+    if (isSmsCardStopped(entry.status)) {
       return reply.code(403).send({ message: "该接码卡密已停用" });
     }
     return {
@@ -3941,7 +3942,7 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
       latestOrder: null
     };
   }
-  if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(card.status)) {
+  if (isSmsCardStopped(card.status)) {
     return reply.code(403).send({ message: "该接码卡密已停用" });
   }
   if (card.site_status !== smsSiteStatuses.active) {
@@ -4204,7 +4205,7 @@ app.get("/api/public/sms/query", async (request, reply) => {
 
   const smsCard = getSmsCardDetail(key);
   if (smsCard) {
-    if ([smsCardStatuses.disabled, smsCardStatuses.void].includes(smsCard.status)) {
+    if (isSmsCardStopped(smsCard.status)) {
       return reply.code(403).send({ message: "该接码卡密已停用" });
     }
     let order = smsCard.current_order_id
@@ -4242,7 +4243,7 @@ app.get("/api/public/sms/query", async (request, reply) => {
     return reply.code(404).send({ message: "卡密无效或不存在" });
   }
 
-  if (entry.status === "disabled" || entry.status === "void" || entry.status === "used") {
+  if (isSmsCardStopped(entry.status)) {
     return reply.code(403).send({ message: "该卡密已停用" });
   }
 

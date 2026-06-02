@@ -407,8 +407,7 @@
                 </label>
               </div>
               <div class="claim-actions">
-                <button type="button" id="claim-btn" class="primary-btn">提取</button>
-                <button type="button" id="auto-claim-btn" class="ghost-btn">自动提取</button>
+                <button type="button" id="auto-claim-btn" class="primary-btn">自动提取</button>
               </div>
             </div>
             <div id="auto-claim-status" class="result muted auto-claim-status hidden"></div>
@@ -452,10 +451,13 @@
       let warningPollTimer = null;
       let stockStatusTimer = null;
       let autoClaimTimer = null;
+      let autoClaimQueueTimer = null;
       let autoClaimRunning = false;
       let autoClaimInFlight = false;
       let autoClaimTargetTotal = 0;
       let autoClaimClaimedTotal = 0;
+      let autoClaimSessionId = "";
+      let autoClaimQueued = false;
 
       // --- DOM ---
       const stockStatusValue = document.getElementById("stock-status-value");
@@ -476,7 +478,6 @@
       const warningMessage = document.getElementById("warning-message");
       const claimBatchCount = document.getElementById("claim-batch-count");
       const claimCount = document.getElementById("claim-count");
-      const claimBtn = document.getElementById("claim-btn");
       const autoClaimBtn = document.getElementById("auto-claim-btn");
       const autoClaimStatus = document.getElementById("auto-claim-status");
       const claimResult = document.getElementById("claim-result");
@@ -541,21 +542,44 @@
       function syncClaimControls() {
         const remainingQuota = getRemainingQuotaValue();
         const quotaDepleted = remainingQuota !== null && remainingQuota <= 0;
-        const shouldDisable = autoClaimRunning || quotaDepleted;
-        claimBtn.disabled = shouldDisable;
         claimBatchCount.disabled = autoClaimRunning || quotaDepleted;
         claimCount.disabled = autoClaimRunning || quotaDepleted;
         autoClaimBtn.textContent = autoClaimRunning ? "停止自动提取" : "自动提取";
         autoClaimBtn.disabled = quotaDepleted;
       }
 
-      function stopAutoClaim(reason, type = "muted") {
+      async function releaseAutoClaimSession() {
+        if (!autoClaimSessionId) return;
+        const sessionId = autoClaimSessionId;
+        autoClaimSessionId = "";
+        try {
+          await apiRequest(`/api/public/quota/auto-claim/session/${encodeURIComponent(sessionId)}`, {
+            method: "DELETE"
+          });
+        } catch {
+          // 会话会在后端自动过期，这里忽略释放失败。
+        }
+      }
+
+      function clearAutoClaimTimers() {
         if (autoClaimTimer) {
           clearInterval(autoClaimTimer);
           autoClaimTimer = null;
         }
+        if (autoClaimQueueTimer) {
+          clearInterval(autoClaimQueueTimer);
+          autoClaimQueueTimer = null;
+        }
+      }
+
+      function stopAutoClaim(reason, type = "muted", options = {}) {
+        clearAutoClaimTimers();
         autoClaimRunning = false;
         autoClaimInFlight = false;
+        autoClaimQueued = false;
+        if (options.releaseSession !== false) {
+          releaseAutoClaimSession();
+        }
         if (reason) {
           updateAutoClaimStatus(reason, type);
         }
@@ -721,9 +745,16 @@
           body: JSON.stringify({
             cardCode: verifiedCardCode,
             count,
-            warningAckId: warningAckId || ""
+            warningAckId: warningAckId || "",
+            autoSessionId: autoClaimSessionId || ""
           })
         });
+
+        if (result.queued) {
+          const positionText = result.queue?.position ? `当前排队第 ${result.queue.position} 位` : "正在等待可用名额";
+          updateAutoClaimStatus(`自动提取排队中：${positionText}`, "muted");
+          return result;
+        }
 
         if (result.success) {
           setState(claimResult, `提取成功，消耗 ${result.chargedQuota} 货，剩余 ${result.remaining} 货`, "success");
@@ -749,7 +780,7 @@
       }
 
       async function runAutoClaimAttempt() {
-        if (!autoClaimRunning || autoClaimInFlight) return;
+        if (!autoClaimRunning || autoClaimQueued || autoClaimInFlight) return;
         if (autoClaimClaimedTotal >= autoClaimTargetTotal) {
           stopAutoClaim(`自动提取已完成：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "success");
           return;
@@ -774,22 +805,67 @@
 
         try {
           const result = await performClaim(nextCount, { isAuto: true });
+          if (result?.queued) {
+            autoClaimQueued = true;
+            startAutoClaimQueuePolling();
+            return;
+          }
           const chargedQuota = Number(result?.chargedQuota) || nextCount;
           autoClaimClaimedTotal += chargedQuota;
           if (autoClaimClaimedTotal >= autoClaimTargetTotal) {
             stopAutoClaim(`自动提取已完成：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "success");
           } else {
-            updateAutoClaimStatus(`自动提取进行中：已累计 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货，6 秒后继续`, "success");
+            updateAutoClaimStatus(`自动提取进行中：已累计 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货，10 秒后继续`, "success");
           }
         } catch (error) {
           setState(claimResult, error.message, "error");
-          updateAutoClaimStatus(`自动提取遇到错误：${error.message}，6 秒后继续重试`, "error");
+          updateAutoClaimStatus(`自动提取遇到错误：${error.message}，10 秒后继续重试`, "error");
         } finally {
           autoClaimInFlight = false;
         }
       }
 
-      function startAutoClaim() {
+      async function createAutoClaimSession() {
+        const session = await apiRequest("/api/public/quota/auto-claim/session", {
+          method: "POST",
+          body: JSON.stringify({ cardCode: verifiedCardCode })
+        });
+        autoClaimSessionId = session.sessionId || "";
+        autoClaimQueued = session.status === "queued";
+        return session;
+      }
+
+      async function pollAutoClaimQueue() {
+        if (!autoClaimRunning || !autoClaimSessionId) return;
+        try {
+          const session = await apiRequest(`/api/public/quota/auto-claim/session/${encodeURIComponent(autoClaimSessionId)}`);
+          autoClaimQueued = session.status === "queued";
+          if (session.status === "active") {
+            if (autoClaimQueueTimer) {
+              clearInterval(autoClaimQueueTimer);
+              autoClaimQueueTimer = null;
+            }
+            updateAutoClaimStatus(`已进入自动提取阶段：已累计 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "success");
+            runAutoClaimAttempt();
+            if (!autoClaimTimer) {
+              autoClaimTimer = setInterval(runAutoClaimAttempt, 10000);
+            }
+            return;
+          }
+          const positionText = session.position ? `当前排队第 ${session.position} 位` : "正在等待可用名额";
+          updateAutoClaimStatus(`自动提取排队中：${positionText}，最多同时 ${session.maxActive || 3} 人`, "muted");
+        } catch (error) {
+          stopAutoClaim(error.message, "error", { releaseSession: false });
+        }
+      }
+
+      function startAutoClaimQueuePolling() {
+        if (autoClaimQueueTimer) return;
+        pollAutoClaimQueue();
+        autoClaimQueueTimer = setInterval(pollAutoClaimQueue, 3000);
+      }
+
+      async function startAutoClaim() {
         if (autoClaimRunning) {
           stopAutoClaim(`自动提取已手动停止：已累计提取 ${autoClaimClaimedTotal}/${autoClaimTargetTotal} 货`, "muted");
           return;
@@ -815,33 +891,34 @@
         autoClaimClaimedTotal = 0;
         autoClaimRunning = true;
         autoClaimInFlight = false;
-        updateAutoClaimStatus(`自动提取已启动：目标 ${autoClaimTargetTotal} 货，每次 ${batchCount} 货`, "muted");
+        autoClaimQueued = false;
+        autoClaimSessionId = "";
+        updateAutoClaimStatus(`自动提取已启动：目标 ${autoClaimTargetTotal} 货，每次 ${batchCount} 货，正在申请队列名额`, "muted");
         syncClaimControls();
-        runAutoClaimAttempt();
-        autoClaimTimer = setInterval(runAutoClaimAttempt, 6000);
-      }
-
-      claimBtn.addEventListener("click", async () => {
-        const count = getNumericValue(claimBatchCount);
-        if (!count || count < 1) {
-          setState(claimResult, "请输入有效的每次提取数量", "error");
-          return;
-        }
-
-        claimBtn.disabled = true;
-        autoClaimBtn.disabled = true;
-
         try {
-          await performClaim(count);
+          const session = await createAutoClaimSession();
+          if (session.status === "queued") {
+            const positionText = session.position ? `当前排队第 ${session.position} 位` : "正在等待可用名额";
+            updateAutoClaimStatus(`自动提取排队中：${positionText}，最多同时 ${session.maxActive || 3} 人`, "muted");
+            startAutoClaimQueuePolling();
+            return;
+          }
+          updateAutoClaimStatus(`已进入自动提取阶段：目标 ${autoClaimTargetTotal} 货，每次 ${batchCount} 货`, "muted");
+          runAutoClaimAttempt();
+          autoClaimTimer = setInterval(runAutoClaimAttempt, 10000);
         } catch (error) {
-          setState(claimResult, error.message, "error");
-        } finally {
-          syncClaimControls();
+          stopAutoClaim(error.message, "error", { releaseSession: false });
         }
-      });
+      }
 
       autoClaimBtn.addEventListener("click", () => {
         startAutoClaim();
+      });
+
+      window.addEventListener("beforeunload", () => {
+        if (!autoClaimSessionId) return;
+        const url = `${API_BASE}/api/public/quota/auto-claim/session/${encodeURIComponent(autoClaimSessionId)}`;
+        fetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
       });
 
       // --- Render Accounts ---

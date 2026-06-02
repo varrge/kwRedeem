@@ -43,6 +43,9 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
+const QUOTA_AUTO_CLAIM_MAX_ACTIVE = 3;
+const QUOTA_AUTO_CLAIM_SESSION_TTL_MS = 45_000;
+const QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS = 10_000;
 
 const updateState = {
   status: "idle",
@@ -54,6 +57,71 @@ const updateState = {
   hasUpdate: false,
   error: null
 };
+
+const quotaAutoClaimSessions = new Map();
+const quotaAutoClaimQueue = [];
+
+function cleanupQuotaAutoClaimSessions() {
+  const now = Date.now();
+  let changed = false;
+  for (const [id, session] of quotaAutoClaimSessions.entries()) {
+    if (session.status === "active" && now - session.lastSeenAt > QUOTA_AUTO_CLAIM_SESSION_TTL_MS) {
+      quotaAutoClaimSessions.delete(id);
+      changed = true;
+    }
+  }
+  for (let i = quotaAutoClaimQueue.length - 1; i >= 0; i -= 1) {
+    const session = quotaAutoClaimSessions.get(quotaAutoClaimQueue[i]);
+    if (!session || session.status !== "queued" || now - session.lastSeenAt > QUOTA_AUTO_CLAIM_SESSION_TTL_MS) {
+      if (session) quotaAutoClaimSessions.delete(session.id);
+      quotaAutoClaimQueue.splice(i, 1);
+      changed = true;
+    }
+  }
+  if (changed) {
+    promoteQuotaAutoClaimQueue();
+  }
+}
+
+function getActiveQuotaAutoClaimCount() {
+  let count = 0;
+  for (const session of quotaAutoClaimSessions.values()) {
+    if (session.status === "active") count += 1;
+  }
+  return count;
+}
+
+function getQuotaAutoClaimPosition(sessionId) {
+  const index = quotaAutoClaimQueue.indexOf(sessionId);
+  return index >= 0 ? index + 1 : null;
+}
+
+function serializeQuotaAutoClaimSession(session) {
+  return {
+    sessionId: session.id,
+    status: session.status,
+    position: session.status === "queued" ? getQuotaAutoClaimPosition(session.id) : null,
+    active: getActiveQuotaAutoClaimCount(),
+    maxActive: QUOTA_AUTO_CLAIM_MAX_ACTIVE
+  };
+}
+
+function promoteQuotaAutoClaimQueue() {
+  while (getActiveQuotaAutoClaimCount() < QUOTA_AUTO_CLAIM_MAX_ACTIVE && quotaAutoClaimQueue.length > 0) {
+    const sessionId = quotaAutoClaimQueue.shift();
+    const session = quotaAutoClaimSessions.get(sessionId);
+    if (session && session.status === "queued") {
+      session.status = "active";
+      session.lastSeenAt = Date.now();
+      session.startedAt = nowIso();
+    }
+  }
+}
+
+function touchQuotaAutoClaimSession(session) {
+  session.lastSeenAt = Date.now();
+  session.updatedAt = nowIso();
+}
 
 // --- Verification Cache ---
 const verificationCache = new Map();
@@ -102,6 +170,7 @@ function cleanupExpiredEntries() {
 }
 
 setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
+setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS);
 // --- End Verification Cache ---
 
 async function fetchStaticSmsCode(smsUrl) {
@@ -5591,12 +5660,86 @@ app.get("/api/public/quota/status", async () => {
   };
 });
 
+app.post("/api/public/quota/auto-claim/session", async (request, reply) => {
+  const schema = z.object({
+    cardCode: z.string().min(1)
+  });
+  const parsed = schema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      message: "请提供 cardCode",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  cleanupQuotaAutoClaimSessions();
+
+  const subCard = db.prepare("SELECT id, status FROM quota_sub_cards WHERE card_code = ?").get(parsed.data.cardCode);
+  if (!subCard || subCard.status === quotaSubCardStatuses.void) {
+    return reply.code(401).send({ message: "卡密无效", code: quotaErrorCodes.CARD_INVALID });
+  }
+  if (subCard.status === quotaSubCardStatuses.used) {
+    return reply.code(403).send({ message: "额度已用完", code: quotaErrorCodes.CARD_EXHAUSTED });
+  }
+
+  const session = {
+    id: nanoid(16),
+    cardCode: parsed.data.cardCode,
+    status: getActiveQuotaAutoClaimCount() < QUOTA_AUTO_CLAIM_MAX_ACTIVE ? "active" : "queued",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    startedAt: null,
+    lastSeenAt: Date.now()
+  };
+  if (session.status === "active") {
+    session.startedAt = nowIso();
+  } else {
+    quotaAutoClaimQueue.push(session.id);
+  }
+  quotaAutoClaimSessions.set(session.id, session);
+
+  return serializeQuotaAutoClaimSession(session);
+});
+
+app.get("/api/public/quota/auto-claim/session/:id", async (request, reply) => {
+  cleanupQuotaAutoClaimSessions();
+
+  const session = quotaAutoClaimSessions.get(request.params.id);
+  if (!session) {
+    return reply.code(404).send({
+      message: "自动提取会话已过期，请重新启动",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  touchQuotaAutoClaimSession(session);
+  promoteQuotaAutoClaimQueue();
+  return serializeQuotaAutoClaimSession(session);
+});
+
+app.delete("/api/public/quota/auto-claim/session/:id", async (request) => {
+  const sessionId = request.params.id;
+  quotaAutoClaimSessions.delete(sessionId);
+  const index = quotaAutoClaimQueue.indexOf(sessionId);
+  if (index >= 0) {
+    quotaAutoClaimQueue.splice(index, 1);
+  }
+  promoteQuotaAutoClaimQueue();
+
+  return {
+    success: true,
+    active: getActiveQuotaAutoClaimCount(),
+    maxActive: QUOTA_AUTO_CLAIM_MAX_ACTIVE
+  };
+});
+
 // ── Quota Public: Claim ──
 app.post("/api/public/quota/claim", async (request, reply) => {
   const schema = z.object({
     cardCode: z.string().min(1),
     count: z.number().int().min(1),
-    warningAckId: z.string().default("")
+    warningAckId: z.string().default(""),
+    autoSessionId: z.string().optional().default("")
   });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
@@ -5606,8 +5749,34 @@ app.post("/api/public/quota/claim", async (request, reply) => {
     });
   }
 
-  const { cardCode, count, warningAckId } = parsed.data;
+  const { cardCode, count, warningAckId, autoSessionId } = parsed.data;
   const sourceIp = request.ip || request.headers["x-forwarded-for"] || "";
+
+  if (!autoSessionId) {
+    return reply.code(400).send({
+      message: "请先启动自动提取并进入队列",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+
+  cleanupQuotaAutoClaimSessions();
+  const autoSession = quotaAutoClaimSessions.get(autoSessionId);
+  if (!autoSession || autoSession.cardCode !== cardCode) {
+    return reply.code(409).send({
+      message: "自动提取会话已过期，请重新启动",
+      code: quotaErrorCodes.VALIDATION_ERROR
+    });
+  }
+  touchQuotaAutoClaimSession(autoSession);
+  promoteQuotaAutoClaimQueue();
+  if (autoSession.status !== "active") {
+    return reply.code(202).send({
+      success: false,
+      queued: true,
+      message: "自动提取排队中，请等待进入提取阶段",
+      queue: serializeQuotaAutoClaimSession(autoSession)
+    });
+  }
 
   // Step 1: Look up sub-card by card_code, validate status is 'active'
   const subCard = db.prepare("SELECT * FROM quota_sub_cards WHERE card_code = ?").get(cardCode);

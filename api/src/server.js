@@ -104,6 +104,18 @@ function cleanupExpiredEntries() {
 setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
 // --- End Verification Cache ---
 
+async function fetchStaticSmsCode(smsUrl) {
+  if (!smsUrl) return "";
+
+  const response = await fetch(smsUrl, {
+    headers: { "User-Agent": BROWSER_UA },
+    signal: AbortSignal.timeout(5000)
+  });
+
+  if (!response.ok) return "";
+  return (await response.text()).trim();
+}
+
 await app.register(cors, {
   origin: true,
   credentials: true,
@@ -4263,26 +4275,14 @@ app.get("/api/public/sms/query", async (request, reply) => {
 
   if (verificationStatus === "pending" && entry.sms_url) {
     try {
-      const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
-      const pollResponse = await fetch(workerUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Internal-Secret": env.internalSecret
-        },
-        body: JSON.stringify({
-          publicKey: key,
-          smsUrl: entry.sms_url,
-          smsEntryId: String(entry.id)
-        }),
-        signal: AbortSignal.timeout(5000)
-      });
-
-      if (pollResponse.status === 503) {
-        verificationStatus = "busy";
+      const code = await fetchStaticSmsCode(entry.sms_url);
+      if (code) {
+        verificationStatus = "ready";
+        verificationCode = code;
+        setCacheEntry(key, code, String(entry.id));
       }
     } catch (error) {
-      console.error("[SMS Query] Failed to trigger poll:", error.message);
+      console.error("[SMS Query] Failed to fetch static SMS URL:", error.message);
     }
   }
 

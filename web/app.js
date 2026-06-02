@@ -32,10 +32,12 @@ let redeemStatusTimer = null;
 let pendingRedeemData = null;
 let verifiedSmsCard = null;
 let currentSmsOrderNo = null;
+let smsSubmitCooldownTimer = null;
 
 // --- Constants ---
 
 const LIVE_STATUS_POLL_MS = 2000;
+const SMS_LEGACY_RETRY_SECONDS = 60;
 
 const STATUS_LABELS = {
   active: "可用",
@@ -593,6 +595,31 @@ function stopSmsPolling() {
   }
 }
 
+function stopSmsSubmitCooldown() {
+  if (smsSubmitCooldownTimer) {
+    clearInterval(smsSubmitCooldownTimer);
+    smsSubmitCooldownTimer = null;
+  }
+  smsSubmit.textContent = "获取号码";
+}
+
+function startSmsSubmitCooldown(seconds = SMS_LEGACY_RETRY_SECONDS) {
+  stopSmsSubmitCooldown();
+  let remaining = seconds;
+  smsSubmit.disabled = true;
+  smsSubmit.textContent = `${remaining}s 后可再次获取`;
+
+  smsSubmitCooldownTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      stopSmsSubmitCooldown();
+      smsSubmit.disabled = false;
+      return;
+    }
+    smsSubmit.textContent = `${remaining}s 后可再次获取`;
+  }, 1000);
+}
+
 function startSmsPolling(orderNo) {
   stopSmsPolling();
   smsPollingInterval = setInterval(async () => {
@@ -660,6 +687,7 @@ function renderSmsOrderResult(payload) {
 smsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   stopSmsPolling();
+  stopSmsSubmitCooldown();
 
   const key = smsKeyInput.value.trim();
   if (!key) {
@@ -709,11 +737,7 @@ smsSubmit.addEventListener("click", async () => {
       const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(verifiedSmsCard.cardKey)}`);
       currentSmsOrderNo = null;
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
-      if (["pending", "busy"].includes(payload.verificationStatus)) {
-        startSmsLegacyPolling(verifiedSmsCard.cardKey);
-      } else {
-        smsSubmit.disabled = false;
-      }
+      startSmsSubmitCooldown();
       return;
     }
 

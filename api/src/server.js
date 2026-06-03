@@ -13,7 +13,7 @@ import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
-import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
+import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
@@ -1025,7 +1025,7 @@ async function callConfiguredApi(config, context) {
   const body = typeof renderedBody === "string"
     ? safeParseJson(renderedBody, renderedBody)
     : renderedBody;
-  const bodyString = config.method === "GET" ? "" : JSON.stringify(body);
+  const bodyString = config.method === "GET" ? "" : encodeRequestBody(body, headers);
   applyAuthHeaders(headers, { ...config, url }, bodyString);
 
   let response;

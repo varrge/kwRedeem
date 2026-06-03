@@ -871,6 +871,33 @@ function seedDefaults(db) {
       status: "disabled",
       createdAt: now,
       updatedAt: now
+    },
+    {
+      id: "site_preset_9977",
+      name: "9977",
+      slug: "9977",
+      verifyApiUrl: "https://9977ai.vip/",
+      submitApiUrl: "https://9977ai.vip/",
+      verifyHttpMethod: "POST",
+      submitHttpMethod: "POST",
+      verifyHeadersTemplate: '{"Content-Type":"application/x-www-form-urlencoded"}',
+      verifyBodyTemplate: '{"ajax":"1","action":"verify_code","activation_code":"{{sourceKey}}"}',
+      submitHeadersTemplate: '{"Content-Type":"application/x-www-form-urlencoded"}',
+      submitBodyTemplate: '{"ajax":"1","action":"submit_json","activation_code":"{{sourceKey}}","json_token":{{sessionString}}}',
+      abandonSubmitBodyTemplate: '{"ajax":"1","action":"submit_json","activation_code":"{{sourceKey}}","json_token":{{sessionString}}}',
+      authType: null,
+      authConfig: null,
+      verifySuccessRule: '{"kind":"json_path_equals","path":"is_new","value":"true"}',
+      verifyFailureRule: '{"is_new":false}',
+      submitSuccessRule: '{"kind":"json_path_equals","path":"success","value":"true"}',
+      submitFailureRule: '{"kind":"json_path_equals","path":"success","value":"false"}',
+      timeoutSeconds: 15,
+      maxRetries: 3,
+      productId: "prod_demo",
+      activationEndpointId: null,
+      status: "active",
+      createdAt: now,
+      updatedAt: now
     }
   ];
 

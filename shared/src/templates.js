@@ -37,6 +37,26 @@ export function renderJsonTemplate(template, payload) {
   return JSON.parse(renderTemplateString(JSON.stringify(parsed), payload));
 }
 
+export function shouldSendFormBody(headers = {}) {
+  return Object.entries(headers || {}).some(([key, value]) => (
+    key.toLowerCase() === "content-type"
+    && String(value || "").toLowerCase().includes("application/x-www-form-urlencoded")
+  ));
+}
+
+export function encodeRequestBody(body, headers = {}) {
+  if (shouldSendFormBody(headers)) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(body && typeof body === "object" ? body : {})) {
+      if (value === null || value === undefined) continue;
+      params.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+    }
+    return params.toString();
+  }
+
+  return typeof body === "string" ? body : JSON.stringify(body);
+}
+
 function valuesMatch(expected, actual) {
   if (expected && typeof expected === "object") {
     if (!actual || typeof actual !== "object") return false;

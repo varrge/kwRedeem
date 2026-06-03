@@ -3,7 +3,7 @@ import http from "node:http";
 import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { decryptText } from "../../shared/src/secure.js";
-import { evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
+import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
 import { getNumber, getStatus, setStatus } from "../../shared/src/fivesim-client.js";
 import {
@@ -359,7 +359,7 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   const body = typeof renderedBody === "string"
     ? safeParseJson(renderedBody, renderedBody)
     : renderedBody;
-  const bodyString = remoteConfig.method === "GET" ? "" : JSON.stringify(body);
+  const bodyString = remoteConfig.method === "GET" ? "" : encodeRequestBody(body, headers);
   applyAuthHeaders(headers, remoteConfig, bodyString);
 
   let response;

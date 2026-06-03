@@ -23,6 +23,9 @@ const confirmCdkeyEl = document.querySelector("#confirm-cdkey");
 const confirmAbandonEl = document.querySelector("#confirm-abandon");
 const confirmOkBtn = document.querySelector("#confirm-ok");
 const confirmCancelBtn = document.querySelector("#confirm-cancel");
+const smsConfirmModal = document.querySelector("#sms-confirm-modal");
+const smsConfirmOkBtn = document.querySelector("#sms-confirm-ok");
+const smsConfirmCancelBtn = document.querySelector("#sms-confirm-cancel");
 
 // --- State ---
 
@@ -33,6 +36,7 @@ let pendingRedeemData = null;
 let verifiedSmsCard = null;
 let currentSmsOrderNo = null;
 let smsSubmitCooldownTimer = null;
+let pendingSmsConfirmResolve = null;
 
 // --- Constants ---
 
@@ -472,6 +476,22 @@ function hideConfirmModal() {
   pendingRedeemData = null;
 }
 
+function showSmsConfirmModal() {
+  smsConfirmModal.classList.remove("hidden");
+  return new Promise((resolve) => {
+    pendingSmsConfirmResolve = resolve;
+  });
+}
+
+function resolveSmsConfirmModal(confirmed) {
+  smsConfirmModal.classList.add("hidden");
+  if (!pendingSmsConfirmResolve) return;
+
+  const resolve = pendingSmsConfirmResolve;
+  pendingSmsConfirmResolve = null;
+  resolve(confirmed);
+}
+
 async function executeRedeem(sessionPayload, abandonRemainingTime) {
   stopRedeemStatusPolling();
   setState(redeemResult, "正在提交兑换任务...");
@@ -529,6 +549,13 @@ confirmCancelBtn.addEventListener("click", hideConfirmModal);
 
 confirmModal.addEventListener("click", (event) => {
   if (event.target === confirmModal) hideConfirmModal();
+});
+
+smsConfirmOkBtn.addEventListener("click", () => resolveSmsConfirmModal(true));
+smsConfirmCancelBtn.addEventListener("click", () => resolveSmsConfirmModal(false));
+
+smsConfirmModal.addEventListener("click", (event) => {
+  if (event.target === smsConfirmModal) resolveSmsConfirmModal(false);
 });
 
 redeemForm.addEventListener("submit", async (event) => {
@@ -728,6 +755,9 @@ smsSubmit.addEventListener("click", async () => {
     setState(smsResult, "请先验证接码卡密", "error");
     return;
   }
+
+  const confirmed = await showSmsConfirmModal();
+  if (!confirmed) return;
 
   smsSubmit.disabled = true;
   setState(smsResult, "正在分配手机号并创建接码订单...");

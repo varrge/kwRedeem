@@ -217,6 +217,18 @@
       </div>
     </div>
 
+    <!-- SMS Confirm Modal -->
+    <div id="sms-confirm-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sms-confirm-title">
+      <div class="modal-box">
+        <h3 id="sms-confirm-title" class="modal-title">确定已经发送了验证码？</h3>
+        <p class="modal-desc">请先在目标平台点击发送验证码，确认后将开始获取验证码。</p>
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" id="sms-confirm-cancel">取消</button>
+          <button type="button" class="primary-btn" id="sms-confirm-ok">确定</button>
+        </div>
+      </div>
+    </div>
+
     <script src="./runtime-config.js"></script>
     <script type="module" src="./app.js"></script>
   </body>

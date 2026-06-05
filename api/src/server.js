@@ -12,6 +12,7 @@ import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
+import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
@@ -406,6 +407,46 @@ function validateSessionForSite(site, session) {
       throw new Error("666 站 session 缺少 user.email 字段，请重新获取完整 Session JSON");
     }
   }
+}
+
+function is987AiSite(siteSlug) {
+  return String(siteSlug || "").trim().toLowerCase() === "987ai";
+}
+
+function getJsonMessage(json) {
+  return json?.error_msg || json?.error || json?.message || json?.msg || "";
+}
+
+function shouldAllow987AiUsedGptReuse(remoteJson) {
+  if (!remoteJson || typeof remoteJson !== "object") return false;
+  const productType = String(remoteJson.product_api_type || "gpt").trim().toLowerCase() || "gpt";
+  const message = String(getJsonMessage(remoteJson));
+  return remoteJson.available === false
+    && productType === "gpt"
+    && typeof remoteJson.used_email === "string"
+    && remoteJson.used_email.trim()
+    && message.includes("已被使用");
+}
+
+function interpretVerifyResult(siteSlug, remoteResult, defaultCanRedeem) {
+  if (!is987AiSite(siteSlug)) {
+    return {
+      canRedeem: defaultCanRedeem,
+      message: getJsonMessage(remoteResult?.json)
+    };
+  }
+
+  if (shouldAllow987AiUsedGptReuse(remoteResult?.json)) {
+    return {
+      canRedeem: true,
+      message: "卡密已使用，可复用原账号继续充值"
+    };
+  }
+
+  return {
+    canRedeem: defaultCanRedeem,
+    message: getJsonMessage(remoteResult?.json)
+  };
 }
 
 const MEIMEI_SITE_SLUG = "meimei_site";
@@ -1336,14 +1377,17 @@ async function verifyCdkeyForPublic(publicKey) {
   }
 
   const supportOnly = isSupportOnlyCdkey(key.metadata);
+  const sourceKey = supportOnly ? "" : decryptText(key.source_key);
   const verifyContext = {
     publicKey: key.public_key,
-    sourceKey: supportOnly ? "" : decryptText(key.source_key),
+    sourceKey,
+    normalizedSourceKey: normalizeSourceKey(sourceKey),
     siteName: key.site_name,
     siteSlug: key.site_slug
   };
 
   let remoteResult = null;
+  let remoteMessage = "";
   let canRedeem = key.status === cdkeyStatuses.active && !supportOnly;
   const canSupportAccess = key.status === cdkeyStatuses.active
     && String(key.site_slug || "").trim().toLowerCase() === MEIMEI_SITE_SLUG;
@@ -1362,7 +1406,9 @@ async function verifyCdkeyForPublic(publicKey) {
 
     const failureMatched = key.verify_failure_rule ? evaluateRule(key.verify_failure_rule, remoteResult) : false;
     const successMatched = key.verify_success_rule ? evaluateRule(key.verify_success_rule, remoteResult) : remoteResult.ok;
-    canRedeem = !failureMatched && successMatched;
+    const interpreted = interpretVerifyResult(key.site_slug, remoteResult, !failureMatched && successMatched);
+    canRedeem = interpreted.canRedeem;
+    remoteMessage = interpreted.message;
   }
 
   const emailToken = getCdkeyEmailToken(key.metadata);
@@ -1384,13 +1430,8 @@ async function verifyCdkeyForPublic(publicKey) {
       canSupportAccess,
       hasBoundEmailToken: Boolean(emailToken),
       remoteAvailable: typeof remoteResult?.json?.available === "boolean" ? remoteResult.json.available : null,
-      remoteError: typeof remoteResult?.json?.error_msg === "string"
-        ? remoteResult.json.error_msg
-        : (typeof remoteResult?.json?.error === "string"
-          ? remoteResult.json.error
-          : (typeof remoteResult?.json?.message === "string"
-            ? remoteResult.json.message
-            : (typeof remoteResult?.json?.msg === "string" ? remoteResult.json.msg : ""))),
+      remoteMessage,
+      remoteError: remoteMessage,
       stockLevel: typeof remoteResult?.json?.stock_level === "string" ? remoteResult.json.stock_level : "",
       remoteResult: remoteResult ? {
         ok: remoteResult.ok,

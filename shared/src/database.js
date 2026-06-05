@@ -806,15 +806,15 @@ function seedDefaults(db) {
       id: "site_preset_987ai",
       name: "987AI",
       slug: "987ai",
-      verifyApiUrl: "https://api.987ai.vip/api/card-keys/{{sourceKey}}",
+      verifyApiUrl: "https://api.987ai.vip/api/card-keys/{{normalizedSourceKey}}",
       submitApiUrl: "https://api.987ai.vip/api/tasks",
       verifyHttpMethod: "GET",
       submitHttpMethod: "POST",
       verifyHeadersTemplate: "{}",
       verifyBodyTemplate: "{}",
       submitHeadersTemplate: "{}",
-      submitBodyTemplate: '{"card_key":"{{sourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":false}',
-      abandonSubmitBodyTemplate: '{"card_key":"{{sourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":true}',
+      submitBodyTemplate: '{"card_key":"{{normalizedSourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":false}',
+      abandonSubmitBodyTemplate: '{"card_key":"{{normalizedSourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":true}',
       authType: null,
       authConfig: null,
       verifySuccessRule: '{"kind":"json_path_equals","path":"available","value":"true"}',
@@ -904,6 +904,22 @@ function seedDefaults(db) {
   for (const presetSite of presetSites) {
     upsertSite(db, presetSite, { preserveExistingStatus: true });
   }
+
+  db.prepare(`
+    UPDATE sites
+    SET
+      verify_api_url = 'https://api.987ai.vip/api/card-keys/{{normalizedSourceKey}}',
+      verify_http_method = 'GET',
+      verify_body_template = '{}',
+      submit_api_url = 'https://api.987ai.vip/api/tasks',
+      submit_http_method = 'POST',
+      submit_body_template = '{"card_key":"{{normalizedSourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":false}',
+      abandon_submit_body_template = '{"card_key":"{{normalizedSourceKey}}","access_token":"{{session.accessToken}}","idp":"","force_recharge":true}',
+      query_api_url = 'https://api.987ai.vip/api/tasks/{{taskId}}',
+      task_id_path = 'task_id',
+      updated_at = ?
+    WHERE slug = '987ai'
+  `).run(now);
 
   db.prepare(`
     UPDATE cdkey_batches

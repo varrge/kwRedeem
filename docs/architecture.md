@@ -52,6 +52,7 @@
 `site.verify_*` 与 `site.submit_*` 都支持模板渲染。常用变量：
 
 - `{{sourceKey}}`
+- `{{normalizedSourceKey}}`
 - `{{publicKey}}`
 - `{{orderNo}}`
 - `{{sessionRaw}}`

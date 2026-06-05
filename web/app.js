@@ -264,7 +264,8 @@ function getApiMessage(job = {}) {
 function renderVerifyResult(payload) {
   const title = payload.canRedeem ? "验证成功，正在跳转..." : "卡密验证完成";
   const badgeStatus = payload.canRedeem ? payload.status : (payload.remoteAvailable === false ? "unavailable" : (payload.status || "unknown"));
-  const verifyMessage = payload.canRedeem ? "远端校验通过" : (payload.remoteError || "远端校验未通过");
+  const remoteMessage = payload.remoteMessage || payload.remoteError || "";
+  const verifyMessage = payload.canRedeem ? (remoteMessage || "远端校验通过") : (remoteMessage || "远端校验未通过");
 
   return `
     <div class="result-card">

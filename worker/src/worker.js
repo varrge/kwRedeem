@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
+import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText } from "../../shared/src/secure.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
@@ -71,6 +72,7 @@ function buildRequestContext(job, order, cdkey, site, endpoint) {
     orderNo: order.order_no,
     publicKey: cdkey.public_key,
     sourceKey,
+    normalizedSourceKey: normalizeSourceKey(sourceKey),
     session: sessionJson,
     sessionRaw,
     // Use this in templates when the remote field expects a JSON string, not an object.

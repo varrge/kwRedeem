@@ -92,6 +92,38 @@ function getUrlOrigin(url) {
   }
 }
 
+function is9977Site(site) {
+  return String(site?.slug || "").trim().toLowerCase() === "9977";
+}
+
+function getResponseSetCookies(headers) {
+  if (typeof headers?.getSetCookie === "function") {
+    return headers.getSetCookie();
+  }
+  const fallback = headers?.get("set-cookie");
+  return fallback ? [fallback] : [];
+}
+
+function compactCookieHeader(cookies = []) {
+  return cookies
+    .map((item) => String(item ?? "").split(";")[0].trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function mergeCookieHeaders(...values) {
+  const cookies = new Map();
+  for (const value of values) {
+    for (const item of String(value ?? "").split(";")) {
+      const cookie = item.trim();
+      if (!cookie || !cookie.includes("=")) continue;
+      const name = cookie.split("=")[0].trim();
+      if (name) cookies.set(name, cookie);
+    }
+  }
+  return Array.from(cookies.values()).join("; ");
+}
+
 function applyAuthHeaders(headers, remoteConfig, bodyString) {
   if (remoteConfig.authType === "bearer" && remoteConfig.authConfig) {
     headers.Authorization = `Bearer ${remoteConfig.authConfig}`;
@@ -120,6 +152,78 @@ function applyAuthHeaders(headers, remoteConfig, bodyString) {
       headers.Referer = headers.Referer || `${origin}/`;
     }
   }
+}
+
+async function fetch9977VerificationCookie(site, context) {
+  const renderedHeaders = renderJsonTemplate(site.verify_headers_template || "{}", context);
+  const renderedBody = renderJsonTemplate(site.verify_body_template || "{}", context);
+  const headers = typeof renderedHeaders === "string"
+    ? safeParseJson(renderedHeaders, {})
+    : renderedHeaders;
+  const body = typeof renderedBody === "string"
+    ? safeParseJson(renderedBody, renderedBody)
+    : renderedBody;
+  const method = site.verify_http_method || "POST";
+  const bodyString = method === "GET" ? "" : encodeRequestBody(body, headers);
+  const verifyConfig = {
+    url: site.verify_api_url,
+    method,
+    authType: site.auth_type,
+    authConfig: site.auth_config,
+    timeoutSeconds: site.timeout_seconds || 15
+  };
+  applyAuthHeaders(headers, verifyConfig, bodyString);
+
+  const origin = getUrlOrigin(site.verify_api_url);
+  const fetchHeaders = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "application/json, text/plain, */*",
+    "Referer": origin ? `${origin}/` : undefined,
+    "Origin": origin || undefined,
+    "Content-Type": "application/json",
+    ...headers
+  };
+  if (site.request_cookies) {
+    fetchHeaders.Cookie = site.request_cookies;
+  }
+
+  let response;
+  let responseText = "";
+  let responseJson = null;
+
+  try {
+    response = await fetch(site.verify_api_url, {
+      method,
+      headers: fetchHeaders,
+      body: method === "GET" ? undefined : bodyString,
+      signal: AbortSignal.timeout((site.timeout_seconds || 15) * 1000)
+    });
+    responseText = await response.text();
+    responseJson = safeParseJson(responseText, null);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 599,
+      text: error.message,
+      json: null,
+      cookieHeader: ""
+    };
+  }
+
+  const responseInfo = {
+    ok: response.ok,
+    status: response.status,
+    text: responseText,
+    json: responseJson
+  };
+  const failureMatched = site.verify_failure_rule ? evaluateRule(site.verify_failure_rule, responseInfo) : false;
+  const successMatched = site.verify_success_rule ? evaluateRule(site.verify_success_rule, responseInfo) : responseInfo.ok;
+
+  return {
+    ...responseInfo,
+    ok: response.ok && !failureMatched && successMatched,
+    cookieHeader: compactCookieHeader(getResponseSetCookies(response.headers))
+  };
 }
 
 function extractFailureMessages(responseInfo = {}) {
@@ -350,6 +454,21 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
   }
 
   const context = buildRequestContext(job, order, cdkey, site, endpoint);
+  let requestCookieHeader = site?.request_cookies || "";
+  if (is9977Site(site) && site?.verify_api_url) {
+    const verifyInfo = await fetch9977VerificationCookie(site, context);
+    if (!verifyInfo.ok) {
+      return {
+        ok: false,
+        status: verifyInfo.status,
+        text: verifyInfo.text,
+        json: verifyInfo.json,
+        phase: "verify_code"
+      };
+    }
+    requestCookieHeader = mergeCookieHeaders(requestCookieHeader, verifyInfo.cookieHeader);
+  }
+
   const bodyTemplate = context.abandonRemainingTime && remoteConfig.abandonBodyTemplate
     ? remoteConfig.abandonBodyTemplate
     : remoteConfig.bodyTemplate;
@@ -378,8 +497,8 @@ async function invokeEndpoint(job, order, cdkey, site, endpoint) {
       "Content-Type": "application/json",
       ...headers
     };
-    if (site?.request_cookies) {
-      fetchHeaders.Cookie = site.request_cookies;
+    if (requestCookieHeader) {
+      fetchHeaders.Cookie = requestCookieHeader;
     }
     response = await fetch(remoteConfig.url, {
       method: remoteConfig.method || "POST",

@@ -16,6 +16,7 @@ import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
+import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
 import { purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
@@ -44,6 +45,7 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
+const SMS_ORDER_TIMEOUT_MS = 60 * 1000;
 const QUOTA_AUTO_CLAIM_MAX_ACTIVE = 3;
 const QUOTA_AUTO_CLAIM_SESSION_TTL_MS = 45_000;
 const QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS = 10_000;
@@ -130,12 +132,16 @@ const CACHE_TTL_MS = 300000; // 5 分钟
 const CACHE_CLEANUP_INTERVAL_MS = 60000; // 60 秒
 
 function setCacheEntry(publicKey, verificationCode, smsEntryId) {
+  const normalizedCode = extractSmsVerificationCode(verificationCode);
+  if (!normalizedCode) return false;
+
   verificationCache.set(publicKey, {
-    verificationCode,
+    verificationCode: normalizedCode,
     fetchedAt: new Date().toISOString(),
     smsEntryId,
     status: "ready"
   });
+  return true;
 }
 
 function setTimeoutEntry(publicKey) {
@@ -183,7 +189,8 @@ async function fetchStaticSmsCode(smsUrl) {
   });
 
   if (!response.ok) return "";
-  return (await response.text()).trim();
+  const text = (await response.text()).trim();
+  return extractSmsVerificationCode(text) || "";
 }
 
 await app.register(cors, {
@@ -194,6 +201,13 @@ await app.register(cors, {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getSmsOrderExpiresAt(providerEndTime = null, timeoutMs = SMS_ORDER_TIMEOUT_MS) {
+  const cappedTimeoutMs = Math.min(Number(timeoutMs) || SMS_ORDER_TIMEOUT_MS, SMS_ORDER_TIMEOUT_MS);
+  const fallbackTime = Date.now() + cappedTimeoutMs;
+  const providerTime = providerEndTime ? new Date(providerEndTime).getTime() : NaN;
+  return new Date(Number.isFinite(providerTime) ? Math.min(providerTime, fallbackTime) : fallbackTime).toISOString();
 }
 
 function ensureLogsDir() {
@@ -667,25 +681,33 @@ function reserveSmsEntryForOrder() {
 }
 
 function readSmsOrderVerification(order) {
+  const storedCode = extractSmsVerificationCode(order?.verification_code);
   if (!order?.sms_entry_id) {
     return {
-      verificationStatus: order?.status === smsOrderStatuses.ready ? "ready" : "pending",
-      verificationCode: order?.verification_code || null
+      verificationStatus: order?.status === smsOrderStatuses.timeout ? "timeout" : (storedCode ? "ready" : "pending"),
+      verificationCode: storedCode
     };
   }
 
   const cacheEntry = getCacheEntry(order.sms_entry_id);
   if (!cacheEntry) {
     return {
-      verificationStatus: order?.status === smsOrderStatuses.timeout ? "timeout" : (order?.status === smsOrderStatuses.ready ? "ready" : "pending"),
-      verificationCode: order?.verification_code || null
+      verificationStatus: order?.status === smsOrderStatuses.timeout ? "timeout" : (storedCode ? "ready" : "pending"),
+      verificationCode: storedCode
     };
   }
 
   if (cacheEntry.status === "ready") {
+    const cachedCode = extractSmsVerificationCode(cacheEntry.verificationCode);
+    if (!cachedCode) {
+      return {
+        verificationStatus: storedCode ? "ready" : "pending",
+        verificationCode: storedCode
+      };
+    }
     return {
       verificationStatus: "ready",
-      verificationCode: cacheEntry.verificationCode
+      verificationCode: cachedCode
     };
   }
 
@@ -703,7 +725,7 @@ function readSmsOrderVerification(order) {
 }
 
 async function syncNexSmsOrder(order) {
-  if (!order || order.verification_code || !order.provider_payload) return null;
+  if (!order || extractSmsVerificationCode(order.verification_code) || !order.provider_payload) return null;
   const payload = safeParseJson(order.provider_payload, {});
   if (payload.provider !== "nexsms" || !payload.apiKeyEncrypted || !order.phone) return null;
 
@@ -716,7 +738,7 @@ async function syncNexSmsOrder(order) {
 
   const records = await getPremiumSmsRecords(apiKey, order.phone);
   const record = records.find((item) => item.code || item.sms);
-  const code = record?.code || "";
+  const code = extractSmsVerificationCode(record?.code || record?.sms) || "";
   if (!code) return null;
 
   db.prepare(`
@@ -4169,7 +4191,7 @@ app.post("/api/public/sms/orders", async (request, reply) => {
         expiry: card.sms_expiry || 0,
         purchase: purchased
       }),
-      purchased.endTime || new Date(Date.now() + Number(card.sms_poll_timeout_ms || 300000)).toISOString(),
+      getSmsOrderExpiresAt(purchased.endTime, card.sms_poll_timeout_ms),
       now,
       now
     );
@@ -4203,7 +4225,7 @@ app.post("/api/public/sms/orders", async (request, reply) => {
       smsEntry.sms_url,
       smsOrderStatuses.waiting_code,
       JSON.stringify({ source: "sms_entries" }),
-      new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      getSmsOrderExpiresAt(),
       now,
       now
     );
@@ -4267,7 +4289,61 @@ app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
     createSmsOrderEvent(order.id, "nexsms_sync_error", { message: error.message });
   });
 
+  let verification = readSmsOrderVerification(order);
   if (
+    verification.verificationStatus !== "ready" &&
+    order.sms_url &&
+    ![smsOrderStatuses.refunded, smsOrderStatuses.timeout, smsOrderStatuses.failed, smsOrderStatuses.cancelled].includes(order.status)
+  ) {
+    try {
+      const code = await fetchStaticSmsCode(order.sms_url);
+      if (code) {
+        if (order.sms_entry_id) {
+          setCacheEntry(String(order.sms_entry_id), code, String(order.sms_entry_id));
+        }
+        verification = { verificationStatus: "ready", verificationCode: code };
+      }
+    } catch (error) {
+      createSmsOrderEvent(order.id, "sms_url_fetch_error", { message: error.message });
+    }
+  }
+
+  if (
+    verification.verificationStatus !== "ready" &&
+    order.status === smsOrderStatuses.ready &&
+    order.verification_code &&
+    !extractSmsVerificationCode(order.verification_code)
+  ) {
+    db.prepare(`
+      UPDATE sms_orders
+      SET status = ?, verification_code = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(smsOrderStatuses.waiting_code, nowIso(), order.id);
+    createSmsOrderEvent(order.id, "invalid_verification_ignored", { value: order.verification_code });
+    order.status = smsOrderStatuses.waiting_code;
+    order.verification_code = null;
+  }
+
+  if (
+    verification.verificationStatus === "ready" &&
+    (order.status !== smsOrderStatuses.ready || order.verification_code !== verification.verificationCode)
+  ) {
+    db.prepare(`
+      UPDATE sms_orders
+      SET status = ?, verification_code = ?, updated_at = ?
+      WHERE id = ?
+    `).run(smsOrderStatuses.ready, verification.verificationCode, nowIso(), order.id);
+    releaseSmsCard(order.card_id, smsCardStatuses.used);
+    if (order.sms_entry_id) {
+      db.prepare(`UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ?`).run(nowIso(), order.sms_entry_id);
+    }
+    createSmsOrderEvent(order.id, "verification_ready", { verificationCode: verification.verificationCode });
+    order.status = smsOrderStatuses.ready;
+    order.verification_code = verification.verificationCode;
+  }
+
+  if (
+    verification.verificationStatus !== "ready" &&
     order.expires_at &&
     new Date(order.expires_at) <= new Date() &&
     ![smsOrderStatuses.ready, smsOrderStatuses.refunded, smsOrderStatuses.timeout].includes(order.status)
@@ -4283,22 +4359,6 @@ app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
     }
     createSmsOrderEvent(order.id, "expired_used", null);
     order.status = smsOrderStatuses.refunded;
-  }
-
-  const verification = readSmsOrderVerification(order);
-  if (verification.verificationStatus === "ready" && order.status !== smsOrderStatuses.ready) {
-    db.prepare(`
-      UPDATE sms_orders
-      SET status = ?, verification_code = ?, updated_at = ?
-      WHERE id = ?
-    `).run(smsOrderStatuses.ready, verification.verificationCode, nowIso(), order.id);
-    releaseSmsCard(order.card_id, smsCardStatuses.used);
-    if (order.sms_entry_id) {
-      db.prepare(`UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ?`).run(nowIso(), order.sms_entry_id);
-    }
-    createSmsOrderEvent(order.id, "verification_ready", { verificationCode: verification.verificationCode });
-    order.status = smsOrderStatuses.ready;
-    order.verification_code = verification.verificationCode;
   }
 
   if (verification.verificationStatus === "timeout" && ![smsOrderStatuses.timeout, smsOrderStatuses.refunded, smsOrderStatuses.ready].includes(order.status)) {
@@ -4425,7 +4485,12 @@ app.post("/api/internal/sms/verification", { preHandler: [requireInternalSecret]
   }
 
   const { publicKey, verificationCode, smsEntryId } = parsed.data;
-  setCacheEntry(publicKey, verificationCode, smsEntryId);
+  const normalizedCode = extractSmsVerificationCode(verificationCode);
+  if (!normalizedCode) {
+    return { stored: false, reason: "verification_code_not_found" };
+  }
+
+  setCacheEntry(publicKey, normalizedCode, smsEntryId);
   db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ? AND status != 'used'")
     .run(nowIso(), smsEntryId);
 
@@ -4433,10 +4498,10 @@ app.post("/api/internal/sms/verification", { preHandler: [requireInternalSecret]
     .get(smsEntryId, smsOrderStatuses.waiting_code, smsOrderStatuses.number_reserved);
   if (smsOrder) {
     db.prepare("UPDATE sms_orders SET status = ?, verification_code = ?, updated_at = ? WHERE id = ?")
-      .run(smsOrderStatuses.ready, verificationCode, nowIso(), smsOrder.id);
+      .run(smsOrderStatuses.ready, normalizedCode, nowIso(), smsOrder.id);
     releaseSmsCard(smsOrder.card_id, smsCardStatuses.used);
     db.prepare("UPDATE sms_entries SET status = 'used', updated_at = ? WHERE id = ?").run(nowIso(), smsEntryId);
-    createSmsOrderEvent(smsOrder.id, "verification_ready", { verificationCode });
+    createSmsOrderEvent(smsOrder.id, "verification_ready", { verificationCode: normalizedCode });
   }
 
   return { stored: true };

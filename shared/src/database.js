@@ -534,8 +534,8 @@ function createSchema(db) {
   ensureColumn(db, "sites", "sms_expiry", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "sites", "sms_prefix_filter", "TEXT");
   ensureColumn(db, "sites", "sms_exclude_prefix", "TEXT");
-  ensureColumn(db, "sites", "sms_poll_interval_ms", "INTEGER NOT NULL DEFAULT 5000");
-  ensureColumn(db, "sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 300000");
+  ensureColumn(db, "sites", "sms_poll_interval_ms", "INTEGER NOT NULL DEFAULT 10000");
+  ensureColumn(db, "sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 60000");
   ensureColumn(db, "sites", "sms_submit_phone_template", "TEXT");
   ensureColumn(db, "sites", "sms_submit_code_template", "TEXT");
   ensureColumn(db, "sms_sites", "sms_provider", "TEXT");
@@ -545,7 +545,7 @@ function createSchema(db) {
   ensureColumn(db, "sms_sites", "sms_expiry", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "sms_sites", "sms_prefix_filter", "TEXT");
   ensureColumn(db, "sms_sites", "sms_exclude_prefix", "TEXT");
-  ensureColumn(db, "sms_sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 300000");
+  ensureColumn(db, "sms_sites", "sms_poll_timeout_ms", "INTEGER NOT NULL DEFAULT 60000");
   ensureColumn(db, "notification_monitors", "monitor_type", "TEXT NOT NULL DEFAULT 'http'");
   ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");

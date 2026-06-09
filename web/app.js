@@ -41,6 +41,7 @@ let pendingSmsConfirmResolve = null;
 // --- Constants ---
 
 const LIVE_STATUS_POLL_MS = 2000;
+const SMS_POLL_INTERVAL_MS = 10000;
 const SMS_LEGACY_RETRY_SECONDS = 60;
 
 const STATUS_LABELS = {
@@ -662,7 +663,7 @@ function startSmsPolling(orderNo) {
     } catch (error) {
       // 轮询请求失败时不中断，下一周期继续
     }
-  }, 5000);
+  }, SMS_POLL_INTERVAL_MS);
 }
 
 function startSmsLegacyPolling(cardKey) {
@@ -680,7 +681,7 @@ function startSmsLegacyPolling(cardKey) {
       smsSubmit.disabled = false;
       setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
     }
-  }, 5000);
+  }, SMS_POLL_INTERVAL_MS);
 }
 
 document.addEventListener("visibilitychange", () => {

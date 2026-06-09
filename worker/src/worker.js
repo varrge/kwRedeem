@@ -3,6 +3,7 @@ import http from "node:http";
 import { getDb } from "../../shared/src/database.js";
 import { env } from "../../shared/src/env.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
+import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
 import { decryptText } from "../../shared/src/secure.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
@@ -774,9 +775,15 @@ async function processFiveSimJob(job, order, cdkey, site) {
   }
 
   // ── Step 3: Poll for verification code ──
-  const pollIntervalMs = Number(site.sms_poll_interval_ms) || 5000;
-  const pollTimeoutMs = Number(site.sms_poll_timeout_ms) || 300000;
-  const maxPollRounds = Math.floor(pollTimeoutMs / pollIntervalMs);
+  const configuredPollIntervalMs = Number(site.sms_poll_interval_ms);
+  const configuredPollTimeoutMs = Number(site.sms_poll_timeout_ms);
+  const pollIntervalMs = Number.isFinite(configuredPollIntervalMs) && configuredPollIntervalMs > 0
+    ? Math.max(configuredPollIntervalMs, POLL_INTERVAL_MS)
+    : POLL_INTERVAL_MS;
+  const pollTimeoutMs = Number.isFinite(configuredPollTimeoutMs) && configuredPollTimeoutMs > 0
+    ? Math.min(configuredPollTimeoutMs, POLL_TIMEOUT_MS)
+    : POLL_TIMEOUT_MS;
+  const maxPollRounds = Math.max(1, Math.floor(pollTimeoutMs / pollIntervalMs));
 
   let smsCode = null;
 
@@ -1495,8 +1502,8 @@ async function quotaLowStockTick() {
 
 const activePollTasks = new Map(); // publicKey → PollTask
 const MAX_ACTIVE_POLLS = 100;
-const POLL_INTERVAL_MS = 5000;
-const POLL_TIMEOUT_MS = 300000; // 5 分钟
+const POLL_INTERVAL_MS = 10000;
+const POLL_TIMEOUT_MS = 60000; // 1 分钟
 const POLL_HTTP_TIMEOUT_MS = 10000; // 10 秒
 
 /**
@@ -1590,8 +1597,9 @@ class PollTask {
 
       if (response.ok) {
         const text = (await response.text()).trim();
-        if (text) {
-          await submitVerification(this.publicKey, text, this.smsEntryId);
+        const verificationCode = extractSmsVerificationCode(text);
+        if (verificationCode) {
+          await submitVerification(this.publicKey, verificationCode, this.smsEntryId);
           this.stop();
           return;
         }

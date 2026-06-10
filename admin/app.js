@@ -139,6 +139,9 @@ const refs = {
   quotaSubCardCount: document.querySelector("#quota-sub-card-count"),
   quotaSubCardResult: document.querySelector("#quota-sub-card-result"),
   quotaSubCardList: document.querySelector("#quota-sub-card-list"),
+  quotaSubCardStatus: document.querySelector("#quota-sub-card-status"),
+  quotaSubCardPageSize: document.querySelector("#quota-sub-card-page-size"),
+  quotaSubCardPagination: document.querySelector("#quota-sub-card-pagination"),
   quotaSubCardRefreshBtn: document.querySelector("#quota-sub-card-refresh-btn"),
   quotaSubCardCopyBtn: document.querySelector("#quota-sub-card-copy-btn"),
   quotaSubCardExportBtn: document.querySelector("#quota-sub-card-export-btn"),
@@ -154,6 +157,12 @@ const refs = {
 let autoRefreshTimer = null;
 let updatePollTimer = null;
 let currentTab = "dashboard";
+const quotaSubCardState = {
+  page: 1,
+  pageSize: Number(refs.quotaSubCardPageSize?.value || 50),
+  status: refs.quotaSubCardStatus?.value || "",
+  total: 0
+};
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -1571,11 +1580,56 @@ async function deleteQuotaSourceCard(id) {
 window.editQuotaSourceCard = editQuotaSourceCard;
 window.deleteQuotaSourceCard = deleteQuotaSourceCard;
 
-async function refreshQuotaSubCards() {
+function renderQuotaSubCardPagination() {
+  if (!refs.quotaSubCardPagination) return;
+  const total = quotaSubCardState.total;
+  const pageSize = Math.max(1, quotaSubCardState.pageSize);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, quotaSubCardState.page), totalPages);
+  const start = total ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, page * pageSize);
+
+  refs.quotaSubCardPagination.innerHTML = `
+    <div class="pagination-summary">显示 ${start}-${end} / ${total} 张子卡密</div>
+    <div class="pagination-actions">
+      <button class="ghost-btn small" type="button" data-quota-sub-page="1" ${page <= 1 ? "disabled" : ""}>首页</button>
+      <button class="ghost-btn small" type="button" data-quota-sub-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>上一页</button>
+      <span class="pagination-page">第 ${page} / ${totalPages} 页</span>
+      <button class="ghost-btn small" type="button" data-quota-sub-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>下一页</button>
+      <button class="ghost-btn small" type="button" data-quota-sub-page="${totalPages}" ${page >= totalPages ? "disabled" : ""}>末页</button>
+    </div>
+  `;
+}
+
+async function refreshQuotaSubCards(page = quotaSubCardState.page) {
   if (!refs.quotaSubCardList) return;
   try {
-    const payload = await api("/api/admin/quota/sub-cards");
+    quotaSubCardState.page = Math.max(1, Math.floor(Number(page) || 1));
+    const params = new URLSearchParams({
+      page: String(quotaSubCardState.page),
+      pageSize: String(quotaSubCardState.pageSize)
+    });
+    if (quotaSubCardState.status) {
+      params.set("status", quotaSubCardState.status);
+    }
+
+    const payload = await api(`/api/admin/quota/sub-cards?${params.toString()}`);
     const items = payload.subCards || [];
+    const total = Number(payload.total ?? items.length);
+    const responsePageSize = Number(payload.pageSize ?? quotaSubCardState.pageSize);
+    const responsePage = Number(payload.page ?? quotaSubCardState.page);
+    const totalPages = Math.max(1, Math.ceil(total / Math.max(1, responsePageSize)));
+    const normalizedPage = Math.min(Math.max(1, responsePage), totalPages);
+
+    quotaSubCardState.total = total;
+    quotaSubCardState.pageSize = responsePageSize;
+    quotaSubCardState.page = normalizedPage;
+
+    if (total > 0 && responsePage !== normalizedPage) {
+      await refreshQuotaSubCards(normalizedPage);
+      return;
+    }
+
     renderTable(refs.quotaSubCardList, [
       { label: "", render: (item) => `<input type="checkbox" class="quota-sub-check" value="${escapeHtml(item.id)}" data-code="${escapeHtml(item.cardCode)}" data-total="${item.totalQuota ?? 0}" data-used="${item.usedQuota ?? 0}" data-status="${escapeHtml(item.status)}" />` },
       { label: "编码", render: (item) => `<code>${escapeHtml(item.cardCode)}</code>` },
@@ -1593,8 +1647,10 @@ async function refreshQuotaSubCards() {
         ${item.status === "locked" ? `<button class="ghost-btn small" style="padding:6px 12px;font-size:12px" type="button" onclick="unlockQuotaSubCard('${escapeHtml(item.id)}')">恢复</button>` : ""}
       ` }
     ], items, "暂无子卡密");
+    renderQuotaSubCardPagination();
   } catch (error) {
     refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+    if (refs.quotaSubCardPagination) refs.quotaSubCardPagination.innerHTML = "";
   }
 }
 
@@ -2388,7 +2444,7 @@ if (refs.quotaSubCardForm) {
       });
       setHint(refs.quotaSubCardResult, `成功创建 ${payload.createdCount ?? count} 张子卡密`);
       refs.quotaSubCardForm.reset();
-      await refreshQuotaSubCards();
+      await refreshQuotaSubCards(1);
       await refreshQuotaDashboard();
     } catch (error) {
       setHint(refs.quotaSubCardResult, `创建失败：${error.message}`);
@@ -2402,6 +2458,40 @@ if (refs.quotaSubCardRefreshBtn) {
     refreshQuotaSubCards().catch((error) => {
       if (refs.quotaSubCardList) {
         refs.quotaSubCardList.innerHTML = `<p class="hint centered">刷新失败：${escapeHtml(error.message)}</p>`;
+      }
+    });
+  });
+}
+
+if (refs.quotaSubCardStatus) {
+  refs.quotaSubCardStatus.addEventListener("change", () => {
+    quotaSubCardState.status = refs.quotaSubCardStatus.value;
+    refreshQuotaSubCards(1).catch((error) => {
+      if (refs.quotaSubCardList) {
+        refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+      }
+    });
+  });
+}
+
+if (refs.quotaSubCardPageSize) {
+  refs.quotaSubCardPageSize.addEventListener("change", () => {
+    quotaSubCardState.pageSize = Number(refs.quotaSubCardPageSize.value || 50);
+    refreshQuotaSubCards(1).catch((error) => {
+      if (refs.quotaSubCardList) {
+        refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+      }
+    });
+  });
+}
+
+if (refs.quotaSubCardPagination) {
+  refs.quotaSubCardPagination.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-quota-sub-page]");
+    if (!button || button.disabled) return;
+    refreshQuotaSubCards(Number(button.dataset.quotaSubPage)).catch((error) => {
+      if (refs.quotaSubCardList) {
+        refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
       }
     });
   });

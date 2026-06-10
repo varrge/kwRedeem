@@ -711,12 +711,24 @@
             <div class="card-header">
               <h3>子卡密列表</h3>
               <div class="header-actions">
+                <select id="quota-sub-card-status" class="small-select" aria-label="子卡密状态">
+                  <option value="">全部状态</option>
+                  <option value="active">active</option>
+                  <option value="locked">locked</option>
+                  <option value="void">void</option>
+                </select>
+                <select id="quota-sub-card-page-size" class="small-select" aria-label="每页数量">
+                  <option value="20">20 / 页</option>
+                  <option value="50" selected>50 / 页</option>
+                  <option value="100">100 / 页</option>
+                </select>
                 <button id="quota-sub-card-copy-btn" class="ghost-btn small">批量复制</button>
                 <button id="quota-sub-card-export-btn" class="ghost-btn small">批量导出</button>
                 <button id="quota-sub-card-refresh-btn" class="ghost-btn small">刷新</button>
               </div>
             </div>
-            <div id="quota-sub-card-list" class="table-wrapper"></div>
+            <div id="quota-sub-card-list" class="table-wrapper quota-sub-card-table"></div>
+            <div id="quota-sub-card-pagination" class="table-pagination"></div>
           </div>
 
           <div class="card mt-24 hidden" id="quota-sub-card-detail-card">

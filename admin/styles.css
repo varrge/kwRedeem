@@ -341,6 +341,51 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   overflow-x: auto;
 }
 
+.quota-sub-card-table {
+  max-height: min(560px, 65vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.quota-sub-card-table table {
+  min-width: 880px;
+}
+
+.quota-sub-card-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(11, 17, 37, 0.98);
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pagination-summary,
+.pagination-page {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.table-pagination .ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -394,7 +439,7 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
   border: 1px solid var(--line);
 }
 
-.header-actions { display: flex; gap: 8px; align-items: center; }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .small-select { padding: 6px 12px; font-size: 13px; width: auto; }
 
 .health-dot {

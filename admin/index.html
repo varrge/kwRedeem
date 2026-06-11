@@ -75,6 +75,9 @@
           <button class="nav-item" data-tab="quota">
             <span class="icon">💰</span> 提号系统
           </button>
+          <button class="nav-item" data-tab="sub2api">
+            <span class="icon">🔗</span> Sub2api 邀请码
+          </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
@@ -753,6 +756,90 @@
               <button type="submit" class="primary-btn">保存设置</button>
             </form>
             <div id="quota-settings-result" class="hint"></div>
+          </div>
+        </section>
+
+        <!-- Sub2api Invites -->
+        <section class="tab-panel hidden" data-panel="sub2api">
+          <div class="content-header">
+            <h2>Sub2api 邀请码</h2>
+            <p>远程连接配置与账号邀请码管理</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3 id="sub2api-connection-form-title">添加远程连接</h3></div>
+              <form id="sub2api-connection-form" class="stack">
+                <input id="sub2api-connection-edit-id" type="hidden" />
+                <label class="field">
+                  <span>连接名称</span>
+                  <input id="sub2api-connection-name" placeholder="例如 主站 Sub2api" />
+                </label>
+                <label class="field">
+                  <span>Base URL</span>
+                  <input id="sub2api-connection-base-url" placeholder="https://sub2api.example.com" />
+                </label>
+                <label class="field">
+                  <span>Admin Token</span>
+                  <input id="sub2api-connection-admin-token" type="password" autocomplete="off" placeholder="创建时必填；编辑时留空则保持不变" />
+                </label>
+                <label class="field">
+                  <span>状态</span>
+                  <select id="sub2api-connection-status">
+                    <option value="active">active</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+                <div class="actions-row">
+                  <button id="sub2api-connection-submit-btn" type="submit" class="primary-btn">保存连接</button>
+                  <button id="sub2api-connection-cancel-btn" type="button" class="ghost-btn hidden">取消编辑</button>
+                </div>
+              </form>
+              <div id="sub2api-connection-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>嵌入说明</h3></div>
+              <p class="hint">
+                嵌入页地址：<code>/sub2api-invites.html?sso=&lt;jwt&gt;</code>。JWT 使用该连接的 Admin Token 做 HS256 签名，payload 需要包含 connectionId 与 user.id。
+              </p>
+              <p class="hint">
+                远程创建接口固定为 <code>POST /api/admin/invite-codes</code>，测试接口固定为 <code>GET /api/admin/invite-codes/ping</code>。
+              </p>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>远程连接</h3>
+              <div class="header-actions">
+                <button id="sub2api-connection-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-connection-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>邀请码记录</h3>
+              <div class="header-actions">
+                <select id="sub2api-invite-connection-filter" class="small-select">
+                  <option value="">全部连接</option>
+                </select>
+                <input id="sub2api-invite-user-filter" class="small-input" placeholder="用户 ID" />
+                <select id="sub2api-invite-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="processing">processing</option>
+                  <option value="active">active</option>
+                  <option value="failed">failed</option>
+                </select>
+                <button id="sub2api-invite-refresh-btn" class="ghost-btn small">查询</button>
+                <button id="sub2api-invite-copy-btn" class="ghost-btn small">复制邀请码</button>
+                <button id="sub2api-invite-export-btn" class="ghost-btn small">导出 CSV</button>
+              </div>
+            </div>
+            <div id="sub2api-invite-list" class="table-wrapper"></div>
+            <div id="sub2api-invite-result" class="hint"></div>
           </div>
         </section>
 

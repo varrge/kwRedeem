@@ -23,6 +23,17 @@ import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCo
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import { isSmsCardStopped } from "../../shared/src/sms-status.js";
 import {
+  SUB2API_INVITE_LIMIT,
+  countReservedSub2ApiInvites,
+  decodeSub2ApiSsoSelector,
+  getSub2ApiInviteQuota,
+  normalizeSub2ApiBaseUrl,
+  reserveSub2ApiInvite,
+  sub2apiConnectionStatuses,
+  sub2apiInviteStatuses,
+  verifySub2ApiSsoToken
+} from "../../shared/src/sub2api.js";
+import {
   NOTIFICATION_MAX_INTERVAL,
   NOTIFICATION_MIN_INTERVAL,
   buildFeishuMarkdown,
@@ -1516,6 +1527,202 @@ async function loadSupportBundleByToken(emailToken) {
   };
 }
 
+function serializeSub2ApiConnection(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    baseUrl: row.base_url,
+    hasAdminToken: Boolean(row.admin_token),
+    status: row.status,
+    lastTestAt: row.last_test_at || null,
+    lastTestStatus: row.last_test_status || null,
+    lastTestError: row.last_test_error || null,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function serializeSub2ApiInvite(row) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    connectionId: row.connection_id,
+    connectionName: row.connection_name || null,
+    connectionBaseUrl: row.connection_base_url || null,
+    userId: row.sub2api_user_id,
+    email: row.email || "",
+    username: row.username || "",
+    inviteCode: row.invite_code || "",
+    remoteInviteId: row.remote_invite_id || "",
+    status: row.status,
+    errorMessage: row.error_message || "",
+    expiresAt: row.expires_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function decryptSub2ApiAdminToken(connection) {
+  try {
+    return decryptText(connection.admin_token);
+  } catch {
+    throw new Error("Sub2api adminToken 解密失败");
+  }
+}
+
+function findSub2ApiConnectionBySelector(selector) {
+  const raw = String(selector || "").trim();
+  if (!raw) return null;
+
+  let row = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(raw, sub2apiConnectionStatuses.deleted);
+  if (row) return row;
+
+  try {
+    const baseUrl = normalizeSub2ApiBaseUrl(raw);
+    row = db.prepare(`
+      SELECT *
+      FROM sub2api_connections
+      WHERE base_url = ? AND status <> ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(baseUrl, sub2apiConnectionStatuses.deleted);
+  } catch {
+    row = null;
+  }
+  return row || null;
+}
+
+function getSub2ApiPublicInvites(connectionId, userId) {
+  return db.prepare(`
+    SELECT i.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_invites i
+    LEFT JOIN sub2api_connections c ON c.id = i.connection_id
+    WHERE i.connection_id = ?
+      AND i.sub2api_user_id = ?
+      AND i.status <> ?
+    ORDER BY i.created_at DESC
+  `).all(connectionId, userId, sub2apiInviteStatuses.failed).map(serializeSub2ApiInvite);
+}
+
+function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
+  const quota = getSub2ApiInviteQuota(db, connection.id, identity.userId, SUB2API_INVITE_LIMIT);
+  return {
+    sessionToken,
+    account: {
+      userId: identity.userId,
+      email: identity.email || "",
+      username: identity.username || ""
+    },
+    connection: {
+      id: connection.id,
+      name: connection.name,
+      baseUrl: connection.base_url
+    },
+    inviteLimit: quota.limit,
+    used: quota.used,
+    remaining: quota.remaining,
+    invites: getSub2ApiPublicInvites(connection.id, identity.userId)
+  };
+}
+
+function signSub2ApiSessionToken(connection, identity) {
+  return jwt.sign({
+    scope: "sub2api_invites",
+    connectionId: connection.id,
+    sub2apiUserId: identity.userId,
+    email: identity.email || "",
+    username: identity.username || ""
+  }, env.jwtSecret, { expiresIn: "30m" });
+}
+
+async function requireSub2ApiSession(request, reply) {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return reply.code(401).send({ message: "缺少 Sub2api 会话 token" });
+  }
+  const token = header.slice("Bearer ".length).trim();
+  try {
+    const payload = jwt.verify(token, env.jwtSecret);
+    if (payload?.scope !== "sub2api_invites" || !payload.connectionId || !payload.sub2apiUserId) {
+      return reply.code(401).send({ message: "Sub2api 会话无效" });
+    }
+    request.sub2api = {
+      connectionId: String(payload.connectionId),
+      userId: String(payload.sub2apiUserId),
+      email: String(payload.email || ""),
+      username: String(payload.username || "")
+    };
+  } catch {
+    return reply.code(401).send({ message: "Sub2api 会话已失效" });
+  }
+}
+
+function getSub2ApiRemoteMessage(responseInfo = {}) {
+  const json = responseInfo.json;
+  if (json && typeof json === "object") {
+    const message = json.message || json.msg || json.error || json.error_msg || json.detail;
+    if (message) return String(message);
+  }
+  return responseInfo.text || "远程 Sub2api 请求失败";
+}
+
+async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null } = {}) {
+  const adminToken = decryptSub2ApiAdminToken(connection);
+  const response = await fetch(`${connection.base_url}${pathname}`, {
+    method,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${adminToken}`,
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10000)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  return result;
+}
+
+async function testSub2ApiConnection(connection) {
+  const result = await callSub2ApiRemote(connection, "/api/admin/invite-codes/ping");
+  if (result.json && result.json.ok === false) {
+    throw new Error(getSub2ApiRemoteMessage(result));
+  }
+  return result;
+}
+
+function extractRemoteInviteResult(result) {
+  const data = result.json && typeof result.json === "object" ? result.json : {};
+  const inviteCode = String(data.inviteCode ?? data.invite_code ?? data.code ?? "").trim();
+  if (!inviteCode) {
+    throw new Error("远程 Sub2api 未返回 inviteCode");
+  }
+  const rawStatus = String(data.status || sub2apiInviteStatuses.active).trim();
+  const status = [
+    sub2apiInviteStatuses.processing,
+    sub2apiInviteStatuses.active,
+    sub2apiInviteStatuses.failed
+  ].includes(rawStatus) ? rawStatus : sub2apiInviteStatuses.active;
+  return {
+    inviteCode,
+    remoteInviteId: String(data.id ?? data.inviteId ?? data.invite_id ?? "").trim(),
+    status,
+    expiresAt: data.expiresAt ?? data.expires_at ?? null
+  };
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -1903,6 +2110,174 @@ app.post("/api/public/support/cdkey-auth", async (request, reply) => {
   };
 });
 
+app.post("/api/public/sub2api/session", async (request, reply) => {
+  const parsed = z.object({
+    sso: z.string().min(20)
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少 SSO token" });
+  }
+
+  let selector;
+  try {
+    selector = decodeSub2ApiSsoSelector(parsed.data.sso);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  const connection = findSub2ApiConnectionBySelector(selector);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    const adminToken = decryptSub2ApiAdminToken(connection);
+    const { identity } = verifySub2ApiSsoToken(parsed.data.sso, adminToken);
+    const sessionToken = signSub2ApiSessionToken(connection, identity);
+    return buildSub2ApiPublicPayload(connection, identity, sessionToken);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
+  }
+});
+
+app.get("/api/public/sub2api/invites", { preHandler: requireSub2ApiSession }, async (request, reply) => {
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(request.sub2api.connectionId, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  return buildSub2ApiPublicPayload(connection, {
+    userId: request.sub2api.userId,
+    email: request.sub2api.email,
+    username: request.sub2api.username
+  });
+});
+
+app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSession }, async (request, reply) => {
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(request.sub2api.connectionId, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  const now = nowIso();
+  const inviteId = nanoid(16);
+  const requestId = `sub2api_${Date.now()}_${nanoid(8)}`;
+  const identity = {
+    userId: request.sub2api.userId,
+    email: request.sub2api.email,
+    username: request.sub2api.username
+  };
+  const reserved = reserveSub2ApiInvite(db, {
+    id: inviteId,
+    requestId,
+    connectionId: connection.id,
+    userId: identity.userId,
+    email: identity.email,
+    username: identity.username,
+    now
+  }, SUB2API_INVITE_LIMIT);
+
+  if (!reserved.ok) {
+    return reply.code(403).send({
+      message: `每个账号最多申请 ${SUB2API_INVITE_LIMIT} 个邀请码`,
+      inviteLimit: reserved.quota.limit,
+      used: reserved.quota.used,
+      remaining: reserved.quota.remaining
+    });
+  }
+
+  try {
+    const remoteResult = await callSub2ApiRemote(connection, "/api/admin/invite-codes", {
+      method: "POST",
+      body: {
+        userId: identity.userId,
+        email: identity.email,
+        username: identity.username,
+        requestId
+      }
+    });
+    const inviteResult = extractRemoteInviteResult(remoteResult);
+    const updatedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_invites
+      SET invite_code = ?, remote_invite_id = ?, status = ?, remote_response = ?, expires_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      inviteResult.inviteCode,
+      inviteResult.remoteInviteId || null,
+      inviteResult.status,
+      JSON.stringify(remoteResult.json ?? remoteResult.text ?? {}),
+      inviteResult.expiresAt,
+      updatedAt,
+      inviteId
+    );
+
+    createAuditLog({
+      action: "sub2api.invite.apply",
+      actor: "public",
+      resourceType: "sub2api_invite",
+      resourceId: inviteId,
+      detail: {
+        connectionId: connection.id,
+        sub2apiUserId: identity.userId,
+        requestId
+      }
+    });
+
+    const row = db.prepare(`
+      SELECT i.*, c.name AS connection_name, c.base_url AS connection_base_url
+      FROM sub2api_invites i
+      LEFT JOIN sub2api_connections c ON c.id = i.connection_id
+      WHERE i.id = ?
+    `).get(inviteId);
+    const quota = getSub2ApiInviteQuota(db, connection.id, identity.userId, SUB2API_INVITE_LIMIT);
+    return {
+      success: true,
+      invite: serializeSub2ApiInvite(row),
+      inviteLimit: quota.limit,
+      used: quota.used,
+      remaining: quota.remaining,
+      invites: getSub2ApiPublicInvites(connection.id, identity.userId)
+    };
+  } catch (error) {
+    const failedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_invites
+      SET status = ?, remote_response = ?, error_message = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      sub2apiInviteStatuses.failed,
+      error.responseInfo ? JSON.stringify(error.responseInfo.json ?? error.responseInfo.text ?? {}) : null,
+      error.message || "远程 Sub2api 创建邀请码失败",
+      failedAt,
+      inviteId
+    );
+    return reply.code(502).send({
+      message: error.message || "远程 Sub2api 创建邀请码失败",
+      inviteLimit: SUB2API_INVITE_LIMIT,
+      used: countReservedSub2ApiInvites(db, connection.id, identity.userId),
+      remaining: Math.max(0, SUB2API_INVITE_LIMIT - countReservedSub2ApiInvites(db, connection.id, identity.userId))
+    });
+  }
+});
+
 app.post("/api/public/cdkeys/verify", async (request, reply) => {
   const schema = z.object({
     publicKey: z.string().min(6)
@@ -2171,6 +2546,259 @@ app.get("/api/admin/dashboard", { preHandler: requireAdmin }, async () => {
   }));
 
   return { counts, recentLogs };
+});
+
+app.get("/api/admin/sub2api/connections", { preHandler: requireAdmin }, async () => {
+  const rows = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE status <> ?
+    ORDER BY created_at DESC
+  `).all(sub2apiConnectionStatuses.deleted);
+  return { items: rows.map(serializeSub2ApiConnection) };
+});
+
+app.post("/api/admin/sub2api/connections", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    name: z.string().trim().min(1),
+    baseUrl: z.string().trim().min(1),
+    adminToken: z.string().trim().min(1),
+    status: z.enum([sub2apiConnectionStatuses.active, sub2apiConnectionStatuses.disabled]).optional().default(sub2apiConnectionStatuses.active)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供名称、baseUrl 和 adminToken" });
+  }
+
+  let baseUrl;
+  try {
+    baseUrl = normalizeSub2ApiBaseUrl(parsed.data.baseUrl);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  const exists = db.prepare(`
+    SELECT id FROM sub2api_connections
+    WHERE base_url = ? AND status <> ?
+  `).get(baseUrl, sub2apiConnectionStatuses.deleted);
+  if (exists) {
+    return reply.code(409).send({ message: "该 Sub2api baseUrl 已存在" });
+  }
+
+  const now = nowIso();
+  const id = nanoid(16);
+  db.prepare(`
+    INSERT INTO sub2api_connections (
+      id, name, base_url, admin_token, status,
+      last_test_at, last_test_status, last_test_error,
+      created_by, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
+  `).run(
+    id,
+    parsed.data.name,
+    baseUrl,
+    encryptText(parsed.data.adminToken),
+    parsed.data.status,
+    request.admin.username,
+    now,
+    now
+  );
+
+  createAuditLog({
+    action: "sub2api.connection.create",
+    actor: request.admin.username,
+    resourceType: "sub2api_connection",
+    resourceId: id,
+    detail: { baseUrl, status: parsed.data.status }
+  });
+
+  const row = db.prepare("SELECT * FROM sub2api_connections WHERE id = ?").get(id);
+  return { item: serializeSub2ApiConnection(row) };
+});
+
+app.patch("/api/admin/sub2api/connections/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiConnectionStatuses.deleted);
+  if (!existing) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const parsed = z.object({
+    name: z.string().trim().min(1).optional(),
+    baseUrl: z.string().trim().min(1).optional(),
+    adminToken: z.string().trim().optional(),
+    status: z.enum([sub2apiConnectionStatuses.active, sub2apiConnectionStatuses.disabled]).optional()
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "连接参数不正确" });
+  }
+
+  let baseUrl = existing.base_url;
+  if (parsed.data.baseUrl !== undefined) {
+    try {
+      baseUrl = normalizeSub2ApiBaseUrl(parsed.data.baseUrl);
+    } catch (error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    const duplicate = db.prepare(`
+      SELECT id FROM sub2api_connections
+      WHERE base_url = ? AND id <> ? AND status <> ?
+    `).get(baseUrl, id, sub2apiConnectionStatuses.deleted);
+    if (duplicate) {
+      return reply.code(409).send({ message: "该 Sub2api baseUrl 已存在" });
+    }
+  }
+
+  const adminToken = parsed.data.adminToken
+    ? encryptText(parsed.data.adminToken)
+    : existing.admin_token;
+  const now = nowIso();
+  db.prepare(`
+    UPDATE sub2api_connections
+    SET name = ?, base_url = ?, admin_token = ?, status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    parsed.data.name ?? existing.name,
+    baseUrl,
+    adminToken,
+    parsed.data.status ?? existing.status,
+    now,
+    id
+  );
+
+  createAuditLog({
+    action: "sub2api.connection.update",
+    actor: request.admin.username,
+    resourceType: "sub2api_connection",
+    resourceId: id,
+    detail: { baseUrl, status: parsed.data.status ?? existing.status, tokenUpdated: Boolean(parsed.data.adminToken) }
+  });
+
+  const row = db.prepare("SELECT * FROM sub2api_connections WHERE id = ?").get(id);
+  return { item: serializeSub2ApiConnection(row) };
+});
+
+app.delete("/api/admin/sub2api/connections/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiConnectionStatuses.deleted);
+  if (!existing) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE sub2api_connections
+    SET status = ?, admin_token = ?, updated_at = ?
+    WHERE id = ?
+  `).run(sub2apiConnectionStatuses.deleted, encryptText(""), now, id);
+
+  createAuditLog({
+    action: "sub2api.connection.delete",
+    actor: request.admin.username,
+    resourceType: "sub2api_connection",
+    resourceId: id
+  });
+
+  return { success: true, id };
+});
+
+app.post("/api/admin/sub2api/connections/:id/test", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const now = nowIso();
+  try {
+    const result = await testSub2ApiConnection(connection);
+    db.prepare(`
+      UPDATE sub2api_connections
+      SET last_test_at = ?, last_test_status = ?, last_test_error = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(now, "ok", now, id);
+    createAuditLog({
+      action: "sub2api.connection.test",
+      actor: request.admin.username,
+      resourceType: "sub2api_connection",
+      resourceId: id,
+      detail: { ok: true, status: result.status }
+    });
+    const row = db.prepare("SELECT * FROM sub2api_connections WHERE id = ?").get(id);
+    return { ok: true, item: serializeSub2ApiConnection(row) };
+  } catch (error) {
+    db.prepare(`
+      UPDATE sub2api_connections
+      SET last_test_at = ?, last_test_status = ?, last_test_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, "failed", error.message || "测试连接失败", now, id);
+    return reply.code(502).send({ ok: false, message: error.message || "测试连接失败" });
+  }
+});
+
+app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(200, Math.max(1, Math.floor(Number(request.query.pageSize) || 50)));
+  const offset = (page - 1) * pageSize;
+  const conditions = [];
+  const params = [];
+
+  const connectionId = String(request.query.connectionId || "").trim();
+  if (connectionId) {
+    conditions.push("i.connection_id = ?");
+    params.push(connectionId);
+  }
+
+  const userId = String(request.query.userId || "").trim();
+  if (userId) {
+    conditions.push("i.sub2api_user_id LIKE ?");
+    params.push(`%${userId}%`);
+  }
+
+  const status = String(request.query.status || "").trim();
+  const allowedStatuses = new Set([
+    sub2apiInviteStatuses.processing,
+    sub2apiInviteStatuses.active,
+    sub2apiInviteStatuses.failed
+  ]);
+  if (status && allowedStatuses.has(status)) {
+    conditions.push("i.status = ?");
+    params.push(status);
+  }
+
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const total = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sub2api_invites i
+    ${whereSql}
+  `).get(...params).count;
+  const rows = db.prepare(`
+    SELECT i.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_invites i
+    LEFT JOIN sub2api_connections c ON c.id = i.connection_id
+    ${whereSql}
+    ORDER BY i.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset);
+
+  return {
+    items: rows.map(serializeSub2ApiInvite),
+    total,
+    page,
+    pageSize
+  };
 });
 
 app.get("/api/admin/system/version", { preHandler: requireAdmin }, async () => {

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sub2api 邀请码</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      body {
+        min-height: 100vh;
+        padding: 0;
+      }
+
+      .sub2api-shell {
+        width: min(960px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0;
+      }
+
+      .sub2api-panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 24px;
+        box-shadow: var(--shadow);
+      }
+
+      .sub2api-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+
+      .sub2api-title h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .sub2api-title p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .sub2api-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .sub2api-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .sub2api-stat {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .sub2api-stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .sub2api-stat strong {
+        font-size: 24px;
+      }
+
+      .invite-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .invite-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .invite-code {
+        font-family: monospace;
+        font-size: 16px;
+        word-break: break-all;
+      }
+
+      .invite-meta {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+
+      .status-line {
+        margin-top: 16px;
+        min-height: 22px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .status-line.error {
+        color: var(--error);
+      }
+
+      @media (max-width: 720px) {
+        .sub2api-shell {
+          width: calc(100vw - 20px);
+          padding: 10px 0;
+        }
+
+        .sub2api-panel {
+          padding: 18px;
+          border-radius: 14px;
+        }
+
+        .sub2api-header,
+        .invite-row {
+          grid-template-columns: 1fr;
+          display: grid;
+        }
+
+        .sub2api-actions {
+          justify-content: stretch;
+        }
+
+        .sub2api-actions button,
+        .invite-row button {
+          width: 100%;
+        }
+
+        .sub2api-stats {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sub2api-shell">
+      <section class="sub2api-panel">
+        <div class="sub2api-header">
+          <div class="sub2api-title">
+            <h1>Sub2api 邀请码</h1>
+            <p id="account-line">正在识别账号...</p>
+          </div>
+          <div class="sub2api-actions">
+            <button id="refresh-btn" class="ghost-btn" type="button">刷新</button>
+            <button id="apply-btn" class="primary-btn" type="button" disabled>申请邀请码</button>
+          </div>
+        </div>
+
+        <div class="sub2api-stats">
+          <article class="sub2api-stat">
+            <span>总额度</span>
+            <strong id="limit-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>已申请</span>
+            <strong id="used-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>剩余</span>
+            <strong id="remaining-value">-</strong>
+          </article>
+        </div>
+
+        <div id="invite-list" class="invite-list"></div>
+        <div id="status-line" class="status-line"></div>
+      </section>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
+      const refs = {
+        accountLine: document.querySelector("#account-line"),
+        applyBtn: document.querySelector("#apply-btn"),
+        refreshBtn: document.querySelector("#refresh-btn"),
+        limitValue: document.querySelector("#limit-value"),
+        usedValue: document.querySelector("#used-value"),
+        remainingValue: document.querySelector("#remaining-value"),
+        inviteList: document.querySelector("#invite-list"),
+        statusLine: document.querySelector("#status-line")
+      };
+      const state = {
+        sessionToken: "",
+        initialized: false,
+        remaining: 0
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function setStatus(message, type = "info") {
+        refs.statusLine.textContent = message || "";
+        refs.statusLine.classList.toggle("error", type === "error");
+      }
+
+      function setBusy(button, busy, text) {
+        if (!button.dataset.idleText) button.dataset.idleText = button.textContent;
+        button.disabled = busy;
+        button.textContent = busy ? text : button.dataset.idleText;
+      }
+
+      async function request(path, options = {}) {
+        const headers = {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        };
+        if (state.sessionToken) {
+          headers.Authorization = `Bearer ${state.sessionToken}`;
+        }
+        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || "请求失败");
+        }
+        return payload;
+      }
+
+      function render(payload) {
+        if (payload.sessionToken) {
+          state.sessionToken = payload.sessionToken;
+        }
+        const account = payload.account || {};
+        const connection = payload.connection || {};
+        const displayName = account.email || account.username || account.userId || "-";
+        refs.accountLine.textContent = `${displayName} · ${connection.name || connection.baseUrl || "Sub2api"}`;
+        refs.limitValue.textContent = payload.inviteLimit ?? "-";
+        refs.usedValue.textContent = payload.used ?? "-";
+        refs.remainingValue.textContent = payload.remaining ?? "-";
+        state.remaining = Number(payload.remaining || 0);
+        refs.applyBtn.disabled = !state.sessionToken || state.remaining <= 0;
+
+        const invites = payload.invites || [];
+        if (!invites.length) {
+          refs.inviteList.innerHTML = `<p class="hint centered">暂无邀请码</p>`;
+          return;
+        }
+        refs.inviteList.innerHTML = invites.map((item) => `
+          <article class="invite-row">
+            <div>
+              <div class="invite-code">${escapeHtml(item.inviteCode || "-")}</div>
+              <div class="invite-meta">${escapeHtml(item.status || "-")} · ${escapeHtml(item.createdAt || "-")}</div>
+            </div>
+            <button class="ghost-btn copy-btn" type="button" data-code="${escapeHtml(item.inviteCode || "")}">复制</button>
+          </article>
+        `).join("");
+      }
+
+      async function initialize() {
+        const sso = new URLSearchParams(window.location.search).get("sso") || "";
+        if (!sso) {
+          refs.accountLine.textContent = "未识别账号";
+          setStatus("缺少 SSO token", "error");
+          return;
+        }
+        try {
+          setStatus("正在加载...");
+          const payload = await request("/api/public/sub2api/session", {
+            method: "POST",
+            body: JSON.stringify({ sso })
+          });
+          state.initialized = true;
+          render(payload);
+          setStatus("");
+        } catch (error) {
+          refs.accountLine.textContent = "账号识别失败";
+          setStatus(error.message, "error");
+        }
+      }
+
+      async function refresh() {
+        if (!state.sessionToken) return;
+        try {
+          setBusy(refs.refreshBtn, true, "刷新中...");
+          const payload = await request("/api/public/sub2api/invites");
+          render(payload);
+          setStatus("");
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          setBusy(refs.refreshBtn, false);
+        }
+      }
+
+      async function applyInvite() {
+        if (!state.sessionToken) return;
+        try {
+          setBusy(refs.applyBtn, true, "申请中...");
+          const payload = await request("/api/public/sub2api/invites/apply", {
+            method: "POST",
+            body: JSON.stringify({})
+          });
+          render(payload);
+          setStatus("邀请码已生成");
+        } catch (error) {
+          setStatus(error.message, "error");
+          await refresh().catch(() => {});
+        } finally {
+          setBusy(refs.applyBtn, false);
+          refs.applyBtn.disabled = !state.sessionToken || state.remaining <= 0;
+        }
+      }
+
+      refs.refreshBtn.addEventListener("click", () => refresh());
+      refs.applyBtn.addEventListener("click", () => applyInvite());
+      refs.inviteList.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-code]");
+        if (!button || !button.dataset.code) return;
+        try {
+          await navigator.clipboard.writeText(button.dataset.code);
+          setStatus("已复制邀请码");
+        } catch {
+          setStatus("复制失败：剪贴板写入被拒绝", "error");
+        }
+      });
+
+      initialize();
+    </script>
+  </body>
+</html>

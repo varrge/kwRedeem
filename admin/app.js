@@ -149,6 +149,26 @@ const refs = {
   quotaSubCardDetail: document.querySelector("#quota-sub-card-detail"),
   quotaSubCardHistory: document.querySelector("#quota-sub-card-history"),
   quotaSubCardDetailClose: document.querySelector("#quota-sub-card-detail-close"),
+  sub2apiConnectionForm: document.querySelector("#sub2api-connection-form"),
+  sub2apiConnectionFormTitle: document.querySelector("#sub2api-connection-form-title"),
+  sub2apiConnectionEditId: document.querySelector("#sub2api-connection-edit-id"),
+  sub2apiConnectionName: document.querySelector("#sub2api-connection-name"),
+  sub2apiConnectionBaseUrl: document.querySelector("#sub2api-connection-base-url"),
+  sub2apiConnectionAdminToken: document.querySelector("#sub2api-connection-admin-token"),
+  sub2apiConnectionStatus: document.querySelector("#sub2api-connection-status"),
+  sub2apiConnectionSubmitBtn: document.querySelector("#sub2api-connection-submit-btn"),
+  sub2apiConnectionCancelBtn: document.querySelector("#sub2api-connection-cancel-btn"),
+  sub2apiConnectionRefreshBtn: document.querySelector("#sub2api-connection-refresh-btn"),
+  sub2apiConnectionResult: document.querySelector("#sub2api-connection-result"),
+  sub2apiConnectionList: document.querySelector("#sub2api-connection-list"),
+  sub2apiInviteConnectionFilter: document.querySelector("#sub2api-invite-connection-filter"),
+  sub2apiInviteUserFilter: document.querySelector("#sub2api-invite-user-filter"),
+  sub2apiInviteStatusFilter: document.querySelector("#sub2api-invite-status-filter"),
+  sub2apiInviteRefreshBtn: document.querySelector("#sub2api-invite-refresh-btn"),
+  sub2apiInviteCopyBtn: document.querySelector("#sub2api-invite-copy-btn"),
+  sub2apiInviteExportBtn: document.querySelector("#sub2api-invite-export-btn"),
+  sub2apiInviteList: document.querySelector("#sub2api-invite-list"),
+  sub2apiInviteResult: document.querySelector("#sub2api-invite-result"),
 
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
@@ -163,6 +183,8 @@ const quotaSubCardState = {
   status: refs.quotaSubCardStatus?.value || "",
   total: 0
 };
+let sub2apiConnectionsCache = [];
+let sub2apiInvitesCache = [];
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -240,6 +262,9 @@ function switchTab(tabName) {
     refreshQuotaSubCards().catch(() => {});
     refreshQuotaSourceCards().catch(() => {});
     loadQuotaSettings().catch(() => {});
+  }
+  if (tabName === "sub2api" && getToken()) {
+    refreshSub2ApiConsole().catch(() => {});
   }
 }
 
@@ -1729,6 +1754,300 @@ window.viewQuotaSubCardDetail = viewQuotaSubCardDetail;
 window.cancelQuotaSubCard = cancelQuotaSubCard;
 window.unlockQuotaSubCard = unlockQuotaSubCard;
 
+function resetSub2ApiConnectionForm() {
+  if (!refs.sub2apiConnectionForm) return;
+  refs.sub2apiConnectionForm.reset();
+  refs.sub2apiConnectionEditId.value = "";
+  refs.sub2apiConnectionStatus.value = "active";
+  refs.sub2apiConnectionFormTitle.textContent = "添加远程连接";
+  refs.sub2apiConnectionSubmitBtn.textContent = "保存连接";
+  refs.sub2apiConnectionCancelBtn.classList.add("hidden");
+  refs.sub2apiConnectionAdminToken.placeholder = "创建时必填；编辑时留空则保持不变";
+}
+
+function populateSub2ApiConnectionFilter() {
+  if (!refs.sub2apiInviteConnectionFilter) return;
+  const current = refs.sub2apiInviteConnectionFilter.value;
+  refs.sub2apiInviteConnectionFilter.innerHTML = [`<option value="">全部连接</option>`]
+    .concat(sub2apiConnectionsCache.map((item) => `
+      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+    `))
+    .join("");
+  if (sub2apiConnectionsCache.some((item) => item.id === current)) {
+    refs.sub2apiInviteConnectionFilter.value = current;
+  }
+}
+
+async function refreshSub2ApiConnections() {
+  if (!refs.sub2apiConnectionList) return;
+  const payload = await api("/api/admin/sub2api/connections");
+  sub2apiConnectionsCache = payload.items || [];
+  populateSub2ApiConnectionFilter();
+
+  renderTable(refs.sub2apiConnectionList, [
+    {
+      label: "连接",
+      render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.id)}</code>`
+    },
+    {
+      label: "Base URL",
+      render: (item) => `<code style="font-size:12px;word-break:break-all">${escapeHtml(item.baseUrl)}</code>`
+    },
+    {
+      label: "Admin Token",
+      render: (item) => item.hasAdminToken ? "已保存" : "未配置"
+    },
+    {
+      label: "状态",
+      render: (item) => renderStatus(item.status)
+    },
+    {
+      label: "最近测试",
+      render: (item) => `
+        <div style="font-size:12px;line-height:1.5">
+          <div>${escapeHtml(item.lastTestAt || "未测试")}</div>
+          <div style="color:${item.lastTestStatus === "failed" ? "var(--error)" : "var(--muted)"}">${escapeHtml(item.lastTestStatus || "-")}${item.lastTestError ? ` · ${escapeHtml(item.lastTestError)}` : ""}</div>
+        </div>
+      `
+    },
+    {
+      label: "操作",
+      render: (item) => `
+        <button class="primary-btn small" type="button" onclick="editSub2ApiConnection('${escapeHtml(item.id)}')">编辑</button>
+        <button class="ghost-btn small" type="button" onclick="testSub2ApiConnection('${escapeHtml(item.id)}')">测试</button>
+        <button class="ghost-btn small" type="button" style="color:var(--error)" onclick="deleteSub2ApiConnection('${escapeHtml(item.id)}')">删除</button>
+      `
+    }
+  ], sub2apiConnectionsCache, "暂无 Sub2api 连接");
+}
+
+function editSub2ApiConnection(id) {
+  const item = sub2apiConnectionsCache.find((entry) => entry.id === id);
+  if (!item || !refs.sub2apiConnectionForm) return;
+  refs.sub2apiConnectionEditId.value = item.id;
+  refs.sub2apiConnectionName.value = item.name || "";
+  refs.sub2apiConnectionBaseUrl.value = item.baseUrl || "";
+  refs.sub2apiConnectionAdminToken.value = "";
+  refs.sub2apiConnectionAdminToken.placeholder = "留空则保持原 Admin Token";
+  refs.sub2apiConnectionStatus.value = item.status || "active";
+  refs.sub2apiConnectionFormTitle.textContent = `编辑连接：${item.name}`;
+  refs.sub2apiConnectionSubmitBtn.textContent = "保存修改";
+  refs.sub2apiConnectionCancelBtn.classList.remove("hidden");
+  refs.sub2apiConnectionForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function testSub2ApiConnection(id) {
+  try {
+    setHint(refs.sub2apiConnectionResult, "正在测试连接...");
+    await api(`/api/admin/sub2api/connections/${encodeURIComponent(id)}/test`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.sub2apiConnectionResult, "测试成功");
+    await refreshSub2ApiConnections();
+  } catch (error) {
+    setHint(refs.sub2apiConnectionResult, `测试失败：${error.message}`);
+    await refreshSub2ApiConnections().catch(() => {});
+  }
+}
+
+async function deleteSub2ApiConnection(id) {
+  if (!window.confirm("确认删除该 Sub2api 连接？历史邀请码记录会保留。")) return;
+  try {
+    await api(`/api/admin/sub2api/connections/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    if (refs.sub2apiConnectionEditId?.value === id) resetSub2ApiConnectionForm();
+    setHint(refs.sub2apiConnectionResult, "连接已删除");
+    await refreshSub2ApiConsole();
+  } catch (error) {
+    setHint(refs.sub2apiConnectionResult, `删除失败：${error.message}`);
+  }
+}
+
+async function saveSub2ApiConnection() {
+  const id = refs.sub2apiConnectionEditId?.value || "";
+  const payload = {
+    name: refs.sub2apiConnectionName.value.trim(),
+    baseUrl: refs.sub2apiConnectionBaseUrl.value.trim(),
+    status: refs.sub2apiConnectionStatus.value
+  };
+  const adminToken = refs.sub2apiConnectionAdminToken.value.trim();
+  if (adminToken) payload.adminToken = adminToken;
+  if (!id && !adminToken) {
+    setHint(refs.sub2apiConnectionResult, "新建连接必须填写 Admin Token");
+    return;
+  }
+
+  try {
+    setHint(refs.sub2apiConnectionResult, "正在保存...");
+    await api(id ? `/api/admin/sub2api/connections/${encodeURIComponent(id)}` : "/api/admin/sub2api/connections", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    setHint(refs.sub2apiConnectionResult, "连接已保存");
+    resetSub2ApiConnectionForm();
+    await refreshSub2ApiConsole();
+  } catch (error) {
+    setHint(refs.sub2apiConnectionResult, `保存失败：${error.message}`);
+  }
+}
+
+function getSelectedSub2ApiInviteCodes() {
+  const checked = Array.from(document.querySelectorAll(".sub2api-invite-check:checked"));
+  const source = checked.length
+    ? checked
+    : Array.from(document.querySelectorAll(".sub2api-invite-check"));
+  return source
+    .map((item) => item.dataset.inviteCode || "")
+    .filter(Boolean);
+}
+
+async function refreshSub2ApiInvites() {
+  if (!refs.sub2apiInviteList) return;
+  const params = new URLSearchParams();
+  if (refs.sub2apiInviteConnectionFilter?.value) params.set("connectionId", refs.sub2apiInviteConnectionFilter.value);
+  if (refs.sub2apiInviteUserFilter?.value.trim()) params.set("userId", refs.sub2apiInviteUserFilter.value.trim());
+  if (refs.sub2apiInviteStatusFilter?.value) params.set("status", refs.sub2apiInviteStatusFilter.value);
+  params.set("pageSize", "100");
+
+  const payload = await api(`/api/admin/sub2api/invites?${params.toString()}`);
+  sub2apiInvitesCache = payload.items || [];
+  renderTable(refs.sub2apiInviteList, [
+    {
+      label: "",
+      render: (item) => `<input type="checkbox" class="sub2api-invite-check" value="${escapeHtml(item.id)}" data-invite-code="${escapeHtml(item.inviteCode || "")}" />`
+    },
+    {
+      label: "邀请码",
+      render: (item) => item.inviteCode ? `<code>${escapeHtml(item.inviteCode)}</code>` : "-"
+    },
+    {
+      label: "连接",
+      render: (item) => `${escapeHtml(item.connectionName || "-")}<br/><code style="font-size:11px">${escapeHtml(item.connectionId)}</code>`
+    },
+    {
+      label: "账号",
+      render: (item) => `
+        <div style="font-size:12px;line-height:1.5">
+          <div><code>${escapeHtml(item.userId)}</code></div>
+          <div>${escapeHtml(item.email || item.username || "-")}</div>
+        </div>
+      `
+    },
+    {
+      label: "状态",
+      render: (item) => renderStatus(item.status)
+    },
+    {
+      label: "远端 ID",
+      render: (item) => item.remoteInviteId ? `<code>${escapeHtml(item.remoteInviteId)}</code>` : "-"
+    },
+    {
+      label: "时间",
+      render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>`
+    },
+    {
+      label: "错误",
+      render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 36))}</span>` : "-"
+    }
+  ], sub2apiInvitesCache, "暂无邀请码记录");
+  setHint(refs.sub2apiInviteResult, `共 ${payload.total ?? sub2apiInvitesCache.length} 条记录，当前显示 ${sub2apiInvitesCache.length} 条`);
+}
+
+async function refreshSub2ApiConsole() {
+  await refreshSub2ApiConnections().catch((error) => {
+    if (refs.sub2apiConnectionList) refs.sub2apiConnectionList.innerHTML = `<p class="hint centered">加载连接失败：${escapeHtml(error.message)}</p>`;
+  });
+  await refreshSub2ApiInvites().catch((error) => {
+    if (refs.sub2apiInviteList) refs.sub2apiInviteList.innerHTML = `<p class="hint centered">加载邀请码失败：${escapeHtml(error.message)}</p>`;
+  });
+}
+
+function exportSub2ApiInvitesCsv() {
+  if (!sub2apiInvitesCache.length) {
+    setHint(refs.sub2apiInviteResult, "无数据可导出");
+    return;
+  }
+  const headers = ["连接", "连接ID", "用户ID", "邮箱", "用户名", "邀请码", "远端ID", "状态", "创建时间", "过期时间", "错误"];
+  const escapeCsv = (value) => `"${String(value ?? "").replaceAll("\"", "\"\"")}"`;
+  const lines = [
+    headers.map(escapeCsv).join(","),
+    ...sub2apiInvitesCache.map((item) => [
+      item.connectionName,
+      item.connectionId,
+      item.userId,
+      item.email,
+      item.username,
+      item.inviteCode,
+      item.remoteInviteId,
+      item.status,
+      item.createdAt,
+      item.expiresAt,
+      item.errorMessage
+    ].map(escapeCsv).join(","))
+  ];
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `sub2api-invites-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setHint(refs.sub2apiInviteResult, `已导出 ${sub2apiInvitesCache.length} 条记录`);
+}
+
+window.editSub2ApiConnection = editSub2ApiConnection;
+window.testSub2ApiConnection = testSub2ApiConnection;
+window.deleteSub2ApiConnection = deleteSub2ApiConnection;
+
+if (refs.sub2apiConnectionForm) {
+  refs.sub2apiConnectionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveSub2ApiConnection().catch(() => {});
+  });
+}
+
+if (refs.sub2apiConnectionCancelBtn) {
+  refs.sub2apiConnectionCancelBtn.addEventListener("click", () => {
+    resetSub2ApiConnectionForm();
+    setHint(refs.sub2apiConnectionResult, "");
+  });
+}
+
+if (refs.sub2apiConnectionRefreshBtn) {
+  refs.sub2apiConnectionRefreshBtn.addEventListener("click", () => {
+    refreshSub2ApiConsole().catch(() => {});
+  });
+}
+
+if (refs.sub2apiInviteRefreshBtn) {
+  refs.sub2apiInviteRefreshBtn.addEventListener("click", () => {
+    refreshSub2ApiInvites().catch((error) => setHint(refs.sub2apiInviteResult, `查询失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiInviteCopyBtn) {
+  refs.sub2apiInviteCopyBtn.addEventListener("click", async () => {
+    const codes = getSelectedSub2ApiInviteCodes();
+    if (!codes.length) {
+      setHint(refs.sub2apiInviteResult, "暂无可复制的邀请码");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(codes.join("\n"));
+      setHint(refs.sub2apiInviteResult, `已复制 ${codes.length} 个邀请码`);
+    } catch {
+      setHint(refs.sub2apiInviteResult, "复制失败：剪贴板写入被拒绝");
+    }
+  });
+}
+
+if (refs.sub2apiInviteExportBtn) {
+  refs.sub2apiInviteExportBtn.addEventListener("click", exportSub2ApiInvitesCsv);
+}
+
 async function refreshAll() {
   if (!getToken()) return;
   await Promise.all([
@@ -1744,7 +2063,8 @@ async function refreshAll() {
     refreshSubscriptions(),
     refreshNotifications(),
     refreshQuotaDashboard(),
-    refreshQuotaSubCards()
+    refreshQuotaSubCards(),
+    refreshSub2ApiConsole()
   ]);
 }
 

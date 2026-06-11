@@ -502,6 +502,37 @@ function createSchema(db) {
       updated_by TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_connections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      admin_token TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_test_at TEXT,
+      last_test_status TEXT,
+      last_test_error TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_invites (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      invite_code TEXT,
+      remote_invite_id TEXT,
+      status TEXT NOT NULL DEFAULT 'processing',
+      remote_response TEXT,
+      error_message TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -580,6 +611,10 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_quota_sub_cards_status ON quota_sub_cards(status);
     CREATE INDEX IF NOT EXISTS idx_quota_claim_logs_card ON quota_claim_logs(sub_card_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_quota_rate_limits_card ON quota_rate_limits(sub_card_id, window_start);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_connections_status ON sub2api_connections(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_invites_account ON sub2api_invites(connection_id, sub2api_user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_invites_connection ON sub2api_invites(connection_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_invites_status ON sub2api_invites(status, created_at);
   `);
 }
 

@@ -785,12 +785,22 @@
         if (state.sessionToken) {
           headers.Authorization = `Bearer ${state.sessionToken}`;
         }
-        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        let response;
+        try {
+          response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        } catch {
+          const target = API_BASE ? `${API_BASE}${path}` : path;
+          throw new Error(`无法连接后端接口：${target}。请确认 KaWang API 和反代路径可访问。`);
+        }
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(payload.message || "请求失败");
         }
         return payload;
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
       }
 
       function getSelectedButtonValue(selector, fallback) {
@@ -909,16 +919,36 @@
         });
       }
 
-      function showLoading() {
+      function showLoading(message = "已提交到 Sub2api，生成时间取决于模型和张数。") {
         refs.stageBody.innerHTML = `
           <div class="loading">
             <div>
               <div class="spinner"></div>
               <h3>正在生成图片</h3>
-              <p>已提交到 Sub2api，生成时间取决于模型和张数。</p>
+              <p>${escapeHtml(message)}</p>
             </div>
           </div>
         `;
+      }
+
+      async function waitForImageJob(jobId) {
+        const startedAt = Date.now();
+        let pollCount = 0;
+        while (Date.now() - startedAt < 10 * 60 * 1000) {
+          pollCount += 1;
+          await sleep(pollCount < 3 ? 1200 : 2500);
+          const job = await request(`/api/public/sub2api/image/jobs/${encodeURIComponent(jobId)}`);
+          if (job.status === "succeeded" && job.result) {
+            return job.result;
+          }
+          if (job.status === "failed") {
+            throw new Error(job.error || "图片生成失败");
+          }
+          if (pollCount % 4 === 0) {
+            showLoading(`任务 ${jobId} 正在生成，当前状态：${job.status || "running"}。`);
+          }
+        }
+        throw new Error("图片任务等待超时，请稍后刷新结果或重新生成。");
       }
 
       function getImageSrc(image) {
@@ -1084,7 +1114,7 @@
         setStatus("");
         showLoading();
         try {
-          const payload = await request("/api/public/sub2api/image/generate", {
+          const job = await request("/api/public/sub2api/image/jobs", {
             method: "POST",
             body: JSON.stringify({
               mode: state.mode,
@@ -1098,6 +1128,8 @@
               referenceImages: state.mode === "image" ? state.references.map((item) => item.dataUrl) : []
             })
           });
+          showLoading(`任务 ${job.jobId} 已提交，正在等待 Sub2api 返回结果。`);
+          const payload = await waitForImageJob(job.jobId);
           renderResults(payload);
           setStatus("生成完成", "success");
         } catch (error) {

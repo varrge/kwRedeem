@@ -64,6 +64,7 @@ const QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS = 10_000;
 const SUB2API_IMAGE_SESSION_TTL_MS = 30 * 60 * 1000;
 const SUB2API_IMAGE_KEYS_TTL_MS = 2 * 60 * 1000;
 const SUB2API_IMAGE_GENERATE_TIMEOUT_MS = 180 * 1000;
+const SUB2API_IMAGE_JOB_TTL_MS = 30 * 60 * 1000;
 const SUB2API_IMAGE_MAX_COUNT = 5;
 const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
 const SUB2API_IMAGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -87,6 +88,7 @@ const updateState = {
 const quotaAutoClaimSessions = new Map();
 const quotaAutoClaimQueue = [];
 const sub2apiImageSessions = new Map();
+const sub2apiImageJobs = new Map();
 
 function cleanupQuotaAutoClaimSessions() {
   const now = Date.now();
@@ -203,6 +205,7 @@ function cleanupExpiredEntries() {
 setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
 setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS);
 setInterval(cleanupSub2ApiImageSessions, 60_000);
+setInterval(cleanupSub2ApiImageJobs, 60_000);
 // --- End Verification Cache ---
 
 async function fetchStaticSmsCode(smsUrl) {
@@ -1807,6 +1810,36 @@ function cleanupSub2ApiImageSessions() {
   }
 }
 
+function cleanupSub2ApiImageJobs() {
+  const now = Date.now();
+  for (const [id, job] of sub2apiImageJobs.entries()) {
+    if (!job || job.expiresAtMs <= now) {
+      sub2apiImageJobs.delete(id);
+    }
+  }
+}
+
+function serializeSub2ApiImageJob(job) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    mode: job.mode,
+    model: job.model,
+    quality: job.quality,
+    outputFormat: job.outputFormat,
+    aspectRatio: job.aspectRatio,
+    count: job.count,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    elapsedMs: job.endedAt && job.startedAt
+      ? Math.max(0, new Date(job.endedAt).getTime() - new Date(job.startedAt).getTime())
+      : null,
+    error: job.error || "",
+    result: job.result || null
+  };
+}
+
 function buildSub2ApiImagePublicPayload(connection, identity, sessionToken = null, extra = {}) {
   return {
     sessionToken,
@@ -2241,6 +2274,144 @@ async function generateSub2ApiImages({ mode, connection, apiKey, prompt, model, 
     }
   }
   return images.slice(0, count);
+}
+
+const sub2apiImageGenerateSchema = z.object({
+  mode: z.enum(["text", "image"]).default("text"),
+  keyId: z.string().trim().optional().default(""),
+  prompt: z.string().trim().min(1).max(4000),
+  model: z.string().trim().optional().default("gpt-image-2"),
+  quality: z.string().trim().optional().default("auto"),
+  outputFormat: z.string().trim().optional().default("png"),
+  aspectRatio: z.string().trim().optional().default("auto"),
+  count: z.coerce.number().int().min(1).max(SUB2API_IMAGE_MAX_COUNT).optional().default(1),
+  referenceImages: z.array(z.string()).max(SUB2API_IMAGE_MAX_REFERENCE_IMAGES).optional().default([])
+});
+
+function prepareSub2ApiImageGenerateRequest(body) {
+  const parsed = sub2apiImageGenerateSchema.safeParse(getBodyObject(body));
+  if (!parsed.success) {
+    const error = new Error("图片生成参数不正确");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const payload = parsed.data;
+  if (payload.mode === "image" && payload.referenceImages.length < 1) {
+    const error = new Error("图生图需要至少 1 张参考图");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const model = SUB2API_IMAGE_MODELS.includes(payload.model) ? payload.model : "gpt-image-2";
+  const quality = SUB2API_IMAGE_QUALITIES.includes(payload.quality) ? payload.quality : "auto";
+  const outputFormat = SUB2API_IMAGE_FORMATS.includes(payload.outputFormat) ? payload.outputFormat : "png";
+  const aspectRatio = SUB2API_IMAGE_ASPECT_RATIOS.includes(payload.aspectRatio) ? payload.aspectRatio : "auto";
+  const size = getSub2ApiImageSize(aspectRatio);
+  return { payload, model, quality, outputFormat, aspectRatio, size };
+}
+
+function auditSub2ApiImageGenerateFailure({ jobId, payload, connection, imageSession, model, error }) {
+  createAuditLog({
+    action: "sub2api.image.generate_failed",
+    actor: "public",
+    resourceType: "sub2api_image_job",
+    resourceId: jobId,
+    detail: {
+      connectionId: connection.id,
+      sub2apiUserId: imageSession.userId,
+      mode: payload.mode,
+      model,
+      message: error.message || "生成失败"
+    }
+  });
+}
+
+async function completeSub2ApiImageGeneration({
+  jobId,
+  startedAt,
+  payload,
+  connection,
+  imageSession,
+  model,
+  quality,
+  outputFormat,
+  aspectRatio,
+  size
+}) {
+  const key = await getSub2ApiImageKeyForRequest(connection, imageSession, payload.keyId);
+  const images = await generateSub2ApiImages({
+    mode: payload.mode,
+    connection,
+    apiKey: key.secret,
+    prompt: payload.prompt,
+    model,
+    quality,
+    outputFormat,
+    size,
+    count: payload.count,
+    referenceImages: payload.referenceImages
+  });
+
+  if (!images.length) {
+    throw new Error("远程 Sub2api 未返回图片结果");
+  }
+
+  const result = {
+    success: true,
+    jobId,
+    mode: payload.mode,
+    model,
+    quality,
+    outputFormat,
+    aspectRatio,
+    size,
+    count: payload.count,
+    elapsedMs: Date.now() - startedAt,
+    images
+  };
+
+  createAuditLog({
+    action: "sub2api.image.generate",
+    actor: "public",
+    resourceType: "sub2api_image_job",
+    resourceId: jobId,
+    detail: {
+      connectionId: connection.id,
+      sub2apiUserId: imageSession.userId,
+      mode: payload.mode,
+      model,
+      quality,
+      outputFormat,
+      aspectRatio,
+      count: payload.count,
+      returned: images.length,
+      elapsedMs: result.elapsedMs
+    }
+  });
+
+  return result;
+}
+
+async function runSub2ApiImageJob(job, params) {
+  job.status = "running";
+  job.startedAt = nowIso();
+  job.expiresAtMs = Date.now() + SUB2API_IMAGE_JOB_TTL_MS;
+  try {
+    job.result = await completeSub2ApiImageGeneration({
+      ...params,
+      jobId: job.id,
+      startedAt: new Date(job.startedAt).getTime()
+    });
+    job.status = "succeeded";
+  } catch (error) {
+    job.status = "failed";
+    job.error = error.message || "图片生成失败";
+    auditSub2ApiImageGenerateFailure({ ...params, jobId: job.id, error });
+  } finally {
+    job.endedAt = nowIso();
+    job.expiresAtMs = Date.now() + SUB2API_IMAGE_JOB_TTL_MS;
+  }
 }
 
 app.get("/healthz", async () => ({
@@ -2750,33 +2921,83 @@ app.get("/api/public/sub2api/image/keys", { preHandler: requireSub2ApiImageSessi
   }
 });
 
+app.post("/api/public/sub2api/image/jobs", {
+  preHandler: requireSub2ApiImageSession,
+  bodyLimit: SUB2API_IMAGE_BODY_LIMIT
+}, async (request, reply) => {
+  let prepared;
+  try {
+    prepared = prepareSub2ApiImageGenerateRequest(request.body);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message || "图片生成参数不正确" });
+  }
+
+  let connection;
+  try {
+    connection = getSub2ApiImageConnection(request.sub2apiImage.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  const jobId = nanoid(16);
+  const job = {
+    id: jobId,
+    status: "queued",
+    connectionId: connection.id,
+    sub2apiUserId: request.sub2apiImage.userId,
+    mode: prepared.payload.mode,
+    model: prepared.model,
+    quality: prepared.quality,
+    outputFormat: prepared.outputFormat,
+    aspectRatio: prepared.aspectRatio,
+    count: prepared.payload.count,
+    createdAt: nowIso(),
+    startedAt: null,
+    endedAt: null,
+    expiresAtMs: Date.now() + SUB2API_IMAGE_JOB_TTL_MS,
+    error: "",
+    result: null
+  };
+  sub2apiImageJobs.set(jobId, job);
+
+  setTimeout(() => {
+    void runSub2ApiImageJob(job, {
+      payload: prepared.payload,
+      connection,
+      imageSession: request.sub2apiImage.session,
+      model: prepared.model,
+      quality: prepared.quality,
+      outputFormat: prepared.outputFormat,
+      aspectRatio: prepared.aspectRatio,
+      size: prepared.size
+    });
+  }, 0);
+
+  return reply.code(202).send(serializeSub2ApiImageJob(job));
+});
+
+app.get("/api/public/sub2api/image/jobs/:jobId", { preHandler: requireSub2ApiImageSession }, async (request, reply) => {
+  const jobId = String(request.params?.jobId || "").trim();
+  const job = sub2apiImageJobs.get(jobId);
+  if (!job || job.expiresAtMs <= Date.now()) {
+    if (job) sub2apiImageJobs.delete(job.id);
+    return reply.code(404).send({ message: "图片任务不存在或已过期" });
+  }
+  if (job.connectionId !== request.sub2apiImage.connectionId || job.sub2apiUserId !== request.sub2apiImage.userId) {
+    return reply.code(403).send({ message: "无权查看该图片任务" });
+  }
+  return serializeSub2ApiImageJob(job);
+});
+
 app.post("/api/public/sub2api/image/generate", {
   preHandler: requireSub2ApiImageSession,
   bodyLimit: SUB2API_IMAGE_BODY_LIMIT
 }, async (request, reply) => {
-  const parsed = z.object({
-    mode: z.enum(["text", "image"]).default("text"),
-    keyId: z.string().trim().optional().default(""),
-    prompt: z.string().trim().min(1).max(4000),
-    model: z.string().trim().optional().default("gpt-image-2"),
-    quality: z.string().trim().optional().default("auto"),
-    outputFormat: z.string().trim().optional().default("png"),
-    aspectRatio: z.string().trim().optional().default("auto"),
-    count: z.coerce.number().int().min(1).max(SUB2API_IMAGE_MAX_COUNT).optional().default(1),
-    referenceImages: z.array(z.string()).max(SUB2API_IMAGE_MAX_REFERENCE_IMAGES).optional().default([])
-  }).safeParse(getBodyObject(request.body));
-  if (!parsed.success) {
-    return reply.code(400).send({ message: "图片生成参数不正确" });
-  }
-
-  const payload = parsed.data;
-  const model = SUB2API_IMAGE_MODELS.includes(payload.model) ? payload.model : "gpt-image-2";
-  const quality = SUB2API_IMAGE_QUALITIES.includes(payload.quality) ? payload.quality : "auto";
-  const outputFormat = SUB2API_IMAGE_FORMATS.includes(payload.outputFormat) ? payload.outputFormat : "png";
-  const aspectRatio = SUB2API_IMAGE_ASPECT_RATIOS.includes(payload.aspectRatio) ? payload.aspectRatio : "auto";
-  const size = getSub2ApiImageSize(aspectRatio);
-  if (payload.mode === "image" && payload.referenceImages.length < 1) {
-    return reply.code(400).send({ message: "图生图需要至少 1 张参考图" });
+  let prepared;
+  try {
+    prepared = prepareSub2ApiImageGenerateRequest(request.body);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message || "图片生成参数不正确" });
   }
 
   let connection;
@@ -2789,69 +3010,26 @@ app.post("/api/public/sub2api/image/generate", {
   const jobId = nanoid(16);
   const startedAt = Date.now();
   try {
-    const key = await getSub2ApiImageKeyForRequest(connection, request.sub2apiImage.session, payload.keyId);
-    const images = await generateSub2ApiImages({
-      mode: payload.mode,
-      connection,
-      apiKey: key.secret,
-      prompt: payload.prompt,
-      model,
-      quality,
-      outputFormat,
-      size,
-      count: payload.count,
-      referenceImages: payload.referenceImages
-    });
-
-    if (!images.length) {
-      throw new Error("远程 Sub2api 未返回图片结果");
-    }
-
-    createAuditLog({
-      action: "sub2api.image.generate",
-      actor: "public",
-      resourceType: "sub2api_image_job",
-      resourceId: jobId,
-      detail: {
-        connectionId: connection.id,
-        sub2apiUserId: request.sub2apiImage.userId,
-        mode: payload.mode,
-        model,
-        quality,
-        outputFormat,
-        aspectRatio,
-        count: payload.count,
-        returned: images.length,
-        elapsedMs: Date.now() - startedAt
-      }
-    });
-
-    return {
-      success: true,
+    return await completeSub2ApiImageGeneration({
       jobId,
-      mode: payload.mode,
-      model,
-      quality,
-      outputFormat,
-      aspectRatio,
-      size,
-      count: payload.count,
-      elapsedMs: Date.now() - startedAt,
-      images
-    };
+      startedAt,
+      payload: prepared.payload,
+      connection,
+      imageSession: request.sub2apiImage.session,
+      model: prepared.model,
+      quality: prepared.quality,
+      outputFormat: prepared.outputFormat,
+      aspectRatio: prepared.aspectRatio,
+      size: prepared.size
+    });
   } catch (error) {
-    createAuditLog({
-      action: "sub2api.image.generate_failed",
-      actor: "public",
-      resourceType: "sub2api_image_job",
-      resourceId: jobId,
-      detail: {
-        connectionId: connection.id,
-        sub2apiUserId: request.sub2apiImage.userId,
-        mode: payload.mode,
-        model,
-        message: error.message || "生成失败"
-      }
+    auditSub2ApiImageGenerateFailure({
+      jobId,
+      payload: prepared.payload,
+      connection,
+      imageSession: request.sub2apiImage.session,
+      model: prepared.model,
+      error
     });
     return reply.code(error.status ? 502 : 400).send({ message: error.message || "图片生成失败" });
   }

@@ -683,7 +683,7 @@
           <header class="stage-head">
             <div>
               <h2>生成结果</h2>
-              <p id="stage-subtitle" class="hint">完成登录识别后即可开始生成。</p>
+              <p id="stage-subtitle" class="hint" hidden></p>
             </div>
             <div class="stage-actions">
               <button id="refresh-keys-btn" class="ghost-btn" type="button" disabled>刷新 Key</button>
@@ -844,9 +844,8 @@
         state.account = payload.account || {};
         state.connection = payload.connection || {};
         const name = state.account.email || state.account.username || state.account.userId || "-";
-        const connection = state.connection.name || state.connection.baseUrl || "Sub2api";
-        refs.accountLine.textContent = `${name} · ${connection}`;
-        refs.stageSubtitle.textContent = "图片由 KaWang 后端代理调用 Sub2api，结果直接返回当前页面。";
+        refs.accountLine.textContent = name;
+        refs.stageSubtitle.textContent = "";
       }
 
       async function initialize() {

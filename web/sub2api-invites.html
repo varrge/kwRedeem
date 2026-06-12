@@ -242,9 +242,8 @@
           state.sessionToken = payload.sessionToken;
         }
         const account = payload.account || {};
-        const connection = payload.connection || {};
         const displayName = account.email || account.username || account.userId || "-";
-        refs.accountLine.textContent = `${displayName} · ${connection.name || connection.baseUrl || "Sub2api"}`;
+        refs.accountLine.textContent = displayName;
         refs.limitValue.textContent = payload.inviteLimit ?? "-";
         refs.usedValue.textContent = payload.used ?? "-";
         refs.remainingValue.textContent = payload.remaining ?? "-";

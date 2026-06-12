@@ -765,8 +765,33 @@
           .replaceAll("'", "&#39;");
       }
 
+      function getErrorMessage(value, fallback = "请求失败") {
+        if (value === null || value === undefined) return fallback;
+        if (typeof value === "string") return value.trim() || fallback;
+        if (typeof value === "number" || typeof value === "boolean") return String(value);
+        if (Array.isArray(value)) {
+          return value.map((item) => getErrorMessage(item, "")).filter(Boolean).join("; ") || fallback;
+        }
+        if (typeof value === "object") {
+          for (const key of ["message", "msg", "error_msg", "detail", "reason", "description"]) {
+            const message = getErrorMessage(value[key], "");
+            if (message) return message;
+          }
+          for (const key of ["error", "errors", "details", "data"]) {
+            const message = getErrorMessage(value[key], "");
+            if (message) return message;
+          }
+          try {
+            return JSON.stringify(value).slice(0, 1000) || fallback;
+          } catch {
+            return fallback;
+          }
+        }
+        return fallback;
+      }
+
       function setStatus(message, type = "info") {
-        refs.statusLine.textContent = message || "";
+        refs.statusLine.textContent = getErrorMessage(message, "");
         refs.statusLine.className = `status-line ${type === "error" ? "error" : type === "success" ? "success" : ""}`;
       }
 
@@ -794,7 +819,7 @@
         }
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(payload.message || "请求失败");
+          throw new Error(getErrorMessage(payload, "请求失败"));
         }
         return payload;
       }
@@ -942,7 +967,7 @@
             return job.result;
           }
           if (job.status === "failed") {
-            throw new Error(job.error || "图片生成失败");
+            throw new Error(getErrorMessage(job.error || job, "图片生成失败"));
           }
           if (pollCount % 4 === 0) {
             showLoading(`任务 ${jobId} 正在生成，当前状态：${job.status || "running"}。`);
@@ -1007,11 +1032,12 @@
       }
 
       function renderError(error) {
+        const message = getErrorMessage(error, "未知错误");
         refs.stageBody.innerHTML = `
           <div class="error-box">
             <div>
               <h3>生成失败</h3>
-              <p>${escapeHtml(error.message || "未知错误")}</p>
+              <p>${escapeHtml(message)}</p>
             </div>
           </div>
         `;

@@ -65,6 +65,7 @@ const SUB2API_IMAGE_SESSION_TTL_MS = 30 * 60 * 1000;
 const SUB2API_IMAGE_KEYS_TTL_MS = 2 * 60 * 1000;
 const SUB2API_IMAGE_GENERATE_TIMEOUT_MS = 180 * 1000;
 const SUB2API_IMAGE_JOB_TTL_MS = 30 * 60 * 1000;
+const SUB2API_IMAGE_RESPONSES_MODEL = "gpt-5.5";
 const SUB2API_IMAGE_MAX_COUNT = 5;
 const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
 const SUB2API_IMAGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -1679,13 +1680,39 @@ async function requireSub2ApiSession(request, reply) {
   }
 }
 
+function getReadableErrorMessage(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value.trim() || fallback;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value instanceof Error) return value.message || fallback;
+  if (Array.isArray(value)) {
+    return value.map((item) => getReadableErrorMessage(item, "")).filter(Boolean).join("; ") || fallback;
+  }
+  if (typeof value === "object") {
+    for (const key of ["message", "msg", "error_msg", "detail", "reason", "description"]) {
+      const message = getReadableErrorMessage(value[key], "");
+      if (message) return message;
+    }
+    for (const key of ["error", "errors", "details", "data"]) {
+      const message = getReadableErrorMessage(value[key], "");
+      if (message) return message;
+    }
+    try {
+      return JSON.stringify(value).slice(0, 1000) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 function getSub2ApiRemoteMessage(responseInfo = {}) {
   const json = responseInfo.json;
   if (json && typeof json === "object") {
-    const message = json.message || json.msg || json.error || json.error_msg || json.detail;
-    if (message) return String(message);
+    const message = getReadableErrorMessage(json, "");
+    if (message) return message;
   }
-  return responseInfo.text || "远程 Sub2api 请求失败";
+  return getReadableErrorMessage(responseInfo.text, "远程 Sub2api 请求失败");
 }
 
 async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null, headers = {} } = {}) {
@@ -2171,6 +2198,83 @@ async function callSub2ApiOpenAiForm(connection, apiKey, pathname, form) {
   return json;
 }
 
+function walkForSub2ApiImageCall(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = walkForSub2ApiImageCall(child);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    if (value.type === "image_generation_call" && value.result) return value;
+    for (const child of Object.values(value)) {
+      const found = walkForSub2ApiImageCall(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function extractSub2ApiResponsesImageItems(raw) {
+  let partialB64 = "";
+  let partialPrompt = "";
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice(6).trim();
+    if (!payload || payload === "[DONE]") continue;
+    const event = safeParseJson(payload, null);
+    if (!event || typeof event !== "object") continue;
+    if (event.type === "response.image_generation_call.partial_image" && event.partial_image_b64) {
+      partialB64 = event.partial_image_b64;
+      partialPrompt = event.revised_prompt || partialPrompt;
+      continue;
+    }
+    if (event.type === "response.output_item.done" && event.item?.type === "image_generation_call") {
+      if (event.item.result) {
+        return [{ b64_json: event.item.result, revised_prompt: event.item.revised_prompt || "" }];
+      }
+      if (partialB64) {
+        return [{ b64_json: partialB64, revised_prompt: partialPrompt }];
+      }
+    }
+  }
+
+  const parsed = safeParseJson(raw, null);
+  const found = walkForSub2ApiImageCall(parsed);
+  if (found?.result) {
+    return [{ b64_json: found.result, revised_prompt: found.revised_prompt || "" }];
+  }
+  if (partialB64) {
+    return [{ b64_json: partialB64, revised_prompt: partialPrompt }];
+  }
+  return [];
+}
+
+async function callSub2ApiResponses(connection, apiKey, body) {
+  const response = await fetch(`${connection.base_url}/v1/responses`, {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream, application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  return extractSub2ApiResponsesImageItems(text);
+}
+
 function extractSub2ApiImageItems(json) {
   const payload = unwrapSub2ApiRemoteData(json);
   if (Array.isArray(payload)) return payload;
@@ -2227,7 +2331,66 @@ async function normalizeSub2ApiImageResult(item, outputFormat) {
   return null;
 }
 
+function buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, size }) {
+  return {
+    type: "image_generation",
+    model,
+    action: mode === "image" ? "edit" : "generate",
+    size: size === "auto" ? "auto" : size,
+    quality,
+    output_format: outputFormat,
+    moderation: "low",
+    partial_images: 0
+  };
+}
+
+function buildSub2ApiResponsesBody({ mode, prompt, model, quality, outputFormat, size, referenceImages = [] }) {
+  const content = [{ type: "input_text", text: prompt }];
+  if (mode === "image") {
+    for (const dataUrl of referenceImages) {
+      content.push({ type: "input_image", image_url: dataUrl });
+    }
+  }
+  return {
+    model: SUB2API_IMAGE_RESPONSES_MODEL,
+    instructions: "You are a tool runner. Pass the user prompt to image_generation VERBATIM. DO NOT rewrite, expand, polish, or revise it in any way. Use the exact text the user gave.",
+    input: [{ role: "user", content }],
+    tools: [buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, size })],
+    tool_choice: { type: "image_generation" },
+    reasoning: { effort: "xhigh" },
+    store: false,
+    stream: true
+  };
+}
+
+function shouldFallbackToSub2ApiImagesApi(error) {
+  const status = Number(error?.status || error?.httpStatus || 0);
+  if ([404, 405, 501, 503].includes(status)) return true;
+  const message = getReadableErrorMessage(error, "").toLowerCase();
+  return message.includes("responses") && (
+    message.includes("not found")
+    || message.includes("not supported")
+    || message.includes("unsupported")
+    || message.includes("unavailable")
+  );
+}
+
 async function textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size }) {
+  try {
+    const body = buildSub2ApiResponsesBody({
+      mode: "text",
+      prompt,
+      model,
+      quality,
+      outputFormat,
+      size
+    });
+    const items = await callSub2ApiResponses(connection, apiKey, body);
+    if (items.length) return items;
+  } catch (error) {
+    if (!shouldFallbackToSub2ApiImagesApi(error)) throw error;
+  }
+
   const body = {
     model,
     prompt,
@@ -2242,6 +2405,22 @@ async function textToSub2ApiImage({ connection, apiKey, prompt, model, quality, 
 }
 
 async function referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size, referenceImages }) {
+  try {
+    const body = buildSub2ApiResponsesBody({
+      mode: "image",
+      prompt,
+      model,
+      quality,
+      outputFormat,
+      size,
+      referenceImages
+    });
+    const items = await callSub2ApiResponses(connection, apiKey, body);
+    if (items.length) return items;
+  } catch (error) {
+    if (!shouldFallbackToSub2ApiImagesApi(error)) throw error;
+  }
+
   const form = new FormData();
   referenceImages.forEach((dataUrl, index) => {
     const parsed = parseSub2ApiImageDataUrl(dataUrl);
@@ -2322,7 +2501,7 @@ function auditSub2ApiImageGenerateFailure({ jobId, payload, connection, imageSes
       sub2apiUserId: imageSession.userId,
       mode: payload.mode,
       model,
-      message: error.message || "生成失败"
+      message: getReadableErrorMessage(error, "生成失败")
     }
   });
 }
@@ -2406,7 +2585,7 @@ async function runSub2ApiImageJob(job, params) {
     job.status = "succeeded";
   } catch (error) {
     job.status = "failed";
-    job.error = error.message || "图片生成失败";
+    job.error = getReadableErrorMessage(error, "图片生成失败");
     auditSub2ApiImageGenerateFailure({ ...params, jobId: job.id, error });
   } finally {
     job.endedAt = nowIso();

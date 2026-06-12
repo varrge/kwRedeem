@@ -183,7 +183,8 @@
 
     <script src="./runtime-config.js"></script>
     <script>
-      const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
+      const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+      const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
       const refs = {
         accountLine: document.querySelector("#account-line"),
         applyBtn: document.querySelector("#apply-btn"),
@@ -267,24 +268,37 @@
       }
 
       async function initialize() {
-        const sso = new URLSearchParams(window.location.search).get("sso") || "";
-        if (!sso) {
+        const params = new URLSearchParams(window.location.search);
+        const sso = params.get("sso") || "";
+        const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+        if (!sso && !connectionId) {
           refs.accountLine.textContent = "未识别账号";
-          setStatus("缺少 SSO token", "error");
+          setStatus("缺少 SSO token 或 connectionId", "error");
           return;
         }
         try {
           setStatus("正在加载...");
-          const payload = await request("/api/public/sub2api/session", {
-            method: "POST",
-            body: JSON.stringify({ sso })
-          });
+          const payload = sso
+            ? await request("/api/public/sub2api/session", {
+                method: "POST",
+                body: JSON.stringify({ sso })
+              })
+            : await request("/api/public/sub2api/session-from-token", {
+                method: "POST",
+                body: JSON.stringify({
+                  connectionId,
+                  accessToken: localStorage.getItem("auth_token") || ""
+                })
+              });
           state.initialized = true;
           render(payload);
           setStatus("");
         } catch (error) {
           refs.accountLine.textContent = "账号识别失败";
-          setStatus(error.message, "error");
+          const sameOriginHint = connectionId && !sso
+            ? "请确认此页面是通过 Sub2api 同源地址打开，例如 sub.vsakura.top 下的反代路径。"
+            : "";
+          setStatus([error.message, sameOriginHint].filter(Boolean).join(" "), "error");
         }
       }
 

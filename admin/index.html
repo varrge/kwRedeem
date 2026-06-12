@@ -801,10 +801,13 @@
             <div class="card">
               <div class="card-header"><h3>嵌入说明</h3></div>
               <p class="hint">
-                嵌入页地址：<code>/sub2api-invites.html?sso=&lt;jwt&gt;</code>。JWT 使用该连接的 Admin Token 做 HS256 签名，payload 需要包含 connectionId 与 user.id。
+                嵌入页地址：<code>/sub2api-invites.html?sso=&lt;jwt&gt;</code>。JWT 由远程 Sub2api 服务端使用该连接的 Admin Token 做 HS256 签名，payload 需要包含 connectionId 与 user.id。connectionId 使用连接列表里连接名下方的 ID，也可以用 baseUrl 放到 iss。
               </p>
               <p class="hint">
-                远程创建接口固定为 <code>POST /api/admin/invite-codes</code>，测试接口固定为 <code>GET /api/admin/invite-codes/ping</code>。
+                不改 Sub2api 代码时，把本页面反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-invites.html?connectionId=&lt;连接ID&gt;</code>。页面会读取 Sub2api 已登录态的 <code>localStorage.auth_token</code>，再由后端调用 <code>/api/v1/auth/me</code> 校验账号。
+              </p>
+              <p class="hint">
+                最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
               </p>
             </div>
           </div>

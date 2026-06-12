@@ -56,6 +56,7 @@ export function extractSub2ApiIdentity(payload) {
   const userId = payload?.sub
     ?? payload?.userId
     ?? payload?.user_id
+    ?? payload?.id
     ?? user.id
     ?? "";
   const normalizedUserId = String(userId).trim();

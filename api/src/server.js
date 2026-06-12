@@ -26,6 +26,7 @@ import {
   SUB2API_INVITE_LIMIT,
   countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
+  extractSub2ApiIdentity,
   getSub2ApiInviteQuota,
   normalizeSub2ApiBaseUrl,
   reserveSub2ApiInvite,
@@ -1697,6 +1698,46 @@ async function callSub2ApiRemote(connection, pathname, { method = "GET", body = 
   return result;
 }
 
+async function callSub2ApiUserRemote(connection, pathname, accessToken) {
+  const response = await fetch(`${connection.base_url}${pathname}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`
+    },
+    signal: AbortSignal.timeout(10000)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  return result;
+}
+
+async function getSub2ApiIdentityFromAccessToken(connection, accessToken) {
+  const token = String(accessToken || "").trim();
+  if (!token) {
+    throw new Error("缺少 Sub2api 登录 token");
+  }
+
+  const result = await callSub2ApiUserRemote(connection, "/api/v1/auth/me", token);
+  if (result.json && result.json.code !== undefined && Number(result.json.code) !== 0) {
+    throw new Error(getSub2ApiRemoteMessage(result));
+  }
+
+  const payload = unwrapSub2ApiRemoteData(result.json);
+  try {
+    return extractSub2ApiIdentity(payload);
+  } catch (error) {
+    throw new Error(error.message || "Sub2api 当前用户信息无效");
+  }
+}
+
 async function testSub2ApiConnection(connection) {
   try {
     const result = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes?type=invitation&page=1&page_size=1");
@@ -2161,6 +2202,32 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
     return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
+  }
+});
+
+app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1),
+    accessToken: z.string().trim().min(20)
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
+  }
+
+  const connection = findSub2ApiConnectionBySelector(parsed.data.connectionId);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
+    const sessionToken = signSub2ApiSessionToken(connection, identity);
+    return buildSub2ApiPublicPayload(connection, identity, sessionToken);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
   }
 });
 

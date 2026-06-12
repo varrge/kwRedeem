@@ -807,6 +807,9 @@
                 不改 Sub2api 代码时，把本页面反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-invites.html?connectionId=&lt;连接ID&gt;</code>。页面会读取 Sub2api 已登录态的 <code>localStorage.auth_token</code>，再由后端调用 <code>/api/v1/auth/me</code> 校验账号。
               </p>
               <p class="hint">
+                生图嵌入页地址：<code>/sub2api-image.html?connectionId=&lt;连接ID&gt;</code>。建议同样反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-image.html?connectionId=&lt;连接ID&gt;</code>。图片生成由 KaWang 后端代理调用 Sub2api，前台不会暴露真实 API Key。
+              </p>
+              <p class="hint">
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
               </p>
             </div>

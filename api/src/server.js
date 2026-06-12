@@ -61,6 +61,17 @@ const SMS_ORDER_TIMEOUT_MS = 60 * 1000;
 const QUOTA_AUTO_CLAIM_MAX_ACTIVE = 3;
 const QUOTA_AUTO_CLAIM_SESSION_TTL_MS = 45_000;
 const QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS = 10_000;
+const SUB2API_IMAGE_SESSION_TTL_MS = 30 * 60 * 1000;
+const SUB2API_IMAGE_KEYS_TTL_MS = 2 * 60 * 1000;
+const SUB2API_IMAGE_GENERATE_TIMEOUT_MS = 180 * 1000;
+const SUB2API_IMAGE_MAX_COUNT = 5;
+const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
+const SUB2API_IMAGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const SUB2API_IMAGE_BODY_LIMIT = 96 * 1024 * 1024;
+const SUB2API_IMAGE_MODELS = Object.freeze(["gpt-image-2", "gpt-image-1.5", "gpt-image-1", "dall-e-3"]);
+const SUB2API_IMAGE_QUALITIES = Object.freeze(["auto", "low", "medium", "high"]);
+const SUB2API_IMAGE_FORMATS = Object.freeze(["png", "webp", "jpeg"]);
+const SUB2API_IMAGE_ASPECT_RATIOS = Object.freeze(["auto", "1:1", "16:9", "4:3", "3:4", "9:16"]);
 
 const updateState = {
   status: "idle",
@@ -75,6 +86,7 @@ const updateState = {
 
 const quotaAutoClaimSessions = new Map();
 const quotaAutoClaimQueue = [];
+const sub2apiImageSessions = new Map();
 
 function cleanupQuotaAutoClaimSessions() {
   const now = Date.now();
@@ -190,6 +202,7 @@ function cleanupExpiredEntries() {
 
 setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
 setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS);
+setInterval(cleanupSub2ApiImageSessions, 60_000);
 // --- End Verification Cache ---
 
 async function fetchStaticSmsCode(smsUrl) {
@@ -1785,6 +1798,451 @@ function extractRemoteInviteResult(result) {
   };
 }
 
+function cleanupSub2ApiImageSessions() {
+  const now = Date.now();
+  for (const [id, session] of sub2apiImageSessions.entries()) {
+    if (!session || session.expiresAtMs <= now) {
+      sub2apiImageSessions.delete(id);
+    }
+  }
+}
+
+function buildSub2ApiImagePublicPayload(connection, identity, sessionToken = null, extra = {}) {
+  return {
+    sessionToken,
+    account: {
+      userId: identity.userId,
+      email: identity.email || "",
+      username: identity.username || ""
+    },
+    connection: {
+      id: connection.id,
+      name: connection.name,
+      baseUrl: connection.base_url
+    },
+    options: {
+      models: SUB2API_IMAGE_MODELS,
+      qualities: SUB2API_IMAGE_QUALITIES,
+      formats: SUB2API_IMAGE_FORMATS,
+      aspectRatios: SUB2API_IMAGE_ASPECT_RATIOS,
+      maxCount: SUB2API_IMAGE_MAX_COUNT,
+      maxReferenceImages: SUB2API_IMAGE_MAX_REFERENCE_IMAGES,
+      maxReferenceImageBytes: SUB2API_IMAGE_MAX_IMAGE_BYTES
+    },
+    ...extra
+  };
+}
+
+function signSub2ApiImageSessionToken(connection, identity, accessToken) {
+  const sessionId = nanoid(18);
+  const expiresAtMs = Date.now() + SUB2API_IMAGE_SESSION_TTL_MS;
+  sub2apiImageSessions.set(sessionId, {
+    id: sessionId,
+    connectionId: connection.id,
+    userId: identity.userId,
+    email: identity.email || "",
+    username: identity.username || "",
+    accessToken,
+    keys: new Map(),
+    keysFetchedAt: 0,
+    createdAt: nowIso(),
+    lastUsedAt: nowIso(),
+    expiresAtMs
+  });
+
+  return jwt.sign({
+    scope: "sub2api_image",
+    imageSessionId: sessionId,
+    connectionId: connection.id,
+    sub2apiUserId: identity.userId,
+    email: identity.email || "",
+    username: identity.username || ""
+  }, env.jwtSecret, { expiresIn: "30m" });
+}
+
+async function requireSub2ApiImageSession(request, reply) {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return reply.code(401).send({ message: "缺少 Sub2api 图片会话 token" });
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+  try {
+    const payload = jwt.verify(token, env.jwtSecret);
+    if (payload?.scope !== "sub2api_image" || !payload.imageSessionId || !payload.connectionId || !payload.sub2apiUserId) {
+      return reply.code(401).send({ message: "Sub2api 图片会话无效" });
+    }
+
+    const session = sub2apiImageSessions.get(String(payload.imageSessionId));
+    if (!session || session.expiresAtMs <= Date.now()) {
+      if (session) sub2apiImageSessions.delete(session.id);
+      return reply.code(401).send({ message: "Sub2api 图片会话已失效" });
+    }
+    if (session.connectionId !== String(payload.connectionId) || session.userId !== String(payload.sub2apiUserId)) {
+      return reply.code(401).send({ message: "Sub2api 图片会话不匹配" });
+    }
+
+    session.lastUsedAt = nowIso();
+    request.sub2apiImage = {
+      session,
+      connectionId: session.connectionId,
+      userId: session.userId,
+      email: session.email || "",
+      username: session.username || ""
+    };
+  } catch {
+    return reply.code(401).send({ message: "Sub2api 图片会话已失效" });
+  }
+}
+
+function getSub2ApiConnectionById(connectionId) {
+  return db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(connectionId, sub2apiConnectionStatuses.deleted);
+}
+
+function getSub2ApiImageConnection(connectionId) {
+  const connection = getSub2ApiConnectionById(connectionId);
+  if (!connection) {
+    const error = new Error("Sub2api 连接不存在或已删除");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    const error = new Error("Sub2api 连接已停用");
+    error.statusCode = 403;
+    throw error;
+  }
+  return connection;
+}
+
+function pickFirstString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function getSub2ApiImageKeySecret(item = {}) {
+  return pickFirstString(
+    item.apiKey,
+    item.api_key,
+    item.key,
+    item.keyValue,
+    item.key_value,
+    item.token,
+    item.value,
+    item.secret,
+    item.sk
+  );
+}
+
+function getSub2ApiImageKeyLabel(item = {}, index = 0) {
+  return pickFirstString(
+    item.name,
+    item.label,
+    item.title,
+    item.remark,
+    item.description,
+    item.group,
+    item.groupName,
+    item.group_name,
+    item.alias
+  ) || `API Key ${index + 1}`;
+}
+
+function getSub2ApiImageKeyListPayload(json) {
+  const payload = unwrapSub2ApiRemoteData(json);
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of ["items", "list", "keys", "records", "data"]) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+}
+
+function isDisabledSub2ApiKey(item = {}) {
+  const status = String(item.status ?? item.state ?? item.enabled ?? "").trim().toLowerCase();
+  return ["disabled", "inactive", "deleted", "false", "0", "off"].includes(status);
+}
+
+function hasExplicitImageSupport(item = {}) {
+  const flags = [
+    item.imageEnabled,
+    item.image_enabled,
+    item.imagesEnabled,
+    item.images_enabled,
+    item.enableImage,
+    item.enable_image,
+    item.supportsImages,
+    item.supports_images,
+    item.supportImage,
+    item.support_image,
+    item.canImage,
+    item.can_image
+  ];
+  for (const flag of flags) {
+    if (typeof flag === "boolean") return flag;
+    if (typeof flag === "number") return flag > 0;
+    if (typeof flag === "string" && flag.trim()) {
+      return ["1", "true", "yes", "on", "enabled"].includes(flag.trim().toLowerCase());
+    }
+  }
+  return null;
+}
+
+function shouldIncludeSub2ApiImageKey(item = {}) {
+  if (isDisabledSub2ApiKey(item)) return false;
+  const explicit = hasExplicitImageSupport(item);
+  if (explicit !== null) return explicit;
+  const models = Array.isArray(item.models) ? item.models : Array.isArray(item.modelList) ? item.modelList : [];
+  if (!models.length) return true;
+  return models.some((model) => /image|dall-e/i.test(String(model)));
+}
+
+function hashSub2ApiImageKeySecret(secret) {
+  return createHash("sha256").update(secret).digest("hex").slice(0, 18);
+}
+
+function normalizeSub2ApiImageKeys(json) {
+  const items = getSub2ApiImageKeyListPayload(json);
+  const keys = [];
+  items.forEach((item, index) => {
+    if (!item || typeof item !== "object" || !shouldIncludeSub2ApiImageKey(item)) return;
+    const secret = getSub2ApiImageKeySecret(item);
+    if (!secret || secret.includes("***")) return;
+    const id = pickFirstString(item.id, item.keyId, item.key_id, item.uuid) || hashSub2ApiImageKeySecret(secret);
+    keys.push({
+      id: String(id),
+      label: getSub2ApiImageKeyLabel(item, index),
+      models: Array.isArray(item.models) ? item.models.map(String) : [],
+      secret
+    });
+  });
+  return keys;
+}
+
+function serializeSub2ApiImageKey(key) {
+  return {
+    id: key.id,
+    label: key.label,
+    models: key.models || []
+  };
+}
+
+async function refreshSub2ApiImageKeys(connection, session, force = false) {
+  const now = Date.now();
+  if (!force && session.keys?.size && now - session.keysFetchedAt < SUB2API_IMAGE_KEYS_TTL_MS) {
+    return Array.from(session.keys.values()).map(serializeSub2ApiImageKey);
+  }
+
+  const result = await callSub2ApiUserRemote(connection, "/api/v1/keys", session.accessToken);
+  if (result.json && result.json.code !== undefined && Number(result.json.code) !== 0) {
+    throw new Error(getSub2ApiRemoteMessage(result));
+  }
+  const keys = normalizeSub2ApiImageKeys(result.json);
+  session.keys = new Map(keys.map((key) => [key.id, key]));
+  session.keysFetchedAt = now;
+  return keys.map(serializeSub2ApiImageKey);
+}
+
+async function getSub2ApiImageKeyForRequest(connection, session, keyId = "") {
+  await refreshSub2ApiImageKeys(connection, session, false);
+  let key = keyId ? session.keys.get(keyId) : null;
+  if (!key) {
+    await refreshSub2ApiImageKeys(connection, session, true);
+    key = keyId ? session.keys.get(keyId) : Array.from(session.keys.values())[0];
+  }
+  if (!key) {
+    throw new Error("当前 Sub2api 账号没有可用的图片 API Key");
+  }
+  return key;
+}
+
+function getSub2ApiImageSize(aspectRatio) {
+  const normalized = String(aspectRatio || "auto").trim();
+  if (normalized === "auto") return "auto";
+  if (normalized === "1:1") return "1024x1024";
+  if (normalized === "16:9" || normalized === "4:3") return "1536x1024";
+  if (normalized === "3:4" || normalized === "9:16") return "1024x1536";
+  return "auto";
+}
+
+function getSub2ApiImageMime(outputFormat) {
+  if (outputFormat === "jpeg") return "image/jpeg";
+  if (outputFormat === "webp") return "image/webp";
+  return "image/png";
+}
+
+function parseSub2ApiImageDataUrl(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^data:(image\/(?:png|jpe?g|webp));base64,([\s\S]+)$/i);
+  if (!match) {
+    throw new Error("参考图必须是 PNG、JPG 或 WebP 格式");
+  }
+  const mimeType = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
+  const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+  if (!buffer.length) {
+    throw new Error("参考图内容为空");
+  }
+  if (buffer.length > SUB2API_IMAGE_MAX_IMAGE_BYTES) {
+    throw new Error("单张参考图不能超过 20MB");
+  }
+  return { mimeType, buffer };
+}
+
+async function callSub2ApiOpenAiJson(connection, apiKey, pathname, body) {
+  const response = await fetch(`${connection.base_url}${pathname}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  return json;
+}
+
+async function callSub2ApiOpenAiForm(connection, apiKey, pathname, form) {
+  const response = await fetch(`${connection.base_url}${pathname}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: form,
+    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  return json;
+}
+
+function extractSub2ApiImageItems(json) {
+  const payload = unwrapSub2ApiRemoteData(json);
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.images)) return payload.images;
+  if (payload?.b64_json || payload?.url) return [payload];
+  return [];
+}
+
+async function dataUrlFromRemoteImageUrl(url, outputFormat) {
+  const response = await fetch(url, {
+    headers: { Accept: "image/*" },
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    throw new Error("图片 URL 拉取失败");
+  }
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > SUB2API_IMAGE_MAX_IMAGE_BYTES) {
+    throw new Error("图片结果超过直接返回大小限制");
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > SUB2API_IMAGE_MAX_IMAGE_BYTES) {
+    throw new Error("图片结果超过直接返回大小限制");
+  }
+  const mimeType = response.headers.get("content-type")?.split(";")[0] || getSub2ApiImageMime(outputFormat);
+  return `data:${mimeType};base64,${Buffer.from(arrayBuffer).toString("base64")}`;
+}
+
+async function normalizeSub2ApiImageResult(item, outputFormat) {
+  const b64 = item?.b64_json || item?.b64Json || item?.base64 || item?.image_base64 || "";
+  if (b64) {
+    const mimeType = getSub2ApiImageMime(outputFormat);
+    return {
+      dataUrl: `data:${mimeType};base64,${String(b64).replace(/^data:[^,]+,/, "")}`,
+      url: "",
+      revisedPrompt: item?.revised_prompt || item?.revisedPrompt || ""
+    };
+  }
+  const url = item?.url || item?.image_url || "";
+  if (url) {
+    let dataUrl = "";
+    try {
+      dataUrl = await dataUrlFromRemoteImageUrl(url, outputFormat);
+    } catch {
+      dataUrl = "";
+    }
+    return {
+      dataUrl,
+      url,
+      revisedPrompt: item?.revised_prompt || item?.revisedPrompt || ""
+    };
+  }
+  return null;
+}
+
+async function textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size }) {
+  const body = {
+    model,
+    prompt,
+    n: 1,
+    size,
+    quality,
+    output_format: outputFormat,
+    response_format: "b64_json"
+  };
+  const json = await callSub2ApiOpenAiJson(connection, apiKey, "/v1/images/generations", body);
+  return extractSub2ApiImageItems(json);
+}
+
+async function referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size, referenceImages }) {
+  const form = new FormData();
+  referenceImages.forEach((dataUrl, index) => {
+    const parsed = parseSub2ApiImageDataUrl(dataUrl);
+    const ext = parsed.mimeType === "image/jpeg" ? "jpg" : parsed.mimeType.split("/")[1] || "png";
+    const blob = new Blob([parsed.buffer], { type: parsed.mimeType });
+    form.append(index === 0 ? "image" : "image[]", blob, `reference-${index + 1}.${ext}`);
+  });
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("n", "1");
+  form.append("size", size === "auto" ? "1024x1024" : size);
+  form.append("quality", quality);
+  form.append("output_format", outputFormat);
+  form.append("response_format", "b64_json");
+
+  const json = await callSub2ApiOpenAiForm(connection, apiKey, "/v1/images/edits", form);
+  return extractSub2ApiImageItems(json);
+}
+
+async function generateSub2ApiImages({ mode, connection, apiKey, prompt, model, quality, outputFormat, size, count, referenceImages }) {
+  const images = [];
+  for (let i = 0; i < count; i += 1) {
+    const rawItems = mode === "image"
+      ? await referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size, referenceImages })
+      : await textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size });
+    for (const item of rawItems) {
+      const normalized = await normalizeSub2ApiImageResult(item, outputFormat);
+      if (normalized) images.push(normalized);
+      if (images.length >= count) break;
+    }
+  }
+  return images.slice(0, count);
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -2231,6 +2689,174 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
   }
 });
 
+app.post("/api/public/sub2api/image/session-from-token", async (request, reply) => {
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1),
+    accessToken: z.string().trim().min(20)
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
+  }
+
+  const connection = findSub2ApiConnectionBySelector(parsed.data.connectionId);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
+    const sessionToken = signSub2ApiImageSessionToken(connection, identity, parsed.data.accessToken);
+    return buildSub2ApiImagePublicPayload(connection, identity, sessionToken);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
+  }
+});
+
+app.get("/api/public/sub2api/image/bootstrap", { preHandler: requireSub2ApiImageSession }, async (request, reply) => {
+  let connection;
+  try {
+    connection = getSub2ApiImageConnection(request.sub2apiImage.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  try {
+    const keys = await refreshSub2ApiImageKeys(connection, request.sub2apiImage.session, true);
+    return buildSub2ApiImagePublicPayload(connection, {
+      userId: request.sub2apiImage.userId,
+      email: request.sub2apiImage.email,
+      username: request.sub2apiImage.username
+    }, null, { keys });
+  } catch (error) {
+    return reply.code(502).send({ message: error.message || "获取 Sub2api 图片 Key 失败" });
+  }
+});
+
+app.get("/api/public/sub2api/image/keys", { preHandler: requireSub2ApiImageSession }, async (request, reply) => {
+  let connection;
+  try {
+    connection = getSub2ApiImageConnection(request.sub2apiImage.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  try {
+    return { keys: await refreshSub2ApiImageKeys(connection, request.sub2apiImage.session, true) };
+  } catch (error) {
+    return reply.code(502).send({ message: error.message || "获取 Sub2api 图片 Key 失败" });
+  }
+});
+
+app.post("/api/public/sub2api/image/generate", {
+  preHandler: requireSub2ApiImageSession,
+  bodyLimit: SUB2API_IMAGE_BODY_LIMIT
+}, async (request, reply) => {
+  const parsed = z.object({
+    mode: z.enum(["text", "image"]).default("text"),
+    keyId: z.string().trim().optional().default(""),
+    prompt: z.string().trim().min(1).max(4000),
+    model: z.string().trim().optional().default("gpt-image-2"),
+    quality: z.string().trim().optional().default("auto"),
+    outputFormat: z.string().trim().optional().default("png"),
+    aspectRatio: z.string().trim().optional().default("auto"),
+    count: z.coerce.number().int().min(1).max(SUB2API_IMAGE_MAX_COUNT).optional().default(1),
+    referenceImages: z.array(z.string()).max(SUB2API_IMAGE_MAX_REFERENCE_IMAGES).optional().default([])
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "图片生成参数不正确" });
+  }
+
+  const payload = parsed.data;
+  const model = SUB2API_IMAGE_MODELS.includes(payload.model) ? payload.model : "gpt-image-2";
+  const quality = SUB2API_IMAGE_QUALITIES.includes(payload.quality) ? payload.quality : "auto";
+  const outputFormat = SUB2API_IMAGE_FORMATS.includes(payload.outputFormat) ? payload.outputFormat : "png";
+  const aspectRatio = SUB2API_IMAGE_ASPECT_RATIOS.includes(payload.aspectRatio) ? payload.aspectRatio : "auto";
+  const size = getSub2ApiImageSize(aspectRatio);
+  if (payload.mode === "image" && payload.referenceImages.length < 1) {
+    return reply.code(400).send({ message: "图生图需要至少 1 张参考图" });
+  }
+
+  let connection;
+  try {
+    connection = getSub2ApiImageConnection(request.sub2apiImage.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  const jobId = nanoid(16);
+  const startedAt = Date.now();
+  try {
+    const key = await getSub2ApiImageKeyForRequest(connection, request.sub2apiImage.session, payload.keyId);
+    const images = await generateSub2ApiImages({
+      mode: payload.mode,
+      connection,
+      apiKey: key.secret,
+      prompt: payload.prompt,
+      model,
+      quality,
+      outputFormat,
+      size,
+      count: payload.count,
+      referenceImages: payload.referenceImages
+    });
+
+    if (!images.length) {
+      throw new Error("远程 Sub2api 未返回图片结果");
+    }
+
+    createAuditLog({
+      action: "sub2api.image.generate",
+      actor: "public",
+      resourceType: "sub2api_image_job",
+      resourceId: jobId,
+      detail: {
+        connectionId: connection.id,
+        sub2apiUserId: request.sub2apiImage.userId,
+        mode: payload.mode,
+        model,
+        quality,
+        outputFormat,
+        aspectRatio,
+        count: payload.count,
+        returned: images.length,
+        elapsedMs: Date.now() - startedAt
+      }
+    });
+
+    return {
+      success: true,
+      jobId,
+      mode: payload.mode,
+      model,
+      quality,
+      outputFormat,
+      aspectRatio,
+      size,
+      count: payload.count,
+      elapsedMs: Date.now() - startedAt,
+      images
+    };
+  } catch (error) {
+    createAuditLog({
+      action: "sub2api.image.generate_failed",
+      actor: "public",
+      resourceType: "sub2api_image_job",
+      resourceId: jobId,
+      detail: {
+        connectionId: connection.id,
+        sub2apiUserId: request.sub2apiImage.userId,
+        mode: payload.mode,
+        model,
+        message: error.message || "生成失败"
+      }
+    });
+    return reply.code(error.status ? 502 : 400).send({ message: error.message || "图片生成失败" });
+  }
+});
+
 app.get("/api/public/sub2api/invites", { preHandler: requireSub2ApiSession }, async (request, reply) => {
   const connection = db.prepare(`
     SELECT *
@@ -2313,7 +2939,7 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
       inviteResult.inviteCode,
       inviteResult.remoteInviteId || null,
       inviteResult.status,
-      JSON.stringify(remoteResult.json ?? remoteResult.text ?? {}),
+      null,
       inviteResult.expiresAt,
       updatedAt,
       inviteId
@@ -2354,7 +2980,7 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
       WHERE id = ?
     `).run(
       sub2apiInviteStatuses.failed,
-      error.responseInfo ? JSON.stringify(error.responseInfo.json ?? error.responseInfo.text ?? {}) : null,
+      null,
       error.message || "远程 Sub2api 创建邀请码失败",
       failedAt,
       inviteId

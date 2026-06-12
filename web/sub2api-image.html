@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sub2api 生图系统</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7fb;
+        --panel: #ffffff;
+        --panel-strong: #f0f3f8;
+        --line: #d9e0ea;
+        --text: #172033;
+        --muted: #68758b;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --success: #0f9f6e;
+        --warning: #d97706;
+        --error: #dc2626;
+        --shadow: 0 16px 40px rgba(28, 37, 59, 0.1);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #101521;
+          --panel: #151c2b;
+          --panel-strong: #1d2638;
+          --line: #2a354a;
+          --text: #eef3ff;
+          --muted: #9aa8bd;
+          --accent: #60a5fa;
+          --accent-strong: #3b82f6;
+          --shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
+      .shell {
+        min-height: 100vh;
+        padding: 18px;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+        gap: 18px;
+        min-height: calc(100vh - 36px);
+      }
+
+      .controls,
+      .stage {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .controls {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .controls-head,
+      .stage-head {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .controls-head h1,
+      .stage-head h2 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.25;
+      }
+
+      .account-line,
+      .status-line,
+      .hint {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .status-line.error {
+        color: var(--error);
+      }
+
+      .status-line.success {
+        color: var(--success);
+      }
+
+      .control-scroll {
+        padding: 16px 18px 18px;
+        overflow: auto;
+      }
+
+      .mode-switch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 16px;
+        padding: 4px;
+        border-radius: 8px;
+        background: var(--panel-strong);
+      }
+
+      .mode-btn {
+        border: 0;
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: transparent;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .mode-btn.active {
+        background: var(--panel);
+        color: var(--accent);
+        box-shadow: 0 4px 12px rgba(28, 37, 59, 0.08);
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+        margin-bottom: 14px;
+      }
+
+      .field-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      label,
+      .field-label {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        outline: none;
+      }
+
+      select,
+      input[type="text"] {
+        height: 42px;
+        padding: 0 11px;
+      }
+
+      textarea {
+        min-height: 128px;
+        resize: vertical;
+        padding: 11px;
+        line-height: 1.55;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      }
+
+      .ratio-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+
+      .ratio-btn,
+      .quality-btn {
+        min-height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .ratio-btn.active,
+      .quality-btn.active {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+      }
+
+      .quality-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+
+      .count-line {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .count-line input {
+        flex: 1;
+      }
+
+      .count-value {
+        min-width: 34px;
+        text-align: center;
+        font-weight: 800;
+        color: var(--accent);
+      }
+
+      .reference-zone {
+        display: none;
+      }
+
+      .reference-zone.active {
+        display: grid;
+      }
+
+      .upload-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 48px;
+        border: 1px dashed var(--line);
+        border-radius: 7px;
+        background: var(--panel-strong);
+        color: var(--text);
+        font-weight: 800;
+      }
+
+      .ref-list {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+
+      .ref-item {
+        position: relative;
+        aspect-ratio: 1;
+        overflow: hidden;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: var(--panel-strong);
+      }
+
+      .ref-item img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .remove-ref {
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        width: 24px;
+        height: 24px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(10, 15, 25, 0.72);
+        color: white;
+        line-height: 1;
+      }
+
+      .primary-btn,
+      .ghost-btn,
+      .icon-btn {
+        min-height: 42px;
+        border-radius: 7px;
+        font-weight: 800;
+      }
+
+      .primary-btn {
+        width: 100%;
+        border: 0;
+        background: var(--accent);
+        color: white;
+      }
+
+      .primary-btn:hover:not(:disabled) {
+        background: var(--accent-strong);
+      }
+
+      .ghost-btn,
+      .icon-btn {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+      }
+
+      .stage {
+        min-width: 0;
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .stage-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .stage-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .stage-actions .ghost-btn {
+        min-height: 36px;
+        padding: 0 12px;
+      }
+
+      .stage-body {
+        padding: 18px;
+        overflow: auto;
+      }
+
+      .empty,
+      .loading,
+      .error-box {
+        min-height: 360px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        background: var(--panel-strong);
+        padding: 28px;
+      }
+
+      .empty h3,
+      .loading h3,
+      .error-box h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+
+      .empty p,
+      .loading p,
+      .error-box p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid color-mix(in srgb, var(--accent) 18%, transparent);
+        border-top-color: var(--accent);
+        margin: 0 auto 14px;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
+      .result-summary {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+
+      .result-summary h3 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .result-summary p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .result-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .result-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+
+      .result-media {
+        position: relative;
+        aspect-ratio: 1;
+        background: var(--panel-strong);
+      }
+
+      .result-media img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      .result-card-actions {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        padding: 10px;
+      }
+
+      .icon-btn {
+        padding: 0 8px;
+        font-size: 13px;
+      }
+
+      .history {
+        margin-top: 18px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+      }
+
+      .history-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .history-head h3 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .history-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 10px;
+      }
+
+      .history-card {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+
+      .history-card img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+        display: block;
+        background: var(--panel-strong);
+      }
+
+      .history-card div {
+        padding: 8px;
+      }
+
+      .history-card strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+      }
+
+      .history-card span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+        background: rgba(5, 8, 16, 0.78);
+      }
+
+      .lightbox-inner {
+        max-width: min(1120px, 96vw);
+        max-height: 92vh;
+        display: grid;
+        gap: 10px;
+      }
+
+      .lightbox img {
+        max-width: 100%;
+        max-height: 84vh;
+        object-fit: contain;
+        border-radius: 8px;
+        background: #0f172a;
+      }
+
+      .lightbox-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .lightbox-actions button {
+        min-height: 38px;
+        padding: 0 12px;
+      }
+
+      @media (max-width: 960px) {
+        .shell {
+          padding: 10px;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .controls,
+        .stage {
+          box-shadow: none;
+        }
+
+        .stage-head,
+        .result-summary {
+          align-items: stretch;
+          flex-direction: column;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .ratio-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .quality-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .result-card-actions {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="workspace">
+        <aside class="controls">
+          <header class="controls-head">
+            <h1>Sub2api 生图系统</h1>
+            <p id="account-line" class="account-line">正在识别玩家账号...</p>
+            <p id="status-line" class="status-line"></p>
+          </header>
+
+          <div class="control-scroll">
+            <div class="mode-switch" role="tablist" aria-label="生成模式">
+              <button class="mode-btn active" type="button" data-mode="text">文生图</button>
+              <button class="mode-btn" type="button" data-mode="image">参考图修改</button>
+            </div>
+
+            <div class="field">
+              <label for="key-select">API Key</label>
+              <select id="key-select" disabled>
+                <option value="">等待加载</option>
+              </select>
+              <p class="hint">只显示后端从 Sub2api 获取到的可用图片 Key，前台不会接触真实 Key。</p>
+            </div>
+
+            <div class="field">
+              <label for="model-select">模型</label>
+              <select id="model-select">
+                <option value="gpt-image-2">gpt-image-2</option>
+                <option value="gpt-image-1.5">gpt-image-1.5</option>
+                <option value="gpt-image-1">gpt-image-1</option>
+                <option value="dall-e-3">dall-e-3</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <div class="field-label">清晰度</div>
+              <div id="quality-grid" class="quality-grid">
+                <button class="quality-btn active" type="button" data-value="auto">自动</button>
+                <button class="quality-btn" type="button" data-value="low">低</button>
+                <button class="quality-btn" type="button" data-value="medium">中</button>
+                <button class="quality-btn" type="button" data-value="high">高</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">画面比例</div>
+              <div id="ratio-grid" class="ratio-grid">
+                <button class="ratio-btn active" type="button" data-value="auto">自动</button>
+                <button class="ratio-btn" type="button" data-value="1:1">1:1</button>
+                <button class="ratio-btn" type="button" data-value="16:9">16:9</button>
+                <button class="ratio-btn" type="button" data-value="4:3">4:3</button>
+                <button class="ratio-btn" type="button" data-value="3:4">3:4</button>
+                <button class="ratio-btn" type="button" data-value="9:16">9:16</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-row">
+                <label for="count-range">张数</label>
+                <span id="count-value" class="count-value">1</span>
+              </div>
+              <div class="count-line">
+                <input id="count-range" type="range" min="1" max="5" step="1" value="1" />
+              </div>
+            </div>
+
+            <div id="reference-zone" class="field reference-zone">
+              <div class="field-row">
+                <span class="field-label">参考图</span>
+                <span id="reference-count" class="hint">0 / 4</span>
+              </div>
+              <label class="upload-btn" for="reference-input">添加参考图</label>
+              <input id="reference-input" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+              <p class="hint">支持 PNG / JPG / WebP，单张最大 20MB，最多 4 张。</p>
+              <div id="reference-list" class="ref-list"></div>
+            </div>
+
+            <div class="field">
+              <label for="prompt-input">提示词</label>
+              <textarea id="prompt-input" maxlength="4000" placeholder="描述主体、风格、光线、构图和需要修改的细节。"></textarea>
+              <p id="prompt-count" class="hint">0 / 4000</p>
+            </div>
+
+            <button id="generate-btn" class="primary-btn" type="button" disabled>生成图片</button>
+          </div>
+        </aside>
+
+        <section class="stage">
+          <header class="stage-head">
+            <div>
+              <h2>生成结果</h2>
+              <p id="stage-subtitle" class="hint">完成登录识别后即可开始生成。</p>
+            </div>
+            <div class="stage-actions">
+              <button id="refresh-keys-btn" class="ghost-btn" type="button" disabled>刷新 Key</button>
+              <button id="clear-results-btn" class="ghost-btn" type="button">清空结果</button>
+            </div>
+          </header>
+          <div id="stage-body" class="stage-body">
+            <div class="empty">
+              <div>
+                <h3>等待生成</h3>
+                <p>选择模型和参数，输入提示词后开始生成图片。</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <div id="lightbox" class="lightbox hidden">
+      <div class="lightbox-inner">
+        <img id="lightbox-image" alt="图片预览" />
+        <div class="lightbox-actions">
+          <button id="lightbox-download" class="ghost-btn" type="button">下载</button>
+          <button id="lightbox-close" class="ghost-btn" type="button">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+      const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
+      const MAX_REFERENCE_IMAGES = 4;
+      const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
+      const HISTORY_KEY = "kw_sub2api_image_history_v1";
+
+      const refs = {
+        accountLine: document.querySelector("#account-line"),
+        statusLine: document.querySelector("#status-line"),
+        stageSubtitle: document.querySelector("#stage-subtitle"),
+        keySelect: document.querySelector("#key-select"),
+        modelSelect: document.querySelector("#model-select"),
+        countRange: document.querySelector("#count-range"),
+        countValue: document.querySelector("#count-value"),
+        promptInput: document.querySelector("#prompt-input"),
+        promptCount: document.querySelector("#prompt-count"),
+        referenceZone: document.querySelector("#reference-zone"),
+        referenceInput: document.querySelector("#reference-input"),
+        referenceList: document.querySelector("#reference-list"),
+        referenceCount: document.querySelector("#reference-count"),
+        generateBtn: document.querySelector("#generate-btn"),
+        refreshKeysBtn: document.querySelector("#refresh-keys-btn"),
+        clearResultsBtn: document.querySelector("#clear-results-btn"),
+        stageBody: document.querySelector("#stage-body"),
+        lightbox: document.querySelector("#lightbox"),
+        lightboxImage: document.querySelector("#lightbox-image"),
+        lightboxDownload: document.querySelector("#lightbox-download"),
+        lightboxClose: document.querySelector("#lightbox-close")
+      };
+
+      const state = {
+        sessionToken: "",
+        mode: "text",
+        quality: "auto",
+        aspectRatio: "auto",
+        references: [],
+        lastImages: [],
+        account: null,
+        connection: null,
+        busy: false
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function setStatus(message, type = "info") {
+        refs.statusLine.textContent = message || "";
+        refs.statusLine.className = `status-line ${type === "error" ? "error" : type === "success" ? "success" : ""}`;
+      }
+
+      function setBusy(busy) {
+        state.busy = busy;
+        refs.generateBtn.disabled = busy || !state.sessionToken || !refs.keySelect.value;
+        refs.generateBtn.textContent = busy ? "生成中..." : "生成图片";
+        refs.refreshKeysBtn.disabled = busy || !state.sessionToken;
+      }
+
+      async function request(path, options = {}) {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers["Content-Type"]) {
+          headers["Content-Type"] = "application/json";
+        }
+        if (state.sessionToken) {
+          headers.Authorization = `Bearer ${state.sessionToken}`;
+        }
+        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || "请求失败");
+        }
+        return payload;
+      }
+
+      function getSelectedButtonValue(selector, fallback) {
+        return document.querySelector(`${selector}.active`)?.dataset.value || fallback;
+      }
+
+      function renderKeys(keys = []) {
+        refs.keySelect.innerHTML = keys.length
+          ? keys.map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.label || key.id)}</option>`).join("")
+          : `<option value="">无可用图片 Key</option>`;
+        refs.keySelect.disabled = !keys.length;
+        refs.generateBtn.disabled = !state.sessionToken || !keys.length;
+      }
+
+      function renderAccount(payload) {
+        state.account = payload.account || {};
+        state.connection = payload.connection || {};
+        const name = state.account.email || state.account.username || state.account.userId || "-";
+        const connection = state.connection.name || state.connection.baseUrl || "Sub2api";
+        refs.accountLine.textContent = `${name} · ${connection}`;
+        refs.stageSubtitle.textContent = "图片由 KaWang 后端代理调用 Sub2api，结果直接返回当前页面。";
+      }
+
+      async function initialize() {
+        const params = new URLSearchParams(window.location.search);
+        const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+        if (!connectionId) {
+          refs.accountLine.textContent = "未识别连接";
+          setStatus("缺少 connectionId，请从 Sub2api 同源嵌入地址打开。", "error");
+          return;
+        }
+
+        const accessToken = localStorage.getItem("auth_token") || localStorage.getItem("access_token") || "";
+        if (!accessToken) {
+          refs.accountLine.textContent = "未识别登录态";
+          setStatus("未读取到 Sub2api 登录态，请确认页面通过 Sub2api 同源反代打开。", "error");
+          return;
+        }
+
+        try {
+          setStatus("正在识别玩家账号...");
+          const session = await request("/api/public/sub2api/image/session-from-token", {
+            method: "POST",
+            body: JSON.stringify({ connectionId, accessToken })
+          });
+          state.sessionToken = session.sessionToken || "";
+          renderAccount(session);
+          setStatus("账号识别成功，正在加载图片 Key...", "success");
+          await refreshKeys();
+          setStatus("");
+        } catch (error) {
+          refs.accountLine.textContent = "账号识别失败";
+          setStatus(error.message, "error");
+        }
+      }
+
+      async function refreshKeys() {
+        if (!state.sessionToken) return;
+        try {
+          refs.refreshKeysBtn.disabled = true;
+          const payload = await request("/api/public/sub2api/image/bootstrap");
+          renderAccount(payload);
+          renderKeys(payload.keys || []);
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          refs.refreshKeysBtn.disabled = !state.sessionToken;
+        }
+      }
+
+      function setMode(mode) {
+        state.mode = mode === "image" ? "image" : "text";
+        document.querySelectorAll(".mode-btn").forEach((button) => {
+          button.classList.toggle("active", button.dataset.mode === state.mode);
+        });
+        refs.referenceZone.classList.toggle("active", state.mode === "image");
+      }
+
+      function renderReferences() {
+        refs.referenceCount.textContent = `${state.references.length} / ${MAX_REFERENCE_IMAGES}`;
+        refs.referenceList.innerHTML = state.references.map((item) => `
+          <div class="ref-item">
+            <img src="${escapeHtml(item.dataUrl)}" alt="${escapeHtml(item.name || "参考图")}" />
+            <button class="remove-ref" type="button" data-id="${escapeHtml(item.id)}" title="移除">x</button>
+          </div>
+        `).join("");
+      }
+
+      function addReference(dataUrl, name = "参考图") {
+        if (state.references.length >= MAX_REFERENCE_IMAGES) {
+          setStatus(`最多添加 ${MAX_REFERENCE_IMAGES} 张参考图`, "error");
+          return;
+        }
+        state.references.push({
+          id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          dataUrl,
+          name
+        });
+        renderReferences();
+      }
+
+      function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+            reject(new Error("仅支持 PNG / JPG / WebP"));
+            return;
+          }
+          if (file.size > MAX_REFERENCE_BYTES) {
+            reject(new Error("单张参考图不能超过 20MB"));
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("读取图片失败"));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function showLoading() {
+        refs.stageBody.innerHTML = `
+          <div class="loading">
+            <div>
+              <div class="spinner"></div>
+              <h3>正在生成图片</h3>
+              <p>已提交到 Sub2api，生成时间取决于模型和张数。</p>
+            </div>
+          </div>
+        `;
+      }
+
+      function getImageSrc(image) {
+        return image.dataUrl || image.url || "";
+      }
+
+      function renderResults(payload) {
+        state.lastImages = payload.images || [];
+        if (!state.lastImages.length) {
+          refs.stageBody.innerHTML = `
+            <div class="error-box">
+              <div>
+                <h3>没有图片结果</h3>
+                <p>远程接口返回成功，但没有可展示的图片。</p>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        const cards = state.lastImages.map((image, index) => {
+          const src = getImageSrc(image);
+          return `
+            <article class="result-card" data-index="${index}">
+              <div class="result-media">
+                <img src="${escapeHtml(src)}" alt="生成图片 ${index + 1}" />
+              </div>
+              <div class="result-card-actions">
+                <button class="icon-btn" type="button" data-action="preview" data-index="${index}">预览</button>
+                <button class="icon-btn" type="button" data-action="download" data-index="${index}">下载</button>
+                <button class="icon-btn" type="button" data-action="reuse" data-index="${index}">引用</button>
+              </div>
+            </article>
+          `;
+        }).join("");
+
+        refs.stageBody.innerHTML = `
+          <div class="result-summary">
+            <div>
+              <h3>生成完成</h3>
+              <p>${escapeHtml(payload.mode === "image" ? "参考图修改" : "文生图")} · ${escapeHtml(payload.model)} · ${state.lastImages.length}/${payload.count} 张 · ${(payload.elapsedMs / 1000).toFixed(1)} 秒</p>
+            </div>
+            <button class="ghost-btn" type="button" id="download-all-btn">下载全部</button>
+          </div>
+          <div class="result-grid">${cards}</div>
+          <section class="history">
+            <div class="history-head">
+              <h3>最近结果</h3>
+              <button class="ghost-btn" type="button" id="clear-history-btn">清空记录</button>
+            </div>
+            <div id="history-list" class="history-list"></div>
+          </section>
+        `;
+        saveHistory(payload);
+        renderHistory();
+      }
+
+      function renderError(error) {
+        refs.stageBody.innerHTML = `
+          <div class="error-box">
+            <div>
+              <h3>生成失败</h3>
+              <p>${escapeHtml(error.message || "未知错误")}</p>
+            </div>
+          </div>
+        `;
+      }
+
+      function downloadImage(image, index = 0) {
+        const src = getImageSrc(image);
+        if (!src) return;
+        const format = "png";
+        const a = document.createElement("a");
+        a.href = src;
+        a.download = `sub2api-image-${Date.now()}-${index + 1}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      function showLightbox(image) {
+        const src = getImageSrc(image);
+        if (!src) return;
+        refs.lightboxImage.src = src;
+        refs.lightboxDownload.onclick = () => downloadImage(image, 0);
+        refs.lightbox.classList.remove("hidden");
+      }
+
+      function hideLightbox() {
+        refs.lightbox.classList.add("hidden");
+        refs.lightboxImage.src = "";
+      }
+
+      function saveHistory(payload) {
+        const prompt = refs.promptInput.value.trim();
+        const entries = (payload.images || []).map((image, index) => ({
+          id: `${payload.jobId}_${index}`,
+          mode: payload.mode,
+          model: payload.model,
+          prompt: prompt.slice(0, 80),
+          createdAt: new Date().toISOString(),
+          image: getImageSrc(image)
+        })).filter((item) => item.image);
+
+        let history = [];
+        try {
+          history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        } catch {
+          history = [];
+        }
+        history = entries.concat(history).slice(0, 12);
+        while (history.length) {
+          try {
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+            return;
+          } catch {
+            history.pop();
+          }
+        }
+      }
+
+      function getHistory() {
+        try {
+          return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        } catch {
+          return [];
+        }
+      }
+
+      function renderHistory() {
+        const list = document.querySelector("#history-list");
+        if (!list) return;
+        const history = getHistory();
+        if (!history.length) {
+          list.innerHTML = `<p class="hint">暂无历史记录。</p>`;
+          return;
+        }
+        list.innerHTML = history.map((item, index) => `
+          <article class="history-card" data-history-index="${index}">
+            <img src="${escapeHtml(item.image)}" alt="历史图片" />
+            <div>
+              <strong>${escapeHtml(item.prompt || "未命名")}</strong>
+              <span>${escapeHtml(item.mode === "image" ? "参考图修改" : "文生图")} · ${escapeHtml(item.model || "-")}</span>
+            </div>
+          </article>
+        `).join("");
+      }
+
+      async function generate() {
+        if (state.busy) return;
+        const prompt = refs.promptInput.value.trim();
+        if (!prompt) {
+          setStatus("请输入提示词", "error");
+          refs.promptInput.focus();
+          return;
+        }
+        if (state.mode === "image" && state.references.length < 1) {
+          setStatus("参考图修改模式需要至少添加 1 张参考图", "error");
+          return;
+        }
+
+        setBusy(true);
+        setStatus("");
+        showLoading();
+        try {
+          const payload = await request("/api/public/sub2api/image/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              mode: state.mode,
+              keyId: refs.keySelect.value,
+              prompt,
+              model: refs.modelSelect.value,
+              quality: state.quality,
+              outputFormat: "png",
+              aspectRatio: state.aspectRatio,
+              count: Number(refs.countRange.value || 1),
+              referenceImages: state.mode === "image" ? state.references.map((item) => item.dataUrl) : []
+            })
+          });
+          renderResults(payload);
+          setStatus("生成完成", "success");
+        } catch (error) {
+          renderError(error);
+          setStatus(error.message, "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      document.querySelectorAll(".mode-btn").forEach((button) => {
+        button.addEventListener("click", () => setMode(button.dataset.mode));
+      });
+
+      document.querySelectorAll(".quality-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".quality-btn").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          state.quality = getSelectedButtonValue(".quality-btn", "auto");
+        });
+      });
+
+      document.querySelectorAll(".ratio-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".ratio-btn").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          state.aspectRatio = getSelectedButtonValue(".ratio-btn", "auto");
+        });
+      });
+
+      refs.countRange.addEventListener("input", () => {
+        refs.countValue.textContent = refs.countRange.value;
+      });
+
+      refs.promptInput.addEventListener("input", () => {
+        refs.promptCount.textContent = `${refs.promptInput.value.length} / 4000`;
+      });
+
+      refs.referenceInput.addEventListener("change", async () => {
+        const files = Array.from(refs.referenceInput.files || []);
+        for (const file of files) {
+          try {
+            const dataUrl = await readFileAsDataUrl(file);
+            addReference(dataUrl, file.name);
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        }
+        refs.referenceInput.value = "";
+      });
+
+      refs.referenceList.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-id]");
+        if (!button) return;
+        state.references = state.references.filter((item) => item.id !== button.dataset.id);
+        renderReferences();
+      });
+
+      refs.stageBody.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-action]");
+        if (!button) {
+          const historyCard = event.target.closest("[data-history-index]");
+          if (historyCard) {
+            const item = getHistory()[Number(historyCard.dataset.historyIndex)];
+            if (item) showLightbox({ dataUrl: item.image });
+          }
+          return;
+        }
+        const image = state.lastImages[Number(button.dataset.index)];
+        if (!image) return;
+        const action = button.dataset.action;
+        if (action === "preview") showLightbox(image);
+        if (action === "download") downloadImage(image, Number(button.dataset.index));
+        if (action === "reuse") {
+          const src = getImageSrc(image);
+          if (!src.startsWith("data:")) {
+            setStatus("该图片没有可复用的直接数据，请下载后作为参考图上传。", "error");
+            return;
+          }
+          addReference(src, "上一张结果");
+          setMode("image");
+          setStatus("已引用到参考图", "success");
+        }
+      });
+
+      refs.stageBody.addEventListener("click", (event) => {
+        if (event.target.id === "download-all-btn") {
+          state.lastImages.forEach((image, index) => downloadImage(image, index));
+        }
+        if (event.target.id === "clear-history-btn") {
+          localStorage.removeItem(HISTORY_KEY);
+          renderHistory();
+        }
+      });
+
+      refs.generateBtn.addEventListener("click", generate);
+      refs.refreshKeysBtn.addEventListener("click", refreshKeys);
+      refs.clearResultsBtn.addEventListener("click", () => {
+        state.lastImages = [];
+        refs.stageBody.innerHTML = `
+          <div class="empty">
+            <div>
+              <h3>等待生成</h3>
+              <p>选择模型和参数，输入提示词后开始生成图片。</p>
+            </div>
+          </div>
+        `;
+      });
+
+      refs.lightboxClose.addEventListener("click", hideLightbox);
+      refs.lightbox.addEventListener("click", (event) => {
+        if (event.target === refs.lightbox) hideLightbox();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") hideLightbox();
+      });
+
+      renderReferences();
+      initialize();
+    </script>
+  </body>
+</html>

@@ -1671,14 +1671,16 @@ function getSub2ApiRemoteMessage(responseInfo = {}) {
   return responseInfo.text || "远程 Sub2api 请求失败";
 }
 
-async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null } = {}) {
+async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null, headers = {} } = {}) {
   const adminToken = decryptSub2ApiAdminToken(connection);
   const response = await fetch(`${connection.base_url}${pathname}`, {
     method,
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${adminToken}`,
-      ...(body ? { "Content-Type": "application/json" } : {})
+      "x-api-key": adminToken,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers
     },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(10000)
@@ -1696,6 +1698,16 @@ async function callSub2ApiRemote(connection, pathname, { method = "GET", body = 
 }
 
 async function testSub2ApiConnection(connection) {
+  try {
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes?type=invitation&page=1&page_size=1");
+    if (result.json && result.json.code !== undefined && Number(result.json.code) !== 0) {
+      throw new Error(getSub2ApiRemoteMessage(result));
+    }
+    return result;
+  } catch (error) {
+    if (Number(error.status) !== 404) throw error;
+  }
+
   const result = await callSub2ApiRemote(connection, "/api/admin/invite-codes/ping");
   if (result.json && result.json.ok === false) {
     throw new Error(getSub2ApiRemoteMessage(result));
@@ -1703,13 +1715,22 @@ async function testSub2ApiConnection(connection) {
   return result;
 }
 
+function unwrapSub2ApiRemoteData(data) {
+  if (data && typeof data === "object" && !Array.isArray(data) && data.data !== undefined) {
+    return data.data;
+  }
+  return data;
+}
+
 function extractRemoteInviteResult(result) {
   const data = result.json && typeof result.json === "object" ? result.json : {};
-  const inviteCode = String(data.inviteCode ?? data.invite_code ?? data.code ?? "").trim();
+  const payload = unwrapSub2ApiRemoteData(data);
+  const invite = Array.isArray(payload) ? payload[0] : payload;
+  const inviteCode = String(invite?.inviteCode ?? invite?.invite_code ?? invite?.code ?? "").trim();
   if (!inviteCode) {
     throw new Error("远程 Sub2api 未返回 inviteCode");
   }
-  const rawStatus = String(data.status || sub2apiInviteStatuses.active).trim();
+  const rawStatus = String(invite?.status || sub2apiInviteStatuses.active).trim();
   const status = [
     sub2apiInviteStatuses.processing,
     sub2apiInviteStatuses.active,
@@ -1717,9 +1738,9 @@ function extractRemoteInviteResult(result) {
   ].includes(rawStatus) ? rawStatus : sub2apiInviteStatuses.active;
   return {
     inviteCode,
-    remoteInviteId: String(data.id ?? data.inviteId ?? data.invite_id ?? "").trim(),
+    remoteInviteId: String(invite?.id ?? invite?.inviteId ?? invite?.invite_id ?? "").trim(),
     status,
-    expiresAt: data.expiresAt ?? data.expires_at ?? null
+    expiresAt: invite?.expiresAt ?? invite?.expires_at ?? null
   };
 }
 
@@ -2204,13 +2225,15 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
   }
 
   try {
-    const remoteResult = await callSub2ApiRemote(connection, "/api/admin/invite-codes", {
+    const remoteResult = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes/generate", {
       method: "POST",
+      headers: {
+        "Idempotency-Key": requestId
+      },
       body: {
-        userId: identity.userId,
-        email: identity.email,
-        username: identity.username,
-        requestId
+        count: 1,
+        type: "invitation",
+        value: 0
       }
     });
     const inviteResult = extractRemoteInviteResult(remoteResult);

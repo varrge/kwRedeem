@@ -457,7 +457,7 @@ function is987AiSite(siteSlug) {
 }
 
 function getJsonMessage(json) {
-  return json?.error_msg || json?.error || json?.message || json?.msg || "";
+  return json?.error_msg || json?.error || json?.message || json?.msg || json?.data?.status_label || "";
 }
 
 function shouldAllow987AiUsedGptReuse(remoteJson) {

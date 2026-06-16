@@ -592,8 +592,10 @@ function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs) {
   return Number(upcomingCount || 0) < 2;
 }
 
-async function apiFootballWorldCupTick() {
-  if (worldCupSyncRunning) return;
+async function apiFootballWorldCupTick({ force = false } = {}) {
+  if (worldCupSyncRunning) {
+    return { accepted: false, reason: "already_running" };
+  }
   worldCupSyncRunning = true;
   try {
     const settings = getApiFootballSettings(db, { includeApiKey: true });
@@ -602,27 +604,27 @@ async function apiFootballWorldCupTick() {
         console.log("[KaWang worker] worldcup: API-Football 后台配置未启用，跳过自动同步");
         worldCupDisabledLogged = true;
       }
-      return;
+      return { accepted: false, reason: "disabled" };
     }
     worldCupDisabledLogged = false;
 
     const nowMs = Date.now();
-    if (worldCupLastTickAt && nowMs - worldCupLastTickAt < settings.syncIntervalMs) {
-      return;
+    if (!force && worldCupLastTickAt && nowMs - worldCupLastTickAt < settings.syncIntervalMs) {
+      return { accepted: false, reason: "interval_not_due" };
     }
     worldCupLastTickAt = nowMs;
 
     const connections = getActiveSub2ApiConnections();
-    if (!connections.length) return;
+    if (!connections.length) return { accepted: false, reason: "no_active_connections" };
     if (!settings.apiKey) {
       logApiFootballSyncError("config", Object.assign(new Error("未在后台配置 API-Football API Key，跳过 API-Football 同步"), {
         code: "API_FOOTBALL_KEY_MISSING"
       }));
-      return;
+      return { accepted: false, reason: "missing_api_key" };
     }
     worldCupMissingKeyLogged = false;
 
-    if (shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs)) {
+    if (force || shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs)) {
       try {
         await discoverApiFootballWorldCupFixtures(connections, nowMs, settings);
       } catch (error) {
@@ -633,6 +635,7 @@ async function apiFootballWorldCupTick() {
     await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
     await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
     await autoCancelApiFootballWorldCupMatches(nowMs);
+    return { accepted: true, forced: force };
   } finally {
     worldCupSyncRunning = false;
   }
@@ -2240,8 +2243,7 @@ export { PollTask, activePollTasks, MAX_ACTIVE_POLLS, POLL_INTERVAL_MS, POLL_TIM
  */
 function createWorkerHttpServer() {
   const server = http.createServer((req, res) => {
-    // Only accept POST /api/internal/sms/poll
-    if (req.method !== "POST" || req.url !== "/api/internal/sms/poll") {
+    if (req.method !== "POST" || !["/api/internal/sms/poll", "/api/internal/sub2api/worldcup/sync"].includes(req.url)) {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ message: "not found" }));
       return;
@@ -2255,16 +2257,33 @@ function createWorkerHttpServer() {
       return;
     }
 
-    // Parse request body
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
+    req.on("end", async () => {
       let parsed;
       try {
-        parsed = JSON.parse(body);
+        parsed = body ? JSON.parse(body) : {};
       } catch {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: "invalid JSON" }));
+        return;
+      }
+
+      if (req.url === "/api/internal/sub2api/worldcup/sync") {
+        try {
+          const result = await apiFootballWorldCupTick({ force: true });
+          if (result.accepted) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(result));
+            return;
+          }
+          const status = result.reason === "already_running" ? 409 : 400;
+          res.writeHead(status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ accepted: false, message: error.message || "worldcup sync failed" }));
+        }
         return;
       }
 

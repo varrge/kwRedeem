@@ -2150,18 +2150,44 @@ function getSub2ApiImageKeySecret(item = {}) {
   );
 }
 
+function maskSub2ApiImageKeySecret(secret) {
+  const value = String(secret || "").trim();
+  if (!value) return "";
+  if (value.length <= 12) return `${value.slice(0, 4)}****`;
+  return `${value.slice(0, 8)}...${value.slice(-4)}`;
+}
+
+function formatSub2ApiImageKeyUsage(item = {}) {
+  const quota = Number(item.quota ?? 0);
+  const used = Number(item.quota_used ?? item.quotaUsed ?? 0);
+  if (!Number.isFinite(quota) || quota <= 0) return "";
+  const safeUsed = Number.isFinite(used) ? used : 0;
+  return `$${safeUsed.toFixed(2)}/$${quota.toFixed(2)}`;
+}
+
 function getSub2ApiImageKeyLabel(item = {}, index = 0) {
-  return pickFirstString(
+  const name = pickFirstString(
     item.name,
     item.label,
     item.title,
     item.remark,
     item.description,
-    item.group,
-    item.groupName,
-    item.group_name,
     item.alias
   ) || `API Key ${index + 1}`;
+  const secret = getSub2ApiImageKeySecret(item);
+  const group = pickFirstString(
+    item.group?.name,
+    item.groupName,
+    item.group_name,
+    item.group
+  );
+  const usage = formatSub2ApiImageKeyUsage(item);
+  const meta = [
+    maskSub2ApiImageKeySecret(secret),
+    group,
+    usage
+  ].filter(Boolean).join(" · ");
+  return meta ? `${name} (${meta})` : name;
 }
 
 function getSub2ApiImageKeyListPayload(json) {
@@ -2229,6 +2255,10 @@ function normalizeSub2ApiImageKeys(json) {
       id: String(id),
       label: getSub2ApiImageKeyLabel(item, index),
       models: Array.isArray(item.models) ? item.models.map(String) : [],
+      maskedKey: maskSub2ApiImageKeySecret(secret),
+      status: pickFirstString(item.status, item.state) || "active",
+      quota: Number(item.quota ?? 0) || 0,
+      quotaUsed: Number(item.quota_used ?? item.quotaUsed ?? 0) || 0,
       secret
     });
   });
@@ -2239,6 +2269,10 @@ function serializeSub2ApiImageKey(key) {
   return {
     id: key.id,
     label: key.label,
+    maskedKey: key.maskedKey || "",
+    status: key.status || "active",
+    quota: key.quota || 0,
+    quotaUsed: key.quotaUsed || 0,
     models: key.models || []
   };
 }
@@ -3111,6 +3145,18 @@ const sub2apiWorldCupMatchAdminSchema = z.object({
 });
 
 function parseSub2ApiWorldCupKickoff(value) {
+  const raw = String(value || "").trim();
+  const beijingLocal = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (beijingLocal) {
+    const year = Number(beijingLocal[1]);
+    const month = Number(beijingLocal[2]);
+    const day = Number(beijingLocal[3]);
+    const hour = Number(beijingLocal[4]);
+    const minute = Number(beijingLocal[5]);
+    const second = Number(beijingLocal[6] || 0);
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second) - 8 * 60 * 60000);
+    if (Number.isFinite(date.getTime())) return date.toISOString();
+  }
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) {
     throw new Error("开赛时间不正确");
@@ -5496,6 +5542,50 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
   });
 
   return buildApiFootballAdminPayload();
+});
+
+app.post("/api/admin/sub2api/worldcup/api-football/sync", { preHandler: requireAdmin }, async (request, reply) => {
+  const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sub2api/worldcup/sync`;
+  let response;
+  try {
+    response = await fetch(workerUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": env.internalSecret
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(120000)
+    });
+  } catch (error) {
+    return reply.code(502).send({ message: `无法连接 worker：${error.message || "请求失败"}` });
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const reasonText = {
+      already_running: "世界杯同步正在执行中",
+      disabled: "API-Football 自动同步未启用",
+      no_active_connections: "没有 active 的 Sub2api 连接",
+      missing_api_key: "未配置 API-Football API Key",
+      interval_not_due: "同步间隔尚未到期"
+    }[payload.reason] || payload.message || "worker 执行失败";
+    return reply.code(response.status).send({ message: reasonText, worker: payload });
+  }
+
+  createAuditLog({
+    action: "sub2api.worldcup.api_football.manual_sync",
+    actor: request.admin.username,
+    resourceType: "api_football_settings",
+    resourceId: "default",
+    detail: payload
+  });
+
+  return {
+    success: true,
+    worker: payload,
+    ...buildApiFootballAdminPayload()
+  };
 });
 
 app.get("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, async (request) => {

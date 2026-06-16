@@ -207,6 +207,7 @@ const refs = {
   worldCupApiClearKey: document.querySelector("#worldcup-api-clear-key"),
   worldCupApiSettingsSubmitBtn: document.querySelector("#worldcup-api-settings-submit-btn"),
   worldCupApiSettingsRefreshBtn: document.querySelector("#worldcup-api-settings-refresh-btn"),
+  worldCupApiManualSyncBtn: document.querySelector("#worldcup-api-manual-sync-btn"),
   worldCupApiUsage: document.querySelector("#worldcup-api-usage"),
   worldCupApiSettingsResult: document.querySelector("#worldcup-api-settings-result"),
   worldCupMatchForm: document.querySelector("#worldcup-match-form"),
@@ -2321,6 +2322,30 @@ async function saveWorldCupApiSettings() {
   }
 }
 
+async function runWorldCupManualSync() {
+  if (!refs.worldCupApiManualSyncBtn) return;
+  try {
+    setHint(refs.worldCupApiSettingsResult, "正在触发 worker 立即同步赛事...");
+    setButtonBusy(refs.worldCupApiManualSyncBtn, true, "同步中...");
+    const response = await api("/api/admin/sub2api/worldcup/api-football/sync", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    fillWorldCupApiSettings(response);
+    const usage = response.usage || {};
+    setHint(
+      refs.worldCupApiSettingsResult,
+      `已触发同步。今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`
+    );
+    await refreshWorldCupMatches().catch(() => {});
+    await refreshWorldCupBets().catch(() => {});
+  } catch (error) {
+    setHint(refs.worldCupApiSettingsResult, `立即同步失败：${error.message}`);
+  } finally {
+    setButtonBusy(refs.worldCupApiManualSyncBtn, false);
+  }
+}
+
 async function refreshSub2ApiConsole() {
   await refreshWorldCupApiSettings().catch((error) => {
     setHint(refs.worldCupApiSettingsResult, `加载 API-Football 配置失败：${error.message}`);
@@ -2384,23 +2409,54 @@ function formatWorldCupAmount(value) {
   return number.toFixed(2).replace(/\.00$/, "");
 }
 
+const WORLD_CUP_BEIJING_TIMEZONE = "Asia/Shanghai";
+const WORLD_CUP_BEIJING_OFFSET_MINUTES = 8 * 60;
+const worldCupBeijingFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: WORLD_CUP_BEIJING_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23"
+});
+
+function getWorldCupBeijingParts(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = Object.fromEntries(
+    worldCupBeijingFormatter.formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+  if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return null;
+  return parts;
+}
+
 function formatWorldCupTime(value) {
   if (!value) return "-";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return String(value);
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const parts = getWorldCupBeijingParts(value);
+  if (!parts) return String(value);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second || "00"} 北京时间`;
 }
 
 function toWorldCupDateTimeLocal(value) {
   if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+  const parts = getWorldCupBeijingParts(value);
+  if (!parts) return "";
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
 function fromWorldCupDateTimeLocal(value) {
-  const date = new Date(value);
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute) - WORLD_CUP_BEIJING_OFFSET_MINUTES * 60000);
   return Number.isFinite(date.getTime()) ? date.toISOString() : "";
 }
 
@@ -2463,7 +2519,7 @@ async function refreshWorldCupMatches() {
       render: (item) => `${escapeHtml(item.connectionName || "-")}<br/><code style="font-size:11px">${escapeHtml(item.connectionId)}</code>`
     },
     {
-      label: "开赛",
+      label: "开赛（北京时间）",
       render: (item) => `<span style="font-size:12px">${escapeHtml(formatWorldCupTime(item.kickoffAt))}</span>`
     },
     {
@@ -2695,8 +2751,8 @@ function exportWorldCupBetsCsv() {
       item.odds,
       item.status,
       item.payout,
-      item.createdAt,
-      item.settledAt,
+      formatWorldCupTime(item.createdAt),
+      item.settledAt ? formatWorldCupTime(item.settledAt) : "",
       item.errorMessage
     ].map(escapeCsv).join(","))
   ];
@@ -2802,6 +2858,12 @@ if (refs.worldCupApiSettingsForm) {
 if (refs.worldCupApiSettingsRefreshBtn) {
   refs.worldCupApiSettingsRefreshBtn.addEventListener("click", () => {
     refreshWorldCupApiSettings().catch((error) => setHint(refs.worldCupApiSettingsResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.worldCupApiManualSyncBtn) {
+  refs.worldCupApiManualSyncBtn.addEventListener("click", () => {
+    runWorldCupManualSync().catch(() => {});
   });
 }
 

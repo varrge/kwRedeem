@@ -613,7 +613,7 @@
               <select id="key-select" disabled>
                 <option value="">等待加载</option>
               </select>
-              <p class="hint">只显示后端从 Sub2api 获取到的可用图片 Key，前台不会接触真实 Key。</p>
+              <p class="hint">选择当前玩家在 Sub2api 已生成的 API Key，前台只显示名称和掩码。</p>
             </div>
 
             <div class="field">
@@ -834,8 +834,11 @@
 
       function renderKeys(keys = []) {
         refs.keySelect.innerHTML = keys.length
-          ? keys.map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.label || key.id)}</option>`).join("")
-          : `<option value="">无可用图片 Key</option>`;
+          ? keys.map((key) => {
+            const label = key.label || key.maskedKey || key.id;
+            return `<option value="${escapeHtml(key.id)}">${escapeHtml(label)}</option>`;
+          }).join("")
+          : `<option value="">暂无已生成的 API Key</option>`;
         refs.keySelect.disabled = !keys.length;
         refs.generateBtn.disabled = !state.sessionToken || !keys.length;
       }

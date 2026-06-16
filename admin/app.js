@@ -2360,10 +2360,13 @@ async function runWorldCupManualSync() {
     const emptyHint = Number(discovery.fixturesReturned || 0) === 0
       ? `${provider} 未返回赛事，请检查数据源、赛季、API Key/Token 权限或当前日期是否有赛程。`
       : "";
+    const oddsHint = odds.returned !== undefined || odds.matched !== undefined
+      ? `体彩返回 ${odds.returned ?? 0} 场，匹配 ${odds.matched ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`
+      : `赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`;
     setHint(
       refs.worldCupApiSettingsResult,
       [
-        `已触发同步：${provider} 返回 ${discovery.fixturesReturned ?? 0} 场，筛选 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条，清理旧赛事 ${discovery.rowsPruned ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
+        `已触发同步：${provider} 返回 ${discovery.fixturesReturned ?? 0} 场，筛选 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条，清理旧赛事 ${discovery.rowsPruned ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，${oddsHint}，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
         `今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`,
         emptyHint
       ].filter(Boolean).join(" ")

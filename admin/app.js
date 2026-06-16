@@ -2492,7 +2492,7 @@ function fromWorldCupDateTimeLocal(value) {
 }
 
 function getWorldCupMatchTitle(item) {
-  return `${item.homeTeam || "-"} vs ${item.awayTeam || "-"}`;
+  return `${item.homeTeam || "-"} 对阵 ${item.awayTeam || "-"}`;
 }
 
 function resetWorldCupMatchForm() {
@@ -2723,7 +2723,7 @@ async function refreshWorldCupBets() {
     {
       label: "比赛",
       render: (item) => item.match
-        ? `<strong>${escapeHtml(item.match.homeTeam)} vs ${escapeHtml(item.match.awayTeam)}</strong><br/><span class="hint">${escapeHtml(formatWorldCupTime(item.match.kickoffAt))}</span>`
+        ? `<strong>${escapeHtml(item.match.homeTeam)} 对阵 ${escapeHtml(item.match.awayTeam)}</strong><br/><span class="hint">${escapeHtml(formatWorldCupTime(item.match.kickoffAt))}</span>`
         : escapeHtml(item.matchId)
     },
     {
@@ -2776,7 +2776,7 @@ function exportWorldCupBetsCsv() {
       item.connectionName || item.connectionId,
       item.userId,
       item.email,
-      item.match ? `${item.match.homeTeam} vs ${item.match.awayTeam}` : item.matchId,
+      item.match ? `${item.match.homeTeam} 对阵 ${item.match.awayTeam}` : item.matchId,
       item.predictionLabel,
       item.stake,
       item.odds,

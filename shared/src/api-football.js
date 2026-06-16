@@ -55,6 +55,92 @@ function getApiFootballErrorMessage(errors) {
   return String(errors);
 }
 
+const WORLDCUP_TEAM_CN_NAMES = new Map(Object.entries({
+  Argentina: "阿根廷",
+  Australia: "澳大利亚",
+  Austria: "奥地利",
+  Belgium: "比利时",
+  Brazil: "巴西",
+  Cameroon: "喀麦隆",
+  Canada: "加拿大",
+  Chile: "智利",
+  Colombia: "哥伦比亚",
+  "Costa Rica": "哥斯达黎加",
+  Croatia: "克罗地亚",
+  Denmark: "丹麦",
+  Ecuador: "厄瓜多尔",
+  Egypt: "埃及",
+  England: "英格兰",
+  France: "法国",
+  Germany: "德国",
+  Ghana: "加纳",
+  Iran: "伊朗",
+  Italy: "意大利",
+  Japan: "日本",
+  Korea: "韩国",
+  "Korea Republic": "韩国",
+  Mexico: "墨西哥",
+  Morocco: "摩洛哥",
+  Netherlands: "荷兰",
+  "New Zealand": "新西兰",
+  Nigeria: "尼日利亚",
+  Norway: "挪威",
+  Panama: "巴拿马",
+  Paraguay: "巴拉圭",
+  Peru: "秘鲁",
+  Poland: "波兰",
+  Portugal: "葡萄牙",
+  Qatar: "卡塔尔",
+  "Saudi Arabia": "沙特阿拉伯",
+  Scotland: "苏格兰",
+  Senegal: "塞内加尔",
+  Serbia: "塞尔维亚",
+  Spain: "西班牙",
+  Sweden: "瑞典",
+  Switzerland: "瑞士",
+  Tunisia: "突尼斯",
+  Ukraine: "乌克兰",
+  Uruguay: "乌拉圭",
+  USA: "美国",
+  "United States": "美国",
+  "United States of America": "美国",
+  Wales: "威尔士"
+}));
+
+function normalizeWorldCupDisplayText(value) {
+  return String(value || "").trim().replaceAll("_", " ").replace(/\s+/g, " ");
+}
+
+function localizeWorldCupTeamName(value, fallback) {
+  const normalized = normalizeWorldCupDisplayText(value);
+  if (!normalized) return fallback;
+  return WORLDCUP_TEAM_CN_NAMES.get(normalized) || normalized;
+}
+
+function localizeWorldCupGroupName(value) {
+  const normalized = normalizeWorldCupDisplayText(value);
+  if (!normalized) return "";
+  const groupMatch = normalized.match(/^group\s+([a-z0-9]+)$/i);
+  if (groupMatch) return `小组 ${groupMatch[1].toUpperCase()}`;
+  return normalized;
+}
+
+function localizeWorldCupStageName(value) {
+  const normalized = normalizeWorldCupDisplayText(value);
+  if (!normalized) return "";
+  const groupMatch = normalized.match(/^group\s+([a-z0-9]+)$/i);
+  if (groupMatch) return `小组 ${groupMatch[1].toUpperCase()}`;
+  const lower = normalized.toLowerCase();
+  if (lower === "group stage") return "小组赛";
+  if (lower === "round of 32") return "32 强";
+  if (lower === "round of 16") return "16 强";
+  if (lower === "quarter finals" || lower === "quarter-finals" || lower === "quarterfinals") return "四分之一决赛";
+  if (lower === "semi finals" || lower === "semi-finals" || lower === "semifinals") return "半决赛";
+  if (lower === "third place" || lower === "third-place match") return "三四名决赛";
+  if (lower === "final") return "决赛";
+  return normalized;
+}
+
 function normalizeApiFootballLimit(value, fallback) {
   const number = Math.floor(Number(value));
   return Number.isFinite(number) && number > 0 ? number : fallback;
@@ -512,10 +598,10 @@ export function parseApiFootballFixture(item, nowMs = Date.now()) {
     source: "api-football",
     apiLeagueId: toIntegerOrNull(league.id),
     apiSeason: toIntegerOrNull(league.season),
-    stage: String(league.round || ""),
+    stage: localizeWorldCupStageName(league.round),
     groupName: "",
-    homeTeam: String(teams.home?.name || "待定主队"),
-    awayTeam: String(teams.away?.name || "待定客队"),
+    homeTeam: localizeWorldCupTeamName(teams.home?.name, "待定主队"),
+    awayTeam: localizeWorldCupTeamName(teams.away?.name, "待定客队"),
     kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
     status,
     apiStatusShort: statusShort,
@@ -562,10 +648,10 @@ export function parseFootballDataMatch(item, nowMs = Date.now()) {
     source: "football-data",
     apiLeagueId: null,
     apiSeason: toIntegerOrNull(item?.season?.startDate?.slice(0, 4)) || null,
-    stage: String(item?.stage || item?.group || item?.matchday || ""),
-    groupName: String(item?.group || ""),
-    homeTeam: String(item?.homeTeam?.name || item?.homeTeam?.shortName || "待定主队"),
-    awayTeam: String(item?.awayTeam?.name || item?.awayTeam?.shortName || "待定客队"),
+    stage: localizeWorldCupStageName(item?.stage || item?.matchday || item?.group),
+    groupName: localizeWorldCupGroupName(item?.group),
+    homeTeam: localizeWorldCupTeamName(item?.homeTeam?.name || item?.homeTeam?.shortName, "待定主队"),
+    awayTeam: localizeWorldCupTeamName(item?.awayTeam?.name || item?.awayTeam?.shortName, "待定客队"),
     kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
     status,
     apiStatusShort: statusShort,
@@ -621,10 +707,10 @@ export function parseZafronixMatch(item, nowMs = Date.now()) {
     source: "zafronix",
     apiLeagueId: null,
     apiSeason: toIntegerOrNull(item?.year) || null,
-    stage: String(item?.stage || ""),
-    groupName: String(item?.group || ""),
-    homeTeam: String(item?.homeTeam || item?.home || item?.homeRef || "待定主队"),
-    awayTeam: String(item?.awayTeam || item?.away || item?.awayRef || "待定客队"),
+    stage: localizeWorldCupStageName(item?.stage || item?.group),
+    groupName: localizeWorldCupGroupName(item?.group),
+    homeTeam: localizeWorldCupTeamName(item?.homeTeam || item?.home || item?.homeRef, "待定主队"),
+    awayTeam: localizeWorldCupTeamName(item?.awayTeam || item?.away || item?.awayRef, "待定客队"),
     kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
     status,
     apiStatusShort: statusShort,

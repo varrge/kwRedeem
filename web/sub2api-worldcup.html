@@ -658,7 +658,7 @@
             <article class="match-card">
               <div class="match-top">
                 <div>
-                  <div class="teams">${escapeHtml(item.homeTeam)} <span class="hint">vs</span> ${escapeHtml(item.awayTeam)}</div>
+                  <div class="teams">${escapeHtml(item.homeTeam)} <span class="hint">对阵</span> ${escapeHtml(item.awayTeam)}</div>
                   <div class="meta">${role ? `${escapeHtml(role)} · ` : ""}${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""} · ${escapeHtml(formatTime(item.kickoffAt))}</div>
                   ${betLines}
                   ${score}
@@ -687,7 +687,7 @@
 
       function renderSlip() {
         const match = getSelectedMatch();
-        refs.slipMatch.textContent = match ? `${match.homeTeam} vs ${match.awayTeam}` : "-";
+        refs.slipMatch.textContent = match ? `${match.homeTeam} 对阵 ${match.awayTeam}` : "-";
         refs.slipPrediction.textContent = state.selectedPrediction ? predictionLabel(state.selectedPrediction) : "-";
         refs.slipOdds.textContent = state.selectedOdds ? formatAmount(state.selectedOdds) : "-";
         refs.slipStatus.textContent = match
@@ -714,7 +714,7 @@
         refs.historyList.innerHTML = bets.map((item) => `
           <article class="history-item">
             <div>
-              <strong>${escapeHtml(item.match ? `${item.match.homeTeam} vs ${item.match.awayTeam}` : item.matchId)}</strong>
+              <strong>${escapeHtml(item.match ? `${item.match.homeTeam} 对阵 ${item.match.awayTeam}` : item.matchId)}</strong>
               <span>${escapeHtml(item.phaseLabel || "")} · ${escapeHtml(item.predictionLabel)} · 投注 ${escapeHtml(formatAmount(item.stake))} × ${escapeHtml(formatAmount(item.odds))} · ${escapeHtml(statusLabel(item.status))}</span>
             </div>
             <div class="amount">${escapeHtml(formatAmount(item.payout))}</div>
@@ -806,7 +806,7 @@
         if (!match || !canSubmit()) return;
         const stake = clampStakeToMatchMax(match);
         const phasePrefix = match.bettingPhaseLabel ? `${match.bettingPhaseLabel}，` : "";
-        const message = `确认投注 ${match.homeTeam} vs ${match.awayTeam}：${phasePrefix}${predictionLabel(state.selectedPrediction)}，金额 ${formatAmount(stake)}？`;
+        const message = `确认投注 ${match.homeTeam} 对阵 ${match.awayTeam}：${phasePrefix}${predictionLabel(state.selectedPrediction)}，金额 ${formatAmount(stake)}？`;
         if (!window.confirm(message)) return;
 
         try {

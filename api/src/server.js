@@ -3333,7 +3333,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     const debitResult = await adjustSub2ApiWorldCupBalance(connection, identity.userId, {
       amount: payload.stake,
       operation: "subtract",
-      notes: `世界杯竞猜扣款：${match.home_team} vs ${match.away_team}，${bettingState.label}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
+      notes: `世界杯竞猜扣款：${match.home_team} 对阵 ${match.away_team}，${bettingState.label}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
       idempotencyKey: `worldcup_bet_${betId}`
     });
     const updatedAt = nowIso();
@@ -3517,7 +3517,7 @@ async function cancelSub2ApiWorldCupMatch(match, actor = "system") {
       const refundResult = await adjustSub2ApiWorldCupBalance(connection, bet.sub2api_user_id, {
         amount: Number(bet.stake),
         operation: "add",
-        notes: `世界杯竞猜取消退款：${match.home_team} vs ${match.away_team}，投注 ${bet.stake}`,
+        notes: `世界杯竞猜取消退款：${match.home_team} 对阵 ${match.away_team}，投注 ${bet.stake}`,
         idempotencyKey: `worldcup_refund_${bet.id}`
       });
       db.prepare(`

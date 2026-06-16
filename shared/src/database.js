@@ -638,6 +638,7 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS api_football_settings (
       id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT 'api-football',
       enabled INTEGER NOT NULL DEFAULT 0,
       api_key TEXT,
       base_url TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io',
@@ -726,6 +727,7 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
   ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "api_football_settings", "provider", "TEXT NOT NULL DEFAULT 'api-football'");
   ensureColumn(db, "api_football_settings", "api_key", "TEXT");
   ensureColumn(db, "api_football_settings", "base_url", "TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io'");
   ensureColumn(db, "api_football_settings", "worldcup_league_id", "INTEGER NOT NULL DEFAULT 1");
@@ -1203,10 +1205,10 @@ function seedDefaults(db) {
 
   db.prepare(`
     INSERT OR IGNORE INTO api_football_settings (
-      id, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
+      id, provider, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
       timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
     )
-    VALUES ('default', 0, NULL, 'https://v3.football.api-sports.io', 1, 2026,
+    VALUES ('default', 'api-football', 0, NULL, 'https://v3.football.api-sports.io', 1, 2026,
             'Asia/Shanghai', 80, 100, 60000, ?, 'system')
   `).run(new Date().toISOString());
 

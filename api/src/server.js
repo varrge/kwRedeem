@@ -5431,6 +5431,7 @@ function buildApiFootballAdminPayload() {
 }
 
 const apiFootballSettingsSchema = z.object({
+  provider: z.enum(["api-football", "football-data", "zafronix"]).optional(),
   enabled: z.boolean().optional(),
   apiKey: z.string().trim().optional(),
   clearApiKey: z.boolean().optional(),
@@ -5456,6 +5457,7 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
   const currentRow = db.prepare("SELECT * FROM api_football_settings WHERE id = 'default'").get();
   const current = getApiFootballSettings(db);
   const next = {
+    provider: parsed.data.provider || current.provider || DEFAULT_API_FOOTBALL_SETTINGS.provider,
     enabled: parsed.data.enabled ?? current.enabled,
     baseUrl: parsed.data.baseUrl || current.baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl,
     worldCupLeagueId: parsed.data.worldCupLeagueId ?? current.worldCupLeagueId,
@@ -5488,15 +5490,16 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
   const now = nowIso();
   db.prepare(`
     INSERT OR IGNORE INTO api_football_settings (
-      id, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
+      id, provider, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
       timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
     )
-    VALUES ('default', 0, NULL, ?, 1, 2026, 'Asia/Shanghai', 80, 100, 60000, ?, 'system')
+    VALUES ('default', 'api-football', 0, NULL, ?, 1, 2026, 'Asia/Shanghai', 80, 100, 60000, ?, 'system')
   `).run(DEFAULT_API_FOOTBALL_SETTINGS.baseUrl, now);
 
   db.prepare(`
     UPDATE api_football_settings
-    SET enabled = ?,
+    SET provider = ?,
+        enabled = ?,
         api_key = ?,
         base_url = ?,
         worldcup_league_id = ?,
@@ -5509,6 +5512,7 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
         updated_by = ?
     WHERE id = 'default'
   `).run(
+    next.provider,
     next.enabled ? 1 : 0,
     apiKey,
     next.baseUrl,
@@ -5529,6 +5533,7 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
     resourceId: "default",
     detail: {
       enabled: next.enabled,
+      provider: next.provider,
       baseUrl: next.baseUrl,
       worldCupLeagueId: next.worldCupLeagueId,
       worldCupSeason: next.worldCupSeason,

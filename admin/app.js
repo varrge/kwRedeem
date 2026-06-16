@@ -195,6 +195,7 @@ const refs = {
   sub2apiOrderList: document.querySelector("#sub2api-order-list"),
   sub2apiOrderResult: document.querySelector("#sub2api-order-result"),
   worldCupApiSettingsForm: document.querySelector("#worldcup-api-settings-form"),
+  worldCupApiProvider: document.querySelector("#worldcup-api-provider"),
   worldCupApiEnabled: document.querySelector("#worldcup-api-enabled"),
   worldCupApiKey: document.querySelector("#worldcup-api-key"),
   worldCupApiBaseUrl: document.querySelector("#worldcup-api-base-url"),
@@ -2254,19 +2255,42 @@ function renderWorldCupApiUsage(payload) {
   const usage = payload?.usage || {};
   const hasKey = settings.hasApiKey ? "Key 已配置" : "Key 未配置";
   const enabled = settings.enabled ? "启用" : "停用";
-  refs.worldCupApiUsage.textContent = `${enabled} · ${hasKey} · 今日 ${usage.used ?? 0}/${usage.softLimit ?? 80}/${usage.hardLimit ?? 100}`;
+  const provider = getWorldCupProviderLabel(settings.provider);
+  refs.worldCupApiUsage.textContent = `${provider} · ${enabled} · ${hasKey} · 今日 ${usage.used ?? 0}/${usage.softLimit ?? 80}/${usage.hardLimit ?? 100}`;
   refs.worldCupApiUsage.className = `table-badge ${settings.enabled && settings.hasApiKey ? "status-active" : "status-disabled"}`;
+}
+
+function getWorldCupProviderLabel(provider) {
+  if (provider === "football-data") return "Football-Data.org";
+  if (provider === "zafronix") return "Zafronix";
+  return "API-Football";
+}
+
+function getWorldCupProviderDefaultBaseUrl(provider, defaults = {}) {
+  if (provider === "football-data") return defaults.footballDataBaseUrl || "https://api.football-data.org/v4";
+  if (provider === "zafronix") return defaults.zafronixBaseUrl || "https://api.zafronix.com/fifa/worldcup/v1";
+  return defaults.baseUrl || "https://v3.football.api-sports.io";
+}
+
+function getWorldCupProviderKeyPlaceholder(provider) {
+  if (provider === "football-data") return "请输入 Football-Data.org Token";
+  if (provider === "zafronix") return "请输入 Zafronix API Key";
+  return "请输入 API-Football API Key";
 }
 
 function fillWorldCupApiSettings(payload) {
   const settings = payload?.settings || {};
   const defaults = payload?.defaults || {};
+  const provider = settings.provider || defaults.provider || "api-football";
+  if (refs.worldCupApiProvider) refs.worldCupApiProvider.value = provider;
   if (refs.worldCupApiEnabled) refs.worldCupApiEnabled.value = settings.enabled ? "1" : "0";
   if (refs.worldCupApiKey) {
     refs.worldCupApiKey.value = "";
-    refs.worldCupApiKey.placeholder = settings.hasApiKey ? "已配置，留空则保持原 Key" : "请输入 API-Football API Key";
+    refs.worldCupApiKey.placeholder = settings.hasApiKey ? "已配置，留空则保持原 Key" : getWorldCupProviderKeyPlaceholder(provider);
   }
-  if (refs.worldCupApiBaseUrl) refs.worldCupApiBaseUrl.value = settings.baseUrl || defaults.baseUrl || "https://v3.football.api-sports.io";
+  if (refs.worldCupApiBaseUrl) {
+    refs.worldCupApiBaseUrl.value = settings.baseUrl || getWorldCupProviderDefaultBaseUrl(provider, defaults);
+  }
   if (refs.worldCupApiTimezone) refs.worldCupApiTimezone.value = settings.timezone || defaults.timezone || "Asia/Shanghai";
   if (refs.worldCupApiLeagueId) refs.worldCupApiLeagueId.value = settings.worldCupLeagueId || defaults.worldCupLeagueId || 1;
   if (refs.worldCupApiSeason) refs.worldCupApiSeason.value = settings.worldCupSeason || defaults.worldCupSeason || 2026;
@@ -2292,6 +2316,7 @@ async function refreshWorldCupApiSettings() {
 async function saveWorldCupApiSettings() {
   if (!refs.worldCupApiSettingsForm) return;
   const payload = {
+    provider: refs.worldCupApiProvider?.value || "api-football",
     enabled: refs.worldCupApiEnabled.value === "1",
     apiKey: refs.worldCupApiKey.value.trim(),
     clearApiKey: refs.worldCupApiClearKey.value === "1",
@@ -2306,7 +2331,7 @@ async function saveWorldCupApiSettings() {
   if (!payload.apiKey) delete payload.apiKey;
 
   try {
-    setHint(refs.worldCupApiSettingsResult, "正在保存 API-Football 配置...");
+    setHint(refs.worldCupApiSettingsResult, "正在保存世界杯 API 配置...");
     setButtonBusy(refs.worldCupApiSettingsSubmitBtn, true, "保存中...");
     const response = await api("/api/admin/sub2api/worldcup/api-football/settings", {
       method: "PATCH",
@@ -2339,13 +2364,14 @@ async function runWorldCupManualSync() {
     const odds = stats.upcomingOdds || {};
     const settle = stats.settle || {};
     const cancel = stats.cancel || {};
+    const provider = getWorldCupProviderLabel(response.settings?.provider);
     const emptyHint = Number(discovery.fixturesReturned || 0) === 0
-      ? "API-Football 未返回赛事，请检查 League ID、赛季、API Key 权限或当前日期是否有赛程。"
+      ? `${provider} 未返回赛事，请检查数据源、赛季、API Key/Token 权限或当前日期是否有赛程。`
       : "";
     setHint(
       refs.worldCupApiSettingsResult,
       [
-        `已触发同步：API 返回 ${discovery.fixturesReturned ?? 0} 场，去重 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
+        `已触发同步：${provider} 返回 ${discovery.fixturesReturned ?? 0} 场，去重 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
         `今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`,
         emptyHint
       ].filter(Boolean).join(" ")
@@ -2865,6 +2891,18 @@ if (refs.worldCupApiSettingsForm) {
   refs.worldCupApiSettingsForm.addEventListener("submit", (event) => {
     event.preventDefault();
     saveWorldCupApiSettings().catch(() => {});
+  });
+}
+
+if (refs.worldCupApiProvider) {
+  refs.worldCupApiProvider.addEventListener("change", () => {
+    const provider = refs.worldCupApiProvider.value;
+    if (refs.worldCupApiBaseUrl) {
+      refs.worldCupApiBaseUrl.value = getWorldCupProviderDefaultBaseUrl(provider);
+    }
+    if (refs.worldCupApiKey) {
+      refs.worldCupApiKey.placeholder = getWorldCupProviderKeyPlaceholder(provider);
+    }
   });
 }
 

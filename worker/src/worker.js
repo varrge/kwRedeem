@@ -10,12 +10,16 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEven
 import { getNumber, getStatus, setStatus } from "../../shared/src/fivesim-client.js";
 import {
   fetchApiFootballWorldCupFixtures,
+  fetchFootballDataWorldCupMatches,
+  fetchZafronixWorldCupMatches,
   fetchApiFootballWorldCupLiveOdds,
   fetchApiFootballWorldCupOdds,
   getApiFootballQuotaSnapshot,
   getApiFootballSettings,
   getApiFootballUsageDate,
   parseApiFootballFixture,
+  parseFootballDataMatch,
+  parseZafronixMatch,
   parseApiFootballMatchWinnerOdds
 } from "../../shared/src/api-football.js";
 import {
@@ -121,6 +125,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
     return 0;
   }
   const now = nowIso();
+  const source = parsedFixture.source || "api-football";
   const sync = db.transaction(() => {
     let count = 0;
     for (const connection of connections) {
@@ -129,7 +134,8 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
         FROM sub2api_worldcup_matches
         WHERE connection_id = ?
           AND api_fixture_id = ?
-      `).get(connection.id, parsedFixture.apiFixtureId);
+          AND source = ?
+      `).get(connection.id, parsedFixture.apiFixtureId, source);
 
       const terminalStatus = existing && [
         sub2apiWorldCupMatchStatuses.settled,
@@ -150,7 +156,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
               home_score = ?,
               away_score = ?,
               result = ?,
-              source = 'api-football',
+              source = ?,
               api_league_id = ?,
               api_season = ?,
               api_status_short = ?,
@@ -173,6 +179,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
           parsedFixture.homeScore,
           parsedFixture.awayScore,
           parsedFixture.result,
+          source,
           parsedFixture.apiLeagueId,
           parsedFixture.apiSeason,
           parsedFixture.apiStatusShort || null,
@@ -195,7 +202,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
             created_at, updated_at, settled_at
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.8, 3.2, 1.8, 0.1, 2, NULL,
-                  'api-football', ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL)
+                  ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL)
         `).run(
           randomWorldCupId(),
           connection.id,
@@ -208,6 +215,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
           parsedFixture.homeScore,
           parsedFixture.awayScore,
           parsedFixture.result,
+          source,
           parsedFixture.apiFixtureId,
           parsedFixture.apiLeagueId,
           parsedFixture.apiSeason,
@@ -274,6 +282,62 @@ function markApiFootballWorldCupOddsAttempt(apiFixtureId) {
 }
 
 async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings) {
+  if (settings.provider === "zafronix") {
+    const stats = { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 };
+    try {
+      stats.requests += 1;
+      const response = await fetchZafronixWorldCupMatches(db, { priority: "normal", settings });
+      const items = Array.isArray(response?.json?.data) ? response.json.data : [];
+      stats.fixturesReturned = items.length;
+      const seen = new Set();
+      let synced = 0;
+      for (const item of items) {
+        const parsed = parseZafronixMatch(item, nowMs);
+        if (!parsed.apiFixtureId || seen.has(parsed.apiFixtureId)) continue;
+        seen.add(parsed.apiFixtureId);
+        synced += upsertApiFootballWorldCupFixture(parsed, connections);
+      }
+      stats.fixturesSeen = seen.size;
+      stats.rowsSynced = synced;
+      worldCupLastDiscoveryAt = nowMs;
+      if (synced > 0) {
+        console.log(`[KaWang worker] worldcup: synced ${seen.size} Zafronix matches for ${connections.length} Sub2api connections`);
+      }
+    } catch (error) {
+      logApiFootballSyncError("zafronix discovery", error);
+      if (error?.code === "API_FOOTBALL_HARD_LIMIT") throw error;
+    }
+    return stats;
+  }
+
+  if (settings.provider === "football-data") {
+    const stats = { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 };
+    try {
+      stats.requests += 1;
+      const response = await fetchFootballDataWorldCupMatches(db, { priority: "normal", settings });
+      const items = Array.isArray(response?.json?.matches) ? response.json.matches : [];
+      stats.fixturesReturned = items.length;
+      const seen = new Set();
+      let synced = 0;
+      for (const item of items) {
+        const parsed = parseFootballDataMatch(item, nowMs);
+        if (!parsed.apiFixtureId || seen.has(parsed.apiFixtureId)) continue;
+        seen.add(parsed.apiFixtureId);
+        synced += upsertApiFootballWorldCupFixture(parsed, connections);
+      }
+      stats.fixturesSeen = seen.size;
+      stats.rowsSynced = synced;
+      worldCupLastDiscoveryAt = nowMs;
+      if (synced > 0) {
+        console.log(`[KaWang worker] worldcup: synced ${seen.size} Football-Data matches for ${connections.length} Sub2api connections`);
+      }
+    } catch (error) {
+      logApiFootballSyncError("football-data discovery", error);
+      if (error?.code === "API_FOOTBALL_HARD_LIMIT") throw error;
+    }
+    return stats;
+  }
+
   const today = getApiFootballUsageDate(new Date(nowMs), settings.timezone);
   const requests = [
     { priority: "normal" },
@@ -528,7 +592,7 @@ async function autoSettleFinishedApiFootballWorldCupMatches(nowMs) {
   const rows = db.prepare(`
     SELECT id, home_team, away_team, home_score, away_score
     FROM sub2api_worldcup_matches
-    WHERE source = 'api-football'
+    WHERE source IN ('api-football', 'football-data', 'zafronix')
       AND status = ?
       AND result IS NOT NULL
       AND (auto_settle_attempted_at IS NULL OR auto_settle_attempted_at <= ?)
@@ -561,7 +625,7 @@ async function autoCancelApiFootballWorldCupMatches(nowMs) {
   const rows = db.prepare(`
     SELECT m.id, m.home_team, m.away_team
     FROM sub2api_worldcup_matches m
-    WHERE m.source = 'api-football'
+    WHERE m.source IN ('api-football', 'football-data', 'zafronix')
       AND m.status = ?
       AND (m.auto_settle_attempted_at IS NULL OR m.auto_settle_attempted_at <= ?)
       AND EXISTS (
@@ -600,8 +664,9 @@ async function autoCancelApiFootballWorldCupMatches(nowMs) {
   return stats;
 }
 
-function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs) {
+function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs, settings = {}) {
   if (!connections.length) return false;
+  if (settings.provider === "football-data" || settings.provider === "zafronix") return true;
   if (!worldCupLastDiscoveryAt || nowMs - worldCupLastDiscoveryAt >= WORLDCUP_DISCOVERY_INTERVAL_MS) return true;
   const upcomingCount = db.prepare(`
     SELECT COUNT(DISTINCT api_fixture_id) AS count
@@ -660,15 +725,17 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
       cancel: { targets: 0, cancelled: 0, failed: 0 }
     };
 
-    if (force || shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs)) {
+    if (force || shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs, settings)) {
       try {
         stats.discovery = await discoverApiFootballWorldCupFixtures(connections, nowMs, settings);
       } catch (error) {
         logApiFootballSyncError("discovery", error);
       }
     }
-    stats.tracked = await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
-    stats.upcomingOdds = await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
+    if (settings.provider === "api-football") {
+      stats.tracked = await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
+      stats.upcomingOdds = await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
+    }
     stats.settle = await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
     stats.cancel = await autoCancelApiFootballWorldCupMatches(nowMs);
     return { accepted: true, forced: force, stats };

@@ -13,8 +13,12 @@ import {
 const DEFAULT_TIMEOUT_MS = 12000;
 
 export const DEFAULT_API_FOOTBALL_SETTINGS = Object.freeze({
+  provider: "api-football",
   enabled: false,
   baseUrl: "https://v3.football.api-sports.io",
+  footballDataBaseUrl: "https://api.football-data.org/v4",
+  footballDataCompetition: "WC",
+  zafronixBaseUrl: "https://api.zafronix.com/fifa/worldcup/v1",
   worldCupLeagueId: 1,
   worldCupSeason: 2026,
   timezone: "Asia/Shanghai",
@@ -59,6 +63,12 @@ function normalizeApiFootballPositiveInteger(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
+function normalizeWorldCupApiProvider(value) {
+  const provider = String(value || "").trim();
+  if (provider === "football-data" || provider === "zafronix") return provider;
+  return "api-football";
+}
+
 function maskApiFootballKey(value) {
   const normalized = String(value || "").trim();
   if (!normalized) return "";
@@ -78,6 +88,7 @@ export function normalizeApiFootballSettings(row = null, { includeApiKey = false
   }
 
   return {
+    provider: normalizeWorldCupApiProvider(row?.provider ?? DEFAULT_API_FOOTBALL_SETTINGS.provider),
     enabled: Boolean(Number(row?.enabled ?? DEFAULT_API_FOOTBALL_SETTINGS.enabled)),
     hasApiKey: Boolean(encryptedApiKey),
     apiKey,
@@ -241,6 +252,24 @@ export function buildApiFootballUrl(endpoint, params = {}, baseUrl = DEFAULT_API
   return url;
 }
 
+function getWorldCupProviderBaseUrl(settings) {
+  if (settings.provider === "football-data") {
+    const baseUrl = String(settings.baseUrl || "").trim();
+    if (!baseUrl || baseUrl.includes("football.api-sports.io")) {
+      return DEFAULT_API_FOOTBALL_SETTINGS.footballDataBaseUrl;
+    }
+    return baseUrl;
+  }
+  if (settings.provider === "zafronix") {
+    const baseUrl = String(settings.baseUrl || "").trim();
+    if (!baseUrl || baseUrl.includes("football.api-sports.io") || baseUrl.includes("football-data.org")) {
+      return DEFAULT_API_FOOTBALL_SETTINGS.zafronixBaseUrl;
+    }
+    return baseUrl;
+  }
+  return settings.baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl;
+}
+
 export async function fetchApiFootballJson(db, endpoint, params = {}, {
   priority = "normal",
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -293,6 +322,98 @@ export async function fetchApiFootballJson(db, endpoint, params = {}, {
   }
 }
 
+export async function fetchFootballDataJson(db, endpoint, params = {}, {
+  priority = "normal",
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  settings = null
+} = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
+  const resolvedApiKey = String(resolvedSettings.apiKey || "").trim();
+  if (!resolvedApiKey) {
+    const error = new Error("未配置 Football-Data.org API Token，跳过世界杯同步");
+    error.code = "API_FOOTBALL_KEY_MISSING";
+    throw error;
+  }
+
+  const date = getApiFootballUsageDate(new Date(), resolvedSettings.timezone);
+  const reservation = reserveApiFootballRequest(db, {
+    endpoint,
+    params,
+    priority,
+    date,
+    softLimit: resolvedSettings.dailySoftLimit,
+    hardLimit: resolvedSettings.dailyHardLimit
+  });
+  const url = buildApiFootballUrl(endpoint, params, getWorldCupProviderBaseUrl(resolvedSettings));
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "X-Auth-Token": resolvedApiKey
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(json?.message || `HTTP ${response.status}`);
+    }
+    markApiFootballRequestLog(db, reservation.logId, { status: response.status });
+    return { json, usage: reservation.usage };
+  } catch (error) {
+    markApiFootballRequestLog(db, reservation.logId, {
+      status: error.name === "TimeoutError" ? 408 : 0,
+      errorMessage: error.message || "Football-Data.org 请求失败"
+    });
+    throw error;
+  }
+}
+
+export async function fetchZafronixJson(db, endpoint, params = {}, {
+  priority = "normal",
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  settings = null
+} = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
+  const resolvedApiKey = String(resolvedSettings.apiKey || "").trim();
+  if (!resolvedApiKey) {
+    const error = new Error("未配置 Zafronix API Key，跳过世界杯同步");
+    error.code = "API_FOOTBALL_KEY_MISSING";
+    throw error;
+  }
+
+  const date = getApiFootballUsageDate(new Date(), resolvedSettings.timezone);
+  const reservation = reserveApiFootballRequest(db, {
+    endpoint,
+    params,
+    priority,
+    date,
+    softLimit: resolvedSettings.dailySoftLimit,
+    hardLimit: resolvedSettings.dailyHardLimit
+  });
+  const url = buildApiFootballUrl(endpoint, params, getWorldCupProviderBaseUrl(resolvedSettings));
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "X-API-Key": resolvedApiKey
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(json?.message || json?.error || `HTTP ${response.status}`);
+    }
+    markApiFootballRequestLog(db, reservation.logId, { status: response.status });
+    return { json, usage: reservation.usage };
+  } catch (error) {
+    markApiFootballRequestLog(db, reservation.logId, {
+      status: error.name === "TimeoutError" ? 408 : 0,
+      errorMessage: error.message || "Zafronix 请求失败"
+    });
+    throw error;
+  }
+}
+
 export async function fetchApiFootballWorldCupFixtures(db, {
   next = null,
   fixtureId = null,
@@ -309,6 +430,33 @@ export async function fetchApiFootballWorldCupFixtures(db, {
   if (fixtureId) params.id = fixtureId;
   if (date) params.date = date;
   return fetchApiFootballJson(db, "/fixtures", params, { priority, settings: resolvedSettings });
+}
+
+export async function fetchFootballDataWorldCupMatches(db, {
+  priority = "normal",
+  settings = null
+} = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
+  const competition = DEFAULT_API_FOOTBALL_SETTINGS.footballDataCompetition;
+  return fetchFootballDataJson(
+    db,
+    `/competitions/${competition}/matches`,
+    { season: resolvedSettings.worldCupSeason },
+    { priority, settings: resolvedSettings }
+  );
+}
+
+export async function fetchZafronixWorldCupMatches(db, {
+  priority = "normal",
+  settings = null
+} = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
+  return fetchZafronixJson(
+    db,
+    "/matches",
+    { year: resolvedSettings.worldCupSeason },
+    { priority, settings: resolvedSettings }
+  );
 }
 
 export async function fetchApiFootballWorldCupOdds(db, {
@@ -361,17 +509,127 @@ export function parseApiFootballFixture(item, nowMs = Date.now()) {
 
   return {
     apiFixtureId: String(fixture.id || ""),
+    source: "api-football",
     apiLeagueId: toIntegerOrNull(league.id),
     apiSeason: toIntegerOrNull(league.season),
     stage: String(league.round || ""),
     groupName: "",
-    homeTeam: String(teams.home?.name || ""),
-    awayTeam: String(teams.away?.name || ""),
+    homeTeam: String(teams.home?.name || "待定主队"),
+    awayTeam: String(teams.away?.name || "待定客队"),
     kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
     status,
     apiStatusShort: statusShort,
     apiStatusLong: String(fixture.status?.long || ""),
     apiElapsed: toIntegerOrNull(fixture.status?.elapsed),
+    homeScore,
+    awayScore,
+    result
+  };
+}
+
+function normalizeFootballDataStatus(value) {
+  const status = String(value || "").trim().toUpperCase();
+  if (["IN_PLAY", "LIVE"].includes(status)) return "1H";
+  if (status === "PAUSED") return "HT";
+  if (status === "FINISHED") return "FT";
+  if (["POSTPONED", "SUSPENDED", "CANCELLED", "CANCELED"].includes(status)) return "PST";
+  return "NS";
+}
+
+export function parseFootballDataMatch(item, nowMs = Date.now()) {
+  const statusShort = normalizeFootballDataStatus(item?.status);
+  const kickoffDate = item?.utcDate ? new Date(item.utcDate) : new Date("");
+  const kickoffMs = kickoffDate.getTime();
+  const homeScore = toIntegerOrNull(item?.score?.fullTime?.home);
+  const awayScore = toIntegerOrNull(item?.score?.fullTime?.away);
+  const result = isSub2ApiWorldCupApiStatusFinal(statusShort) && homeScore !== null && awayScore !== null
+    ? getSub2ApiWorldCupResult(homeScore, awayScore)
+    : null;
+
+  let status = sub2apiWorldCupMatchStatuses.open;
+  if (isSub2ApiWorldCupApiStatusFinal(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.finished;
+  } else if (isSub2ApiWorldCupApiStatusCancelled(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.cancelled;
+  } else if (isSub2ApiWorldCupApiStatusLive(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.locked;
+  } else if (Number.isFinite(kickoffMs) && kickoffMs - nowMs <= 60 * 60 * 1000) {
+    status = sub2apiWorldCupMatchStatuses.locked;
+  }
+
+  return {
+    apiFixtureId: String(item?.id || ""),
+    source: "football-data",
+    apiLeagueId: null,
+    apiSeason: toIntegerOrNull(item?.season?.startDate?.slice(0, 4)) || null,
+    stage: String(item?.stage || item?.group || item?.matchday || ""),
+    groupName: String(item?.group || ""),
+    homeTeam: String(item?.homeTeam?.name || item?.homeTeam?.shortName || "待定主队"),
+    awayTeam: String(item?.awayTeam?.name || item?.awayTeam?.shortName || "待定客队"),
+    kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
+    status,
+    apiStatusShort: statusShort,
+    apiStatusLong: String(item?.status || ""),
+    apiElapsed: null,
+    homeScore,
+    awayScore,
+    result
+  };
+}
+
+function normalizeZafronixStatus(value, homeScore, awayScore) {
+  const status = String(value || "").trim().toLowerCase();
+  if (["live", "in_play", "in-progress", "in_progress"].includes(status)) return "1H";
+  if (["halftime", "half_time", "paused"].includes(status)) return "HT";
+  if (["finished", "final", "completed"].includes(status)) return "FT";
+  if (["postponed", "abandoned", "cancelled", "canceled"].includes(status)) return "PST";
+  if (homeScore !== null && awayScore !== null) return "FT";
+  return "NS";
+}
+
+function parseZafronixKickoff(item) {
+  const utcValue = item?.kickoffUtc || item?.utcDate || item?.startTimeUtc || item?.startsAt;
+  if (utcValue) return new Date(utcValue);
+  if (item?.date && item?.kickoff) return new Date(`${item.date}T${item.kickoff}:00Z`);
+  if (item?.date) return new Date(`${item.date}T00:00:00Z`);
+  return new Date("");
+}
+
+export function parseZafronixMatch(item, nowMs = Date.now()) {
+  const homeScore = toIntegerOrNull(item?.homeScore);
+  const awayScore = toIntegerOrNull(item?.awayScore);
+  const statusShort = normalizeZafronixStatus(item?.status, homeScore, awayScore);
+  const kickoffDate = parseZafronixKickoff(item);
+  const kickoffMs = kickoffDate.getTime();
+  const result = isSub2ApiWorldCupApiStatusFinal(statusShort) && homeScore !== null && awayScore !== null
+    ? getSub2ApiWorldCupResult(homeScore, awayScore)
+    : null;
+
+  let status = sub2apiWorldCupMatchStatuses.open;
+  if (isSub2ApiWorldCupApiStatusFinal(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.finished;
+  } else if (isSub2ApiWorldCupApiStatusCancelled(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.cancelled;
+  } else if (isSub2ApiWorldCupApiStatusLive(statusShort)) {
+    status = sub2apiWorldCupMatchStatuses.locked;
+  } else if (Number.isFinite(kickoffMs) && kickoffMs - nowMs <= 60 * 60 * 1000) {
+    status = sub2apiWorldCupMatchStatuses.locked;
+  }
+
+  return {
+    apiFixtureId: String(item?.id || ""),
+    source: "zafronix",
+    apiLeagueId: null,
+    apiSeason: toIntegerOrNull(item?.year) || null,
+    stage: String(item?.stage || ""),
+    groupName: String(item?.group || ""),
+    homeTeam: String(item?.homeTeam || item?.home || item?.homeRef || "待定主队"),
+    awayTeam: String(item?.awayTeam || item?.away || item?.awayRef || "待定客队"),
+    kickoffAt: Number.isFinite(kickoffMs) ? kickoffDate.toISOString() : "",
+    status,
+    apiStatusShort: statusShort,
+    apiStatusLong: String(item?.status || ""),
+    apiElapsed: null,
     homeScore,
     awayScore,
     result

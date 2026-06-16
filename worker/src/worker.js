@@ -276,15 +276,19 @@ function markApiFootballWorldCupOddsAttempt(apiFixtureId) {
 async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings) {
   const today = getApiFootballUsageDate(new Date(nowMs), settings.timezone);
   const requests = [
+    { priority: "normal" },
     { next: 3, priority: "normal" },
     { date: today, priority: "normal" }
   ];
   const seen = new Set();
+  const stats = { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 };
   let synced = 0;
   for (const request of requests) {
     try {
+      stats.requests += 1;
       const response = await fetchApiFootballWorldCupFixtures(db, { ...request, settings });
       const items = Array.isArray(response?.json?.response) ? response.json.response : [];
+      stats.fixturesReturned += items.length;
       for (const item of items) {
         const parsed = parseApiFootballFixture(item, nowMs);
         if (!parsed.apiFixtureId || seen.has(parsed.apiFixtureId)) continue;
@@ -297,9 +301,12 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
     }
   }
   worldCupLastDiscoveryAt = nowMs;
+  stats.fixturesSeen = seen.size;
+  stats.rowsSynced = synced;
   if (synced > 0) {
     console.log(`[KaWang worker] worldcup: synced ${seen.size} fixtures for ${connections.length} Sub2api connections`);
   }
+  return stats;
 }
 
 function getTrackedApiFootballFixtures() {
@@ -364,7 +371,7 @@ async function syncApiFootballFixtureById(apiFixtureId, connections, nowMs, sett
 }
 
 async function syncApiFootballHalftimeOdds(parsedFixture, priority, settings) {
-  if (!parsedFixture?.apiFixtureId || parsedFixture.apiStatusShort !== "HT") return;
+  if (!parsedFixture?.apiFixtureId || parsedFixture.apiStatusShort !== "HT") return { attempted: 0, updated: 0 };
   const row = db.prepare(`
     SELECT MAX(odds_last_synced_at) AS odds_last_synced_at
     FROM sub2api_worldcup_matches
@@ -372,7 +379,7 @@ async function syncApiFootballHalftimeOdds(parsedFixture, priority, settings) {
       AND source = 'api-football'
   `).get(parsedFixture.apiFixtureId);
   if (parseTimeMs(row?.odds_last_synced_at) && Date.now() - parseTimeMs(row.odds_last_synced_at) < 2 * 60 * 1000) {
-    return;
+    return { attempted: 0, updated: 0 };
   }
   try {
     const response = await fetchApiFootballWorldCupLiveOdds(db, {
@@ -385,31 +392,39 @@ async function syncApiFootballHalftimeOdds(parsedFixture, priority, settings) {
       awayTeam: parsedFixture.awayTeam
     });
     if (odds) {
-      updateApiFootballWorldCupOdds(parsedFixture.apiFixtureId, odds);
+      return { attempted: 1, updated: updateApiFootballWorldCupOdds(parsedFixture.apiFixtureId, odds) };
     } else {
       markApiFootballWorldCupOddsAttempt(parsedFixture.apiFixtureId);
+      return { attempted: 1, updated: 0 };
     }
   } catch (error) {
     logApiFootballSyncError("live-odds", error);
     if (!isApiFootballLimitError(error)) {
       markApiFootballWorldCupOddsAttempt(parsedFixture.apiFixtureId);
     }
+    return { attempted: 1, updated: 0, failed: 1 };
   }
 }
 
 async function syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings) {
   const rows = getTrackedApiFootballFixtures().filter((row) => shouldRefreshApiFootballFixture(row, nowMs));
+  const stats = { targets: rows.length, refreshed: 0, halftimeOddsAttempted: 0, halftimeOddsUpdated: 0, failed: 0 };
   for (const row of rows) {
     const urgent = isUrgentApiFootballFixtureRefresh(row, nowMs);
     const priority = getWorldCupRequestPriority(settings, urgent);
     try {
       const parsed = await syncApiFootballFixtureById(row.api_fixture_id, connections, nowMs, settings, priority);
-      await syncApiFootballHalftimeOdds(parsed, getWorldCupRequestPriority(settings, true), settings);
+      if (parsed) stats.refreshed += 1;
+      const oddsStats = await syncApiFootballHalftimeOdds(parsed, getWorldCupRequestPriority(settings, true), settings);
+      stats.halftimeOddsAttempted += oddsStats?.attempted || 0;
+      stats.halftimeOddsUpdated += oddsStats?.updated || 0;
     } catch (error) {
+      stats.failed += 1;
       logApiFootballSyncError(`fixture ${row.api_fixture_id}`, error);
       if (error?.code === "API_FOOTBALL_HARD_LIMIT") break;
     }
   }
+  return stats;
 }
 
 function getUpcomingApiFootballOddsTargets(now = nowIso()) {
@@ -446,8 +461,10 @@ function shouldRefreshApiFootballOdds(row, nowMs) {
 async function syncUpcomingApiFootballWorldCupOdds(nowMs, settings) {
   const targets = getUpcomingApiFootballOddsTargets(new Date(nowMs).toISOString())
     .filter((row) => shouldRefreshApiFootballOdds(row, nowMs));
+  const stats = { targets: targets.length, attempted: 0, updated: 0, failed: 0 };
   for (const target of targets) {
     try {
+      stats.attempted += 1;
       const response = await fetchApiFootballWorldCupOdds(db, {
         fixtureId: target.api_fixture_id,
         priority: "normal",
@@ -458,16 +475,18 @@ async function syncUpcomingApiFootballWorldCupOdds(nowMs, settings) {
         awayTeam: target.away_team
       });
       if (odds) {
-        updateApiFootballWorldCupOdds(target.api_fixture_id, odds);
+        stats.updated += updateApiFootballWorldCupOdds(target.api_fixture_id, odds);
       } else {
         markApiFootballWorldCupOddsAttempt(target.api_fixture_id);
       }
     } catch (error) {
+      stats.failed += 1;
       logApiFootballSyncError(`odds ${target.api_fixture_id}`, error);
       if (isApiFootballLimitError(error)) break;
       markApiFootballWorldCupOddsAttempt(target.api_fixture_id);
     }
   }
+  return stats;
 }
 
 async function requestWorldCupInternalSettle(matchId) {
@@ -517,6 +536,7 @@ async function autoSettleFinishedApiFootballWorldCupMatches(nowMs) {
     LIMIT 10
   `).all(sub2apiWorldCupMatchStatuses.finished, retryBefore);
 
+  const stats = { targets: rows.length, settled: 0, failed: 0 };
   for (const row of rows) {
     const now = nowIso();
     db.prepare(`
@@ -526,11 +546,14 @@ async function autoSettleFinishedApiFootballWorldCupMatches(nowMs) {
     `).run(now, now, row.id);
     try {
       await requestWorldCupInternalSettle(row.id);
+      stats.settled += 1;
       console.log(`[KaWang worker] worldcup: settled ${row.home_team} ${row.home_score}-${row.away_score} ${row.away_team}`);
     } catch (error) {
+      stats.failed += 1;
       console.error(`[KaWang worker] worldcup settle ${row.id}:`, error.message || error);
     }
   }
+  return stats;
 }
 
 async function autoCancelApiFootballWorldCupMatches(nowMs) {
@@ -557,6 +580,7 @@ async function autoCancelApiFootballWorldCupMatches(nowMs) {
     sub2apiWorldCupBetStatuses.refundFailed
   );
 
+  const stats = { targets: rows.length, cancelled: 0, failed: 0 };
   for (const row of rows) {
     const now = nowIso();
     db.prepare(`
@@ -566,11 +590,14 @@ async function autoCancelApiFootballWorldCupMatches(nowMs) {
     `).run(now, now, row.id);
     try {
       await requestWorldCupInternalCancel(row.id);
+      stats.cancelled += 1;
       console.log(`[KaWang worker] worldcup: cancelled ${row.home_team} vs ${row.away_team}`);
     } catch (error) {
+      stats.failed += 1;
       console.error(`[KaWang worker] worldcup cancel ${row.id}:`, error.message || error);
     }
   }
+  return stats;
 }
 
 function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs) {
@@ -624,18 +651,27 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
     }
     worldCupMissingKeyLogged = false;
 
+    const stats = {
+      connections: connections.length,
+      discovery: { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 },
+      tracked: { targets: 0, refreshed: 0, halftimeOddsAttempted: 0, halftimeOddsUpdated: 0, failed: 0 },
+      upcomingOdds: { targets: 0, attempted: 0, updated: 0, failed: 0 },
+      settle: { targets: 0, settled: 0, failed: 0 },
+      cancel: { targets: 0, cancelled: 0, failed: 0 }
+    };
+
     if (force || shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs)) {
       try {
-        await discoverApiFootballWorldCupFixtures(connections, nowMs, settings);
+        stats.discovery = await discoverApiFootballWorldCupFixtures(connections, nowMs, settings);
       } catch (error) {
         logApiFootballSyncError("discovery", error);
       }
     }
-    await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
-    await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
-    await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
-    await autoCancelApiFootballWorldCupMatches(nowMs);
-    return { accepted: true, forced: force };
+    stats.tracked = await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
+    stats.upcomingOdds = await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
+    stats.settle = await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
+    stats.cancel = await autoCancelApiFootballWorldCupMatches(nowMs);
+    return { accepted: true, forced: force, stats };
   } finally {
     worldCupSyncRunning = false;
   }

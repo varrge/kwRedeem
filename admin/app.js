@@ -2333,9 +2333,22 @@ async function runWorldCupManualSync() {
     });
     fillWorldCupApiSettings(response);
     const usage = response.usage || {};
+    const stats = response.worker?.stats || {};
+    const discovery = stats.discovery || {};
+    const tracked = stats.tracked || {};
+    const odds = stats.upcomingOdds || {};
+    const settle = stats.settle || {};
+    const cancel = stats.cancel || {};
+    const emptyHint = Number(discovery.fixturesReturned || 0) === 0
+      ? "API-Football 未返回赛事，请检查 League ID、赛季、API Key 权限或当前日期是否有赛程。"
+      : "";
     setHint(
       refs.worldCupApiSettingsResult,
-      `已触发同步。今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`
+      [
+        `已触发同步：API 返回 ${discovery.fixturesReturned ?? 0} 场，去重 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
+        `今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`,
+        emptyHint
+      ].filter(Boolean).join(" ")
     );
     await refreshWorldCupMatches().catch(() => {});
     await refreshWorldCupBets().catch(() => {});

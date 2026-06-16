@@ -321,6 +321,17 @@ function getPinnedZafronixWorldCupFixtureIds() {
   ).map((row) => String(row.api_fixture_id)));
 }
 
+function extractZafronixMatchItems(json) {
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json?.items)) return json.items;
+  if (Array.isArray(json?.matches)) return json.matches;
+  if (Array.isArray(json?.fixtures)) return json.fixtures;
+  if (Array.isArray(json?.data?.matches)) return json.data.matches;
+  if (Array.isArray(json?.data?.items)) return json.data.items;
+  return [];
+}
+
 function selectZafronixWorldCupMatches(matches, nowMs, pinnedFixtureIds = new Set()) {
   const validMatches = matches
     .filter((match) => match?.apiFixtureId && match.kickoffAt && parseTimeMs(match.kickoffAt))
@@ -396,7 +407,7 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
     try {
       stats.requests += 1;
       const response = await fetchZafronixWorldCupMatches(db, { priority: "normal", settings });
-      const items = Array.isArray(response?.json?.data) ? response.json.data : [];
+      const items = extractZafronixMatchItems(response?.json);
       stats.fixturesReturned = items.length;
       const selectedMatches = selectZafronixWorldCupMatches(
         items.map((item) => parseZafronixMatch(item, nowMs)),

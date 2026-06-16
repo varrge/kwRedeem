@@ -32,6 +32,8 @@ function nowIso() {
 }
 
 function toIntegerOrNull(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const number = Number(value);
   return Number.isInteger(number) ? number : null;
 }
@@ -589,7 +591,7 @@ function parseZafronixKickoff(item) {
   const utcValue = item?.kickoffUtc || item?.utcDate || item?.startTimeUtc || item?.startsAt;
   if (utcValue) return new Date(utcValue);
   if (item?.date && item?.kickoff) return new Date(`${item.date}T${item.kickoff}:00Z`);
-  if (item?.date) return new Date(`${item.date}T00:00:00Z`);
+  if (item?.date) return new Date(`${item.date}T04:00:00Z`);
   return new Date("");
 }
 

@@ -13,9 +13,9 @@ import {
 const DEFAULT_TIMEOUT_MS = 12000;
 
 export const DEFAULT_API_FOOTBALL_SETTINGS = Object.freeze({
-  provider: "api-football",
+  provider: "zafronix",
   enabled: false,
-  baseUrl: "https://v3.football.api-sports.io",
+  baseUrl: "https://api.zafronix.com/fifa/worldcup/v1",
   footballDataBaseUrl: "https://api.football-data.org/v4",
   footballDataCompetition: "WC",
   zafronixBaseUrl: "https://api.zafronix.com/fifa/worldcup/v1",
@@ -64,9 +64,7 @@ function normalizeApiFootballPositiveInteger(value, fallback) {
 }
 
 function normalizeWorldCupApiProvider(value) {
-  const provider = String(value || "").trim();
-  if (provider === "football-data" || provider === "zafronix") return provider;
-  return "api-football";
+  return "zafronix";
 }
 
 function maskApiFootballKey(value) {

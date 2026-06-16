@@ -638,10 +638,10 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS api_football_settings (
       id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL DEFAULT 'api-football',
+      provider TEXT NOT NULL DEFAULT 'zafronix',
       enabled INTEGER NOT NULL DEFAULT 0,
       api_key TEXT,
-      base_url TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io',
+      base_url TEXT NOT NULL DEFAULT 'https://api.zafronix.com/fifa/worldcup/v1',
       worldcup_league_id INTEGER NOT NULL DEFAULT 1,
       worldcup_season INTEGER NOT NULL DEFAULT 2026,
       timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
@@ -727,9 +727,9 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
   ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "api_football_settings", "provider", "TEXT NOT NULL DEFAULT 'api-football'");
+  ensureColumn(db, "api_football_settings", "provider", "TEXT NOT NULL DEFAULT 'zafronix'");
   ensureColumn(db, "api_football_settings", "api_key", "TEXT");
-  ensureColumn(db, "api_football_settings", "base_url", "TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io'");
+  ensureColumn(db, "api_football_settings", "base_url", "TEXT NOT NULL DEFAULT 'https://api.zafronix.com/fifa/worldcup/v1'");
   ensureColumn(db, "api_football_settings", "worldcup_league_id", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "api_football_settings", "worldcup_season", "INTEGER NOT NULL DEFAULT 2026");
   ensureColumn(db, "api_football_settings", "timezone", "TEXT NOT NULL DEFAULT 'Asia/Shanghai'");
@@ -1208,9 +1208,20 @@ function seedDefaults(db) {
       id, provider, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
       timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
     )
-    VALUES ('default', 'api-football', 0, NULL, 'https://v3.football.api-sports.io', 1, 2026,
+    VALUES ('default', 'zafronix', 0, NULL, 'https://api.zafronix.com/fifa/worldcup/v1', 1, 2026,
             'Asia/Shanghai', 80, 100, 60000, ?, 'system')
   `).run(new Date().toISOString());
+
+  db.prepare(`
+    UPDATE api_football_settings
+    SET provider = 'zafronix',
+        base_url = CASE
+          WHEN base_url LIKE '%football.api-sports.io%' OR base_url LIKE '%football-data.org%' OR base_url IS NULL OR base_url = ''
+          THEN 'https://api.zafronix.com/fifa/worldcup/v1'
+          ELSE base_url
+        END
+    WHERE id = 'default'
+  `).run();
 
   db.prepare(`
     INSERT OR IGNORE INTO sms_sites (id, name, slug, inventory_source, status, note, created_at, updated_at)

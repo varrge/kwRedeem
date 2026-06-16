@@ -5431,7 +5431,7 @@ function buildApiFootballAdminPayload() {
 }
 
 const apiFootballSettingsSchema = z.object({
-  provider: z.enum(["api-football", "football-data", "zafronix"]).optional(),
+  provider: z.enum(["zafronix"]).optional(),
   enabled: z.boolean().optional(),
   apiKey: z.string().trim().optional(),
   clearApiKey: z.boolean().optional(),
@@ -5451,15 +5451,20 @@ app.get("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: requi
 app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: requireAdmin }, async (request, reply) => {
   const parsed = apiFootballSettingsSchema.safeParse(getBodyObject(request.body));
   if (!parsed.success) {
-    return reply.code(400).send({ message: "API-Football 配置参数不正确" });
+    return reply.code(400).send({ message: "Zafronix 配置参数不正确" });
   }
 
   const currentRow = db.prepare("SELECT * FROM api_football_settings WHERE id = 'default'").get();
   const current = getApiFootballSettings(db);
+  const provider = "zafronix";
+  let baseUrl = parsed.data.baseUrl || current.baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.zafronixBaseUrl;
+  if (baseUrl.includes("football.api-sports.io") || baseUrl.includes("football-data.org")) {
+    baseUrl = DEFAULT_API_FOOTBALL_SETTINGS.zafronixBaseUrl;
+  }
   const next = {
-    provider: parsed.data.provider || current.provider || DEFAULT_API_FOOTBALL_SETTINGS.provider,
+    provider,
     enabled: parsed.data.enabled ?? current.enabled,
-    baseUrl: parsed.data.baseUrl || current.baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl,
+    baseUrl,
     worldCupLeagueId: parsed.data.worldCupLeagueId ?? current.worldCupLeagueId,
     worldCupSeason: parsed.data.worldCupSeason ?? current.worldCupSeason,
     timezone: parsed.data.timezone || current.timezone || DEFAULT_API_FOOTBALL_SETTINGS.timezone,
@@ -5493,8 +5498,8 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
       id, provider, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
       timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
     )
-    VALUES ('default', 'api-football', 0, NULL, ?, 1, 2026, 'Asia/Shanghai', 80, 100, 60000, ?, 'system')
-  `).run(DEFAULT_API_FOOTBALL_SETTINGS.baseUrl, now);
+    VALUES ('default', 'zafronix', 0, NULL, ?, 1, 2026, 'Asia/Shanghai', 80, 100, 60000, ?, 'system')
+  `).run(DEFAULT_API_FOOTBALL_SETTINGS.zafronixBaseUrl, now);
 
   db.prepare(`
     UPDATE api_football_settings
@@ -5570,9 +5575,9 @@ app.post("/api/admin/sub2api/worldcup/api-football/sync", { preHandler: requireA
   if (!response.ok) {
     const reasonText = {
       already_running: "世界杯同步正在执行中",
-      disabled: "API-Football 自动同步未启用",
+      disabled: "Zafronix 自动同步未启用",
       no_active_connections: "没有 active 的 Sub2api 连接",
-      missing_api_key: "未配置 API-Football API Key",
+      missing_api_key: "未配置 Zafronix API Key",
       interval_not_due: "同步间隔尚未到期"
     }[payload.reason] || payload.message || "worker 执行失败";
     return reply.code(response.status).send({ message: reasonText, worker: payload });

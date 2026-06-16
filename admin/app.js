@@ -200,7 +200,6 @@ const refs = {
   worldCupApiKey: document.querySelector("#worldcup-api-key"),
   worldCupApiBaseUrl: document.querySelector("#worldcup-api-base-url"),
   worldCupApiTimezone: document.querySelector("#worldcup-api-timezone"),
-  worldCupApiLeagueId: document.querySelector("#worldcup-api-league-id"),
   worldCupApiSeason: document.querySelector("#worldcup-api-season"),
   worldCupApiSoftLimit: document.querySelector("#worldcup-api-soft-limit"),
   worldCupApiHardLimit: document.querySelector("#worldcup-api-hard-limit"),
@@ -2261,27 +2260,21 @@ function renderWorldCupApiUsage(payload) {
 }
 
 function getWorldCupProviderLabel(provider) {
-  if (provider === "football-data") return "Football-Data.org";
-  if (provider === "zafronix") return "Zafronix";
-  return "API-Football";
+  return "Zafronix";
 }
 
 function getWorldCupProviderDefaultBaseUrl(provider, defaults = {}) {
-  if (provider === "football-data") return defaults.footballDataBaseUrl || "https://api.football-data.org/v4";
-  if (provider === "zafronix") return defaults.zafronixBaseUrl || "https://api.zafronix.com/fifa/worldcup/v1";
-  return defaults.baseUrl || "https://v3.football.api-sports.io";
+  return defaults.zafronixBaseUrl || "https://api.zafronix.com/fifa/worldcup/v1";
 }
 
 function getWorldCupProviderKeyPlaceholder(provider) {
-  if (provider === "football-data") return "请输入 Football-Data.org Token";
-  if (provider === "zafronix") return "请输入 Zafronix API Key";
-  return "请输入 API-Football API Key";
+  return "请输入 Zafronix API Key";
 }
 
 function fillWorldCupApiSettings(payload) {
   const settings = payload?.settings || {};
   const defaults = payload?.defaults || {};
-  const provider = settings.provider || defaults.provider || "api-football";
+  const provider = "zafronix";
   if (refs.worldCupApiProvider) refs.worldCupApiProvider.value = provider;
   if (refs.worldCupApiEnabled) refs.worldCupApiEnabled.value = settings.enabled ? "1" : "0";
   if (refs.worldCupApiKey) {
@@ -2292,7 +2285,6 @@ function fillWorldCupApiSettings(payload) {
     refs.worldCupApiBaseUrl.value = settings.baseUrl || getWorldCupProviderDefaultBaseUrl(provider, defaults);
   }
   if (refs.worldCupApiTimezone) refs.worldCupApiTimezone.value = settings.timezone || defaults.timezone || "Asia/Shanghai";
-  if (refs.worldCupApiLeagueId) refs.worldCupApiLeagueId.value = settings.worldCupLeagueId || defaults.worldCupLeagueId || 1;
   if (refs.worldCupApiSeason) refs.worldCupApiSeason.value = settings.worldCupSeason || defaults.worldCupSeason || 2026;
   if (refs.worldCupApiSoftLimit) refs.worldCupApiSoftLimit.value = settings.dailySoftLimit || defaults.dailySoftLimit || 80;
   if (refs.worldCupApiHardLimit) refs.worldCupApiHardLimit.value = settings.dailyHardLimit || defaults.dailyHardLimit || 100;
@@ -2316,13 +2308,13 @@ async function refreshWorldCupApiSettings() {
 async function saveWorldCupApiSettings() {
   if (!refs.worldCupApiSettingsForm) return;
   const payload = {
-    provider: refs.worldCupApiProvider?.value || "api-football",
+    provider: "zafronix",
     enabled: refs.worldCupApiEnabled.value === "1",
     apiKey: refs.worldCupApiKey.value.trim(),
     clearApiKey: refs.worldCupApiClearKey.value === "1",
     baseUrl: refs.worldCupApiBaseUrl.value.trim(),
     timezone: refs.worldCupApiTimezone.value.trim(),
-    worldCupLeagueId: Number(refs.worldCupApiLeagueId.value || 1),
+    worldCupLeagueId: 1,
     worldCupSeason: Number(refs.worldCupApiSeason.value || 2026),
     dailySoftLimit: Number(refs.worldCupApiSoftLimit.value || 80),
     dailyHardLimit: Number(refs.worldCupApiHardLimit.value || 100),
@@ -2371,7 +2363,7 @@ async function runWorldCupManualSync() {
     setHint(
       refs.worldCupApiSettingsResult,
       [
-        `已触发同步：${provider} 返回 ${discovery.fixturesReturned ?? 0} 场，去重 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
+        `已触发同步：${provider} 返回 ${discovery.fixturesReturned ?? 0} 场，筛选 ${discovery.fixturesSeen ?? 0} 场，写入 ${discovery.rowsSynced ?? 0} 条，清理旧赛事 ${discovery.rowsPruned ?? 0} 条；刷新 ${tracked.refreshed ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条，结算 ${settle.settled ?? 0} 场，取消 ${cancel.cancelled ?? 0} 场。`,
         `今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`,
         emptyHint
       ].filter(Boolean).join(" ")
@@ -2387,7 +2379,7 @@ async function runWorldCupManualSync() {
 
 async function refreshSub2ApiConsole() {
   await refreshWorldCupApiSettings().catch((error) => {
-    setHint(refs.worldCupApiSettingsResult, `加载 API-Football 配置失败：${error.message}`);
+    setHint(refs.worldCupApiSettingsResult, `加载 Zafronix 配置失败：${error.message}`);
   });
   await refreshSub2ApiConnections().catch((error) => {
     if (refs.sub2apiConnectionList) refs.sub2apiConnectionList.innerHTML = `<p class="hint centered">加载连接失败：${escapeHtml(error.message)}</p>`;

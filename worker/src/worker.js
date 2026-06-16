@@ -67,6 +67,10 @@ const WORLDCUP_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const WORLDCUP_INTERNAL_TIMEOUT_MS = 30 * 1000;
 const WORLDCUP_TRACKED_FIXTURE_LIMIT = 12;
 const WORLDCUP_UPCOMING_ODDS_LIMIT = 2;
+const WORLDCUP_ZAFRONIX_ACTIVE_LIMIT = 3;
+const WORLDCUP_ZAFRONIX_IDLE_LIMIT = 2;
+const WORLDCUP_ZAFRONIX_ACTIVE_BEFORE_MS = 60 * 60 * 1000;
+const WORLDCUP_ZAFRONIX_ACTIVE_AFTER_MS = 4 * 60 * 60 * 1000;
 let worldCupSyncRunning = false;
 let worldCupLastDiscoveryAt = 0;
 let worldCupLastTickAt = 0;
@@ -281,21 +285,132 @@ function markApiFootballWorldCupOddsAttempt(apiFixtureId) {
   return result.changes || 0;
 }
 
+function isZafronixMatchFinalOrCancelled(match) {
+  return isSub2ApiWorldCupApiStatusFinal(match?.apiStatusShort)
+    || match?.status === sub2apiWorldCupMatchStatuses.cancelled;
+}
+
+function isZafronixMatchInActiveWindow(match, nowMs) {
+  if (!match?.kickoffAt || match.status === sub2apiWorldCupMatchStatuses.cancelled) return false;
+  if (isSub2ApiWorldCupApiStatusLive(match.apiStatusShort)) return true;
+  const kickoffMs = parseTimeMs(match.kickoffAt);
+  if (!kickoffMs) return false;
+  return kickoffMs - nowMs <= WORLDCUP_ZAFRONIX_ACTIVE_BEFORE_MS
+    && nowMs - kickoffMs <= WORLDCUP_ZAFRONIX_ACTIVE_AFTER_MS;
+}
+
+function getPinnedZafronixWorldCupFixtureIds() {
+  return new Set(db.prepare(`
+    SELECT DISTINCT m.api_fixture_id
+    FROM sub2api_worldcup_matches m
+    WHERE m.source = 'zafronix'
+      AND m.api_fixture_id IS NOT NULL
+      AND m.status NOT IN (?, ?)
+      AND EXISTS (
+        SELECT 1
+        FROM sub2api_worldcup_bets b
+        WHERE b.match_id = m.id
+          AND b.status IN (?, ?, ?)
+      )
+  `).all(
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    sub2apiWorldCupBetStatuses.placed,
+    sub2apiWorldCupBetStatuses.payoutFailed,
+    sub2apiWorldCupBetStatuses.refundFailed
+  ).map((row) => String(row.api_fixture_id)));
+}
+
+function selectZafronixWorldCupMatches(matches, nowMs, pinnedFixtureIds = new Set()) {
+  const validMatches = matches
+    .filter((match) => match?.apiFixtureId && match.kickoffAt && parseTimeMs(match.kickoffAt))
+    .sort((left, right) => parseTimeMs(left.kickoffAt) - parseTimeMs(right.kickoffAt));
+
+  const pinnedMatches = validMatches.filter((match) => pinnedFixtureIds.has(match.apiFixtureId));
+  const activeMatches = validMatches
+    .filter((match) => !isZafronixMatchFinalOrCancelled(match) && isZafronixMatchInActiveWindow(match, nowMs))
+    .slice(0, WORLDCUP_ZAFRONIX_ACTIVE_LIMIT);
+  if (activeMatches.length) {
+    const selected = new Map(pinnedMatches.map((match) => [match.apiFixtureId, match]));
+    for (const match of activeMatches) selected.set(match.apiFixtureId, match);
+    for (const match of validMatches) {
+      if (selected.size >= pinnedMatches.length + WORLDCUP_ZAFRONIX_ACTIVE_LIMIT) break;
+      if (selected.has(match.apiFixtureId)) continue;
+      if (isZafronixMatchFinalOrCancelled(match) || parseTimeMs(match.kickoffAt) < nowMs) continue;
+      selected.set(match.apiFixtureId, match);
+    }
+    return [...selected.values()];
+  }
+
+  const idleMatches = validMatches
+    .filter((match) => !isZafronixMatchFinalOrCancelled(match) && parseTimeMs(match.kickoffAt) >= nowMs)
+    .slice(0, WORLDCUP_ZAFRONIX_IDLE_LIMIT);
+  const selected = new Map(pinnedMatches.map((match) => [match.apiFixtureId, match]));
+  for (const match of idleMatches) selected.set(match.apiFixtureId, match);
+  return [...selected.values()];
+}
+
+function pruneUnselectedZafronixWorldCupMatches(selectedFixtureIds) {
+  if (!selectedFixtureIds.length) {
+    const result = db.prepare(`
+      DELETE FROM sub2api_worldcup_matches
+      WHERE source = 'zafronix'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sub2api_worldcup_bets b
+          WHERE b.match_id = sub2api_worldcup_matches.id
+        )
+    `).run();
+    return result.changes || 0;
+  }
+  const placeholders = selectedFixtureIds.map(() => "?").join(", ");
+  const result = db.prepare(`
+    DELETE FROM sub2api_worldcup_matches
+    WHERE source = 'zafronix'
+      AND api_fixture_id NOT IN (${placeholders})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sub2api_worldcup_bets b
+        WHERE b.match_id = sub2api_worldcup_matches.id
+      )
+  `).run(...selectedFixtureIds);
+  return result.changes || 0;
+}
+
+function pruneLegacyWorldCupProviderMatches() {
+  const result = db.prepare(`
+    DELETE FROM sub2api_worldcup_matches
+    WHERE source IN ('api-football', 'football-data')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sub2api_worldcup_bets b
+        WHERE b.match_id = sub2api_worldcup_matches.id
+      )
+  `).run();
+  return result.changes || 0;
+}
+
 async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings) {
   if (settings.provider === "zafronix") {
-    const stats = { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 };
+    const stats = { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0, rowsPruned: 0 };
     try {
       stats.requests += 1;
       const response = await fetchZafronixWorldCupMatches(db, { priority: "normal", settings });
       const items = Array.isArray(response?.json?.data) ? response.json.data : [];
       stats.fixturesReturned = items.length;
+      const selectedMatches = selectZafronixWorldCupMatches(
+        items.map((item) => parseZafronixMatch(item, nowMs)),
+        nowMs,
+        getPinnedZafronixWorldCupFixtureIds()
+      );
+      stats.rowsPruned = pruneLegacyWorldCupProviderMatches()
+        + pruneUnselectedZafronixWorldCupMatches(selectedMatches.map((match) => match.apiFixtureId));
       const seen = new Set();
       let synced = 0;
-      for (const item of items) {
-        const parsed = parseZafronixMatch(item, nowMs);
-        if (!parsed.apiFixtureId || seen.has(parsed.apiFixtureId)) continue;
-        seen.add(parsed.apiFixtureId);
-        synced += upsertApiFootballWorldCupFixture(parsed, connections);
+      for (const match of selectedMatches) {
+        if (!match.apiFixtureId || seen.has(match.apiFixtureId)) continue;
+        seen.add(match.apiFixtureId);
+        synced += upsertApiFootballWorldCupFixture(match, connections);
       }
       stats.fixturesSeen = seen.size;
       stats.rowsSynced = synced;
@@ -693,7 +808,7 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
     const settings = getApiFootballSettings(db, { includeApiKey: true });
     if (!settings.enabled) {
       if (!worldCupDisabledLogged) {
-        console.log("[KaWang worker] worldcup: API-Football 后台配置未启用，跳过自动同步");
+        console.log("[KaWang worker] worldcup: Zafronix 后台配置未启用，跳过自动同步");
         worldCupDisabledLogged = true;
       }
       return { accepted: false, reason: "disabled" };
@@ -709,7 +824,7 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
     const connections = getActiveSub2ApiConnections();
     if (!connections.length) return { accepted: false, reason: "no_active_connections" };
     if (!settings.apiKey) {
-      logApiFootballSyncError("config", Object.assign(new Error("未在后台配置 API-Football API Key，跳过 API-Football 同步"), {
+      logApiFootballSyncError("config", Object.assign(new Error("未在后台配置 Zafronix API Key，跳过世界杯同步"), {
         code: "API_FOOTBALL_KEY_MISSING"
       }));
       return { accepted: false, reason: "missing_api_key" };
@@ -718,7 +833,7 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
 
     const stats = {
       connections: connections.length,
-      discovery: { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0 },
+      discovery: { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0, rowsPruned: 0 },
       tracked: { targets: 0, refreshed: 0, halftimeOddsAttempted: 0, halftimeOddsUpdated: 0, failed: 0 },
       upcomingOdds: { targets: 0, attempted: 0, updated: 0, failed: 0 },
       settle: { targets: 0, settled: 0, failed: 0 },

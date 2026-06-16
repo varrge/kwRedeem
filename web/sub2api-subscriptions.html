@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sub2api 订阅套餐</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7fb;
+        --panel: #ffffff;
+        --line: #d9e0ea;
+        --text: #172033;
+        --muted: #68758b;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --success: #0f9f6e;
+        --error: #dc2626;
+        --shadow: 0 16px 40px rgba(28, 37, 59, 0.1);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #101521;
+          --panel: #151c2b;
+          --line: #2a354a;
+          --text: #eef3ff;
+          --muted: #9aa8bd;
+          --accent: #60a5fa;
+          --accent-strong: #3b82f6;
+          --shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      button { font: inherit; cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: 0.58; }
+      .shell {
+        width: min(1040px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+      h1 { margin: 0; font-size: 24px; }
+      .account-line, .hint, .status-line {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .account-line { margin: 8px 0 0; }
+      .status-line { min-height: 22px; margin-top: 14px; }
+      .status-line.error { color: var(--error); }
+      .status-line.success { color: var(--success); }
+      .toolbar { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+      .primary-btn, .ghost-btn {
+        min-height: 38px;
+        border-radius: 7px;
+        padding: 0 14px;
+        font-weight: 700;
+      }
+      .primary-btn {
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+      .primary-btn:hover:not(:disabled) { background: var(--accent-strong); }
+      .ghost-btn {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 22px;
+        box-shadow: var(--shadow);
+      }
+      .plans {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .plan {
+        display: grid;
+        gap: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .plan-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .plan h2 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.3;
+      }
+      .price {
+        font-size: 24px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .meta div {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 10px;
+      }
+      .meta span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .meta strong { font-size: 14px; }
+      .orders {
+        margin-top: 18px;
+        display: grid;
+        gap: 10px;
+      }
+      .order {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      .badge {
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      .badge.succeeded { color: var(--success); }
+      .badge.failed { color: var(--error); }
+      .empty {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 24px;
+        color: var(--muted);
+        text-align: center;
+      }
+      @media (max-width: 860px) {
+        .plans { grid-template-columns: 1fr; }
+        .header, .order { grid-template-columns: 1fr; display: grid; }
+        .toolbar, .toolbar button, .plan button { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <div class="header">
+          <div>
+            <h1>订阅套餐</h1>
+            <p id="account-line" class="account-line">正在识别账号...</p>
+          </div>
+          <div class="toolbar">
+            <button id="refresh-btn" class="ghost-btn" type="button">刷新</button>
+          </div>
+        </div>
+        <div id="plans" class="plans"></div>
+        <div id="status-line" class="status-line"></div>
+      </section>
+
+      <section class="panel" style="margin-top: 18px;">
+        <div class="header" style="margin-bottom: 10px;">
+          <div>
+            <h1 style="font-size: 18px;">购买记录</h1>
+            <p class="hint">最近 20 条订阅订单</p>
+          </div>
+        </div>
+        <div id="orders" class="orders"></div>
+      </section>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+      const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
+      const refs = {
+        accountLine: document.querySelector("#account-line"),
+        refreshBtn: document.querySelector("#refresh-btn"),
+        plans: document.querySelector("#plans"),
+        orders: document.querySelector("#orders"),
+        statusLine: document.querySelector("#status-line")
+      };
+      const state = { sessionToken: "", plans: [], orders: [] };
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function setStatus(message, type = "info") {
+        refs.statusLine.textContent = message || "";
+        refs.statusLine.classList.toggle("error", type === "error");
+        refs.statusLine.classList.toggle("success", type === "success");
+      }
+
+      function setBusy(button, busy, text) {
+        if (!button.dataset.idleText) button.dataset.idleText = button.textContent;
+        button.disabled = busy;
+        button.textContent = busy ? text : button.dataset.idleText;
+      }
+
+      async function request(path, options = {}) {
+        const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+        if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
+        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.message || "请求失败");
+        return payload;
+      }
+
+      function renderPlans() {
+        if (!state.plans.length) {
+          refs.plans.innerHTML = `<div class="empty">暂无可购买套餐</div>`;
+          return;
+        }
+        refs.plans.innerHTML = state.plans.map((plan) => `
+          <article class="plan">
+            <div class="plan-head">
+              <div>
+                <h2>${escapeHtml(plan.name)}</h2>
+                <p class="hint">${escapeHtml(plan.description || "订阅分组套餐")}</p>
+              </div>
+              <div class="price">${Number(plan.price).toFixed(4)}</div>
+            </div>
+            <div class="meta">
+              <div><span>有效期</span><strong>${escapeHtml(plan.validityDays)} 天</strong></div>
+              <div><span>订阅分组</span><strong>${escapeHtml(plan.subscriptionGroupId)}</strong></div>
+              <div><span>专属分组</span><strong>${plan.dedicatedGroupId ? escapeHtml(plan.dedicatedGroupId) : "-"}</strong></div>
+              <div><span>连接</span><strong>${escapeHtml(plan.connectionName || "-")}</strong></div>
+            </div>
+            <button class="primary-btn buy-btn" type="button" data-plan-id="${escapeHtml(plan.id)}">余额订阅</button>
+          </article>
+        `).join("");
+      }
+
+      function renderOrders() {
+        if (!state.orders.length) {
+          refs.orders.innerHTML = `<div class="empty">暂无购买记录</div>`;
+          return;
+        }
+        refs.orders.innerHTML = state.orders.map((order) => `
+          <article class="order">
+            <div>
+              <strong>${escapeHtml(order.planName || order.planId)}</strong>
+              <div class="hint">${Number(order.price).toFixed(4)} · ${escapeHtml(order.validityDays)} 天 · ${escapeHtml(order.createdAt || "-")}</div>
+              ${order.errorMessage ? `<div class="hint" style="color: var(--error);">${escapeHtml(order.errorMessage)}</div>` : ""}
+            </div>
+            <span class="badge ${escapeHtml(order.status)}">${escapeHtml(order.status)}</span>
+          </article>
+        `).join("");
+      }
+
+      function render(payload) {
+        if (payload.sessionToken) state.sessionToken = payload.sessionToken;
+        const account = payload.account || {};
+        refs.accountLine.textContent = account.email || account.username || account.userId || "-";
+        state.plans = payload.plans || state.plans || [];
+        state.orders = payload.orders || state.orders || [];
+        renderPlans();
+        renderOrders();
+      }
+
+      async function initialize() {
+        const params = new URLSearchParams(window.location.search);
+        const sso = params.get("sso") || "";
+        const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+        if (!sso && !connectionId) {
+          refs.accountLine.textContent = "未识别账号";
+          setStatus("缺少 SSO token 或 connectionId", "error");
+          return;
+        }
+        try {
+          setStatus("正在加载...");
+          const payload = sso
+            ? await request("/api/public/sub2api/session", { method: "POST", body: JSON.stringify({ sso }) })
+            : await request("/api/public/sub2api/session-from-token", {
+                method: "POST",
+                body: JSON.stringify({ connectionId, accessToken: localStorage.getItem("auth_token") || "" })
+              });
+          render(payload);
+          await refresh();
+          setStatus("");
+        } catch (error) {
+          refs.accountLine.textContent = "账号识别失败";
+          const sameOriginHint = connectionId && !sso
+            ? "请确认此页面是通过 Sub2api 同源地址打开。"
+            : "";
+          setStatus([error.message, sameOriginHint].filter(Boolean).join(" "), "error");
+        }
+      }
+
+      async function refresh() {
+        if (!state.sessionToken) return;
+        try {
+          setBusy(refs.refreshBtn, true, "刷新中...");
+          const payload = await request("/api/public/sub2api/subscriptions");
+          render(payload);
+          setStatus("");
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          setBusy(refs.refreshBtn, false);
+        }
+      }
+
+      async function purchase(planId, button) {
+        const plan = state.plans.find((item) => item.id === planId);
+        if (!plan || !window.confirm(`确认扣除 ${Number(plan.price).toFixed(4)} 余额订阅「${plan.name}」？`)) return;
+        try {
+          setBusy(button, true, "订阅中...");
+          const payload = await request("/api/public/sub2api/subscriptions/purchase", {
+            method: "POST",
+            body: JSON.stringify({ planId })
+          });
+          state.plans = payload.plans || state.plans;
+          state.orders = payload.orders || state.orders;
+          renderPlans();
+          renderOrders();
+          const dedicated = payload.order?.dedicatedGroupId ? `，专属分组 ${payload.order.dedicatedGroupId}` : "";
+          const warning = payload.order?.errorMessage ? `；${payload.order.errorMessage}` : "";
+          setStatus(`订阅成功${dedicated}${warning}`, payload.order?.errorMessage ? "error" : "success");
+        } catch (error) {
+          setStatus(error.message, "error");
+          await refresh().catch(() => {});
+        } finally {
+          setBusy(button, false);
+        }
+      }
+
+      refs.refreshBtn.addEventListener("click", () => refresh());
+      refs.plans.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-plan-id]");
+        if (!button) return;
+        purchase(button.dataset.planId, button);
+      });
+
+      initialize();
+    </script>
+  </body>
+</html>

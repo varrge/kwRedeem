@@ -14,6 +14,34 @@ export const sub2apiConnectionStatuses = {
   deleted: "deleted"
 };
 
+export const sub2apiSubscriptionPlanStatuses = {
+  active: "active",
+  disabled: "disabled",
+  deleted: "deleted"
+};
+
+export const sub2apiSubscriptionOrderStatuses = {
+  processing: "processing",
+  succeeded: "succeeded",
+  failed: "failed"
+};
+
+export function normalizeSub2ApiAmount(value, fieldName = "金额") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(`${fieldName}必须大于 0`);
+  }
+  return Math.round(amount * 10000) / 10000;
+}
+
+export function normalizeSub2ApiPositiveInteger(value, fieldName) {
+  const number = Math.floor(Number(value));
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${fieldName}必须大于 0`);
+  }
+  return number;
+}
+
 export function normalizeSub2ApiBaseUrl(value) {
   const raw = String(value ?? "").trim();
   if (!raw) {

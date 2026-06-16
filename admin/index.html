@@ -810,9 +810,98 @@
                 生图嵌入页地址：<code>/sub2api-image.html?connectionId=&lt;连接ID&gt;</code>。建议同样反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-image.html?connectionId=&lt;连接ID&gt;</code>。图片生成由 KaWang 后端代理调用 Sub2api，前台不会暴露真实 API Key。
               </p>
               <p class="hint">
+                订阅套餐嵌入页地址：<code>/sub2api-subscriptions.html?connectionId=&lt;连接ID&gt;</code>。用户在 Sub2api 登录态下打开后，可用 Sub2api 余额购买后台配置的订阅套餐。
+              </p>
+              <p class="hint">
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
               </p>
             </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3 id="sub2api-plan-form-title">添加订阅套餐</h3></div>
+            <form id="sub2api-plan-form" class="grid grid-4">
+              <input id="sub2api-plan-edit-id" type="hidden" />
+              <label class="field">
+                <span>远程连接</span>
+                <select id="sub2api-plan-connection"></select>
+              </label>
+              <label class="field">
+                <span>套餐名称</span>
+                <input id="sub2api-plan-name" placeholder="例如 Claude Max 月卡" />
+              </label>
+              <label class="field">
+                <span>扣款金额</span>
+                <input id="sub2api-plan-price" type="number" min="0.0001" step="0.0001" placeholder="余额扣款金额" />
+              </label>
+              <label class="field">
+                <span>有效天数</span>
+                <input id="sub2api-plan-validity-days" type="number" min="1" step="1" value="30" />
+              </label>
+              <label class="field">
+                <span>订阅分组 ID</span>
+                <input id="sub2api-plan-subscription-group-id" type="number" min="1" step="1" placeholder="sub2api subscription group_id" />
+              </label>
+              <label class="field">
+                <span>原专属分组 ID</span>
+                <input id="sub2api-plan-source-dedicated-group-id" type="number" min="1" step="1" placeholder="可选，用于迁移" />
+              </label>
+              <label class="field">
+                <span>专属分组 ID</span>
+                <input id="sub2api-plan-dedicated-group-id" type="number" min="1" step="1" placeholder="可选" />
+              </label>
+              <label class="field">
+                <span>排序</span>
+                <input id="sub2api-plan-sort-order" type="number" step="1" value="0" />
+              </label>
+              <label class="field">
+                <span>状态</span>
+                <select id="sub2api-plan-status">
+                  <option value="active">active</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+              <label class="field grid-span-4">
+                <span>说明</span>
+                <input id="sub2api-plan-description" placeholder="展示给用户的套餐说明" />
+              </label>
+              <div class="actions-row grid-span-4">
+                <button id="sub2api-plan-submit-btn" type="submit" class="primary-btn">保存套餐</button>
+                <button id="sub2api-plan-cancel-btn" type="button" class="ghost-btn hidden">取消编辑</button>
+              </div>
+            </form>
+            <div id="sub2api-plan-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>订阅套餐</h3>
+              <div class="header-actions">
+                <button id="sub2api-plan-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-plan-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>订阅订单</h3>
+              <div class="header-actions">
+                <select id="sub2api-order-connection-filter" class="small-select">
+                  <option value="">全部连接</option>
+                </select>
+                <input id="sub2api-order-user-filter" class="small-input" placeholder="用户 ID" />
+                <select id="sub2api-order-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="processing">processing</option>
+                  <option value="succeeded">succeeded</option>
+                  <option value="failed">failed</option>
+                </select>
+                <button id="sub2api-order-refresh-btn" class="ghost-btn small">查询</button>
+              </div>
+            </div>
+            <div id="sub2api-order-list" class="table-wrapper"></div>
+            <div id="sub2api-order-result" class="hint"></div>
           </div>
 
           <div class="card mt-24">

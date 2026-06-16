@@ -169,6 +169,30 @@ const refs = {
   sub2apiInviteExportBtn: document.querySelector("#sub2api-invite-export-btn"),
   sub2apiInviteList: document.querySelector("#sub2api-invite-list"),
   sub2apiInviteResult: document.querySelector("#sub2api-invite-result"),
+  sub2apiPlanForm: document.querySelector("#sub2api-plan-form"),
+  sub2apiPlanFormTitle: document.querySelector("#sub2api-plan-form-title"),
+  sub2apiPlanEditId: document.querySelector("#sub2api-plan-edit-id"),
+  sub2apiPlanConnection: document.querySelector("#sub2api-plan-connection"),
+  sub2apiPlanName: document.querySelector("#sub2api-plan-name"),
+  sub2apiPlanPrice: document.querySelector("#sub2api-plan-price"),
+  sub2apiPlanValidityDays: document.querySelector("#sub2api-plan-validity-days"),
+  sub2apiPlanSubscriptionGroupId: document.querySelector("#sub2api-plan-subscription-group-id"),
+  sub2apiPlanSourceDedicatedGroupId: document.querySelector("#sub2api-plan-source-dedicated-group-id"),
+  sub2apiPlanDedicatedGroupId: document.querySelector("#sub2api-plan-dedicated-group-id"),
+  sub2apiPlanSortOrder: document.querySelector("#sub2api-plan-sort-order"),
+  sub2apiPlanStatus: document.querySelector("#sub2api-plan-status"),
+  sub2apiPlanDescription: document.querySelector("#sub2api-plan-description"),
+  sub2apiPlanSubmitBtn: document.querySelector("#sub2api-plan-submit-btn"),
+  sub2apiPlanCancelBtn: document.querySelector("#sub2api-plan-cancel-btn"),
+  sub2apiPlanRefreshBtn: document.querySelector("#sub2api-plan-refresh-btn"),
+  sub2apiPlanResult: document.querySelector("#sub2api-plan-result"),
+  sub2apiPlanList: document.querySelector("#sub2api-plan-list"),
+  sub2apiOrderConnectionFilter: document.querySelector("#sub2api-order-connection-filter"),
+  sub2apiOrderUserFilter: document.querySelector("#sub2api-order-user-filter"),
+  sub2apiOrderStatusFilter: document.querySelector("#sub2api-order-status-filter"),
+  sub2apiOrderRefreshBtn: document.querySelector("#sub2api-order-refresh-btn"),
+  sub2apiOrderList: document.querySelector("#sub2api-order-list"),
+  sub2apiOrderResult: document.querySelector("#sub2api-order-result"),
 
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
@@ -185,6 +209,8 @@ const quotaSubCardState = {
 };
 let sub2apiConnectionsCache = [];
 let sub2apiInvitesCache = [];
+let sub2apiPlansCache = [];
+let sub2apiOrdersCache = [];
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -1776,6 +1802,32 @@ function populateSub2ApiConnectionFilter() {
   if (sub2apiConnectionsCache.some((item) => item.id === current)) {
     refs.sub2apiInviteConnectionFilter.value = current;
   }
+
+  if (refs.sub2apiOrderConnectionFilter) {
+    const currentOrder = refs.sub2apiOrderConnectionFilter.value;
+    refs.sub2apiOrderConnectionFilter.innerHTML = [`<option value="">全部连接</option>`]
+      .concat(sub2apiConnectionsCache.map((item) => `
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+      `))
+      .join("");
+    if (sub2apiConnectionsCache.some((item) => item.id === currentOrder)) {
+      refs.sub2apiOrderConnectionFilter.value = currentOrder;
+    }
+  }
+
+  if (refs.sub2apiPlanConnection) {
+    const currentPlan = refs.sub2apiPlanConnection.value;
+    refs.sub2apiPlanConnection.innerHTML = [`<option value="">选择连接</option>`]
+      .concat(sub2apiConnectionsCache.map((item) => `
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+      `))
+      .join("");
+    if (sub2apiConnectionsCache.some((item) => item.id === currentPlan)) {
+      refs.sub2apiPlanConnection.value = currentPlan;
+    } else if (!refs.sub2apiPlanConnection.value && sub2apiConnectionsCache.length) {
+      refs.sub2apiPlanConnection.value = sub2apiConnectionsCache[0].id;
+    }
+  }
 }
 
 async function refreshSub2ApiConnections() {
@@ -1956,9 +2008,174 @@ async function refreshSub2ApiInvites() {
   setHint(refs.sub2apiInviteResult, `共 ${payload.total ?? sub2apiInvitesCache.length} 条记录，当前显示 ${sub2apiInvitesCache.length} 条`);
 }
 
+function resetSub2ApiPlanForm() {
+  if (!refs.sub2apiPlanForm) return;
+  refs.sub2apiPlanForm.reset();
+  refs.sub2apiPlanEditId.value = "";
+  refs.sub2apiPlanValidityDays.value = "30";
+  refs.sub2apiPlanSortOrder.value = "0";
+  refs.sub2apiPlanStatus.value = "active";
+  refs.sub2apiPlanFormTitle.textContent = "添加订阅套餐";
+  refs.sub2apiPlanSubmitBtn.textContent = "保存套餐";
+  refs.sub2apiPlanCancelBtn.classList.add("hidden");
+  populateSub2ApiConnectionFilter();
+}
+
+async function refreshSub2ApiPlans() {
+  if (!refs.sub2apiPlanList) return;
+  const payload = await api("/api/admin/sub2api/subscription-plans");
+  sub2apiPlansCache = payload.items || [];
+  renderTable(refs.sub2apiPlanList, [
+    {
+      label: "套餐",
+      render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><span class="hint">${escapeHtml(item.description || "-")}</span>`
+    },
+    {
+      label: "连接",
+      render: (item) => `${escapeHtml(item.connectionName || "-")}<br/><code style="font-size:11px">${escapeHtml(item.connectionId)}</code>`
+    },
+    {
+      label: "金额/天数",
+      render: (item) => `<strong>${Number(item.price).toFixed(4)}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
+    },
+    {
+      label: "分组",
+      render: (item) => `
+        <div style="font-size:12px;line-height:1.5">
+          <div>订阅：<code>${escapeHtml(item.subscriptionGroupId)}</code></div>
+          <div>原专属：${item.sourceDedicatedGroupId ? `<code>${escapeHtml(item.sourceDedicatedGroupId)}</code>` : "-"}</div>
+          <div>新专属：${item.dedicatedGroupId ? `<code>${escapeHtml(item.dedicatedGroupId)}</code>` : "-"}</div>
+        </div>
+      `
+    },
+    {
+      label: "状态",
+      render: (item) => `${renderStatus(item.status)}<br/><span class="hint">排序 ${escapeHtml(item.sortOrder)}</span>`
+    },
+    {
+      label: "操作",
+      render: (item) => `
+        <button class="primary-btn small" type="button" onclick="editSub2ApiPlan('${escapeHtml(item.id)}')">编辑</button>
+        <button class="ghost-btn small" type="button" style="color:var(--error)" onclick="deleteSub2ApiPlan('${escapeHtml(item.id)}')">删除</button>
+      `
+    }
+  ], sub2apiPlansCache, "暂无订阅套餐");
+}
+
+function editSub2ApiPlan(id) {
+  const item = sub2apiPlansCache.find((entry) => entry.id === id);
+  if (!item || !refs.sub2apiPlanForm) return;
+  refs.sub2apiPlanEditId.value = item.id;
+  refs.sub2apiPlanConnection.value = item.connectionId || "";
+  refs.sub2apiPlanName.value = item.name || "";
+  refs.sub2apiPlanPrice.value = item.price || "";
+  refs.sub2apiPlanValidityDays.value = item.validityDays || 30;
+  refs.sub2apiPlanSubscriptionGroupId.value = item.subscriptionGroupId || "";
+  refs.sub2apiPlanSourceDedicatedGroupId.value = item.sourceDedicatedGroupId || "";
+  refs.sub2apiPlanDedicatedGroupId.value = item.dedicatedGroupId || "";
+  refs.sub2apiPlanSortOrder.value = item.sortOrder || 0;
+  refs.sub2apiPlanStatus.value = item.status || "active";
+  refs.sub2apiPlanDescription.value = item.description || "";
+  refs.sub2apiPlanFormTitle.textContent = `编辑套餐：${item.name}`;
+  refs.sub2apiPlanSubmitBtn.textContent = "保存修改";
+  refs.sub2apiPlanCancelBtn.classList.remove("hidden");
+  refs.sub2apiPlanForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveSub2ApiPlan() {
+  const id = refs.sub2apiPlanEditId?.value || "";
+  const payload = {
+    connectionId: refs.sub2apiPlanConnection.value,
+    name: refs.sub2apiPlanName.value.trim(),
+    description: refs.sub2apiPlanDescription.value.trim(),
+    price: Number(refs.sub2apiPlanPrice.value),
+    validityDays: Number(refs.sub2apiPlanValidityDays.value),
+    subscriptionGroupId: Number(refs.sub2apiPlanSubscriptionGroupId.value),
+    sourceDedicatedGroupId: refs.sub2apiPlanSourceDedicatedGroupId.value ? Number(refs.sub2apiPlanSourceDedicatedGroupId.value) : null,
+    dedicatedGroupId: refs.sub2apiPlanDedicatedGroupId.value ? Number(refs.sub2apiPlanDedicatedGroupId.value) : null,
+    sortOrder: Number(refs.sub2apiPlanSortOrder.value || 0),
+    status: refs.sub2apiPlanStatus.value
+  };
+  try {
+    setHint(refs.sub2apiPlanResult, "正在保存...");
+    await api(id ? `/api/admin/sub2api/subscription-plans/${encodeURIComponent(id)}` : "/api/admin/sub2api/subscription-plans", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    setHint(refs.sub2apiPlanResult, "套餐已保存");
+    resetSub2ApiPlanForm();
+    await refreshSub2ApiPlans();
+  } catch (error) {
+    setHint(refs.sub2apiPlanResult, `保存失败：${error.message}`);
+  }
+}
+
+async function deleteSub2ApiPlan(id) {
+  if (!window.confirm("确认删除该订阅套餐？历史订单会保留。")) return;
+  try {
+    await api(`/api/admin/sub2api/subscription-plans/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    if (refs.sub2apiPlanEditId?.value === id) resetSub2ApiPlanForm();
+    setHint(refs.sub2apiPlanResult, "套餐已删除");
+    await refreshSub2ApiPlans();
+  } catch (error) {
+    setHint(refs.sub2apiPlanResult, `删除失败：${error.message}`);
+  }
+}
+
+async function refreshSub2ApiOrders() {
+  if (!refs.sub2apiOrderList) return;
+  const params = new URLSearchParams();
+  if (refs.sub2apiOrderConnectionFilter?.value) params.set("connectionId", refs.sub2apiOrderConnectionFilter.value);
+  if (refs.sub2apiOrderUserFilter?.value.trim()) params.set("userId", refs.sub2apiOrderUserFilter.value.trim());
+  if (refs.sub2apiOrderStatusFilter?.value) params.set("status", refs.sub2apiOrderStatusFilter.value);
+  params.set("pageSize", "100");
+  const payload = await api(`/api/admin/sub2api/subscription-orders?${params.toString()}`);
+  sub2apiOrdersCache = payload.items || [];
+  renderTable(refs.sub2apiOrderList, [
+    {
+      label: "订单",
+      render: (item) => `<code>${escapeHtml(item.id)}</code><br/><span class="hint">${escapeHtml(item.planName || item.planId)}</span>`
+    },
+    {
+      label: "用户",
+      render: (item) => `<code>${escapeHtml(item.userId)}</code><br/><span class="hint">${escapeHtml(item.email || item.username || "-")}</span>`
+    },
+    {
+      label: "金额/天数",
+      render: (item) => `<strong>${Number(item.price).toFixed(4)}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
+    },
+    {
+      label: "分组",
+      render: (item) => `订阅 <code>${escapeHtml(item.subscriptionGroupId)}</code><br/>原专属 ${item.sourceDedicatedGroupId ? `<code>${escapeHtml(item.sourceDedicatedGroupId)}</code>` : "-"}<br/>新专属 ${item.dedicatedGroupId ? `<code>${escapeHtml(item.dedicatedGroupId)}</code>` : "-"}`
+    },
+    {
+      label: "状态",
+      render: (item) => renderStatus(item.status)
+    },
+    {
+      label: "时间",
+      render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>`
+    },
+    {
+      label: "错误",
+      render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 42))}</span>` : "-"
+    }
+  ], sub2apiOrdersCache, "暂无订阅订单");
+  setHint(refs.sub2apiOrderResult, `共 ${payload.total ?? sub2apiOrdersCache.length} 条记录，当前显示 ${sub2apiOrdersCache.length} 条`);
+}
+
 async function refreshSub2ApiConsole() {
   await refreshSub2ApiConnections().catch((error) => {
     if (refs.sub2apiConnectionList) refs.sub2apiConnectionList.innerHTML = `<p class="hint centered">加载连接失败：${escapeHtml(error.message)}</p>`;
+  });
+  await refreshSub2ApiPlans().catch((error) => {
+    if (refs.sub2apiPlanList) refs.sub2apiPlanList.innerHTML = `<p class="hint centered">加载订阅套餐失败：${escapeHtml(error.message)}</p>`;
+  });
+  await refreshSub2ApiOrders().catch((error) => {
+    if (refs.sub2apiOrderList) refs.sub2apiOrderList.innerHTML = `<p class="hint centered">加载订阅订单失败：${escapeHtml(error.message)}</p>`;
   });
   await refreshSub2ApiInvites().catch((error) => {
     if (refs.sub2apiInviteList) refs.sub2apiInviteList.innerHTML = `<p class="hint centered">加载邀请码失败：${escapeHtml(error.message)}</p>`;
@@ -2001,6 +2218,8 @@ function exportSub2ApiInvitesCsv() {
 window.editSub2ApiConnection = editSub2ApiConnection;
 window.testSub2ApiConnection = testSub2ApiConnection;
 window.deleteSub2ApiConnection = deleteSub2ApiConnection;
+window.editSub2ApiPlan = editSub2ApiPlan;
+window.deleteSub2ApiPlan = deleteSub2ApiPlan;
 
 if (refs.sub2apiConnectionForm) {
   refs.sub2apiConnectionForm.addEventListener("submit", (event) => {
@@ -2046,6 +2265,32 @@ if (refs.sub2apiInviteCopyBtn) {
 
 if (refs.sub2apiInviteExportBtn) {
   refs.sub2apiInviteExportBtn.addEventListener("click", exportSub2ApiInvitesCsv);
+}
+
+if (refs.sub2apiPlanForm) {
+  refs.sub2apiPlanForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveSub2ApiPlan().catch(() => {});
+  });
+}
+
+if (refs.sub2apiPlanCancelBtn) {
+  refs.sub2apiPlanCancelBtn.addEventListener("click", () => {
+    resetSub2ApiPlanForm();
+    setHint(refs.sub2apiPlanResult, "");
+  });
+}
+
+if (refs.sub2apiPlanRefreshBtn) {
+  refs.sub2apiPlanRefreshBtn.addEventListener("click", () => {
+    refreshSub2ApiPlans().catch((error) => setHint(refs.sub2apiPlanResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiOrderRefreshBtn) {
+  refs.sub2apiOrderRefreshBtn.addEventListener("click", () => {
+    refreshSub2ApiOrders().catch((error) => setHint(refs.sub2apiOrderResult, `查询失败：${error.message}`));
+  });
 }
 
 async function refreshAll() {

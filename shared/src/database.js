@@ -533,6 +533,44 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_subscription_plans (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      price REAL NOT NULL,
+      subscription_group_id INTEGER NOT NULL,
+      source_dedicated_group_id INTEGER,
+      dedicated_group_id INTEGER,
+      validity_days INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_subscription_orders (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      plan_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      price REAL NOT NULL,
+      subscription_group_id INTEGER NOT NULL,
+      source_dedicated_group_id INTEGER,
+      dedicated_group_id INTEGER,
+      validity_days INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      remote_balance_response TEXT,
+      remote_subscription_response TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -581,6 +619,8 @@ function createSchema(db) {
   ensureColumn(db, "notification_monitors", "browser_page_url", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_ready_selector", "TEXT");
   ensureColumn(db, "notification_monitors", "browser_wait_ms", "INTEGER NOT NULL DEFAULT 10000");
+  ensureColumn(db, "sub2api_subscription_plans", "source_dedicated_group_id", "INTEGER");
+  ensureColumn(db, "sub2api_subscription_orders", "source_dedicated_group_id", "INTEGER");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -615,6 +655,10 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_account ON sub2api_invites(connection_id, sub2api_user_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_connection ON sub2api_invites(connection_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_status ON sub2api_invites(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_plans_connection ON sub2api_subscription_plans(connection_id, status, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_account ON sub2api_subscription_orders(connection_id, sub2api_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_plan ON sub2api_subscription_orders(plan_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_status ON sub2api_subscription_orders(status, created_at);
   `);
 }
 
@@ -777,7 +821,7 @@ function seedDefaults(db) {
       name: "666站",
       slug: "666",
       verifyApiUrl: null,
-      submitApiUrl: "https://6661231.xyz/external/redeem/appstore/start2",
+      submitApiUrl: "https://6661231.xyz/external/redeem/appstore/start",
       verifyHttpMethod: "POST",
       submitHttpMethod: "POST",
       verifyHeadersTemplate: "{}",
@@ -792,8 +836,15 @@ function seedDefaults(db) {
       verifyFailureRule: null,
       submitSuccessRule: null,
       submitFailureRule: null,
+      queryApiUrl: "https://6661231.xyz/external/redeem/appstore/status?id={{taskId}}",
+      querySuccessRule: '{"kind":"json_path_equals","path":"data.status","value":"success"}',
+      queryFailureRule: '{"kind":"json_path_equals","path":"data.status","value":"failed"}',
+      pollingEnabled: 1,
+      taskIdPath: "data.taskId",
+      pollIntervalMs: 5000,
+      pollMaxRounds: 12,
       timeoutSeconds: 60,
-      maxRetries: 3,
+      maxRetries: 20,
       productId: "prod_demo",
       activationEndpointId: null,
       status: "disabled",

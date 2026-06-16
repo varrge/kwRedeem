@@ -29,9 +29,13 @@ import {
   extractSub2ApiIdentity,
   getSub2ApiInviteQuota,
   normalizeSub2ApiBaseUrl,
+  normalizeSub2ApiAmount,
+  normalizeSub2ApiPositiveInteger,
   reserveSub2ApiInvite,
   sub2apiConnectionStatuses,
   sub2apiInviteStatuses,
+  sub2apiSubscriptionOrderStatuses,
+  sub2apiSubscriptionPlanStatuses,
   verifySub2ApiSsoToken
 } from "../../shared/src/sub2api.js";
 import {
@@ -1581,6 +1585,50 @@ function serializeSub2ApiInvite(row) {
   };
 }
 
+function serializeSub2ApiSubscriptionPlan(row) {
+  return {
+    id: row.id,
+    connectionId: row.connection_id,
+    connectionName: row.connection_name || null,
+    connectionBaseUrl: row.connection_base_url || null,
+    name: row.name,
+    description: row.description || "",
+    price: Number(row.price || 0),
+    subscriptionGroupId: Number(row.subscription_group_id || 0),
+    sourceDedicatedGroupId: row.source_dedicated_group_id === null || row.source_dedicated_group_id === undefined ? null : Number(row.source_dedicated_group_id),
+    dedicatedGroupId: row.dedicated_group_id === null || row.dedicated_group_id === undefined ? null : Number(row.dedicated_group_id),
+    validityDays: Number(row.validity_days || 0),
+    sortOrder: Number(row.sort_order || 0),
+    status: row.status,
+    createdBy: row.created_by || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function serializeSub2ApiSubscriptionOrder(row) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    planId: row.plan_id,
+    planName: row.plan_name || null,
+    connectionId: row.connection_id,
+    connectionName: row.connection_name || null,
+    userId: row.sub2api_user_id,
+    email: row.email || "",
+    username: row.username || "",
+    price: Number(row.price || 0),
+    subscriptionGroupId: Number(row.subscription_group_id || 0),
+    sourceDedicatedGroupId: row.source_dedicated_group_id === null || row.source_dedicated_group_id === undefined ? null : Number(row.source_dedicated_group_id),
+    dedicatedGroupId: row.dedicated_group_id === null || row.dedicated_group_id === undefined ? null : Number(row.dedicated_group_id),
+    validityDays: Number(row.validity_days || 0),
+    status: row.status,
+    errorMessage: row.error_message || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function decryptSub2ApiAdminToken(connection) {
   try {
     return decryptText(connection.admin_token);
@@ -1627,6 +1675,30 @@ function getSub2ApiPublicInvites(connectionId, userId) {
   `).all(connectionId, userId, sub2apiInviteStatuses.failed).map(serializeSub2ApiInvite);
 }
 
+function getSub2ApiPublicSubscriptionPlans(connectionId) {
+  return db.prepare(`
+    SELECT p.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_subscription_plans p
+    LEFT JOIN sub2api_connections c ON c.id = p.connection_id
+    WHERE p.connection_id = ?
+      AND p.status = ?
+    ORDER BY p.sort_order ASC, p.price ASC, p.created_at ASC
+  `).all(connectionId, sub2apiSubscriptionPlanStatuses.active).map(serializeSub2ApiSubscriptionPlan);
+}
+
+function getSub2ApiPublicSubscriptionOrders(connectionId, userId) {
+  return db.prepare(`
+    SELECT o.*, p.name AS plan_name, c.name AS connection_name
+    FROM sub2api_subscription_orders o
+    LEFT JOIN sub2api_subscription_plans p ON p.id = o.plan_id
+    LEFT JOIN sub2api_connections c ON c.id = o.connection_id
+    WHERE o.connection_id = ?
+      AND o.sub2api_user_id = ?
+    ORDER BY o.created_at DESC
+    LIMIT 20
+  `).all(connectionId, userId).map(serializeSub2ApiSubscriptionOrder);
+}
+
 function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
   const quota = getSub2ApiInviteQuota(db, connection.id, identity.userId, SUB2API_INVITE_LIMIT);
   return {
@@ -1648,9 +1720,27 @@ function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
   };
 }
 
+function buildSub2ApiSubscriptionPublicPayload(connection, identity, sessionToken = null) {
+  return {
+    sessionToken,
+    account: {
+      userId: identity.userId,
+      email: identity.email || "",
+      username: identity.username || ""
+    },
+    connection: {
+      id: connection.id,
+      name: connection.name,
+      baseUrl: connection.base_url
+    },
+    plans: getSub2ApiPublicSubscriptionPlans(connection.id),
+    orders: getSub2ApiPublicSubscriptionOrders(connection.id, identity.userId)
+  };
+}
+
 function signSub2ApiSessionToken(connection, identity) {
   return jwt.sign({
-    scope: "sub2api_invites",
+    scope: "sub2api_public",
     connectionId: connection.id,
     sub2apiUserId: identity.userId,
     email: identity.email || "",
@@ -1666,7 +1756,7 @@ async function requireSub2ApiSession(request, reply) {
   const token = header.slice("Bearer ".length).trim();
   try {
     const payload = jwt.verify(token, env.jwtSecret);
-    if (payload?.scope !== "sub2api_invites" || !payload.connectionId || !payload.sub2apiUserId) {
+    if (!["sub2api_public", "sub2api_invites"].includes(payload?.scope) || !payload.connectionId || !payload.sub2apiUserId) {
       return reply.code(401).send({ message: "Sub2api 会话无效" });
     }
     request.sub2api = {
@@ -1760,6 +1850,32 @@ async function callSub2ApiUserRemote(connection, pathname, accessToken) {
     throw error;
   }
   return result;
+}
+
+async function tryAssignSub2ApiDedicatedGroup(connection, userId, sourceGroupId, targetGroupId, orderId) {
+  if (!targetGroupId) return null;
+  if (sourceGroupId) {
+    return callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}/replace-group`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `${orderId}:dedicated-replace` },
+      body: {
+        old_group_id: Number(sourceGroupId),
+        new_group_id: Number(targetGroupId)
+      }
+    });
+  }
+
+  const userResult = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}`);
+  const userPayload = unwrapSub2ApiRemoteData(userResult.json);
+  const existingGroups = Array.isArray(userPayload?.allowed_groups)
+    ? userPayload.allowed_groups.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)
+    : [];
+  const allowedGroups = Array.from(new Set([...existingGroups, Number(targetGroupId)]));
+  return callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}`, {
+    method: "PUT",
+    headers: { "Idempotency-Key": `${orderId}:dedicated-allow` },
+    body: { allowed_groups: allowedGroups }
+  });
 }
 
 async function getSub2ApiIdentityFromAccessToken(connection, accessToken) {
@@ -3351,6 +3467,204 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
   }
 });
 
+app.get("/api/public/sub2api/subscriptions", { preHandler: requireSub2ApiSession }, async (request, reply) => {
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(request.sub2api.connectionId, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  return buildSub2ApiSubscriptionPublicPayload(connection, {
+    userId: request.sub2api.userId,
+    email: request.sub2api.email,
+    username: request.sub2api.username
+  });
+});
+
+app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2ApiSession }, async (request, reply) => {
+  const parsed = z.object({
+    planId: z.string().trim().min(1)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请选择套餐" });
+  }
+
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(request.sub2api.connectionId, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  const plan = db.prepare(`
+    SELECT *
+    FROM sub2api_subscription_plans
+    WHERE id = ? AND connection_id = ? AND status = ?
+  `).get(parsed.data.planId, connection.id, sub2apiSubscriptionPlanStatuses.active);
+  if (!plan) {
+    return reply.code(404).send({ message: "套餐不存在或已下架" });
+  }
+
+  const userId = normalizeSub2ApiPositiveInteger(request.sub2api.userId, "用户 ID");
+  const orderId = nanoid(16);
+  const requestId = `sub2api_sub_${Date.now()}_${nanoid(8)}`;
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO sub2api_subscription_orders (
+      id, request_id, plan_id, connection_id, sub2api_user_id, email, username,
+      price, subscription_group_id, source_dedicated_group_id, dedicated_group_id, validity_days,
+      status, remote_balance_response, remote_subscription_response, error_message,
+      created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+  `).run(
+    orderId,
+    requestId,
+    plan.id,
+    connection.id,
+    request.sub2api.userId,
+    request.sub2api.email || null,
+    request.sub2api.username || null,
+    plan.price,
+    plan.subscription_group_id,
+    plan.source_dedicated_group_id,
+    plan.dedicated_group_id,
+    plan.validity_days,
+    sub2apiSubscriptionOrderStatuses.processing,
+    now,
+    now
+  );
+
+  let balanceResult = null;
+  let subscriptionResult = null;
+  let dedicatedGroupResult = null;
+  let dedicatedGroupWarning = "";
+  try {
+    balanceResult = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}/balance`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `${requestId}:balance` },
+      body: {
+        balance: Number(plan.price),
+        operation: "subtract",
+        notes: `KaWang 订阅套餐扣款：${plan.name}，订单 ${orderId}`
+      }
+    });
+
+    subscriptionResult = await callSub2ApiRemote(connection, "/api/v1/admin/subscriptions/assign", {
+      method: "POST",
+      headers: { "Idempotency-Key": `${requestId}:subscription` },
+      body: {
+        user_id: userId,
+        group_id: Number(plan.subscription_group_id),
+        validity_days: Number(plan.validity_days),
+        notes: `KaWang 余额购买套餐：${plan.name}，订单 ${orderId}${plan.dedicated_group_id ? `，专属分组 ${plan.dedicated_group_id}` : ""}`
+      }
+    });
+
+    try {
+      dedicatedGroupResult = await tryAssignSub2ApiDedicatedGroup(
+        connection,
+        userId,
+        plan.source_dedicated_group_id,
+        plan.dedicated_group_id,
+        orderId
+      );
+    } catch (dedicatedError) {
+      dedicatedGroupWarning = dedicatedError.message || "专属分组分配失败";
+    }
+
+    const updatedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_subscription_orders
+      SET status = ?, remote_balance_response = ?, remote_subscription_response = ?, error_message = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      sub2apiSubscriptionOrderStatuses.succeeded,
+      JSON.stringify(balanceResult.json ?? balanceResult.text ?? null),
+      JSON.stringify({
+        subscription: subscriptionResult.json ?? subscriptionResult.text ?? null,
+        dedicatedGroup: dedicatedGroupResult?.json ?? dedicatedGroupResult?.text ?? null
+      }),
+      dedicatedGroupWarning || null,
+      updatedAt,
+      orderId
+    );
+
+    createAuditLog({
+      action: "sub2api.subscription.purchase",
+      actor: "public",
+      resourceType: "sub2api_subscription_order",
+      resourceId: orderId,
+      detail: {
+        connectionId: connection.id,
+        sub2apiUserId: request.sub2api.userId,
+        planId: plan.id,
+        price: Number(plan.price),
+        subscriptionGroupId: Number(plan.subscription_group_id),
+        dedicatedGroupId: plan.dedicated_group_id,
+        validityDays: Number(plan.validity_days)
+      }
+    });
+
+    const row = db.prepare(`
+      SELECT o.*, p.name AS plan_name, c.name AS connection_name
+      FROM sub2api_subscription_orders o
+      LEFT JOIN sub2api_subscription_plans p ON p.id = o.plan_id
+      LEFT JOIN sub2api_connections c ON c.id = o.connection_id
+      WHERE o.id = ?
+    `).get(orderId);
+    return {
+      success: true,
+      order: serializeSub2ApiSubscriptionOrder(row),
+      plans: getSub2ApiPublicSubscriptionPlans(connection.id),
+      orders: getSub2ApiPublicSubscriptionOrders(connection.id, request.sub2api.userId)
+    };
+  } catch (error) {
+    let rollbackError = "";
+    if (balanceResult && !subscriptionResult) {
+      try {
+        await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}/balance`, {
+          method: "POST",
+          headers: { "Idempotency-Key": `${requestId}:rollback` },
+          body: {
+            balance: Number(plan.price),
+            operation: "add",
+            notes: `KaWang 订阅套餐开通失败退款：${plan.name}，订单 ${orderId}`
+          }
+        });
+      } catch (rollback) {
+        rollbackError = rollback.message || "退款失败";
+      }
+    }
+
+    const message = [error.message || "购买失败", rollbackError ? `退款失败：${rollbackError}` : ""].filter(Boolean).join("；");
+    db.prepare(`
+      UPDATE sub2api_subscription_orders
+      SET status = ?, remote_balance_response = ?, remote_subscription_response = ?, error_message = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      sub2apiSubscriptionOrderStatuses.failed,
+      balanceResult ? JSON.stringify(balanceResult.json ?? balanceResult.text ?? null) : null,
+      subscriptionResult ? JSON.stringify(subscriptionResult.json ?? subscriptionResult.text ?? null) : null,
+      message,
+      nowIso(),
+      orderId
+    );
+    return reply.code(502).send({ message });
+  }
+});
+
 app.post("/api/public/cdkeys/verify", async (request, reply) => {
   const schema = z.object({
     publicKey: z.string().min(6)
@@ -3868,6 +4182,267 @@ app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (reque
 
   return {
     items: rows.map(serializeSub2ApiInvite),
+    total,
+    page,
+    pageSize
+  };
+});
+
+app.get("/api/admin/sub2api/subscription-plans", { preHandler: requireAdmin }, async (request) => {
+  const connectionId = String(request.query.connectionId || "").trim();
+  const conditions = ["p.status <> ?"];
+  const params = [sub2apiSubscriptionPlanStatuses.deleted];
+  if (connectionId) {
+    conditions.push("p.connection_id = ?");
+    params.push(connectionId);
+  }
+  const rows = db.prepare(`
+    SELECT p.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_subscription_plans p
+    LEFT JOIN sub2api_connections c ON c.id = p.connection_id
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY p.sort_order ASC, p.created_at DESC
+  `).all(...params);
+  return { items: rows.map(serializeSub2ApiSubscriptionPlan) };
+});
+
+app.post("/api/admin/sub2api/subscription-plans", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+    description: z.string().trim().optional().default(""),
+    price: z.union([z.number(), z.string()]),
+    subscriptionGroupId: z.union([z.number(), z.string()]),
+    sourceDedicatedGroupId: z.union([z.number(), z.string(), z.null()]).optional().default(null),
+    dedicatedGroupId: z.union([z.number(), z.string(), z.null()]).optional().default(null),
+    validityDays: z.union([z.number(), z.string()]),
+    sortOrder: z.union([z.number(), z.string()]).optional().default(0),
+    status: z.enum([sub2apiSubscriptionPlanStatuses.active, sub2apiSubscriptionPlanStatuses.disabled]).optional().default(sub2apiSubscriptionPlanStatuses.active)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "套餐参数不正确" });
+  }
+
+  const connection = getSub2ApiConnectionById(parsed.data.connectionId);
+  if (!connection || connection.status === sub2apiConnectionStatuses.deleted) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  let price;
+  let subscriptionGroupId;
+  let sourceDedicatedGroupId = null;
+  let dedicatedGroupId = null;
+  let validityDays;
+  try {
+    price = normalizeSub2ApiAmount(parsed.data.price);
+    subscriptionGroupId = normalizeSub2ApiPositiveInteger(parsed.data.subscriptionGroupId, "订阅分组 ID");
+    if (parsed.data.sourceDedicatedGroupId !== null && String(parsed.data.sourceDedicatedGroupId).trim()) {
+      sourceDedicatedGroupId = normalizeSub2ApiPositiveInteger(parsed.data.sourceDedicatedGroupId, "原专属分组 ID");
+    }
+    if (parsed.data.dedicatedGroupId !== null && String(parsed.data.dedicatedGroupId).trim()) {
+      dedicatedGroupId = normalizeSub2ApiPositiveInteger(parsed.data.dedicatedGroupId, "专属分组 ID");
+    }
+    validityDays = normalizeSub2ApiPositiveInteger(parsed.data.validityDays, "有效天数");
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  const now = nowIso();
+  const id = nanoid(16);
+  db.prepare(`
+    INSERT INTO sub2api_subscription_plans (
+      id, connection_id, name, description, price, subscription_group_id, source_dedicated_group_id, dedicated_group_id,
+      validity_days, sort_order, status, created_by, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    parsed.data.connectionId,
+    parsed.data.name,
+    parsed.data.description || null,
+    price,
+    subscriptionGroupId,
+    sourceDedicatedGroupId,
+    dedicatedGroupId,
+    validityDays,
+    Math.floor(Number(parsed.data.sortOrder) || 0),
+    parsed.data.status,
+    request.admin.username,
+    now,
+    now
+  );
+
+  createAuditLog({
+    action: "sub2api.subscription_plan.create",
+    actor: request.admin.username,
+    resourceType: "sub2api_subscription_plan",
+    resourceId: id,
+    detail: { connectionId: parsed.data.connectionId, price, subscriptionGroupId, sourceDedicatedGroupId, dedicatedGroupId, validityDays }
+  });
+
+  const row = db.prepare(`
+    SELECT p.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_subscription_plans p
+    LEFT JOIN sub2api_connections c ON c.id = p.connection_id
+    WHERE p.id = ?
+  `).get(id);
+  return { item: serializeSub2ApiSubscriptionPlan(row) };
+});
+
+app.patch("/api/admin/sub2api/subscription-plans/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = db.prepare(`
+    SELECT *
+    FROM sub2api_subscription_plans
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiSubscriptionPlanStatuses.deleted);
+  if (!existing) {
+    return reply.code(404).send({ message: "套餐不存在" });
+  }
+
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1).optional(),
+    name: z.string().trim().min(1).optional(),
+    description: z.string().trim().optional(),
+    price: z.union([z.number(), z.string()]).optional(),
+    subscriptionGroupId: z.union([z.number(), z.string()]).optional(),
+    sourceDedicatedGroupId: z.union([z.number(), z.string(), z.null()]).optional(),
+    dedicatedGroupId: z.union([z.number(), z.string(), z.null()]).optional(),
+    validityDays: z.union([z.number(), z.string()]).optional(),
+    sortOrder: z.union([z.number(), z.string()]).optional(),
+    status: z.enum([sub2apiSubscriptionPlanStatuses.active, sub2apiSubscriptionPlanStatuses.disabled]).optional()
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "套餐参数不正确" });
+  }
+
+  const connectionId = parsed.data.connectionId ?? existing.connection_id;
+  const connection = getSub2ApiConnectionById(connectionId);
+  if (!connection || connection.status === sub2apiConnectionStatuses.deleted) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  let price = Number(existing.price);
+  let subscriptionGroupId = Number(existing.subscription_group_id);
+  let sourceDedicatedGroupId = existing.source_dedicated_group_id === null ? null : Number(existing.source_dedicated_group_id);
+  let dedicatedGroupId = existing.dedicated_group_id === null ? null : Number(existing.dedicated_group_id);
+  let validityDays = Number(existing.validity_days);
+  try {
+    if (parsed.data.price !== undefined) price = normalizeSub2ApiAmount(parsed.data.price);
+    if (parsed.data.subscriptionGroupId !== undefined) {
+      subscriptionGroupId = normalizeSub2ApiPositiveInteger(parsed.data.subscriptionGroupId, "订阅分组 ID");
+    }
+    if (parsed.data.sourceDedicatedGroupId !== undefined) {
+      sourceDedicatedGroupId = parsed.data.sourceDedicatedGroupId === null || !String(parsed.data.sourceDedicatedGroupId).trim()
+        ? null
+        : normalizeSub2ApiPositiveInteger(parsed.data.sourceDedicatedGroupId, "原专属分组 ID");
+    }
+    if (parsed.data.dedicatedGroupId !== undefined) {
+      dedicatedGroupId = parsed.data.dedicatedGroupId === null || !String(parsed.data.dedicatedGroupId).trim()
+        ? null
+        : normalizeSub2ApiPositiveInteger(parsed.data.dedicatedGroupId, "专属分组 ID");
+    }
+    if (parsed.data.validityDays !== undefined) {
+      validityDays = normalizeSub2ApiPositiveInteger(parsed.data.validityDays, "有效天数");
+    }
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  db.prepare(`
+    UPDATE sub2api_subscription_plans
+    SET connection_id = ?, name = ?, description = ?, price = ?, subscription_group_id = ?,
+        source_dedicated_group_id = ?, dedicated_group_id = ?, validity_days = ?, sort_order = ?, status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    connectionId,
+    parsed.data.name ?? existing.name,
+    parsed.data.description ?? existing.description,
+    price,
+    subscriptionGroupId,
+    sourceDedicatedGroupId,
+    dedicatedGroupId,
+    validityDays,
+    parsed.data.sortOrder === undefined ? existing.sort_order : Math.floor(Number(parsed.data.sortOrder) || 0),
+    parsed.data.status ?? existing.status,
+    nowIso(),
+    id
+  );
+
+  createAuditLog({
+    action: "sub2api.subscription_plan.update",
+    actor: request.admin.username,
+    resourceType: "sub2api_subscription_plan",
+    resourceId: id
+  });
+
+  const row = db.prepare(`
+    SELECT p.*, c.name AS connection_name, c.base_url AS connection_base_url
+    FROM sub2api_subscription_plans p
+    LEFT JOIN sub2api_connections c ON c.id = p.connection_id
+    WHERE p.id = ?
+  `).get(id);
+  return { item: serializeSub2ApiSubscriptionPlan(row) };
+});
+
+app.delete("/api/admin/sub2api/subscription-plans/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = db.prepare(`
+    SELECT id
+    FROM sub2api_subscription_plans
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiSubscriptionPlanStatuses.deleted);
+  if (!existing) {
+    return reply.code(404).send({ message: "套餐不存在" });
+  }
+  db.prepare(`
+    UPDATE sub2api_subscription_plans
+    SET status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(sub2apiSubscriptionPlanStatuses.deleted, nowIso(), id);
+  createAuditLog({
+    action: "sub2api.subscription_plan.delete",
+    actor: request.admin.username,
+    resourceType: "sub2api_subscription_plan",
+    resourceId: id
+  });
+  return { success: true, id };
+});
+
+app.get("/api/admin/sub2api/subscription-orders", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(200, Math.max(1, Math.floor(Number(request.query.pageSize) || 50)));
+  const offset = (page - 1) * pageSize;
+  const conditions = [];
+  const params = [];
+  const connectionId = String(request.query.connectionId || "").trim();
+  if (connectionId) {
+    conditions.push("o.connection_id = ?");
+    params.push(connectionId);
+  }
+  const userId = String(request.query.userId || "").trim();
+  if (userId) {
+    conditions.push("o.sub2api_user_id LIKE ?");
+    params.push(`%${userId}%`);
+  }
+  const status = String(request.query.status || "").trim();
+  if (Object.values(sub2apiSubscriptionOrderStatuses).includes(status)) {
+    conditions.push("o.status = ?");
+    params.push(status);
+  }
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM sub2api_subscription_orders o ${whereSql}`).get(...params).count;
+  const rows = db.prepare(`
+    SELECT o.*, p.name AS plan_name, c.name AS connection_name
+    FROM sub2api_subscription_orders o
+    LEFT JOIN sub2api_subscription_plans p ON p.id = o.plan_id
+    LEFT JOIN sub2api_connections c ON c.id = o.connection_id
+    ${whereSql}
+    ORDER BY o.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset);
+  return {
+    items: rows.map(serializeSub2ApiSubscriptionOrder),
     total,
     page,
     pageSize

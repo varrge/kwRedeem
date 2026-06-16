@@ -820,6 +820,68 @@
           </div>
 
           <div class="card mt-24">
+            <div class="card-header">
+              <h3>世界杯 API 自动化</h3>
+              <div class="header-actions">
+                <span id="worldcup-api-usage" class="table-badge status-disabled">未加载</span>
+              </div>
+            </div>
+            <form id="worldcup-api-settings-form" class="grid grid-4">
+              <label class="field">
+                <span>自动同步</span>
+                <select id="worldcup-api-enabled">
+                  <option value="0">停用</option>
+                  <option value="1">启用</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>API Key</span>
+                <input id="worldcup-api-key" type="password" autocomplete="off" placeholder="留空则保持原 Key" />
+              </label>
+              <label class="field">
+                <span>Base URL</span>
+                <input id="worldcup-api-base-url" placeholder="https://v3.football.api-sports.io" />
+              </label>
+              <label class="field">
+                <span>时区</span>
+                <input id="worldcup-api-timezone" placeholder="Asia/Shanghai" />
+              </label>
+              <label class="field">
+                <span>世界杯 League ID</span>
+                <input id="worldcup-api-league-id" type="number" min="1" step="1" value="1" />
+              </label>
+              <label class="field">
+                <span>赛季</span>
+                <input id="worldcup-api-season" type="number" min="1900" max="2200" step="1" value="2026" />
+              </label>
+              <label class="field">
+                <span>每日软上限</span>
+                <input id="worldcup-api-soft-limit" type="number" min="1" step="1" value="80" />
+              </label>
+              <label class="field">
+                <span>每日硬上限</span>
+                <input id="worldcup-api-hard-limit" type="number" min="1" step="1" value="100" />
+              </label>
+              <label class="field">
+                <span>同步间隔（毫秒）</span>
+                <input id="worldcup-api-sync-interval-ms" type="number" min="30000" step="1000" value="60000" />
+              </label>
+              <label class="field">
+                <span>清空 API Key</span>
+                <select id="worldcup-api-clear-key">
+                  <option value="0">否</option>
+                  <option value="1">是</option>
+                </select>
+              </label>
+              <div class="actions-row grid-span-4">
+                <button id="worldcup-api-settings-submit-btn" type="submit" class="primary-btn">保存 API 配置</button>
+                <button id="worldcup-api-settings-refresh-btn" type="button" class="ghost-btn">刷新用量</button>
+              </div>
+            </form>
+            <div id="worldcup-api-settings-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
             <div class="card-header"><h3 id="sub2api-plan-form-title">添加订阅套餐</h3></div>
             <form id="sub2api-plan-form" class="grid grid-4">
               <input id="sub2api-plan-edit-id" type="hidden" />
@@ -1022,10 +1084,10 @@
             <div class="card">
               <div class="card-header"><h3>竞猜运营说明</h3></div>
               <p class="hint">
-                前台只展示当前连接下的比赛。比赛状态为 <code>open</code> 且未到开赛时间时允许下注；用户每场只能下注一次。
+                前台只展示当前连接下的比赛。没有进行中的赛事时展示下一场和下下场；有进行中的赛事时展示当前场、下一场和下下场。
               </p>
               <p class="hint">
-                下注会立即通过远程 Sub2api 管理员接口扣减用户余额；结算时命中选项按 <code>投注额 × 赔率</code> 返还余额。
+                赛前盘会在开赛前 1 小时停止下注；中场休息可开放一次中场盘，第二阶段开始后自动关闭。下注会立即通过远程 Sub2api 管理员接口扣减用户余额；结算时命中选项按 <code>投注额 × 赔率</code> 返还余额。
               </p>
               <p class="hint">
                 若比赛取消，使用“取消并退款”会把未结算投注按原投注额返还。该功能应只用于不可提现的平台余额或娱乐积分。

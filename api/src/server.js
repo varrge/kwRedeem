@@ -23,21 +23,32 @@ import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCo
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import { isSmsCardStopped } from "../../shared/src/sms-status.js";
 import {
+  DEFAULT_API_FOOTBALL_SETTINGS,
+  getApiFootballQuotaSnapshot,
+  getApiFootballSettings,
+  getApiFootballUsageDate
+} from "../../shared/src/api-football.js";
+import {
   SUB2API_INVITE_LIMIT,
   countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
+  getSub2ApiWorldCupBetPhaseLabel,
+  getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
+  isSub2ApiWorldCupMatchInProgress,
   normalizeSub2ApiBaseUrl,
   normalizeSub2ApiAmount,
   normalizeSub2ApiPositiveInteger,
   reserveSub2ApiInvite,
   roundSub2ApiWorldCupAmount,
+  selectSub2ApiWorldCupDisplayMatches,
   sub2apiConnectionStatuses,
   sub2apiInviteStatuses,
   sub2apiSubscriptionOrderStatuses,
   sub2apiSubscriptionPlanStatuses,
+  sub2apiWorldCupBetPhases,
   sub2apiWorldCupBetStatuses,
   sub2apiWorldCupMatchStatuses,
   sub2apiWorldCupPredictions,
@@ -2790,17 +2801,31 @@ function getSub2ApiWorldCupBetOdds(match, prediction) {
 }
 
 function isSub2ApiWorldCupMatchBettingOpen(match) {
-  if (!match || match.status !== sub2apiWorldCupMatchStatuses.open) return false;
-  const kickoffMs = new Date(match.kickoff_at).getTime();
-  return Number.isFinite(kickoffMs) && kickoffMs > Date.now();
+  return getSub2ApiWorldCupBettingState(match).open;
 }
 
-function serializeSub2ApiWorldCupMatch(row, userBet = null) {
+function serializeSub2ApiWorldCupMatch(row, userBets = null) {
   if (!row) return null;
+  const bettingState = getSub2ApiWorldCupBettingState(row);
+  const betsByPhase = userBets?.byPhase || {};
+  const currentPhaseBet = bettingState.phase ? betsByPhase[bettingState.phase] : null;
+  const latestBet = userBets?.latest || userBets || null;
+  const preMatchBet = betsByPhase[sub2apiWorldCupBetPhases.preMatch] || null;
+  const halftimeBet = betsByPhase[sub2apiWorldCupBetPhases.halftime] || null;
+  const displayBet = currentPhaseBet || latestBet;
   return {
     id: row.id,
     connectionId: row.connection_id,
     connectionName: row.connection_name || null,
+    source: row.source || "manual",
+    apiFixtureId: row.api_fixture_id || "",
+    apiStatusShort: row.api_status_short || "",
+    apiStatusLong: row.api_status_long || "",
+    apiElapsed: row.api_elapsed,
+    apiLastSyncedAt: row.api_last_synced_at || null,
+    oddsLastSyncedAt: row.odds_last_synced_at || null,
+    displayRole: row.display_role || "",
+    inProgress: isSub2ApiWorldCupMatchInProgress(row),
     stage: row.stage || "",
     groupName: row.group_name || "",
     homeTeam: row.home_team,
@@ -2819,11 +2844,20 @@ function serializeSub2ApiWorldCupMatch(row, userBet = null) {
     minStake: Number(row.min_stake),
     maxStake: Number(row.max_stake),
     note: row.note || "",
-    bettingOpen: isSub2ApiWorldCupMatchBettingOpen(row),
+    bettingOpen: bettingState.open,
+    bettingPhase: bettingState.phase,
+    bettingPhaseLabel: bettingState.label,
+    bettingClosedReason: bettingState.reason,
+    bettingClosesAt: bettingState.closesAt,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     settledAt: row.settled_at || null,
-    myBet: userBet ? serializeSub2ApiWorldCupBet(userBet) : null
+    myBet: displayBet ? serializeSub2ApiWorldCupBet(displayBet) : null,
+    myBetForCurrentPhase: currentPhaseBet ? serializeSub2ApiWorldCupBet(currentPhaseBet) : null,
+    myBets: {
+      preMatch: preMatchBet ? serializeSub2ApiWorldCupBet(preMatchBet) : null,
+      halftime: halftimeBet ? serializeSub2ApiWorldCupBet(halftimeBet) : null
+    }
   };
 }
 
@@ -2837,6 +2871,8 @@ function serializeSub2ApiWorldCupBet(row) {
     userId: row.sub2api_user_id,
     email: row.email || "",
     username: row.username || "",
+    phase: row.phase || sub2apiWorldCupBetPhases.preMatch,
+    phaseLabel: getSub2ApiWorldCupBetPhaseLabel(row.phase || sub2apiWorldCupBetPhases.preMatch),
     prediction: row.prediction,
     predictionLabel: getSub2ApiWorldCupPredictionLabel(row.prediction),
     stake: Number(row.stake),
@@ -2943,17 +2979,27 @@ function getSub2ApiWorldCupUserBetMap(connectionId, userId) {
       AND b.status <> ?
     ORDER BY b.created_at DESC
   `).all(connectionId, userId, sub2apiWorldCupBetStatuses.debitFailed);
-  return new Map(rows.map((row) => [row.match_id, row]));
+  const map = new Map();
+  for (const row of rows) {
+    const phase = row.phase || sub2apiWorldCupBetPhases.preMatch;
+    const item = map.get(row.match_id) || { byPhase: {}, latest: null };
+    if (!item.latest) item.latest = row;
+    if (!item.byPhase[phase]) item.byPhase[phase] = row;
+    map.set(row.match_id, item);
+  }
+  return map;
 }
 
 function getSub2ApiWorldCupPublicMatches(connectionId, userId) {
   const bets = getSub2ApiWorldCupUserBetMap(connectionId, userId);
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT m.*
     FROM sub2api_worldcup_matches m
     WHERE m.connection_id = ?
     ORDER BY datetime(m.kickoff_at) ASC, m.created_at ASC
-  `).all(connectionId).map((row) => serializeSub2ApiWorldCupMatch(row, bets.get(row.id)));
+  `).all(connectionId);
+  return selectSub2ApiWorldCupDisplayMatches(rows)
+    .map((row) => serializeSub2ApiWorldCupMatch(row, bets.get(row.id)));
 }
 
 function getSub2ApiWorldCupMyBets(connectionId, userId) {
@@ -3028,7 +3074,7 @@ async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionTo
         { value: sub2apiWorldCupPredictions.draw, label: "平局" },
         { value: sub2apiWorldCupPredictions.away, label: "客胜" }
       ],
-      ruleText: "下注后立即扣除余额，结算命中后按赔率返还余额。仅限平台内不可提现余额/积分。"
+      ruleText: "赛前盘开赛前 1 小时停止下注；中场盘仅在中场休息时开放一次。下注后立即扣除余额，命中后按赔率返还余额。"
     },
     matches: getSub2ApiWorldCupPublicMatches(connection.id, identity.userId),
     bets: getSub2ApiWorldCupMyBets(connection.id, identity.userId),
@@ -3113,18 +3159,20 @@ function getSub2ApiWorldCupMatchById(matchId) {
   `).get(matchId);
 }
 
-function getSub2ApiWorldCupActiveBet(matchId, userId) {
+function getSub2ApiWorldCupActiveBet(matchId, userId, phase = sub2apiWorldCupBetPhases.preMatch) {
   return db.prepare(`
     SELECT *
     FROM sub2api_worldcup_bets
     WHERE match_id = ?
       AND sub2api_user_id = ?
+      AND phase = ?
       AND status NOT IN (?, ?)
     ORDER BY created_at DESC
     LIMIT 1
   `).get(
     matchId,
     userId,
+    phase,
     sub2apiWorldCupBetStatuses.debitFailed,
     sub2apiWorldCupBetStatuses.refunded
   );
@@ -3160,7 +3208,8 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     error.statusCode = 404;
     throw error;
   }
-  if (!isSub2ApiWorldCupMatchBettingOpen(match)) {
+  const bettingState = getSub2ApiWorldCupBettingState(match);
+  if (!bettingState.open || !bettingState.phase) {
     const error = new Error("该比赛已停止竞猜");
     error.statusCode = 403;
     throw error;
@@ -3176,19 +3225,19 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
   const betId = nanoid(16);
   const requestId = `worldcup_${Date.now()}_${nanoid(8)}`;
   const insertBet = db.transaction(() => {
-    const existing = getSub2ApiWorldCupActiveBet(match.id, identity.userId);
+    const existing = getSub2ApiWorldCupActiveBet(match.id, identity.userId, bettingState.phase);
     if (existing) {
-      const error = new Error("该比赛已经提交过竞猜");
+      const error = new Error(`该比赛${bettingState.label || "当前阶段"}已经提交过竞猜`);
       error.statusCode = 409;
       throw error;
     }
     db.prepare(`
       INSERT INTO sub2api_worldcup_bets (
         id, request_id, connection_id, match_id, sub2api_user_id, email, username,
-        prediction, stake, odds, status, payout, remote_debit_response,
+        phase, prediction, stake, odds, status, payout, remote_debit_response,
         remote_credit_response, error_message, created_at, updated_at, settled_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, NULL)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, NULL)
     `).run(
       betId,
       requestId,
@@ -3197,6 +3246,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
       identity.userId,
       identity.email || null,
       identity.username || null,
+      bettingState.phase,
       payload.prediction,
       payload.stake,
       odds,
@@ -3210,7 +3260,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
   } catch (error) {
     if (error.statusCode) throw error;
     if (String(error.message || "").toLowerCase().includes("unique")) {
-      const duplicate = new Error("该比赛已经提交过竞猜");
+      const duplicate = new Error(`该比赛${bettingState.label || "当前阶段"}已经提交过竞猜`);
       duplicate.statusCode = 409;
       throw duplicate;
     }
@@ -3226,7 +3276,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     const debitResult = await adjustSub2ApiWorldCupBalance(connection, identity.userId, {
       amount: payload.stake,
       operation: "subtract",
-      notes: `世界杯竞猜扣款：${match.home_team} vs ${match.away_team}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
+      notes: `世界杯竞猜扣款：${match.home_team} vs ${match.away_team}，${bettingState.label}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
       idempotencyKey: `worldcup_bet_${betId}`
     });
     const updatedAt = nowIso();
@@ -3248,6 +3298,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
       detail: {
         connectionId: connection.id,
         matchId: match.id,
+        phase: bettingState.phase,
         sub2apiUserId: identity.userId,
         prediction: payload.prediction,
         stake: payload.stake,
@@ -5311,6 +5362,134 @@ app.get("/api/admin/sub2api/subscription-orders", { preHandler: requireAdmin }, 
     page,
     pageSize
   };
+});
+
+function buildApiFootballAdminPayload() {
+  const settings = getApiFootballSettings(db);
+  const usage = getApiFootballQuotaSnapshot(db, {
+    date: getApiFootballUsageDate(new Date(), settings.timezone),
+    softLimit: settings.dailySoftLimit,
+    hardLimit: settings.dailyHardLimit
+  });
+  return {
+    defaults: DEFAULT_API_FOOTBALL_SETTINGS,
+    settings,
+    usage
+  };
+}
+
+const apiFootballSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  apiKey: z.string().trim().optional(),
+  clearApiKey: z.boolean().optional(),
+  baseUrl: z.string().trim().optional(),
+  worldCupLeagueId: z.coerce.number().int().min(1).max(999999).optional(),
+  worldCupSeason: z.coerce.number().int().min(1900).max(2200).optional(),
+  timezone: z.string().trim().min(1).max(80).optional(),
+  dailySoftLimit: z.coerce.number().int().min(1).max(10000).optional(),
+  dailyHardLimit: z.coerce.number().int().min(1).max(10000).optional(),
+  syncIntervalMs: z.coerce.number().int().min(30000).max(86400000).optional()
+});
+
+app.get("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: requireAdmin }, async () => (
+  buildApiFootballAdminPayload()
+));
+
+app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = apiFootballSettingsSchema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "API-Football 配置参数不正确" });
+  }
+
+  const currentRow = db.prepare("SELECT * FROM api_football_settings WHERE id = 'default'").get();
+  const current = getApiFootballSettings(db);
+  const next = {
+    enabled: parsed.data.enabled ?? current.enabled,
+    baseUrl: parsed.data.baseUrl || current.baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl,
+    worldCupLeagueId: parsed.data.worldCupLeagueId ?? current.worldCupLeagueId,
+    worldCupSeason: parsed.data.worldCupSeason ?? current.worldCupSeason,
+    timezone: parsed.data.timezone || current.timezone || DEFAULT_API_FOOTBALL_SETTINGS.timezone,
+    dailySoftLimit: parsed.data.dailySoftLimit ?? current.dailySoftLimit,
+    dailyHardLimit: parsed.data.dailyHardLimit ?? current.dailyHardLimit,
+    syncIntervalMs: parsed.data.syncIntervalMs ?? current.syncIntervalMs
+  };
+
+  try {
+    // Validate early so the worker does not fail later on an invalid base URL.
+    new URL(next.baseUrl);
+    getApiFootballUsageDate(new Date(), next.timezone);
+  } catch {
+    return reply.code(400).send({ message: "Base URL 或时区配置不正确" });
+  }
+
+  if (next.dailyHardLimit < next.dailySoftLimit) {
+    return reply.code(400).send({ message: "硬上限不能小于软上限" });
+  }
+
+  let apiKey = currentRow?.api_key || null;
+  if (parsed.data.clearApiKey) {
+    apiKey = null;
+  } else if (parsed.data.apiKey) {
+    apiKey = encryptText(parsed.data.apiKey);
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    INSERT OR IGNORE INTO api_football_settings (
+      id, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
+      timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
+    )
+    VALUES ('default', 0, NULL, ?, 1, 2026, 'Asia/Shanghai', 80, 100, 60000, ?, 'system')
+  `).run(DEFAULT_API_FOOTBALL_SETTINGS.baseUrl, now);
+
+  db.prepare(`
+    UPDATE api_football_settings
+    SET enabled = ?,
+        api_key = ?,
+        base_url = ?,
+        worldcup_league_id = ?,
+        worldcup_season = ?,
+        timezone = ?,
+        daily_soft_limit = ?,
+        daily_hard_limit = ?,
+        sync_interval_ms = ?,
+        updated_at = ?,
+        updated_by = ?
+    WHERE id = 'default'
+  `).run(
+    next.enabled ? 1 : 0,
+    apiKey,
+    next.baseUrl,
+    next.worldCupLeagueId,
+    next.worldCupSeason,
+    next.timezone,
+    next.dailySoftLimit,
+    next.dailyHardLimit,
+    next.syncIntervalMs,
+    now,
+    request.admin.username
+  );
+
+  createAuditLog({
+    action: "sub2api.worldcup.api_football.settings.update",
+    actor: request.admin.username,
+    resourceType: "api_football_settings",
+    resourceId: "default",
+    detail: {
+      enabled: next.enabled,
+      baseUrl: next.baseUrl,
+      worldCupLeagueId: next.worldCupLeagueId,
+      worldCupSeason: next.worldCupSeason,
+      timezone: next.timezone,
+      dailySoftLimit: next.dailySoftLimit,
+      dailyHardLimit: next.dailyHardLimit,
+      syncIntervalMs: next.syncIntervalMs,
+      apiKeyChanged: Boolean(parsed.data.apiKey),
+      apiKeyCleared: Boolean(parsed.data.clearApiKey)
+    }
+  });
+
+  return buildApiFootballAdminPayload();
 });
 
 app.get("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, async (request) => {
@@ -7984,6 +8163,69 @@ app.post("/api/internal/sms/poll", { preHandler: [requireInternalSecret] }, asyn
 
   // Stub: accept the poll request. Actual poll task management is handled by the Worker (Task 4).
   return { accepted: true };
+});
+
+app.post("/api/internal/sub2api/worldcup/settle", { preHandler: [requireInternalSecret] }, async (request, reply) => {
+  const parsed = z.object({
+    matchId: z.string().trim().min(1)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const match = getSub2ApiWorldCupMatchById(parsed.data.matchId);
+  if (!match) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  if (match.status === sub2apiWorldCupMatchStatuses.settled) {
+    return { alreadySettled: true, match: serializeSub2ApiWorldCupMatch(match) };
+  }
+  if (match.status === sub2apiWorldCupMatchStatuses.cancelled) {
+    return reply.code(409).send({ message: "比赛已取消，不能结算" });
+  }
+  if (match.home_score === null || match.home_score === undefined || match.away_score === null || match.away_score === undefined) {
+    return reply.code(409).send({ message: "比赛比分尚未同步，不能结算" });
+  }
+
+  let result;
+  try {
+    result = getSub2ApiWorldCupResult(match.home_score, match.away_score);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  if (match.status !== sub2apiWorldCupMatchStatuses.finished || match.result !== result) {
+    db.prepare(`
+      UPDATE sub2api_worldcup_matches
+      SET status = ?, result = ?, updated_at = ?
+      WHERE id = ?
+    `).run(sub2apiWorldCupMatchStatuses.finished, result, nowIso(), match.id);
+  }
+
+  try {
+    return await settleSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(match.id), "worker");
+  } catch (error) {
+    return reply.code(error.statusCode || 502).send({ message: error.message || "比赛结算失败" });
+  }
+});
+
+app.post("/api/internal/sub2api/worldcup/cancel", { preHandler: [requireInternalSecret] }, async (request, reply) => {
+  const parsed = z.object({
+    matchId: z.string().trim().min(1)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "参数不正确" });
+  }
+
+  const match = getSub2ApiWorldCupMatchById(parsed.data.matchId);
+  if (!match) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  try {
+    return await cancelSub2ApiWorldCupMatch(match, "worker");
+  } catch (error) {
+    return reply.code(error.statusCode || 502).send({ message: error.message || "取消比赛失败" });
+  }
 });
 
 // ─── SMS 接码管理：批量状态修改 ───────────────────────────────────────────────

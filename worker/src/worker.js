@@ -9,6 +9,25 @@ import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateStri
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
 import { getNumber, getStatus, setStatus } from "../../shared/src/fivesim-client.js";
 import {
+  fetchApiFootballWorldCupFixtures,
+  fetchApiFootballWorldCupLiveOdds,
+  fetchApiFootballWorldCupOdds,
+  getApiFootballQuotaSnapshot,
+  getApiFootballSettings,
+  getApiFootballUsageDate,
+  parseApiFootballFixture,
+  parseApiFootballMatchWinnerOdds
+} from "../../shared/src/api-football.js";
+import {
+  isSub2ApiWorldCupApiStatusFinal,
+  isSub2ApiWorldCupApiStatusHalftime,
+  isSub2ApiWorldCupApiStatusLive,
+  roundSub2ApiWorldCupAmount,
+  sub2apiConnectionStatuses,
+  sub2apiWorldCupBetStatuses,
+  sub2apiWorldCupMatchStatuses
+} from "../../shared/src/sub2api.js";
+import {
   buildFeishuMarkdown,
   clampIntervalSeconds,
   evaluateMonitorRules,
@@ -38,6 +57,585 @@ function writeAuditLog(action, resourceType, resourceId, detail) {
     INSERT INTO admin_audit_logs (id, action, actor, resource_type, resource_id, detail, created_at)
     VALUES (lower(hex(randomblob(8))), ?, 'worker', ?, ?, ?, ?)
   `).run(action, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
+}
+
+const WORLDCUP_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const WORLDCUP_INTERNAL_TIMEOUT_MS = 30 * 1000;
+const WORLDCUP_TRACKED_FIXTURE_LIMIT = 12;
+const WORLDCUP_UPCOMING_ODDS_LIMIT = 2;
+let worldCupSyncRunning = false;
+let worldCupLastDiscoveryAt = 0;
+let worldCupLastTickAt = 0;
+let worldCupMissingKeyLogged = false;
+let worldCupDisabledLogged = false;
+
+function parseTimeMs(value) {
+  const ms = new Date(value || "").getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function randomWorldCupId() {
+  return randomBytes(8).toString("hex");
+}
+
+function isApiFootballLimitError(error) {
+  return ["API_FOOTBALL_SOFT_LIMIT", "API_FOOTBALL_HARD_LIMIT"].includes(error?.code);
+}
+
+function logApiFootballSyncError(scope, error) {
+  if (error?.code === "API_FOOTBALL_KEY_MISSING") {
+    if (!worldCupMissingKeyLogged) {
+      console.warn(`[KaWang worker] worldcup: ${error.message}`);
+      worldCupMissingKeyLogged = true;
+    }
+    return;
+  }
+  if (isApiFootballLimitError(error)) {
+    console.warn(`[KaWang worker] worldcup ${scope}: ${error.message}`);
+    return;
+  }
+  console.error(`[KaWang worker] worldcup ${scope}:`, error.message || error);
+}
+
+function getWorldCupRequestPriority(settings, urgent = false) {
+  if (!urgent) return "normal";
+  const usage = getApiFootballQuotaSnapshot(db, {
+    timezone: settings.timezone,
+    softLimit: settings.dailySoftLimit,
+    hardLimit: settings.dailyHardLimit
+  });
+  return usage.used >= usage.softLimit ? "emergency" : "normal";
+}
+
+function getActiveSub2ApiConnections() {
+  return db.prepare(`
+    SELECT id, name
+    FROM sub2api_connections
+    WHERE status = ?
+    ORDER BY created_at ASC
+  `).all(sub2apiConnectionStatuses.active);
+}
+
+function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
+  if (!parsedFixture?.apiFixtureId || !parsedFixture.homeTeam || !parsedFixture.awayTeam || !parsedFixture.kickoffAt) {
+    return 0;
+  }
+  const now = nowIso();
+  const sync = db.transaction(() => {
+    let count = 0;
+    for (const connection of connections) {
+      const existing = db.prepare(`
+        SELECT *
+        FROM sub2api_worldcup_matches
+        WHERE connection_id = ?
+          AND api_fixture_id = ?
+      `).get(connection.id, parsedFixture.apiFixtureId);
+
+      const terminalStatus = existing && [
+        sub2apiWorldCupMatchStatuses.settled,
+        sub2apiWorldCupMatchStatuses.cancelled
+      ].includes(existing.status);
+      const nextStatus = terminalStatus ? existing.status : parsedFixture.status;
+      const halftimeSyncedAt = parsedFixture.apiStatusShort === "HT" ? now : null;
+
+      if (existing) {
+        db.prepare(`
+          UPDATE sub2api_worldcup_matches
+          SET stage = ?,
+              group_name = ?,
+              home_team = ?,
+              away_team = ?,
+              kickoff_at = ?,
+              status = ?,
+              home_score = ?,
+              away_score = ?,
+              result = ?,
+              source = 'api-football',
+              api_league_id = ?,
+              api_season = ?,
+              api_status_short = ?,
+              api_status_long = ?,
+              api_elapsed = ?,
+              api_last_synced_at = ?,
+              halftime_betting_opened_at = CASE
+                WHEN ? IS NOT NULL AND halftime_betting_opened_at IS NULL THEN ?
+                ELSE halftime_betting_opened_at
+              END,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          parsedFixture.stage || existing.stage || null,
+          parsedFixture.groupName || existing.group_name || null,
+          parsedFixture.homeTeam,
+          parsedFixture.awayTeam,
+          parsedFixture.kickoffAt,
+          nextStatus,
+          parsedFixture.homeScore,
+          parsedFixture.awayScore,
+          parsedFixture.result,
+          parsedFixture.apiLeagueId,
+          parsedFixture.apiSeason,
+          parsedFixture.apiStatusShort || null,
+          parsedFixture.apiStatusLong || null,
+          parsedFixture.apiElapsed,
+          now,
+          halftimeSyncedAt,
+          halftimeSyncedAt,
+          now,
+          existing.id
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO sub2api_worldcup_matches (
+            id, connection_id, stage, group_name, home_team, away_team, kickoff_at, status,
+            home_score, away_score, result, odds_home, odds_draw, odds_away, min_stake,
+            max_stake, note, source, api_fixture_id, api_league_id, api_season,
+            api_status_short, api_status_long, api_elapsed, api_last_synced_at,
+            odds_last_synced_at, halftime_betting_opened_at, auto_settle_attempted_at,
+            created_at, updated_at, settled_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.8, 3.2, 1.8, 0.1, 2, NULL,
+                  'api-football', ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL)
+        `).run(
+          randomWorldCupId(),
+          connection.id,
+          parsedFixture.stage || null,
+          parsedFixture.groupName || null,
+          parsedFixture.homeTeam,
+          parsedFixture.awayTeam,
+          parsedFixture.kickoffAt,
+          nextStatus,
+          parsedFixture.homeScore,
+          parsedFixture.awayScore,
+          parsedFixture.result,
+          parsedFixture.apiFixtureId,
+          parsedFixture.apiLeagueId,
+          parsedFixture.apiSeason,
+          parsedFixture.apiStatusShort || null,
+          parsedFixture.apiStatusLong || null,
+          parsedFixture.apiElapsed,
+          now,
+          halftimeSyncedAt,
+          now,
+          now
+        );
+      }
+      count += 1;
+    }
+    return count;
+  });
+  return sync();
+}
+
+function updateApiFootballWorldCupOdds(apiFixtureId, odds) {
+  if (!apiFixtureId || !odds?.home || !odds?.draw || !odds?.away) return 0;
+  const now = nowIso();
+  const result = db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET odds_home = ?,
+        odds_draw = ?,
+        odds_away = ?,
+        odds_last_synced_at = ?,
+        updated_at = ?
+    WHERE api_fixture_id = ?
+      AND source = 'api-football'
+      AND status NOT IN (?, ?)
+  `).run(
+    roundSub2ApiWorldCupAmount(odds.home),
+    roundSub2ApiWorldCupAmount(odds.draw),
+    roundSub2ApiWorldCupAmount(odds.away),
+    now,
+    now,
+    apiFixtureId,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  );
+  return result.changes || 0;
+}
+
+function markApiFootballWorldCupOddsAttempt(apiFixtureId) {
+  if (!apiFixtureId) return 0;
+  const now = nowIso();
+  const result = db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET odds_last_synced_at = ?,
+        updated_at = ?
+    WHERE api_fixture_id = ?
+      AND source = 'api-football'
+      AND status NOT IN (?, ?)
+  `).run(
+    now,
+    now,
+    apiFixtureId,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  );
+  return result.changes || 0;
+}
+
+async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings) {
+  const today = getApiFootballUsageDate(new Date(nowMs), settings.timezone);
+  const requests = [
+    { next: 3, priority: "normal" },
+    { date: today, priority: "normal" }
+  ];
+  const seen = new Set();
+  let synced = 0;
+  for (const request of requests) {
+    try {
+      const response = await fetchApiFootballWorldCupFixtures(db, { ...request, settings });
+      const items = Array.isArray(response?.json?.response) ? response.json.response : [];
+      for (const item of items) {
+        const parsed = parseApiFootballFixture(item, nowMs);
+        if (!parsed.apiFixtureId || seen.has(parsed.apiFixtureId)) continue;
+        seen.add(parsed.apiFixtureId);
+        synced += upsertApiFootballWorldCupFixture(parsed, connections);
+      }
+    } catch (error) {
+      logApiFootballSyncError("discovery", error);
+      if (error?.code === "API_FOOTBALL_HARD_LIMIT") break;
+    }
+  }
+  worldCupLastDiscoveryAt = nowMs;
+  if (synced > 0) {
+    console.log(`[KaWang worker] worldcup: synced ${seen.size} fixtures for ${connections.length} Sub2api connections`);
+  }
+}
+
+function getTrackedApiFootballFixtures() {
+  return db.prepare(`
+    SELECT api_fixture_id,
+           MIN(kickoff_at) AS kickoff_at,
+           MAX(api_status_short) AS api_status_short,
+           MAX(api_last_synced_at) AS api_last_synced_at
+    FROM sub2api_worldcup_matches
+    WHERE source = 'api-football'
+      AND api_fixture_id IS NOT NULL
+      AND status NOT IN (?, ?)
+    GROUP BY api_fixture_id
+    ORDER BY datetime(kickoff_at) ASC
+    LIMIT ?
+  `).all(
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    WORLDCUP_TRACKED_FIXTURE_LIMIT
+  );
+}
+
+function shouldRefreshApiFootballFixture(row, nowMs) {
+  const apiStatus = String(row.api_status_short || "").toUpperCase();
+  if (isSub2ApiWorldCupApiStatusFinal(apiStatus)) return false;
+
+  const kickoffMs = parseTimeMs(row.kickoff_at);
+  if (!kickoffMs) return false;
+  const lastMs = parseTimeMs(row.api_last_synced_at);
+  if (!lastMs) return true;
+
+  const untilKickoff = kickoffMs - nowMs;
+  const sinceKickoff = nowMs - kickoffMs;
+  const sinceLast = nowMs - lastMs;
+
+  if (untilKickoff > 24 * 60 * 60 * 1000) return false;
+  if (untilKickoff > 2 * 60 * 60 * 1000) return sinceLast >= 6 * 60 * 60 * 1000;
+  if (untilKickoff > -10 * 60 * 1000) return sinceLast >= 15 * 60 * 1000;
+  if (isSub2ApiWorldCupApiStatusHalftime(apiStatus)) return sinceLast >= 2 * 60 * 1000;
+  if (isSub2ApiWorldCupApiStatusLive(apiStatus)) return sinceLast >= 10 * 60 * 1000;
+  if (sinceKickoff <= 3 * 60 * 60 * 1000) return sinceLast >= 5 * 60 * 1000;
+  if (sinceKickoff <= 24 * 60 * 60 * 1000) return sinceLast >= 30 * 60 * 1000;
+  return false;
+}
+
+function isUrgentApiFootballFixtureRefresh(row, nowMs) {
+  const apiStatus = String(row.api_status_short || "").toUpperCase();
+  const kickoffMs = parseTimeMs(row.kickoff_at);
+  if (!kickoffMs) return false;
+  return isSub2ApiWorldCupApiStatusHalftime(apiStatus)
+    || (nowMs - kickoffMs >= 35 * 60 * 1000 && nowMs - kickoffMs <= 75 * 60 * 1000)
+    || (nowMs - kickoffMs >= 105 * 60 * 1000 && nowMs - kickoffMs <= 4 * 60 * 60 * 1000);
+}
+
+async function syncApiFootballFixtureById(apiFixtureId, connections, nowMs, settings, priority = "normal") {
+  const response = await fetchApiFootballWorldCupFixtures(db, { fixtureId: apiFixtureId, priority, settings });
+  const item = Array.isArray(response?.json?.response) ? response.json.response[0] : null;
+  if (!item) return null;
+  const parsed = parseApiFootballFixture(item, nowMs);
+  upsertApiFootballWorldCupFixture(parsed, connections);
+  return parsed;
+}
+
+async function syncApiFootballHalftimeOdds(parsedFixture, priority, settings) {
+  if (!parsedFixture?.apiFixtureId || parsedFixture.apiStatusShort !== "HT") return;
+  const row = db.prepare(`
+    SELECT MAX(odds_last_synced_at) AS odds_last_synced_at
+    FROM sub2api_worldcup_matches
+    WHERE api_fixture_id = ?
+      AND source = 'api-football'
+  `).get(parsedFixture.apiFixtureId);
+  if (parseTimeMs(row?.odds_last_synced_at) && Date.now() - parseTimeMs(row.odds_last_synced_at) < 2 * 60 * 1000) {
+    return;
+  }
+  try {
+    const response = await fetchApiFootballWorldCupLiveOdds(db, {
+      fixtureId: parsedFixture.apiFixtureId,
+      priority,
+      settings
+    });
+    const odds = parseApiFootballMatchWinnerOdds(response.json, {
+      homeTeam: parsedFixture.homeTeam,
+      awayTeam: parsedFixture.awayTeam
+    });
+    if (odds) {
+      updateApiFootballWorldCupOdds(parsedFixture.apiFixtureId, odds);
+    } else {
+      markApiFootballWorldCupOddsAttempt(parsedFixture.apiFixtureId);
+    }
+  } catch (error) {
+    logApiFootballSyncError("live-odds", error);
+    if (!isApiFootballLimitError(error)) {
+      markApiFootballWorldCupOddsAttempt(parsedFixture.apiFixtureId);
+    }
+  }
+}
+
+async function syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings) {
+  const rows = getTrackedApiFootballFixtures().filter((row) => shouldRefreshApiFootballFixture(row, nowMs));
+  for (const row of rows) {
+    const urgent = isUrgentApiFootballFixtureRefresh(row, nowMs);
+    const priority = getWorldCupRequestPriority(settings, urgent);
+    try {
+      const parsed = await syncApiFootballFixtureById(row.api_fixture_id, connections, nowMs, settings, priority);
+      await syncApiFootballHalftimeOdds(parsed, getWorldCupRequestPriority(settings, true), settings);
+    } catch (error) {
+      logApiFootballSyncError(`fixture ${row.api_fixture_id}`, error);
+      if (error?.code === "API_FOOTBALL_HARD_LIMIT") break;
+    }
+  }
+}
+
+function getUpcomingApiFootballOddsTargets(now = nowIso()) {
+  return db.prepare(`
+    SELECT api_fixture_id,
+           MIN(home_team) AS home_team,
+           MIN(away_team) AS away_team,
+           MIN(kickoff_at) AS kickoff_at,
+           MAX(odds_last_synced_at) AS odds_last_synced_at
+    FROM sub2api_worldcup_matches
+    WHERE source = 'api-football'
+      AND api_fixture_id IS NOT NULL
+      AND status = ?
+      AND datetime(kickoff_at) > datetime(?)
+    GROUP BY api_fixture_id
+    ORDER BY datetime(kickoff_at) ASC
+    LIMIT ?
+  `).all(sub2apiWorldCupMatchStatuses.open, now, WORLDCUP_UPCOMING_ODDS_LIMIT);
+}
+
+function shouldRefreshApiFootballOdds(row, nowMs) {
+  const kickoffMs = parseTimeMs(row.kickoff_at);
+  if (!kickoffMs) return false;
+  const untilKickoff = kickoffMs - nowMs;
+  if (untilKickoff <= 60 * 60 * 1000 || untilKickoff > 14 * 24 * 60 * 60 * 1000) return false;
+  const lastMs = parseTimeMs(row.odds_last_synced_at);
+  if (!lastMs) return true;
+  const sinceLast = nowMs - lastMs;
+  if (untilKickoff <= 2 * 60 * 60 * 1000) return sinceLast >= 30 * 60 * 1000;
+  if (untilKickoff <= 24 * 60 * 60 * 1000) return sinceLast >= 2 * 60 * 60 * 1000;
+  return sinceLast >= 12 * 60 * 60 * 1000;
+}
+
+async function syncUpcomingApiFootballWorldCupOdds(nowMs, settings) {
+  const targets = getUpcomingApiFootballOddsTargets(new Date(nowMs).toISOString())
+    .filter((row) => shouldRefreshApiFootballOdds(row, nowMs));
+  for (const target of targets) {
+    try {
+      const response = await fetchApiFootballWorldCupOdds(db, {
+        fixtureId: target.api_fixture_id,
+        priority: "normal",
+        settings
+      });
+      const odds = parseApiFootballMatchWinnerOdds(response.json, {
+        homeTeam: target.home_team,
+        awayTeam: target.away_team
+      });
+      if (odds) {
+        updateApiFootballWorldCupOdds(target.api_fixture_id, odds);
+      } else {
+        markApiFootballWorldCupOddsAttempt(target.api_fixture_id);
+      }
+    } catch (error) {
+      logApiFootballSyncError(`odds ${target.api_fixture_id}`, error);
+      if (isApiFootballLimitError(error)) break;
+      markApiFootballWorldCupOddsAttempt(target.api_fixture_id);
+    }
+  }
+}
+
+async function requestWorldCupInternalSettle(matchId) {
+  const response = await fetch(`${env.apiUrl}/api/internal/sub2api/worldcup/settle`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Secret": env.internalSecret
+    },
+    body: JSON.stringify({ matchId }),
+    signal: AbortSignal.timeout(WORLDCUP_INTERNAL_TIMEOUT_MS)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function requestWorldCupInternalCancel(matchId) {
+  const response = await fetch(`${env.apiUrl}/api/internal/sub2api/worldcup/cancel`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Secret": env.internalSecret
+    },
+    body: JSON.stringify({ matchId }),
+    signal: AbortSignal.timeout(WORLDCUP_INTERNAL_TIMEOUT_MS)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function autoSettleFinishedApiFootballWorldCupMatches(nowMs) {
+  const retryBefore = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT id, home_team, away_team, home_score, away_score
+    FROM sub2api_worldcup_matches
+    WHERE source = 'api-football'
+      AND status = ?
+      AND result IS NOT NULL
+      AND (auto_settle_attempted_at IS NULL OR auto_settle_attempted_at <= ?)
+    ORDER BY datetime(kickoff_at) ASC
+    LIMIT 10
+  `).all(sub2apiWorldCupMatchStatuses.finished, retryBefore);
+
+  for (const row of rows) {
+    const now = nowIso();
+    db.prepare(`
+      UPDATE sub2api_worldcup_matches
+      SET auto_settle_attempted_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, now, row.id);
+    try {
+      await requestWorldCupInternalSettle(row.id);
+      console.log(`[KaWang worker] worldcup: settled ${row.home_team} ${row.home_score}-${row.away_score} ${row.away_team}`);
+    } catch (error) {
+      console.error(`[KaWang worker] worldcup settle ${row.id}:`, error.message || error);
+    }
+  }
+}
+
+async function autoCancelApiFootballWorldCupMatches(nowMs) {
+  const retryBefore = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT m.id, m.home_team, m.away_team
+    FROM sub2api_worldcup_matches m
+    WHERE m.source = 'api-football'
+      AND m.status = ?
+      AND (m.auto_settle_attempted_at IS NULL OR m.auto_settle_attempted_at <= ?)
+      AND EXISTS (
+        SELECT 1
+        FROM sub2api_worldcup_bets b
+        WHERE b.match_id = m.id
+          AND b.status IN (?, ?, ?)
+      )
+    ORDER BY datetime(m.kickoff_at) ASC
+    LIMIT 10
+  `).all(
+    sub2apiWorldCupMatchStatuses.cancelled,
+    retryBefore,
+    sub2apiWorldCupBetStatuses.placed,
+    sub2apiWorldCupBetStatuses.payoutFailed,
+    sub2apiWorldCupBetStatuses.refundFailed
+  );
+
+  for (const row of rows) {
+    const now = nowIso();
+    db.prepare(`
+      UPDATE sub2api_worldcup_matches
+      SET auto_settle_attempted_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, now, row.id);
+    try {
+      await requestWorldCupInternalCancel(row.id);
+      console.log(`[KaWang worker] worldcup: cancelled ${row.home_team} vs ${row.away_team}`);
+    } catch (error) {
+      console.error(`[KaWang worker] worldcup cancel ${row.id}:`, error.message || error);
+    }
+  }
+}
+
+function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs) {
+  if (!connections.length) return false;
+  if (!worldCupLastDiscoveryAt || nowMs - worldCupLastDiscoveryAt >= WORLDCUP_DISCOVERY_INTERVAL_MS) return true;
+  const upcomingCount = db.prepare(`
+    SELECT COUNT(DISTINCT api_fixture_id) AS count
+    FROM sub2api_worldcup_matches
+    WHERE source = 'api-football'
+      AND api_fixture_id IS NOT NULL
+      AND status NOT IN (?, ?, ?)
+      AND datetime(kickoff_at) >= datetime(?)
+  `).get(
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    new Date(nowMs).toISOString()
+  ).count;
+  return Number(upcomingCount || 0) < 2;
+}
+
+async function apiFootballWorldCupTick() {
+  if (worldCupSyncRunning) return;
+  worldCupSyncRunning = true;
+  try {
+    const settings = getApiFootballSettings(db, { includeApiKey: true });
+    if (!settings.enabled) {
+      if (!worldCupDisabledLogged) {
+        console.log("[KaWang worker] worldcup: API-Football 后台配置未启用，跳过自动同步");
+        worldCupDisabledLogged = true;
+      }
+      return;
+    }
+    worldCupDisabledLogged = false;
+
+    const nowMs = Date.now();
+    if (worldCupLastTickAt && nowMs - worldCupLastTickAt < settings.syncIntervalMs) {
+      return;
+    }
+    worldCupLastTickAt = nowMs;
+
+    const connections = getActiveSub2ApiConnections();
+    if (!connections.length) return;
+    if (!settings.apiKey) {
+      logApiFootballSyncError("config", Object.assign(new Error("未在后台配置 API-Football API Key，跳过 API-Football 同步"), {
+        code: "API_FOOTBALL_KEY_MISSING"
+      }));
+      return;
+    }
+    worldCupMissingKeyLogged = false;
+
+    if (shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs)) {
+      try {
+        await discoverApiFootballWorldCupFixtures(connections, nowMs, settings);
+      } catch (error) {
+        logApiFootballSyncError("discovery", error);
+      }
+    }
+    await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
+    await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
+    await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
+    await autoCancelApiFootballWorldCupMatches(nowMs);
+  } finally {
+    worldCupSyncRunning = false;
+  }
 }
 
 function claimJob() {
@@ -1734,6 +2332,12 @@ setInterval(() => {
   });
 }, QUOTA_LOW_STOCK_INTERVAL_MS);
 
+setInterval(() => {
+  apiFootballWorldCupTick().catch((error) => {
+    console.error("[KaWang worker] worldcup", error);
+  });
+}, 30000);
+
 tick().catch((error) => {
   console.error("[KaWang worker]", error);
 });
@@ -1750,4 +2354,8 @@ try {
 
 quotaLowStockTick().catch((error) => {
   console.error("[KaWang worker] quota-low-stock", error);
+});
+
+apiFootballWorldCupTick().catch((error) => {
+  console.error("[KaWang worker] worldcup", error);
 });

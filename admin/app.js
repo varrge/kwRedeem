@@ -193,6 +193,21 @@ const refs = {
   sub2apiOrderRefreshBtn: document.querySelector("#sub2api-order-refresh-btn"),
   sub2apiOrderList: document.querySelector("#sub2api-order-list"),
   sub2apiOrderResult: document.querySelector("#sub2api-order-result"),
+  worldCupApiSettingsForm: document.querySelector("#worldcup-api-settings-form"),
+  worldCupApiEnabled: document.querySelector("#worldcup-api-enabled"),
+  worldCupApiKey: document.querySelector("#worldcup-api-key"),
+  worldCupApiBaseUrl: document.querySelector("#worldcup-api-base-url"),
+  worldCupApiTimezone: document.querySelector("#worldcup-api-timezone"),
+  worldCupApiLeagueId: document.querySelector("#worldcup-api-league-id"),
+  worldCupApiSeason: document.querySelector("#worldcup-api-season"),
+  worldCupApiSoftLimit: document.querySelector("#worldcup-api-soft-limit"),
+  worldCupApiHardLimit: document.querySelector("#worldcup-api-hard-limit"),
+  worldCupApiSyncIntervalMs: document.querySelector("#worldcup-api-sync-interval-ms"),
+  worldCupApiClearKey: document.querySelector("#worldcup-api-clear-key"),
+  worldCupApiSettingsSubmitBtn: document.querySelector("#worldcup-api-settings-submit-btn"),
+  worldCupApiSettingsRefreshBtn: document.querySelector("#worldcup-api-settings-refresh-btn"),
+  worldCupApiUsage: document.querySelector("#worldcup-api-usage"),
+  worldCupApiSettingsResult: document.querySelector("#worldcup-api-settings-result"),
   worldCupMatchForm: document.querySelector("#worldcup-match-form"),
   worldCupMatchFormTitle: document.querySelector("#worldcup-match-form-title"),
   worldCupMatchEditId: document.querySelector("#worldcup-match-edit-id"),
@@ -2223,7 +2238,84 @@ async function refreshSub2ApiOrders() {
   setHint(refs.sub2apiOrderResult, `共 ${payload.total ?? sub2apiOrdersCache.length} 条记录，当前显示 ${sub2apiOrdersCache.length} 条`);
 }
 
+function renderWorldCupApiUsage(payload) {
+  if (!refs.worldCupApiUsage) return;
+  const settings = payload?.settings || {};
+  const usage = payload?.usage || {};
+  const hasKey = settings.hasApiKey ? "Key 已配置" : "Key 未配置";
+  const enabled = settings.enabled ? "启用" : "停用";
+  refs.worldCupApiUsage.textContent = `${enabled} · ${hasKey} · 今日 ${usage.used ?? 0}/${usage.softLimit ?? 80}/${usage.hardLimit ?? 100}`;
+  refs.worldCupApiUsage.className = `table-badge ${settings.enabled && settings.hasApiKey ? "status-active" : "status-disabled"}`;
+}
+
+function fillWorldCupApiSettings(payload) {
+  const settings = payload?.settings || {};
+  const defaults = payload?.defaults || {};
+  if (refs.worldCupApiEnabled) refs.worldCupApiEnabled.value = settings.enabled ? "1" : "0";
+  if (refs.worldCupApiKey) {
+    refs.worldCupApiKey.value = "";
+    refs.worldCupApiKey.placeholder = settings.hasApiKey ? "已配置，留空则保持原 Key" : "请输入 API-Football API Key";
+  }
+  if (refs.worldCupApiBaseUrl) refs.worldCupApiBaseUrl.value = settings.baseUrl || defaults.baseUrl || "https://v3.football.api-sports.io";
+  if (refs.worldCupApiTimezone) refs.worldCupApiTimezone.value = settings.timezone || defaults.timezone || "Asia/Shanghai";
+  if (refs.worldCupApiLeagueId) refs.worldCupApiLeagueId.value = settings.worldCupLeagueId || defaults.worldCupLeagueId || 1;
+  if (refs.worldCupApiSeason) refs.worldCupApiSeason.value = settings.worldCupSeason || defaults.worldCupSeason || 2026;
+  if (refs.worldCupApiSoftLimit) refs.worldCupApiSoftLimit.value = settings.dailySoftLimit || defaults.dailySoftLimit || 80;
+  if (refs.worldCupApiHardLimit) refs.worldCupApiHardLimit.value = settings.dailyHardLimit || defaults.dailyHardLimit || 100;
+  if (refs.worldCupApiSyncIntervalMs) refs.worldCupApiSyncIntervalMs.value = settings.syncIntervalMs || defaults.syncIntervalMs || 60000;
+  if (refs.worldCupApiClearKey) refs.worldCupApiClearKey.value = "0";
+  renderWorldCupApiUsage(payload);
+}
+
+async function refreshWorldCupApiSettings() {
+  if (!refs.worldCupApiSettingsForm) return;
+  const payload = await api("/api/admin/sub2api/worldcup/api-football/settings");
+  fillWorldCupApiSettings(payload);
+  const settings = payload.settings || {};
+  const usage = payload.usage || {};
+  setHint(
+    refs.worldCupApiSettingsResult,
+    `当前 ${settings.enabled ? "已启用" : "未启用"}，${settings.hasApiKey ? "API Key 已保存" : "API Key 未配置"}。今日普通额度剩余 ${usage.remainingSoft ?? 0}，硬上限剩余 ${usage.remainingHard ?? 0}。`
+  );
+}
+
+async function saveWorldCupApiSettings() {
+  if (!refs.worldCupApiSettingsForm) return;
+  const payload = {
+    enabled: refs.worldCupApiEnabled.value === "1",
+    apiKey: refs.worldCupApiKey.value.trim(),
+    clearApiKey: refs.worldCupApiClearKey.value === "1",
+    baseUrl: refs.worldCupApiBaseUrl.value.trim(),
+    timezone: refs.worldCupApiTimezone.value.trim(),
+    worldCupLeagueId: Number(refs.worldCupApiLeagueId.value || 1),
+    worldCupSeason: Number(refs.worldCupApiSeason.value || 2026),
+    dailySoftLimit: Number(refs.worldCupApiSoftLimit.value || 80),
+    dailyHardLimit: Number(refs.worldCupApiHardLimit.value || 100),
+    syncIntervalMs: Number(refs.worldCupApiSyncIntervalMs.value || 60000)
+  };
+  if (!payload.apiKey) delete payload.apiKey;
+
+  try {
+    setHint(refs.worldCupApiSettingsResult, "正在保存 API-Football 配置...");
+    setButtonBusy(refs.worldCupApiSettingsSubmitBtn, true, "保存中...");
+    const response = await api("/api/admin/sub2api/worldcup/api-football/settings", {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    fillWorldCupApiSettings(response);
+    const usage = response.usage || {};
+    setHint(refs.worldCupApiSettingsResult, `配置已保存。今日已用 ${usage.used ?? 0}，软上限 ${usage.softLimit ?? 80}，硬上限 ${usage.hardLimit ?? 100}。`);
+  } catch (error) {
+    setHint(refs.worldCupApiSettingsResult, `保存失败：${error.message}`);
+  } finally {
+    setButtonBusy(refs.worldCupApiSettingsSubmitBtn, false);
+  }
+}
+
 async function refreshSub2ApiConsole() {
+  await refreshWorldCupApiSettings().catch((error) => {
+    setHint(refs.worldCupApiSettingsResult, `加载 API-Football 配置失败：${error.message}`);
+  });
   await refreshSub2ApiConnections().catch((error) => {
     if (refs.sub2apiConnectionList) refs.sub2apiConnectionList.innerHTML = `<p class="hint centered">加载连接失败：${escapeHtml(error.message)}</p>`;
   });
@@ -2353,7 +2445,8 @@ async function refreshWorldCupMatches() {
       label: "比赛",
       render: (item) => `
         <strong>${escapeHtml(getWorldCupMatchTitle(item))}</strong><br/>
-        <span style="font-size:12px;color:var(--muted)">${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""}</span>
+        <span style="font-size:12px;color:var(--muted)">${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""}</span><br/>
+        <span class="hint">${escapeHtml(item.source || "manual")}${item.apiFixtureId ? ` · fixture ${escapeHtml(item.apiFixtureId)}` : ""}</span>
       `
     },
     {
@@ -2366,7 +2459,11 @@ async function refreshWorldCupMatches() {
     },
     {
       label: "状态",
-      render: (item) => `${renderStatus(item.status)}${item.bettingOpen ? `<br/><span class="hint">可下注</span>` : ""}`
+      render: (item) => `
+        ${renderStatus(item.status)}${item.bettingOpen ? `<br/><span class="hint">${escapeHtml(item.bettingPhaseLabel || "可下注")}</span>` : ""}
+        ${item.apiStatusShort ? `<br/><span class="hint">API ${escapeHtml(item.apiStatusShort)}${item.apiElapsed ? ` · ${escapeHtml(item.apiElapsed)}'` : ""}</span>` : ""}
+        ${item.apiLastSyncedAt ? `<br/><span class="hint">${escapeHtml(formatWorldCupTime(item.apiLastSyncedAt))}</span>` : ""}
+      `
     },
     {
       label: "比分",
@@ -2381,6 +2478,7 @@ async function refreshWorldCupMatches() {
           <div>主胜 ${escapeHtml(formatWorldCupAmount(item.odds?.home))}</div>
           <div>平局 ${escapeHtml(formatWorldCupAmount(item.odds?.draw))}</div>
           <div>客胜 ${escapeHtml(formatWorldCupAmount(item.odds?.away))}</div>
+          ${item.oddsLastSyncedAt ? `<div class="hint">${escapeHtml(formatWorldCupTime(item.oddsLastSyncedAt))}</div>` : ""}
         </div>
       `
     },
@@ -2684,6 +2782,20 @@ if (refs.sub2apiOrderRefreshBtn) {
     refreshSub2ApiOrders().catch((error) => setHint(refs.sub2apiOrderResult, `查询失败：${error.message}`));
   });
 }
+
+if (refs.worldCupApiSettingsForm) {
+  refs.worldCupApiSettingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveWorldCupApiSettings().catch(() => {});
+  });
+}
+
+if (refs.worldCupApiSettingsRefreshBtn) {
+  refs.worldCupApiSettingsRefreshBtn.addEventListener("click", () => {
+    refreshWorldCupApiSettings().catch((error) => setHint(refs.worldCupApiSettingsResult, `刷新失败：${error.message}`));
+  });
+}
+
 if (refs.worldCupMatchForm) {
   refs.worldCupMatchForm.addEventListener("submit", (event) => {
     event.preventDefault();

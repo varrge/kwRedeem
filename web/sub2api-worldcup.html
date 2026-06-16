@@ -490,6 +490,12 @@
         refund_failed: "退款失败"
       };
 
+      const DISPLAY_ROLE_LABELS = {
+        current: "当前赛事",
+        next: "下一场",
+        preview: "下下场"
+      };
+
       function escapeHtml(value) {
         return String(value ?? "")
           .replaceAll("&", "&amp;")
@@ -557,7 +563,7 @@
           state.sessionToken
           && match
           && match.bettingOpen
-          && !match.myBet
+          && !match.myBetForCurrentPhase
           && state.selectedPrediction
           && Number.isFinite(stake)
           && stake >= Number(match.minStake)
@@ -582,10 +588,15 @@
       function renderSummary(payload) {
         const matches = payload.matches || [];
         const bets = payload.bets || [];
-        refs.openCount.textContent = matches.filter((item) => item.bettingOpen && !item.myBet).length;
+        refs.openCount.textContent = matches.filter((item) => item.bettingOpen && !item.myBetForCurrentPhase).length;
         refs.betCount.textContent = bets.length;
         refs.payoutValue.textContent = formatAmount(bets.reduce((sum, item) => sum + Number(item.payout || 0), 0));
         refs.ruleLine.textContent = payload.settings?.ruleText || "";
+      }
+
+      function renderBetLine(bet) {
+        if (!bet) return "";
+        return `<div class="hint">${escapeHtml(bet.phaseLabel || "")}已选 ${escapeHtml(bet.predictionLabel)}，投注 ${escapeHtml(formatAmount(bet.stake))}，状态 ${escapeHtml(statusLabel(bet.status))}</div>`;
       }
 
       function renderMatches(matches) {
@@ -594,23 +605,28 @@
           return;
         }
         refs.matchList.innerHTML = matches.map((item) => {
-          const disabled = !item.bettingOpen || item.myBet;
-          const myBet = item.myBet ? `
-            <div class="hint">已选 ${escapeHtml(item.myBet.predictionLabel)}，投注 ${escapeHtml(formatAmount(item.myBet.stake))}，状态 ${escapeHtml(statusLabel(item.myBet.status))}</div>
-          ` : "";
+          const disabled = !item.bettingOpen || item.myBetForCurrentPhase;
+          const betLines = [
+            renderBetLine(item.myBets?.preMatch),
+            renderBetLine(item.myBets?.halftime)
+          ].filter(Boolean).join("");
           const score = item.homeScore === null || item.homeScore === undefined
             ? ""
             : `<div class="hint">比分 ${escapeHtml(item.homeScore)} - ${escapeHtml(item.awayScore)} · ${escapeHtml(item.resultLabel || "-")}</div>`;
+          const role = DISPLAY_ROLE_LABELS[item.displayRole] || "";
+          const phaseText = item.bettingOpen
+            ? item.bettingPhaseLabel
+            : (item.bettingClosedReason || statusLabel(item.status));
           return `
             <article class="match-card">
               <div class="match-top">
                 <div>
                   <div class="teams">${escapeHtml(item.homeTeam)} <span class="hint">vs</span> ${escapeHtml(item.awayTeam)}</div>
-                  <div class="meta">${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""} · ${escapeHtml(formatTime(item.kickoffAt))}</div>
-                  ${myBet}
+                  <div class="meta">${role ? `${escapeHtml(role)} · ` : ""}${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""} · ${escapeHtml(formatTime(item.kickoffAt))}</div>
+                  ${betLines}
                   ${score}
                 </div>
-                <span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabel(item.status))}</span>
+                <span class="badge ${item.bettingOpen ? "open" : escapeHtml(item.status)}">${escapeHtml(phaseText)}</span>
               </div>
               <div class="odds-grid">
                 ${["home", "draw", "away"].map((prediction) => `
@@ -642,7 +658,7 @@
           ? formatAmount(stake * state.selectedOdds)
           : "-";
         refs.slipStatus.textContent = match
-          ? `${formatAmount(match.minStake)} - ${formatAmount(match.maxStake)}`
+          ? `${match.bettingPhaseLabel || statusLabel(match.status)} · ${formatAmount(match.minStake)} - ${formatAmount(match.maxStake)}`
           : "未选择比赛";
         if (match) {
           refs.stakeInput.min = match.minStake;
@@ -661,7 +677,7 @@
           <article class="history-item">
             <div>
               <strong>${escapeHtml(item.match ? `${item.match.homeTeam} vs ${item.match.awayTeam}` : item.matchId)}</strong>
-              <span>${escapeHtml(item.predictionLabel)} · 投注 ${escapeHtml(formatAmount(item.stake))} × ${escapeHtml(formatAmount(item.odds))} · ${escapeHtml(statusLabel(item.status))}</span>
+              <span>${escapeHtml(item.phaseLabel || "")} · ${escapeHtml(item.predictionLabel)} · 投注 ${escapeHtml(formatAmount(item.stake))} × ${escapeHtml(formatAmount(item.odds))} · ${escapeHtml(statusLabel(item.status))}</span>
             </div>
             <div class="amount">${escapeHtml(formatAmount(item.payout))}</div>
           </article>
@@ -751,7 +767,8 @@
         const match = getSelectedMatch();
         if (!match || !canSubmit()) return;
         const stake = Number(refs.stakeInput.value);
-        const message = `确认投注 ${match.homeTeam} vs ${match.awayTeam}：${predictionLabel(state.selectedPrediction)}，金额 ${formatAmount(stake)}？`;
+        const phasePrefix = match.bettingPhaseLabel ? `${match.bettingPhaseLabel}，` : "";
+        const message = `确认投注 ${match.homeTeam} vs ${match.awayTeam}：${phasePrefix}${predictionLabel(state.selectedPrediction)}，金额 ${formatAmount(stake)}？`;
         if (!window.confirm(message)) return;
 
         try {

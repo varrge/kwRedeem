@@ -599,6 +599,7 @@ function createSchema(db) {
       api_last_synced_at TEXT,
       odds_last_synced_at TEXT,
       halftime_betting_opened_at TEXT,
+      auto_settle_attempted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       settled_at TEXT
@@ -633,6 +634,21 @@ function createSchema(db) {
       hard_limit INTEGER NOT NULL DEFAULT 100,
       emergency_used INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS api_football_settings (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      api_key TEXT,
+      base_url TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io',
+      worldcup_league_id INTEGER NOT NULL DEFAULT 1,
+      worldcup_season INTEGER NOT NULL DEFAULT 2026,
+      timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      daily_soft_limit INTEGER NOT NULL DEFAULT 80,
+      daily_hard_limit INTEGER NOT NULL DEFAULT 100,
+      sync_interval_ms INTEGER NOT NULL DEFAULT 60000,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS api_football_request_logs (
@@ -707,7 +723,19 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "api_last_synced_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "odds_last_synced_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "halftime_betting_opened_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
+  ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "api_football_settings", "api_key", "TEXT");
+  ensureColumn(db, "api_football_settings", "base_url", "TEXT NOT NULL DEFAULT 'https://v3.football.api-sports.io'");
+  ensureColumn(db, "api_football_settings", "worldcup_league_id", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "api_football_settings", "worldcup_season", "INTEGER NOT NULL DEFAULT 2026");
+  ensureColumn(db, "api_football_settings", "timezone", "TEXT NOT NULL DEFAULT 'Asia/Shanghai'");
+  ensureColumn(db, "api_football_settings", "daily_soft_limit", "INTEGER NOT NULL DEFAULT 80");
+  ensureColumn(db, "api_football_settings", "daily_hard_limit", "INTEGER NOT NULL DEFAULT 100");
+  ensureColumn(db, "api_football_settings", "sync_interval_ms", "INTEGER NOT NULL DEFAULT 60000");
+  ensureColumn(db, "api_football_settings", "updated_at", "TEXT");
+  ensureColumn(db, "api_football_settings", "updated_by", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -1171,6 +1199,15 @@ function seedDefaults(db) {
   db.prepare(`
     INSERT OR IGNORE INTO quota_settings (id, low_stock_threshold, updated_at)
     VALUES ('default', 5, ?)
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO api_football_settings (
+      id, enabled, api_key, base_url, worldcup_league_id, worldcup_season,
+      timezone, daily_soft_limit, daily_hard_limit, sync_interval_ms, updated_at, updated_by
+    )
+    VALUES ('default', 0, NULL, 'https://v3.football.api-sports.io', 1, 2026,
+            'Asia/Shanghai', 80, 100, 60000, ?, 'system')
   `).run(new Date().toISOString());
 
   db.prepare(`

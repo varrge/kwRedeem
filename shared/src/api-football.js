@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { env } from "./env.js";
+import { decryptText } from "./secure.js";
 import {
   getSub2ApiWorldCupResult,
   isSub2ApiWorldCupApiStatusCancelled,
@@ -11,6 +11,17 @@ import {
 } from "./sub2api.js";
 
 const DEFAULT_TIMEOUT_MS = 12000;
+
+export const DEFAULT_API_FOOTBALL_SETTINGS = Object.freeze({
+  enabled: false,
+  baseUrl: "https://v3.football.api-sports.io",
+  worldCupLeagueId: 1,
+  worldCupSeason: 2026,
+  timezone: "Asia/Shanghai",
+  dailySoftLimit: 80,
+  dailyHardLimit: 100,
+  syncIntervalMs: 60000
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -43,9 +54,76 @@ function normalizeApiFootballLimit(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-export function getApiFootballUsageDate(date = new Date(), timezone = env.apiFootballTimezone) {
+function normalizeApiFootballPositiveInteger(value, fallback) {
+  const number = Math.floor(Number(value));
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function maskApiFootballKey(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.length <= 10) return `${normalized.slice(0, 2)}***`;
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+}
+
+export function normalizeApiFootballSettings(row = null, { includeApiKey = false } = {}) {
+  const encryptedApiKey = String(row?.api_key || "").trim();
+  let apiKey = "";
+  if (includeApiKey && encryptedApiKey) {
+    try {
+      apiKey = decryptText(encryptedApiKey);
+    } catch {
+      apiKey = "";
+    }
+  }
+
+  return {
+    enabled: Boolean(Number(row?.enabled ?? DEFAULT_API_FOOTBALL_SETTINGS.enabled)),
+    hasApiKey: Boolean(encryptedApiKey),
+    apiKey,
+    apiKeyMasked: includeApiKey ? maskApiFootballKey(apiKey) : (encryptedApiKey ? "已配置" : ""),
+    baseUrl: String(row?.base_url || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl).trim(),
+    worldCupLeagueId: normalizeApiFootballPositiveInteger(row?.worldcup_league_id, DEFAULT_API_FOOTBALL_SETTINGS.worldCupLeagueId),
+    worldCupSeason: normalizeApiFootballPositiveInteger(row?.worldcup_season, DEFAULT_API_FOOTBALL_SETTINGS.worldCupSeason),
+    timezone: String(row?.timezone || DEFAULT_API_FOOTBALL_SETTINGS.timezone).trim(),
+    dailySoftLimit: normalizeApiFootballLimit(row?.daily_soft_limit, DEFAULT_API_FOOTBALL_SETTINGS.dailySoftLimit),
+    dailyHardLimit: Math.max(
+      normalizeApiFootballLimit(row?.daily_soft_limit, DEFAULT_API_FOOTBALL_SETTINGS.dailySoftLimit),
+      normalizeApiFootballLimit(row?.daily_hard_limit, DEFAULT_API_FOOTBALL_SETTINGS.dailyHardLimit)
+    ),
+    syncIntervalMs: Math.max(
+      30000,
+      normalizeApiFootballPositiveInteger(row?.sync_interval_ms, DEFAULT_API_FOOTBALL_SETTINGS.syncIntervalMs)
+    ),
+    updatedAt: row?.updated_at || null,
+    updatedBy: row?.updated_by || null
+  };
+}
+
+export function getApiFootballSettings(db, options = {}) {
+  const row = db.prepare("SELECT * FROM api_football_settings WHERE id = 'default'").get();
+  return normalizeApiFootballSettings(row, options);
+}
+
+function getResolvedApiFootballSettings(db, settings = null, { includeApiKey = true } = {}) {
+  if (settings) {
+    return {
+      ...DEFAULT_API_FOOTBALL_SETTINGS,
+      ...settings,
+      enabled: Boolean(settings.enabled),
+      hasApiKey: Boolean(settings.hasApiKey || settings.apiKey),
+      dailyHardLimit: Math.max(
+        normalizeApiFootballLimit(settings.dailySoftLimit, DEFAULT_API_FOOTBALL_SETTINGS.dailySoftLimit),
+        normalizeApiFootballLimit(settings.dailyHardLimit, DEFAULT_API_FOOTBALL_SETTINGS.dailyHardLimit)
+      )
+    };
+  }
+  return getApiFootballSettings(db, { includeApiKey });
+}
+
+export function getApiFootballUsageDate(date = new Date(), timezone = DEFAULT_API_FOOTBALL_SETTINGS.timezone) {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone || "Asia/Shanghai",
+    timeZone: timezone || DEFAULT_API_FOOTBALL_SETTINGS.timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -55,16 +133,18 @@ export function getApiFootballUsageDate(date = new Date(), timezone = env.apiFoo
 }
 
 export function getApiFootballQuotaSnapshot(db, {
-  date = getApiFootballUsageDate(),
-  softLimit = env.apiFootballDailySoftLimit,
-  hardLimit = env.apiFootballDailyHardLimit
+  date = null,
+  softLimit = DEFAULT_API_FOOTBALL_SETTINGS.dailySoftLimit,
+  hardLimit = DEFAULT_API_FOOTBALL_SETTINGS.dailyHardLimit,
+  timezone = DEFAULT_API_FOOTBALL_SETTINGS.timezone
 } = {}) {
+  const usageDate = date || getApiFootballUsageDate(new Date(), timezone);
   const soft = normalizeApiFootballLimit(softLimit, 80);
   const hard = Math.max(soft, normalizeApiFootballLimit(hardLimit, 100));
-  const row = db.prepare("SELECT * FROM api_football_daily_usage WHERE usage_date = ?").get(date);
+  const row = db.prepare("SELECT * FROM api_football_daily_usage WHERE usage_date = ?").get(usageDate);
   const used = Number(row?.used || 0);
   return {
-    date,
+    date: usageDate,
     used,
     softLimit: Number(row?.soft_limit || soft),
     hardLimit: Number(row?.hard_limit || hard),
@@ -79,8 +159,8 @@ export function reserveApiFootballRequest(db, {
   params = {},
   priority = "normal",
   date = getApiFootballUsageDate(),
-  softLimit = env.apiFootballDailySoftLimit,
-  hardLimit = env.apiFootballDailyHardLimit
+  softLimit = DEFAULT_API_FOOTBALL_SETTINGS.dailySoftLimit,
+  hardLimit = DEFAULT_API_FOOTBALL_SETTINGS.dailyHardLimit
 }) {
   const soft = normalizeApiFootballLimit(softLimit, 80);
   const hard = Math.max(soft, normalizeApiFootballLimit(hardLimit, 100));
@@ -150,8 +230,8 @@ export function markApiFootballRequestLog(db, logId, { status = null, errorMessa
   `).run(status, errorMessage || null, logId);
 }
 
-export function buildApiFootballUrl(endpoint, params = {}, baseUrl = env.apiFootballBaseUrl) {
-  const normalizedBase = String(baseUrl || "https://v3.football.api-sports.io").replace(/\/+$/, "");
+export function buildApiFootballUrl(endpoint, params = {}, baseUrl = DEFAULT_API_FOOTBALL_SETTINGS.baseUrl) {
+  const normalizedBase = String(baseUrl || DEFAULT_API_FOOTBALL_SETTINGS.baseUrl).replace(/\/+$/, "");
   const normalizedEndpoint = `/${String(endpoint || "").replace(/^\/+/, "")}`;
   const url = new URL(`${normalizedBase}${normalizedEndpoint}`);
   for (const [key, value] of Object.entries(params || {})) {
@@ -164,22 +244,33 @@ export function buildApiFootballUrl(endpoint, params = {}, baseUrl = env.apiFoot
 export async function fetchApiFootballJson(db, endpoint, params = {}, {
   priority = "normal",
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  apiKey = env.apiFootballKey,
-  baseUrl = env.apiFootballBaseUrl
+  settings = null,
+  apiKey = null,
+  baseUrl = null
 } = {}) {
-  if (!apiKey) {
-    const error = new Error("未配置 API_FOOTBALL_KEY，跳过 API-Football 同步");
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
+  const resolvedApiKey = String(apiKey ?? resolvedSettings.apiKey ?? "").trim();
+  if (!resolvedApiKey) {
+    const error = new Error("未配置 API-Football API Key，跳过 API-Football 同步");
     error.code = "API_FOOTBALL_KEY_MISSING";
     throw error;
   }
 
-  const reservation = reserveApiFootballRequest(db, { endpoint, params, priority });
-  const url = buildApiFootballUrl(endpoint, params, baseUrl);
+  const date = getApiFootballUsageDate(new Date(), resolvedSettings.timezone);
+  const reservation = reserveApiFootballRequest(db, {
+    endpoint,
+    params,
+    priority,
+    date,
+    softLimit: resolvedSettings.dailySoftLimit,
+    hardLimit: resolvedSettings.dailyHardLimit
+  });
+  const url = buildApiFootballUrl(endpoint, params, baseUrl ?? resolvedSettings.baseUrl);
   try {
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
-        "x-apisports-key": apiKey
+        "x-apisports-key": resolvedApiKey
       },
       signal: AbortSignal.timeout(timeoutMs)
     });
@@ -205,28 +296,42 @@ export async function fetchApiFootballJson(db, endpoint, params = {}, {
 export async function fetchApiFootballWorldCupFixtures(db, {
   next = null,
   fixtureId = null,
-  priority = "normal"
+  date = null,
+  priority = "normal",
+  settings = null
 } = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
   const params = {
-    league: env.apiFootballWorldCupLeagueId,
-    season: env.apiFootballWorldCupSeason,
-    timezone: env.apiFootballTimezone
+    league: resolvedSettings.worldCupLeagueId,
+    season: resolvedSettings.worldCupSeason,
+    timezone: resolvedSettings.timezone
   };
   if (next) params.next = next;
   if (fixtureId) params.id = fixtureId;
-  return fetchApiFootballJson(db, "/fixtures", params, { priority });
+  if (date) params.date = date;
+  return fetchApiFootballJson(db, "/fixtures", params, { priority, settings: resolvedSettings });
 }
 
 export async function fetchApiFootballWorldCupOdds(db, {
   fixtureId,
-  priority = "normal"
+  priority = "normal",
+  settings = null
 } = {}) {
+  const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
   const params = {
-    league: env.apiFootballWorldCupLeagueId,
-    season: env.apiFootballWorldCupSeason,
+    league: resolvedSettings.worldCupLeagueId,
+    season: resolvedSettings.worldCupSeason,
     fixture: fixtureId
   };
-  return fetchApiFootballJson(db, "/odds", params, { priority });
+  return fetchApiFootballJson(db, "/odds", params, { priority, settings: resolvedSettings });
+}
+
+export async function fetchApiFootballWorldCupLiveOdds(db, {
+  fixtureId,
+  priority = "emergency",
+  settings = null
+} = {}) {
+  return fetchApiFootballJson(db, "/odds/live", { fixture: fixtureId }, { priority, settings });
 }
 
 export function parseApiFootballFixture(item, nowMs = Date.now()) {

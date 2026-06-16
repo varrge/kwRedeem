@@ -27,15 +27,20 @@ import {
   countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
+  getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
   normalizeSub2ApiBaseUrl,
   normalizeSub2ApiAmount,
   normalizeSub2ApiPositiveInteger,
   reserveSub2ApiInvite,
+  roundSub2ApiWorldCupAmount,
   sub2apiConnectionStatuses,
   sub2apiInviteStatuses,
   sub2apiSubscriptionOrderStatuses,
   sub2apiSubscriptionPlanStatuses,
+  sub2apiWorldCupBetStatuses,
+  sub2apiWorldCupMatchStatuses,
+  sub2apiWorldCupPredictions,
   verifySub2ApiSsoToken
 } from "../../shared/src/sub2api.js";
 import {
@@ -78,6 +83,14 @@ const SUB2API_IMAGE_MODELS = Object.freeze(["gpt-image-2", "gpt-image-1.5", "gpt
 const SUB2API_IMAGE_QUALITIES = Object.freeze(["auto", "low", "medium", "high"]);
 const SUB2API_IMAGE_FORMATS = Object.freeze(["png", "webp", "jpeg"]);
 const SUB2API_IMAGE_ASPECT_RATIOS = Object.freeze(["auto", "1:1", "16:9", "4:3", "3:4", "9:16"]);
+const SUB2API_WORLDCUP_DEFAULT_MIN_STAKE = 0.1;
+const SUB2API_WORLDCUP_DEFAULT_MAX_STAKE = 2;
+const SUB2API_WORLDCUP_MAX_ADMIN_STAKE = 100;
+const SUB2API_WORLDCUP_DEFAULT_ODDS = Object.freeze({
+  home: 1.8,
+  draw: 3.2,
+  away: 1.8
+});
 
 const updateState = {
   status: "idle",
@@ -1878,7 +1891,7 @@ async function tryAssignSub2ApiDedicatedGroup(connection, userId, sourceGroupId,
   });
 }
 
-async function getSub2ApiIdentityFromAccessToken(connection, accessToken) {
+async function getSub2ApiIdentityFromAccessToken(connection, accessToken, expectedUserId = "") {
   const token = String(accessToken || "").trim();
   if (!token) {
     throw new Error("缺少 Sub2api 登录 token");
@@ -1891,7 +1904,12 @@ async function getSub2ApiIdentityFromAccessToken(connection, accessToken) {
 
   const payload = unwrapSub2ApiRemoteData(result.json);
   try {
-    return extractSub2ApiIdentity(payload);
+    const identity = extractSub2ApiIdentity(payload);
+    const normalizedExpectedUserId = String(expectedUserId || "").trim();
+    if (normalizedExpectedUserId && normalizedExpectedUserId !== identity.userId) {
+      throw new Error("Sub2api 登录 token 与当前用户不匹配");
+    }
+    return identity;
   } catch (error) {
     throw new Error(error.message || "Sub2api 当前用户信息无效");
   }
@@ -2709,6 +2727,743 @@ async function runSub2ApiImageJob(job, params) {
   }
 }
 
+function signSub2ApiWorldCupSessionToken(connection, identity) {
+  return jwt.sign({
+    scope: "sub2api_worldcup",
+    connectionId: connection.id,
+    sub2apiUserId: identity.userId,
+    email: identity.email || "",
+    username: identity.username || ""
+  }, env.jwtSecret, { expiresIn: "30m" });
+}
+
+async function requireSub2ApiWorldCupSession(request, reply) {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return reply.code(401).send({ message: "缺少 Sub2api 竞猜会话 token" });
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+  try {
+    const payload = jwt.verify(token, env.jwtSecret);
+    if (payload?.scope !== "sub2api_worldcup" || !payload.connectionId || !payload.sub2apiUserId) {
+      return reply.code(401).send({ message: "Sub2api 竞猜会话无效" });
+    }
+    request.sub2apiWorldCup = {
+      connectionId: String(payload.connectionId),
+      userId: String(payload.sub2apiUserId),
+      email: String(payload.email || ""),
+      username: String(payload.username || "")
+    };
+  } catch {
+    return reply.code(401).send({ message: "Sub2api 竞猜会话已失效" });
+  }
+}
+
+function getSub2ApiWorldCupConnection(connectionId) {
+  const connection = getSub2ApiConnectionById(connectionId);
+  if (!connection) {
+    const error = new Error("Sub2api 连接不存在或已删除");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    const error = new Error("Sub2api 连接已停用");
+    error.statusCode = 403;
+    throw error;
+  }
+  return connection;
+}
+
+function getSub2ApiWorldCupPredictionLabel(prediction) {
+  if (prediction === sub2apiWorldCupPredictions.home) return "主胜";
+  if (prediction === sub2apiWorldCupPredictions.away) return "客胜";
+  if (prediction === sub2apiWorldCupPredictions.draw) return "平局";
+  return prediction || "-";
+}
+
+function getSub2ApiWorldCupBetOdds(match, prediction) {
+  if (prediction === sub2apiWorldCupPredictions.home) return Number(match.odds_home);
+  if (prediction === sub2apiWorldCupPredictions.away) return Number(match.odds_away);
+  if (prediction === sub2apiWorldCupPredictions.draw) return Number(match.odds_draw);
+  throw new Error("竞猜选项无效");
+}
+
+function isSub2ApiWorldCupMatchBettingOpen(match) {
+  if (!match || match.status !== sub2apiWorldCupMatchStatuses.open) return false;
+  const kickoffMs = new Date(match.kickoff_at).getTime();
+  return Number.isFinite(kickoffMs) && kickoffMs > Date.now();
+}
+
+function serializeSub2ApiWorldCupMatch(row, userBet = null) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    connectionId: row.connection_id,
+    connectionName: row.connection_name || null,
+    stage: row.stage || "",
+    groupName: row.group_name || "",
+    homeTeam: row.home_team,
+    awayTeam: row.away_team,
+    kickoffAt: row.kickoff_at,
+    status: row.status,
+    homeScore: row.home_score,
+    awayScore: row.away_score,
+    result: row.result || "",
+    resultLabel: getSub2ApiWorldCupPredictionLabel(row.result),
+    odds: {
+      home: Number(row.odds_home),
+      draw: Number(row.odds_draw),
+      away: Number(row.odds_away)
+    },
+    minStake: Number(row.min_stake),
+    maxStake: Number(row.max_stake),
+    note: row.note || "",
+    bettingOpen: isSub2ApiWorldCupMatchBettingOpen(row),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    settledAt: row.settled_at || null,
+    myBet: userBet ? serializeSub2ApiWorldCupBet(userBet) : null
+  };
+}
+
+function serializeSub2ApiWorldCupBet(row) {
+  if (!row) return null;
+  const item = {
+    id: row.id,
+    requestId: row.request_id,
+    connectionId: row.connection_id,
+    matchId: row.match_id,
+    userId: row.sub2api_user_id,
+    email: row.email || "",
+    username: row.username || "",
+    prediction: row.prediction,
+    predictionLabel: getSub2ApiWorldCupPredictionLabel(row.prediction),
+    stake: Number(row.stake),
+    odds: Number(row.odds),
+    status: row.status,
+    payout: Number(row.payout || 0),
+    errorMessage: row.error_message || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    settledAt: row.settled_at || null
+  };
+  if (row.home_team || row.away_team) {
+    item.match = {
+      id: row.match_id,
+      stage: row.stage || "",
+      homeTeam: row.home_team || "",
+      awayTeam: row.away_team || "",
+      kickoffAt: row.kickoff_at || "",
+      status: row.match_status || row.status || "",
+      homeScore: row.home_score,
+      awayScore: row.away_score,
+      result: row.result || ""
+    };
+  }
+  return item;
+}
+
+function serializeSub2ApiWorldCupRemoteResult(result) {
+  try {
+    return JSON.stringify({
+      status: result?.status || 0,
+      json: result?.json ?? null,
+      text: result?.json ? undefined : String(result?.text || "").slice(0, 1000)
+    });
+  } catch {
+    return null;
+  }
+}
+
+function assertSub2ApiRemoteEnvelopeOk(result) {
+  const json = result?.json;
+  if (json && typeof json === "object") {
+    if (json.code !== undefined && Number(json.code) !== 0) {
+      throw new Error(getSub2ApiRemoteMessage(result));
+    }
+    if (json.success === false || json.ok === false) {
+      throw new Error(getSub2ApiRemoteMessage(result));
+    }
+  }
+}
+
+async function getSub2ApiWorldCupRemoteUser(connection, userId) {
+  const result = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(userId)}`);
+  assertSub2ApiRemoteEnvelopeOk(result);
+  const payload = unwrapSub2ApiRemoteData(result.json);
+  return payload && typeof payload === "object" ? payload : {};
+}
+
+function getSub2ApiWorldCupRemoteBalance(user) {
+  const balance = Number(user?.balance ?? user?.user?.balance ?? user?.account?.balance);
+  return Number.isFinite(balance) ? balance : null;
+}
+
+async function adjustSub2ApiWorldCupBalance(connection, userId, {
+  amount,
+  operation,
+  notes,
+  idempotencyKey
+}) {
+  const result = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(userId)}/balance`, {
+    method: "POST",
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
+    body: {
+      balance: roundSub2ApiWorldCupAmount(amount),
+      operation,
+      notes
+    }
+  });
+  assertSub2ApiRemoteEnvelopeOk(result);
+  return result;
+}
+
+async function getSub2ApiWorldCupBalancePayload(connection, userId) {
+  try {
+    const user = await getSub2ApiWorldCupRemoteUser(connection, userId);
+    return {
+      balance: getSub2ApiWorldCupRemoteBalance(user),
+      balanceError: ""
+    };
+  } catch (error) {
+    return {
+      balance: null,
+      balanceError: error.message || "余额读取失败"
+    };
+  }
+}
+
+function getSub2ApiWorldCupUserBetMap(connectionId, userId) {
+  const rows = db.prepare(`
+    SELECT b.*
+    FROM sub2api_worldcup_bets b
+    WHERE b.connection_id = ?
+      AND b.sub2api_user_id = ?
+      AND b.status <> ?
+    ORDER BY b.created_at DESC
+  `).all(connectionId, userId, sub2apiWorldCupBetStatuses.debitFailed);
+  return new Map(rows.map((row) => [row.match_id, row]));
+}
+
+function getSub2ApiWorldCupPublicMatches(connectionId, userId) {
+  const bets = getSub2ApiWorldCupUserBetMap(connectionId, userId);
+  return db.prepare(`
+    SELECT m.*
+    FROM sub2api_worldcup_matches m
+    WHERE m.connection_id = ?
+    ORDER BY datetime(m.kickoff_at) ASC, m.created_at ASC
+  `).all(connectionId).map((row) => serializeSub2ApiWorldCupMatch(row, bets.get(row.id)));
+}
+
+function getSub2ApiWorldCupMyBets(connectionId, userId) {
+  return db.prepare(`
+    SELECT b.*, m.stage, m.home_team, m.away_team, m.kickoff_at, m.status AS match_status,
+           m.home_score, m.away_score, m.result
+    FROM sub2api_worldcup_bets b
+    LEFT JOIN sub2api_worldcup_matches m ON m.id = b.match_id
+    WHERE b.connection_id = ?
+      AND b.sub2api_user_id = ?
+      AND b.status <> ?
+    ORDER BY b.created_at DESC
+    LIMIT 50
+  `).all(connectionId, userId, sub2apiWorldCupBetStatuses.debitFailed).map(serializeSub2ApiWorldCupBet);
+}
+
+function getSub2ApiWorldCupLeaderboard(connectionId, limit = 20) {
+  const rows = db.prepare(`
+    SELECT sub2api_user_id, email, username,
+           COUNT(*) AS bet_count,
+           SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS win_count,
+           SUM(stake) AS total_stake,
+           SUM(payout) AS total_payout
+    FROM sub2api_worldcup_bets
+    WHERE connection_id = ?
+      AND status IN (?, ?, ?)
+    GROUP BY sub2api_user_id, email, username
+  `).all(
+    sub2apiWorldCupBetStatuses.won,
+    connectionId,
+    sub2apiWorldCupBetStatuses.placed,
+    sub2apiWorldCupBetStatuses.won,
+    sub2apiWorldCupBetStatuses.lost
+  );
+  return rows
+    .map((row) => ({
+      userId: row.sub2api_user_id,
+      email: row.email || "",
+      username: row.username || "",
+      betCount: Number(row.bet_count || 0),
+      winCount: Number(row.win_count || 0),
+      totalStake: roundSub2ApiWorldCupAmount(row.total_stake || 0),
+      totalPayout: roundSub2ApiWorldCupAmount(row.total_payout || 0),
+      net: roundSub2ApiWorldCupAmount((row.total_payout || 0) - (row.total_stake || 0))
+    }))
+    .sort((a, b) => b.net - a.net || b.totalPayout - a.totalPayout || a.betCount - b.betCount)
+    .slice(0, limit)
+    .map((item, index) => ({ ...item, rank: index + 1 }));
+}
+
+async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken = null) {
+  const balance = await getSub2ApiWorldCupBalancePayload(connection, identity.userId);
+  return {
+    sessionToken,
+    account: {
+      userId: identity.userId,
+      email: identity.email || "",
+      username: identity.username || ""
+    },
+    connection: {
+      id: connection.id,
+      name: connection.name,
+      baseUrl: connection.base_url
+    },
+    balance: balance.balance,
+    balanceError: balance.balanceError,
+    settings: {
+      minStake: SUB2API_WORLDCUP_DEFAULT_MIN_STAKE,
+      maxStake: SUB2API_WORLDCUP_DEFAULT_MAX_STAKE,
+      predictions: [
+        { value: sub2apiWorldCupPredictions.home, label: "主胜" },
+        { value: sub2apiWorldCupPredictions.draw, label: "平局" },
+        { value: sub2apiWorldCupPredictions.away, label: "客胜" }
+      ],
+      ruleText: "下注后立即扣除余额，结算命中后按赔率返还余额。仅限平台内不可提现余额/积分。"
+    },
+    matches: getSub2ApiWorldCupPublicMatches(connection.id, identity.userId),
+    bets: getSub2ApiWorldCupMyBets(connection.id, identity.userId),
+    leaderboard: getSub2ApiWorldCupLeaderboard(connection.id)
+  };
+}
+
+const sub2apiWorldCupMatchAdminSchema = z.object({
+  connectionId: z.string().trim().min(1),
+  stage: z.string().trim().max(80).optional().default(""),
+  groupName: z.string().trim().max(80).optional().default(""),
+  homeTeam: z.string().trim().min(1).max(80),
+  awayTeam: z.string().trim().min(1).max(80),
+  kickoffAt: z.string().trim().min(1),
+  status: z.enum([
+    sub2apiWorldCupMatchStatuses.open,
+    sub2apiWorldCupMatchStatuses.locked,
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  ]).optional().default(sub2apiWorldCupMatchStatuses.open),
+  oddsHome: z.coerce.number().min(1).max(50).optional().default(SUB2API_WORLDCUP_DEFAULT_ODDS.home),
+  oddsDraw: z.coerce.number().min(1).max(50).optional().default(SUB2API_WORLDCUP_DEFAULT_ODDS.draw),
+  oddsAway: z.coerce.number().min(1).max(50).optional().default(SUB2API_WORLDCUP_DEFAULT_ODDS.away),
+  minStake: z.coerce.number().min(0.01).max(SUB2API_WORLDCUP_MAX_ADMIN_STAKE).optional().default(SUB2API_WORLDCUP_DEFAULT_MIN_STAKE),
+  maxStake: z.coerce.number().min(0.01).max(SUB2API_WORLDCUP_MAX_ADMIN_STAKE).optional().default(SUB2API_WORLDCUP_DEFAULT_MAX_STAKE),
+  note: z.string().trim().max(500).optional().default("")
+});
+
+function parseSub2ApiWorldCupKickoff(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error("开赛时间不正确");
+  }
+  return date.toISOString();
+}
+
+function prepareSub2ApiWorldCupMatchPayload(body, { partial = false } = {}) {
+  const rawBody = getBodyObject(body);
+  const schema = partial ? sub2apiWorldCupMatchAdminSchema.partial() : sub2apiWorldCupMatchAdminSchema;
+  const parsed = schema.safeParse(rawBody);
+  if (!parsed.success) {
+    const error = new Error("比赛参数不正确");
+    error.statusCode = 400;
+    throw error;
+  }
+  const payload = parsed.data;
+  if (partial && rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
+    for (const key of [
+      "connectionId", "stage", "groupName", "homeTeam", "awayTeam", "kickoffAt",
+      "status", "oddsHome", "oddsDraw", "oddsAway", "minStake", "maxStake", "note"
+    ]) {
+      if (!Object.prototype.hasOwnProperty.call(rawBody, key)) {
+        delete payload[key];
+      }
+    }
+  }
+  if (payload.homeTeam && payload.awayTeam && payload.homeTeam === payload.awayTeam) {
+    const error = new Error("主队和客队不能相同");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (payload.kickoffAt) payload.kickoffAt = parseSub2ApiWorldCupKickoff(payload.kickoffAt);
+  if (payload.minStake !== undefined) payload.minStake = roundSub2ApiWorldCupAmount(payload.minStake);
+  if (payload.maxStake !== undefined) payload.maxStake = roundSub2ApiWorldCupAmount(payload.maxStake);
+  const minStake = payload.minStake ?? SUB2API_WORLDCUP_DEFAULT_MIN_STAKE;
+  const maxStake = payload.maxStake ?? SUB2API_WORLDCUP_DEFAULT_MAX_STAKE;
+  if (maxStake < minStake) {
+    const error = new Error("最高投注额不能小于最低投注额");
+    error.statusCode = 400;
+    throw error;
+  }
+  return payload;
+}
+
+function getSub2ApiWorldCupMatchById(matchId) {
+  return db.prepare(`
+    SELECT m.*, c.name AS connection_name
+    FROM sub2api_worldcup_matches m
+    LEFT JOIN sub2api_connections c ON c.id = m.connection_id
+    WHERE m.id = ?
+  `).get(matchId);
+}
+
+function getSub2ApiWorldCupActiveBet(matchId, userId) {
+  return db.prepare(`
+    SELECT *
+    FROM sub2api_worldcup_bets
+    WHERE match_id = ?
+      AND sub2api_user_id = ?
+      AND status NOT IN (?, ?)
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(
+    matchId,
+    userId,
+    sub2apiWorldCupBetStatuses.debitFailed,
+    sub2apiWorldCupBetStatuses.refunded
+  );
+}
+
+const sub2apiWorldCupBetSchema = z.object({
+  matchId: z.string().trim().min(1),
+  prediction: z.enum([
+    sub2apiWorldCupPredictions.home,
+    sub2apiWorldCupPredictions.draw,
+    sub2apiWorldCupPredictions.away
+  ]),
+  stake: z.coerce.number().min(0.01).max(SUB2API_WORLDCUP_MAX_ADMIN_STAKE)
+});
+
+async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
+  const parsed = sub2apiWorldCupBetSchema.safeParse(getBodyObject(body));
+  if (!parsed.success) {
+    const error = new Error("投注参数不正确");
+    error.statusCode = 400;
+    throw error;
+  }
+  const payload = parsed.data;
+  payload.stake = roundSub2ApiWorldCupAmount(payload.stake);
+
+  const match = db.prepare(`
+    SELECT *
+    FROM sub2api_worldcup_matches
+    WHERE id = ? AND connection_id = ?
+  `).get(payload.matchId, connection.id);
+  if (!match) {
+    const error = new Error("比赛不存在");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!isSub2ApiWorldCupMatchBettingOpen(match)) {
+    const error = new Error("该比赛已停止竞猜");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (payload.stake < Number(match.min_stake) || payload.stake > Number(match.max_stake)) {
+    const error = new Error(`投注额必须在 ${Number(match.min_stake)} 到 ${Number(match.max_stake)} 之间`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const odds = roundSub2ApiWorldCupAmount(getSub2ApiWorldCupBetOdds(match, payload.prediction));
+  const now = nowIso();
+  const betId = nanoid(16);
+  const requestId = `worldcup_${Date.now()}_${nanoid(8)}`;
+  const insertBet = db.transaction(() => {
+    const existing = getSub2ApiWorldCupActiveBet(match.id, identity.userId);
+    if (existing) {
+      const error = new Error("该比赛已经提交过竞猜");
+      error.statusCode = 409;
+      throw error;
+    }
+    db.prepare(`
+      INSERT INTO sub2api_worldcup_bets (
+        id, request_id, connection_id, match_id, sub2api_user_id, email, username,
+        prediction, stake, odds, status, payout, remote_debit_response,
+        remote_credit_response, error_message, created_at, updated_at, settled_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, NULL)
+    `).run(
+      betId,
+      requestId,
+      connection.id,
+      match.id,
+      identity.userId,
+      identity.email || null,
+      identity.username || null,
+      payload.prediction,
+      payload.stake,
+      odds,
+      sub2apiWorldCupBetStatuses.debiting,
+      now,
+      now
+    );
+  });
+  try {
+    insertBet();
+  } catch (error) {
+    if (error.statusCode) throw error;
+    if (String(error.message || "").toLowerCase().includes("unique")) {
+      const duplicate = new Error("该比赛已经提交过竞猜");
+      duplicate.statusCode = 409;
+      throw duplicate;
+    }
+    throw error;
+  }
+
+  try {
+    const remoteUser = await getSub2ApiWorldCupRemoteUser(connection, identity.userId);
+    const balance = getSub2ApiWorldCupRemoteBalance(remoteUser);
+    if (balance !== null && balance + 1e-9 < payload.stake) {
+      throw Object.assign(new Error(`余额不足，当前余额 ${balance}`), { statusCode: 402 });
+    }
+    const debitResult = await adjustSub2ApiWorldCupBalance(connection, identity.userId, {
+      amount: payload.stake,
+      operation: "subtract",
+      notes: `世界杯竞猜扣款：${match.home_team} vs ${match.away_team}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
+      idempotencyKey: `worldcup_bet_${betId}`
+    });
+    const updatedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_worldcup_bets
+      SET status = ?, remote_debit_response = ?, error_message = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(
+      sub2apiWorldCupBetStatuses.placed,
+      serializeSub2ApiWorldCupRemoteResult(debitResult),
+      updatedAt,
+      betId
+    );
+    createAuditLog({
+      action: "sub2api.worldcup.bet.place",
+      actor: "public",
+      resourceType: "sub2api_worldcup_bet",
+      resourceId: betId,
+      detail: {
+        connectionId: connection.id,
+        matchId: match.id,
+        sub2apiUserId: identity.userId,
+        prediction: payload.prediction,
+        stake: payload.stake,
+        odds
+      }
+    });
+  } catch (error) {
+    const updatedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_worldcup_bets
+      SET status = ?, error_message = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      sub2apiWorldCupBetStatuses.debitFailed,
+      error.message || "余额扣款失败",
+      updatedAt,
+      betId
+    );
+    throw error;
+  }
+
+  const row = db.prepare(`
+    SELECT b.*, m.stage, m.home_team, m.away_team, m.kickoff_at, m.status AS match_status,
+           m.home_score, m.away_score, m.result
+    FROM sub2api_worldcup_bets b
+    LEFT JOIN sub2api_worldcup_matches m ON m.id = b.match_id
+    WHERE b.id = ?
+  `).get(betId);
+  return serializeSub2ApiWorldCupBet(row);
+}
+
+async function settleSub2ApiWorldCupMatch(match, actor = "system") {
+  const connection = getSub2ApiWorldCupConnection(match.connection_id);
+  const result = getSub2ApiWorldCupResult(match.home_score, match.away_score);
+  const now = nowIso();
+  const bets = db.prepare(`
+    SELECT *
+    FROM sub2api_worldcup_bets
+    WHERE match_id = ?
+      AND status IN (?, ?)
+    ORDER BY created_at ASC
+  `).all(
+    match.id,
+    sub2apiWorldCupBetStatuses.placed,
+    sub2apiWorldCupBetStatuses.payoutFailed
+  );
+
+  const stats = {
+    total: bets.length,
+    won: 0,
+    lost: 0,
+    payoutFailed: 0,
+    payoutTotal: 0
+  };
+
+  for (const bet of bets) {
+    if (bet.prediction !== result) {
+      db.prepare(`
+        UPDATE sub2api_worldcup_bets
+        SET status = ?, payout = 0, settled_at = ?, updated_at = ?, error_message = NULL
+        WHERE id = ?
+      `).run(sub2apiWorldCupBetStatuses.lost, now, now, bet.id);
+      stats.lost += 1;
+      continue;
+    }
+
+    const payout = roundSub2ApiWorldCupAmount(Number(bet.stake) * Number(bet.odds));
+    try {
+      const creditResult = await adjustSub2ApiWorldCupBalance(connection, bet.sub2api_user_id, {
+        amount: payout,
+        operation: "add",
+        notes: `世界杯竞猜派奖：${match.home_team} ${match.home_score}-${match.away_score} ${match.away_team}，投注 ${bet.stake}，赔率 ${bet.odds}`,
+        idempotencyKey: `worldcup_payout_${bet.id}`
+      });
+      db.prepare(`
+        UPDATE sub2api_worldcup_bets
+        SET status = ?, payout = ?, remote_credit_response = ?, error_message = NULL,
+            settled_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        sub2apiWorldCupBetStatuses.won,
+        payout,
+        serializeSub2ApiWorldCupRemoteResult(creditResult),
+        now,
+        now,
+        bet.id
+      );
+      stats.won += 1;
+      stats.payoutTotal = roundSub2ApiWorldCupAmount(stats.payoutTotal + payout);
+    } catch (error) {
+      db.prepare(`
+        UPDATE sub2api_worldcup_bets
+        SET status = ?, payout = ?, error_message = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        sub2apiWorldCupBetStatuses.payoutFailed,
+        payout,
+        error.message || "派奖失败",
+        now,
+        bet.id
+      );
+      stats.payoutFailed += 1;
+    }
+  }
+
+  const finalStatus = stats.payoutFailed > 0
+    ? sub2apiWorldCupMatchStatuses.finished
+    : sub2apiWorldCupMatchStatuses.settled;
+  db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET status = ?, result = ?, settled_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(finalStatus, result, finalStatus === sub2apiWorldCupMatchStatuses.settled ? now : null, now, match.id);
+
+  createAuditLog({
+    action: "sub2api.worldcup.match.settle",
+    actor,
+    resourceType: "sub2api_worldcup_match",
+    resourceId: match.id,
+    detail: {
+      connectionId: match.connection_id,
+      result,
+      homeScore: match.home_score,
+      awayScore: match.away_score,
+      stats
+    }
+  });
+
+  return {
+    match: serializeSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(match.id)),
+    stats
+  };
+}
+
+async function cancelSub2ApiWorldCupMatch(match, actor = "system") {
+  if (match.status === sub2apiWorldCupMatchStatuses.settled) {
+    const error = new Error("已结算比赛不能取消");
+    error.statusCode = 409;
+    throw error;
+  }
+  const connection = getSub2ApiWorldCupConnection(match.connection_id);
+  const now = nowIso();
+  const bets = db.prepare(`
+    SELECT *
+    FROM sub2api_worldcup_bets
+    WHERE match_id = ?
+      AND status IN (?, ?, ?)
+    ORDER BY created_at ASC
+  `).all(
+    match.id,
+    sub2apiWorldCupBetStatuses.placed,
+    sub2apiWorldCupBetStatuses.payoutFailed,
+    sub2apiWorldCupBetStatuses.refundFailed
+  );
+
+  const stats = { total: bets.length, refunded: 0, refundFailed: 0 };
+  for (const bet of bets) {
+    try {
+      const refundResult = await adjustSub2ApiWorldCupBalance(connection, bet.sub2api_user_id, {
+        amount: Number(bet.stake),
+        operation: "add",
+        notes: `世界杯竞猜取消退款：${match.home_team} vs ${match.away_team}，投注 ${bet.stake}`,
+        idempotencyKey: `worldcup_refund_${bet.id}`
+      });
+      db.prepare(`
+        UPDATE sub2api_worldcup_bets
+        SET status = ?, payout = ?, remote_credit_response = ?, error_message = NULL,
+            settled_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        sub2apiWorldCupBetStatuses.refunded,
+        Number(bet.stake),
+        serializeSub2ApiWorldCupRemoteResult(refundResult),
+        now,
+        now,
+        bet.id
+      );
+      stats.refunded += 1;
+    } catch (error) {
+      db.prepare(`
+        UPDATE sub2api_worldcup_bets
+        SET status = ?, error_message = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        sub2apiWorldCupBetStatuses.refundFailed,
+        error.message || "退款失败",
+        now,
+        bet.id
+      );
+      stats.refundFailed += 1;
+    }
+  }
+
+  const status = stats.refundFailed > 0
+    ? sub2apiWorldCupMatchStatuses.locked
+    : sub2apiWorldCupMatchStatuses.cancelled;
+  db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(status, now, match.id);
+
+  createAuditLog({
+    action: "sub2api.worldcup.match.cancel",
+    actor,
+    resourceType: "sub2api_worldcup_match",
+    resourceId: match.id,
+    detail: { connectionId: match.connection_id, stats }
+  });
+
+  return {
+    match: serializeSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(match.id)),
+    stats
+  };
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -3098,7 +3853,9 @@ app.post("/api/public/support/cdkey-auth", async (request, reply) => {
 
 app.post("/api/public/sub2api/session", async (request, reply) => {
   const parsed = z.object({
-    sso: z.string().min(20)
+    sso: z.string().min(20),
+    accessToken: z.string().trim().optional().default(""),
+    userId: z.union([z.string(), z.number()]).optional().default("")
   }).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少 SSO token" });
@@ -3125,6 +3882,15 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
     const sessionToken = signSub2ApiSessionToken(connection, identity);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
+    if (parsed.data.accessToken && /缺少 user\.id/.test(String(error.message || ""))) {
+      try {
+        const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
+        const sessionToken = signSub2ApiSessionToken(connection, identity);
+        return buildSub2ApiPublicPayload(connection, identity, sessionToken);
+      } catch (tokenError) {
+        return reply.code(401).send({ message: tokenError.message || "Sub2api 登录 token 验证失败" });
+      }
+    }
     return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
   }
 });
@@ -3132,7 +3898,8 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
 app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
   const parsed = z.object({
     connectionId: z.string().trim().min(1),
-    accessToken: z.string().trim().min(20)
+    accessToken: z.string().trim().min(20),
+    userId: z.union([z.string(), z.number()]).optional().default("")
   }).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
@@ -3147,7 +3914,7 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
   }
 
   try {
-    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
+    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
     const sessionToken = signSub2ApiSessionToken(connection, identity);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
@@ -3178,6 +3945,103 @@ app.post("/api/public/sub2api/image/session-from-token", async (request, reply) 
     return buildSub2ApiImagePublicPayload(connection, identity, sessionToken);
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
+  }
+});
+
+app.post("/api/public/sub2api/worldcup/session", async (request, reply) => {
+  const parsed = z.object({
+    sso: z.string().min(20)
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少 SSO token" });
+  }
+
+  let selector;
+  try {
+    selector = decodeSub2ApiSsoSelector(parsed.data.sso);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  const connection = findSub2ApiConnectionBySelector(selector);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    const adminToken = decryptSub2ApiAdminToken(connection);
+    const { identity } = verifySub2ApiSsoToken(parsed.data.sso, adminToken);
+    const sessionToken = signSub2ApiWorldCupSessionToken(connection, identity);
+    return await buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
+  }
+});
+
+app.post("/api/public/sub2api/worldcup/session-from-token", async (request, reply) => {
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1),
+    accessToken: z.string().trim().min(20)
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
+  }
+
+  const connection = findSub2ApiConnectionBySelector(parsed.data.connectionId);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
+    const sessionToken = signSub2ApiWorldCupSessionToken(connection, identity);
+    return await buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
+  }
+});
+
+app.get("/api/public/sub2api/worldcup/bootstrap", { preHandler: requireSub2ApiWorldCupSession }, async (request, reply) => {
+  let connection;
+  try {
+    connection = getSub2ApiWorldCupConnection(request.sub2apiWorldCup.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  return await buildSub2ApiWorldCupPublicPayload(connection, {
+    userId: request.sub2apiWorldCup.userId,
+    email: request.sub2apiWorldCup.email,
+    username: request.sub2apiWorldCup.username
+  });
+});
+
+app.post("/api/public/sub2api/worldcup/bets", { preHandler: requireSub2ApiWorldCupSession }, async (request, reply) => {
+  let connection;
+  try {
+    connection = getSub2ApiWorldCupConnection(request.sub2apiWorldCup.connectionId);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  const identity = {
+    userId: request.sub2apiWorldCup.userId,
+    email: request.sub2apiWorldCup.email,
+    username: request.sub2apiWorldCup.username
+  };
+
+  try {
+    const bet = await placeSub2ApiWorldCupBet({ connection, identity, body: request.body });
+    const payload = await buildSub2ApiWorldCupPublicPayload(connection, identity);
+    return reply.code(201).send({ success: true, bet, ...payload });
+  } catch (error) {
+    return reply.code(error.statusCode || error.status || 400).send({ message: error.message || "竞猜提交失败" });
   }
 });
 
@@ -4443,6 +5307,301 @@ app.get("/api/admin/sub2api/subscription-orders", { preHandler: requireAdmin }, 
   `).all(...params, pageSize, offset);
   return {
     items: rows.map(serializeSub2ApiSubscriptionOrder),
+    total,
+    page,
+    pageSize
+  };
+});
+
+app.get("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, async (request) => {
+  const conditions = [];
+  const params = [];
+
+  const connectionId = String(request.query.connectionId || "").trim();
+  if (connectionId) {
+    conditions.push("m.connection_id = ?");
+    params.push(connectionId);
+  }
+
+  const status = String(request.query.status || "").trim();
+  const allowedStatuses = new Set(Object.values(sub2apiWorldCupMatchStatuses));
+  if (status && allowedStatuses.has(status)) {
+    conditions.push("m.status = ?");
+    params.push(status);
+  }
+
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const rows = db.prepare(`
+    SELECT m.*, c.name AS connection_name
+    FROM sub2api_worldcup_matches m
+    LEFT JOIN sub2api_connections c ON c.id = m.connection_id
+    ${whereSql}
+    ORDER BY datetime(m.kickoff_at) ASC, m.created_at ASC
+  `).all(...params);
+  return { items: rows.map((row) => serializeSub2ApiWorldCupMatch(row)) };
+});
+
+app.post("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, async (request, reply) => {
+  let payload;
+  try {
+    payload = prepareSub2ApiWorldCupMatchPayload(request.body);
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  const connection = getSub2ApiConnectionById(payload.connectionId);
+  if (!connection || connection.status === sub2apiConnectionStatuses.deleted) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const now = nowIso();
+  const id = nanoid(16);
+  db.prepare(`
+    INSERT INTO sub2api_worldcup_matches (
+      id, connection_id, stage, group_name, home_team, away_team, kickoff_at, status,
+      home_score, away_score, result, odds_home, odds_draw, odds_away, min_stake,
+      max_stake, note, created_at, updated_at, settled_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+  `).run(
+    id,
+    payload.connectionId,
+    payload.stage || null,
+    payload.groupName || null,
+    payload.homeTeam,
+    payload.awayTeam,
+    payload.kickoffAt,
+    payload.status,
+    roundSub2ApiWorldCupAmount(payload.oddsHome),
+    roundSub2ApiWorldCupAmount(payload.oddsDraw),
+    roundSub2ApiWorldCupAmount(payload.oddsAway),
+    payload.minStake,
+    payload.maxStake,
+    payload.note || null,
+    now,
+    now
+  );
+
+  createAuditLog({
+    action: "sub2api.worldcup.match.create",
+    actor: request.admin.username,
+    resourceType: "sub2api_worldcup_match",
+    resourceId: id,
+    detail: { connectionId: payload.connectionId, homeTeam: payload.homeTeam, awayTeam: payload.awayTeam }
+  });
+
+  return reply.code(201).send({ item: serializeSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(id)) });
+});
+
+app.patch("/api/admin/sub2api/worldcup/matches/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = getSub2ApiWorldCupMatchById(id);
+  if (!existing) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  if (existing.status === sub2apiWorldCupMatchStatuses.settled) {
+    return reply.code(409).send({ message: "已结算比赛不能直接编辑，请新建修正场次或手动处理投注记录" });
+  }
+
+  let payload;
+  try {
+    payload = prepareSub2ApiWorldCupMatchPayload(request.body, { partial: true });
+  } catch (error) {
+    return reply.code(error.statusCode || 400).send({ message: error.message });
+  }
+
+  const connectionId = payload.connectionId ?? existing.connection_id;
+  if (connectionId !== existing.connection_id) {
+    const betCount = db.prepare("SELECT COUNT(*) AS count FROM sub2api_worldcup_bets WHERE match_id = ?").get(id).count;
+    if (betCount > 0) {
+      return reply.code(409).send({ message: "已有投注记录，不能切换比赛连接" });
+    }
+  }
+  const connection = getSub2ApiConnectionById(connectionId);
+  if (!connection || connection.status === sub2apiConnectionStatuses.deleted) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const homeTeam = payload.homeTeam ?? existing.home_team;
+  const awayTeam = payload.awayTeam ?? existing.away_team;
+  if (homeTeam === awayTeam) {
+    return reply.code(400).send({ message: "主队和客队不能相同" });
+  }
+  const minStake = payload.minStake !== undefined ? payload.minStake : Number(existing.min_stake);
+  const maxStake = payload.maxStake !== undefined ? payload.maxStake : Number(existing.max_stake);
+  if (maxStake < minStake) {
+    return reply.code(400).send({ message: "最高投注额不能小于最低投注额" });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET connection_id = ?, stage = ?, group_name = ?, home_team = ?, away_team = ?,
+        kickoff_at = ?, status = ?, odds_home = ?, odds_draw = ?, odds_away = ?,
+        min_stake = ?, max_stake = ?, note = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    connectionId,
+    payload.stage ?? existing.stage,
+    payload.groupName ?? existing.group_name,
+    homeTeam,
+    awayTeam,
+    payload.kickoffAt ?? existing.kickoff_at,
+    payload.status ?? existing.status,
+    payload.oddsHome !== undefined ? roundSub2ApiWorldCupAmount(payload.oddsHome) : Number(existing.odds_home),
+    payload.oddsDraw !== undefined ? roundSub2ApiWorldCupAmount(payload.oddsDraw) : Number(existing.odds_draw),
+    payload.oddsAway !== undefined ? roundSub2ApiWorldCupAmount(payload.oddsAway) : Number(existing.odds_away),
+    minStake,
+    maxStake,
+    payload.note ?? existing.note,
+    now,
+    id
+  );
+
+  createAuditLog({
+    action: "sub2api.worldcup.match.update",
+    actor: request.admin.username,
+    resourceType: "sub2api_worldcup_match",
+    resourceId: id,
+    detail: { connectionId, status: payload.status ?? existing.status }
+  });
+
+  return { item: serializeSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(id)) };
+});
+
+app.delete("/api/admin/sub2api/worldcup/matches/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = getSub2ApiWorldCupMatchById(id);
+  if (!existing) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  const betCount = db.prepare("SELECT COUNT(*) AS count FROM sub2api_worldcup_bets WHERE match_id = ?").get(id).count;
+  if (betCount > 0) {
+    return reply.code(409).send({ message: "已有投注记录，不能删除；可以取消比赛并退款" });
+  }
+  db.prepare("DELETE FROM sub2api_worldcup_matches WHERE id = ?").run(id);
+  createAuditLog({
+    action: "sub2api.worldcup.match.delete",
+    actor: request.admin.username,
+    resourceType: "sub2api_worldcup_match",
+    resourceId: id
+  });
+  return { success: true, id };
+});
+
+app.post("/api/admin/sub2api/worldcup/matches/:id/settle", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = getSub2ApiWorldCupMatchById(id);
+  if (!existing) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  if (existing.status === sub2apiWorldCupMatchStatuses.settled) {
+    return reply.code(409).send({ message: "比赛已结算，不能重复结算" });
+  }
+  if (existing.status === sub2apiWorldCupMatchStatuses.cancelled) {
+    return reply.code(409).send({ message: "比赛已取消，不能结算" });
+  }
+
+  const parsed = z.object({
+    homeScore: z.coerce.number().int().min(0).max(99),
+    awayScore: z.coerce.number().int().min(0).max(99)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供有效比分" });
+  }
+
+  let result;
+  try {
+    result = getSub2ApiWorldCupResult(parsed.data.homeScore, parsed.data.awayScore);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    UPDATE sub2api_worldcup_matches
+    SET home_score = ?, away_score = ?, result = ?, status = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    parsed.data.homeScore,
+    parsed.data.awayScore,
+    result,
+    sub2apiWorldCupMatchStatuses.finished,
+    now,
+    id
+  );
+
+  try {
+    return await settleSub2ApiWorldCupMatch(getSub2ApiWorldCupMatchById(id), request.admin.username);
+  } catch (error) {
+    return reply.code(error.statusCode || 502).send({ message: error.message || "比赛结算失败" });
+  }
+});
+
+app.post("/api/admin/sub2api/worldcup/matches/:id/cancel", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const existing = getSub2ApiWorldCupMatchById(id);
+  if (!existing) {
+    return reply.code(404).send({ message: "比赛不存在" });
+  }
+  try {
+    return await cancelSub2ApiWorldCupMatch(existing, request.admin.username);
+  } catch (error) {
+    return reply.code(error.statusCode || 502).send({ message: error.message || "取消比赛失败" });
+  }
+});
+
+app.get("/api/admin/sub2api/worldcup/bets", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(200, Math.max(1, Math.floor(Number(request.query.pageSize) || 50)));
+  const offset = (page - 1) * pageSize;
+  const conditions = [];
+  const params = [];
+
+  const connectionId = String(request.query.connectionId || "").trim();
+  if (connectionId) {
+    conditions.push("b.connection_id = ?");
+    params.push(connectionId);
+  }
+  const matchId = String(request.query.matchId || "").trim();
+  if (matchId) {
+    conditions.push("b.match_id = ?");
+    params.push(matchId);
+  }
+  const userId = String(request.query.userId || "").trim();
+  if (userId) {
+    conditions.push("b.sub2api_user_id LIKE ?");
+    params.push(`%${userId}%`);
+  }
+  const status = String(request.query.status || "").trim();
+  const allowedStatuses = new Set(Object.values(sub2apiWorldCupBetStatuses));
+  if (status && allowedStatuses.has(status)) {
+    conditions.push("b.status = ?");
+    params.push(status);
+  }
+
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const total = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sub2api_worldcup_bets b
+    ${whereSql}
+  `).get(...params).count;
+  const rows = db.prepare(`
+    SELECT b.*, m.stage, m.home_team, m.away_team, m.kickoff_at, m.status AS match_status,
+           m.home_score, m.away_score, m.result, c.name AS connection_name
+    FROM sub2api_worldcup_bets b
+    LEFT JOIN sub2api_worldcup_matches m ON m.id = b.match_id
+    LEFT JOIN sub2api_connections c ON c.id = b.connection_id
+    ${whereSql}
+    ORDER BY b.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset);
+
+  return {
+    items: rows.map((row) => ({
+      ...serializeSub2ApiWorldCupBet(row),
+      connectionName: row.connection_name || null
+    })),
     total,
     page,
     pageSize

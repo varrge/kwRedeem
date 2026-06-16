@@ -76,7 +76,7 @@
             <span class="icon">💰</span> 提号系统
           </button>
           <button class="nav-item" data-tab="sub2api">
-            <span class="icon">🔗</span> Sub2api 邀请码
+            <span class="icon">🔗</span> Sub2api 工具
           </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
@@ -762,8 +762,8 @@
         <!-- Sub2api Invites -->
         <section class="tab-panel hidden" data-panel="sub2api">
           <div class="content-header">
-            <h2>Sub2api 邀请码</h2>
-            <p>远程连接配置与账号邀请码管理</p>
+            <h2>Sub2api 工具</h2>
+            <p>远程连接、邀请码、生图和世界杯竞猜管理</p>
           </div>
 
           <div class="grid grid-2">
@@ -811,6 +811,7 @@
               </p>
               <p class="hint">
                 订阅套餐嵌入页地址：<code>/sub2api-subscriptions.html?connectionId=&lt;连接ID&gt;</code>。用户在 Sub2api 登录态下打开后，可用 Sub2api 余额购买后台配置的订阅套餐。
+                世界杯竞猜嵌入页地址：<code>/sub2api-worldcup.html?connectionId=&lt;连接ID&gt;</code>。下注会使用 Sub2api 用户余额做小额扣款，结算命中后按后台赔率返还余额；仅建议用于平台内不可提现余额/积分。
               </p>
               <p class="hint">
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
@@ -935,6 +936,152 @@
             </div>
             <div id="sub2api-invite-list" class="table-wrapper"></div>
             <div id="sub2api-invite-result" class="hint"></div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header"><h3 id="worldcup-match-form-title">添加世界杯比赛</h3></div>
+              <form id="worldcup-match-form" class="stack">
+                <input id="worldcup-match-edit-id" type="hidden" />
+                <label class="field">
+                  <span>远程连接</span>
+                  <select id="worldcup-match-connection"></select>
+                </label>
+                <div class="grid grid-2 compact-grid">
+                  <label class="field">
+                    <span>阶段</span>
+                    <input id="worldcup-match-stage" placeholder="小组赛 / 1/8 决赛" />
+                  </label>
+                  <label class="field">
+                    <span>分组</span>
+                    <input id="worldcup-match-group" placeholder="A组，可留空" />
+                  </label>
+                </div>
+                <div class="grid grid-2 compact-grid">
+                  <label class="field">
+                    <span>主队</span>
+                    <input id="worldcup-match-home" placeholder="主队名称" />
+                  </label>
+                  <label class="field">
+                    <span>客队</span>
+                    <input id="worldcup-match-away" placeholder="客队名称" />
+                  </label>
+                </div>
+                <div class="grid grid-2 compact-grid">
+                  <label class="field">
+                    <span>开赛时间</span>
+                    <input id="worldcup-match-kickoff" type="datetime-local" />
+                  </label>
+                  <label class="field">
+                    <span>状态</span>
+                    <select id="worldcup-match-status">
+                      <option value="open">open</option>
+                      <option value="locked">locked</option>
+                      <option value="finished">finished</option>
+                      <option value="settled">settled</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="grid grid-3 compact-grid">
+                  <label class="field">
+                    <span>主胜赔率</span>
+                    <input id="worldcup-odds-home" type="number" min="1" step="0.01" value="1.8" />
+                  </label>
+                  <label class="field">
+                    <span>平局赔率</span>
+                    <input id="worldcup-odds-draw" type="number" min="1" step="0.01" value="3.2" />
+                  </label>
+                  <label class="field">
+                    <span>客胜赔率</span>
+                    <input id="worldcup-odds-away" type="number" min="1" step="0.01" value="1.8" />
+                  </label>
+                </div>
+                <div class="grid grid-2 compact-grid">
+                  <label class="field">
+                    <span>最低投注</span>
+                    <input id="worldcup-min-stake" type="number" min="0.01" step="0.01" value="0.1" />
+                  </label>
+                  <label class="field">
+                    <span>最高投注</span>
+                    <input id="worldcup-max-stake" type="number" min="0.01" step="0.01" value="2" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>备注</span>
+                  <textarea id="worldcup-match-note" rows="3" placeholder="内部备注，可留空"></textarea>
+                </label>
+                <div class="actions-row">
+                  <button id="worldcup-match-submit-btn" type="submit" class="primary-btn">保存比赛</button>
+                  <button id="worldcup-match-cancel-btn" type="button" class="ghost-btn hidden">取消编辑</button>
+                </div>
+              </form>
+              <div id="worldcup-match-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>竞猜运营说明</h3></div>
+              <p class="hint">
+                前台只展示当前连接下的比赛。比赛状态为 <code>open</code> 且未到开赛时间时允许下注；用户每场只能下注一次。
+              </p>
+              <p class="hint">
+                下注会立即通过远程 Sub2api 管理员接口扣减用户余额；结算时命中选项按 <code>投注额 × 赔率</code> 返还余额。
+              </p>
+              <p class="hint">
+                若比赛取消，使用“取消并退款”会把未结算投注按原投注额返还。该功能应只用于不可提现的平台余额或娱乐积分。
+              </p>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>世界杯比赛</h3>
+              <div class="header-actions">
+                <select id="worldcup-match-connection-filter" class="small-select">
+                  <option value="">全部连接</option>
+                </select>
+                <select id="worldcup-match-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="open">open</option>
+                  <option value="locked">locked</option>
+                  <option value="finished">finished</option>
+                  <option value="settled">settled</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+                <button id="worldcup-match-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="worldcup-match-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>竞猜记录</h3>
+              <div class="header-actions">
+                <select id="worldcup-bet-connection-filter" class="small-select">
+                  <option value="">全部连接</option>
+                </select>
+                <select id="worldcup-bet-match-filter" class="small-select">
+                  <option value="">全部比赛</option>
+                </select>
+                <input id="worldcup-bet-user-filter" class="small-input" placeholder="用户 ID" />
+                <select id="worldcup-bet-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="debiting">debiting</option>
+                  <option value="placed">placed</option>
+                  <option value="won">won</option>
+                  <option value="lost">lost</option>
+                  <option value="refunded">refunded</option>
+                  <option value="debit_failed">debit_failed</option>
+                  <option value="payout_failed">payout_failed</option>
+                  <option value="refund_failed">refund_failed</option>
+                </select>
+                <button id="worldcup-bet-refresh-btn" class="ghost-btn small">查询</button>
+                <button id="worldcup-bet-export-btn" class="ghost-btn small">导出 CSV</button>
+              </div>
+            </div>
+            <div id="worldcup-bet-list" class="table-wrapper"></div>
+            <div id="worldcup-bet-result" class="hint"></div>
           </div>
         </section>
 

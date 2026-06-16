@@ -258,6 +258,7 @@ body {
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .grid-span-4 { grid-column: 1 / -1; }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
 
 .stack { display: grid; gap: 16px; }
 

@@ -193,6 +193,37 @@ const refs = {
   sub2apiOrderRefreshBtn: document.querySelector("#sub2api-order-refresh-btn"),
   sub2apiOrderList: document.querySelector("#sub2api-order-list"),
   sub2apiOrderResult: document.querySelector("#sub2api-order-result"),
+  worldCupMatchForm: document.querySelector("#worldcup-match-form"),
+  worldCupMatchFormTitle: document.querySelector("#worldcup-match-form-title"),
+  worldCupMatchEditId: document.querySelector("#worldcup-match-edit-id"),
+  worldCupMatchConnection: document.querySelector("#worldcup-match-connection"),
+  worldCupMatchStage: document.querySelector("#worldcup-match-stage"),
+  worldCupMatchGroup: document.querySelector("#worldcup-match-group"),
+  worldCupMatchHome: document.querySelector("#worldcup-match-home"),
+  worldCupMatchAway: document.querySelector("#worldcup-match-away"),
+  worldCupMatchKickoff: document.querySelector("#worldcup-match-kickoff"),
+  worldCupMatchStatus: document.querySelector("#worldcup-match-status"),
+  worldCupOddsHome: document.querySelector("#worldcup-odds-home"),
+  worldCupOddsDraw: document.querySelector("#worldcup-odds-draw"),
+  worldCupOddsAway: document.querySelector("#worldcup-odds-away"),
+  worldCupMinStake: document.querySelector("#worldcup-min-stake"),
+  worldCupMaxStake: document.querySelector("#worldcup-max-stake"),
+  worldCupMatchNote: document.querySelector("#worldcup-match-note"),
+  worldCupMatchSubmitBtn: document.querySelector("#worldcup-match-submit-btn"),
+  worldCupMatchCancelBtn: document.querySelector("#worldcup-match-cancel-btn"),
+  worldCupMatchResult: document.querySelector("#worldcup-match-result"),
+  worldCupMatchConnectionFilter: document.querySelector("#worldcup-match-connection-filter"),
+  worldCupMatchStatusFilter: document.querySelector("#worldcup-match-status-filter"),
+  worldCupMatchRefreshBtn: document.querySelector("#worldcup-match-refresh-btn"),
+  worldCupMatchList: document.querySelector("#worldcup-match-list"),
+  worldCupBetConnectionFilter: document.querySelector("#worldcup-bet-connection-filter"),
+  worldCupBetMatchFilter: document.querySelector("#worldcup-bet-match-filter"),
+  worldCupBetUserFilter: document.querySelector("#worldcup-bet-user-filter"),
+  worldCupBetStatusFilter: document.querySelector("#worldcup-bet-status-filter"),
+  worldCupBetRefreshBtn: document.querySelector("#worldcup-bet-refresh-btn"),
+  worldCupBetExportBtn: document.querySelector("#worldcup-bet-export-btn"),
+  worldCupBetList: document.querySelector("#worldcup-bet-list"),
+  worldCupBetResult: document.querySelector("#worldcup-bet-result"),
 
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel")
@@ -211,6 +242,8 @@ let sub2apiConnectionsCache = [];
 let sub2apiInvitesCache = [];
 let sub2apiPlansCache = [];
 let sub2apiOrdersCache = [];
+let worldCupMatchesCache = [];
+let worldCupBetsCache = [];
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -1792,15 +1825,38 @@ function resetSub2ApiConnectionForm() {
 }
 
 function populateSub2ApiConnectionFilter() {
-  if (!refs.sub2apiInviteConnectionFilter) return;
-  const current = refs.sub2apiInviteConnectionFilter.value;
-  refs.sub2apiInviteConnectionFilter.innerHTML = [`<option value="">全部连接</option>`]
+  const filterOptions = [`<option value="">全部连接</option>`]
     .concat(sub2apiConnectionsCache.map((item) => `
       <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
     `))
     .join("");
-  if (sub2apiConnectionsCache.some((item) => item.id === current)) {
-    refs.sub2apiInviteConnectionFilter.value = current;
+  const formOptions = [`<option value="">选择连接</option>`]
+    .concat(sub2apiConnectionsCache.map((item) => `
+      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+    `))
+    .join("");
+
+  for (const select of [
+    refs.sub2apiInviteConnectionFilter,
+    refs.worldCupMatchConnectionFilter,
+    refs.worldCupBetConnectionFilter
+  ]) {
+    if (!select) continue;
+    const current = select.value;
+    select.innerHTML = filterOptions;
+    if (sub2apiConnectionsCache.some((item) => item.id === current)) {
+      select.value = current;
+    }
+  }
+
+  if (refs.worldCupMatchConnection) {
+    const current = refs.worldCupMatchConnection.value;
+    refs.worldCupMatchConnection.innerHTML = formOptions;
+    if (sub2apiConnectionsCache.some((item) => item.id === current)) {
+      refs.worldCupMatchConnection.value = current;
+    } else if (sub2apiConnectionsCache.length === 1) {
+      refs.worldCupMatchConnection.value = sub2apiConnectionsCache[0].id;
+    }
   }
 
   if (refs.sub2apiOrderConnectionFilter) {
@@ -2180,6 +2236,12 @@ async function refreshSub2ApiConsole() {
   await refreshSub2ApiInvites().catch((error) => {
     if (refs.sub2apiInviteList) refs.sub2apiInviteList.innerHTML = `<p class="hint centered">加载邀请码失败：${escapeHtml(error.message)}</p>`;
   });
+  await refreshWorldCupMatches().catch((error) => {
+    if (refs.worldCupMatchList) refs.worldCupMatchList.innerHTML = `<p class="hint centered">加载比赛失败：${escapeHtml(error.message)}</p>`;
+  });
+  await refreshWorldCupBets().catch((error) => {
+    if (refs.worldCupBetList) refs.worldCupBetList.innerHTML = `<p class="hint centered">加载竞猜记录失败：${escapeHtml(error.message)}</p>`;
+  });
 }
 
 function exportSub2ApiInvitesCsv() {
@@ -2215,11 +2277,341 @@ function exportSub2ApiInvitesCsv() {
   setHint(refs.sub2apiInviteResult, `已导出 ${sub2apiInvitesCache.length} 条记录`);
 }
 
+function formatWorldCupAmount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number.toFixed(2).replace(/\.00$/, "");
+}
+
+function formatWorldCupTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function toWorldCupDateTimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function fromWorldCupDateTimeLocal(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+}
+
+function getWorldCupMatchTitle(item) {
+  return `${item.homeTeam || "-"} vs ${item.awayTeam || "-"}`;
+}
+
+function resetWorldCupMatchForm() {
+  if (!refs.worldCupMatchForm) return;
+  refs.worldCupMatchForm.reset();
+  refs.worldCupMatchEditId.value = "";
+  refs.worldCupMatchFormTitle.textContent = "添加世界杯比赛";
+  refs.worldCupMatchSubmitBtn.textContent = "保存比赛";
+  refs.worldCupMatchCancelBtn.classList.add("hidden");
+  refs.worldCupMatchStatus.value = "open";
+  refs.worldCupOddsHome.value = "1.8";
+  refs.worldCupOddsDraw.value = "3.2";
+  refs.worldCupOddsAway.value = "1.8";
+  refs.worldCupMinStake.value = "0.1";
+  refs.worldCupMaxStake.value = "2";
+  if (sub2apiConnectionsCache.length === 1) {
+    refs.worldCupMatchConnection.value = sub2apiConnectionsCache[0].id;
+  }
+}
+
+function populateWorldCupMatchFilter() {
+  if (!refs.worldCupBetMatchFilter) return;
+  const current = refs.worldCupBetMatchFilter.value;
+  refs.worldCupBetMatchFilter.innerHTML = [`<option value="">全部比赛</option>`]
+    .concat(worldCupMatchesCache.map((item) => `
+      <option value="${escapeHtml(item.id)}">${escapeHtml(getWorldCupMatchTitle(item))}</option>
+    `))
+    .join("");
+  if (worldCupMatchesCache.some((item) => item.id === current)) {
+    refs.worldCupBetMatchFilter.value = current;
+  }
+}
+
+async function refreshWorldCupMatches() {
+  if (!refs.worldCupMatchList) return;
+  const params = new URLSearchParams();
+  if (refs.worldCupMatchConnectionFilter?.value) params.set("connectionId", refs.worldCupMatchConnectionFilter.value);
+  if (refs.worldCupMatchStatusFilter?.value) params.set("status", refs.worldCupMatchStatusFilter.value);
+
+  const payload = await api(`/api/admin/sub2api/worldcup/matches?${params.toString()}`);
+  worldCupMatchesCache = payload.items || [];
+  populateWorldCupMatchFilter();
+
+  renderTable(refs.worldCupMatchList, [
+    {
+      label: "比赛",
+      render: (item) => `
+        <strong>${escapeHtml(getWorldCupMatchTitle(item))}</strong><br/>
+        <span style="font-size:12px;color:var(--muted)">${escapeHtml(item.stage || "-")}${item.groupName ? ` · ${escapeHtml(item.groupName)}` : ""}</span>
+      `
+    },
+    {
+      label: "连接",
+      render: (item) => `${escapeHtml(item.connectionName || "-")}<br/><code style="font-size:11px">${escapeHtml(item.connectionId)}</code>`
+    },
+    {
+      label: "开赛",
+      render: (item) => `<span style="font-size:12px">${escapeHtml(formatWorldCupTime(item.kickoffAt))}</span>`
+    },
+    {
+      label: "状态",
+      render: (item) => `${renderStatus(item.status)}${item.bettingOpen ? `<br/><span class="hint">可下注</span>` : ""}`
+    },
+    {
+      label: "比分",
+      render: (item) => item.homeScore === null || item.homeScore === undefined
+        ? "-"
+        : `<strong>${escapeHtml(item.homeScore)} - ${escapeHtml(item.awayScore)}</strong><br/><span class="hint">${escapeHtml(item.resultLabel || "-")}</span>`
+    },
+    {
+      label: "赔率",
+      render: (item) => `
+        <div style="font-size:12px;line-height:1.5">
+          <div>主胜 ${escapeHtml(formatWorldCupAmount(item.odds?.home))}</div>
+          <div>平局 ${escapeHtml(formatWorldCupAmount(item.odds?.draw))}</div>
+          <div>客胜 ${escapeHtml(formatWorldCupAmount(item.odds?.away))}</div>
+        </div>
+      `
+    },
+    {
+      label: "投注",
+      render: (item) => `${escapeHtml(formatWorldCupAmount(item.minStake))} - ${escapeHtml(formatWorldCupAmount(item.maxStake))}`
+    },
+    {
+      label: "操作",
+      render: (item) => `
+        <button class="primary-btn small" type="button" onclick="editWorldCupMatch('${escapeHtml(item.id)}')">编辑</button>
+        <button class="ghost-btn small" type="button" onclick="settleWorldCupMatch('${escapeHtml(item.id)}')">结算</button>
+        <button class="ghost-btn small" type="button" onclick="cancelWorldCupMatch('${escapeHtml(item.id)}')">取消并退款</button>
+        <button class="ghost-btn small" type="button" style="color:var(--error)" onclick="deleteWorldCupMatch('${escapeHtml(item.id)}')">删除</button>
+      `
+    }
+  ], worldCupMatchesCache, "暂无世界杯比赛");
+}
+
+function editWorldCupMatch(id) {
+  const item = worldCupMatchesCache.find((entry) => entry.id === id);
+  if (!item || !refs.worldCupMatchForm) return;
+  refs.worldCupMatchEditId.value = item.id;
+  refs.worldCupMatchConnection.value = item.connectionId || "";
+  refs.worldCupMatchStage.value = item.stage || "";
+  refs.worldCupMatchGroup.value = item.groupName || "";
+  refs.worldCupMatchHome.value = item.homeTeam || "";
+  refs.worldCupMatchAway.value = item.awayTeam || "";
+  refs.worldCupMatchKickoff.value = toWorldCupDateTimeLocal(item.kickoffAt);
+  refs.worldCupMatchStatus.value = item.status || "open";
+  refs.worldCupOddsHome.value = item.odds?.home ?? "1.8";
+  refs.worldCupOddsDraw.value = item.odds?.draw ?? "3.2";
+  refs.worldCupOddsAway.value = item.odds?.away ?? "1.8";
+  refs.worldCupMinStake.value = item.minStake ?? "0.1";
+  refs.worldCupMaxStake.value = item.maxStake ?? "2";
+  refs.worldCupMatchNote.value = item.note || "";
+  refs.worldCupMatchFormTitle.textContent = `编辑比赛：${getWorldCupMatchTitle(item)}`;
+  refs.worldCupMatchSubmitBtn.textContent = "保存修改";
+  refs.worldCupMatchCancelBtn.classList.remove("hidden");
+  refs.worldCupMatchForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveWorldCupMatch() {
+  const id = refs.worldCupMatchEditId?.value || "";
+  const payload = {
+    connectionId: refs.worldCupMatchConnection.value,
+    stage: refs.worldCupMatchStage.value.trim(),
+    groupName: refs.worldCupMatchGroup.value.trim(),
+    homeTeam: refs.worldCupMatchHome.value.trim(),
+    awayTeam: refs.worldCupMatchAway.value.trim(),
+    kickoffAt: fromWorldCupDateTimeLocal(refs.worldCupMatchKickoff.value),
+    status: refs.worldCupMatchStatus.value,
+    oddsHome: Number(refs.worldCupOddsHome.value),
+    oddsDraw: Number(refs.worldCupOddsDraw.value),
+    oddsAway: Number(refs.worldCupOddsAway.value),
+    minStake: Number(refs.worldCupMinStake.value),
+    maxStake: Number(refs.worldCupMaxStake.value),
+    note: refs.worldCupMatchNote.value.trim()
+  };
+  if (!payload.connectionId || !payload.homeTeam || !payload.awayTeam || !payload.kickoffAt) {
+    setHint(refs.worldCupMatchResult, "请填写连接、球队和开赛时间");
+    return;
+  }
+
+  try {
+    setHint(refs.worldCupMatchResult, "正在保存...");
+    await api(id ? `/api/admin/sub2api/worldcup/matches/${encodeURIComponent(id)}` : "/api/admin/sub2api/worldcup/matches", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    setHint(refs.worldCupMatchResult, "比赛已保存");
+    resetWorldCupMatchForm();
+    await refreshWorldCupMatches();
+    await refreshWorldCupBets();
+  } catch (error) {
+    setHint(refs.worldCupMatchResult, `保存失败：${error.message}`);
+  }
+}
+
+async function deleteWorldCupMatch(id) {
+  if (!window.confirm("确认删除该比赛？已有投注时不能删除。")) return;
+  try {
+    await api(`/api/admin/sub2api/worldcup/matches/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    setHint(refs.worldCupMatchResult, "比赛已删除");
+    await refreshWorldCupMatches();
+  } catch (error) {
+    setHint(refs.worldCupMatchResult, `删除失败：${error.message}`);
+  }
+}
+
+async function settleWorldCupMatch(id) {
+  const item = worldCupMatchesCache.find((entry) => entry.id === id);
+  if (!item) return;
+  const homeScore = window.prompt(`${item.homeTeam} 进球数`, item.homeScore ?? "");
+  if (homeScore === null) return;
+  const awayScore = window.prompt(`${item.awayTeam} 进球数`, item.awayScore ?? "");
+  if (awayScore === null) return;
+  try {
+    setHint(refs.worldCupMatchResult, "正在结算...");
+    const payload = await api(`/api/admin/sub2api/worldcup/matches/${encodeURIComponent(id)}/settle`, {
+      method: "POST",
+      body: JSON.stringify({ homeScore: Number(homeScore), awayScore: Number(awayScore) })
+    });
+    const stats = payload.stats || {};
+    setHint(refs.worldCupMatchResult, `结算完成：中奖 ${stats.won || 0}，未中 ${stats.lost || 0}，派奖失败 ${stats.payoutFailed || 0}`);
+    await refreshWorldCupMatches();
+    await refreshWorldCupBets();
+  } catch (error) {
+    setHint(refs.worldCupMatchResult, `结算失败：${error.message}`);
+  }
+}
+
+async function cancelWorldCupMatch(id) {
+  if (!window.confirm("确认取消该比赛并退还未结算投注？")) return;
+  try {
+    setHint(refs.worldCupMatchResult, "正在取消并退款...");
+    const payload = await api(`/api/admin/sub2api/worldcup/matches/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    const stats = payload.stats || {};
+    setHint(refs.worldCupMatchResult, `取消完成：已退款 ${stats.refunded || 0}，退款失败 ${stats.refundFailed || 0}`);
+    await refreshWorldCupMatches();
+    await refreshWorldCupBets();
+  } catch (error) {
+    setHint(refs.worldCupMatchResult, `取消失败：${error.message}`);
+  }
+}
+
+async function refreshWorldCupBets() {
+  if (!refs.worldCupBetList) return;
+  const params = new URLSearchParams();
+  if (refs.worldCupBetConnectionFilter?.value) params.set("connectionId", refs.worldCupBetConnectionFilter.value);
+  if (refs.worldCupBetMatchFilter?.value) params.set("matchId", refs.worldCupBetMatchFilter.value);
+  if (refs.worldCupBetUserFilter?.value.trim()) params.set("userId", refs.worldCupBetUserFilter.value.trim());
+  if (refs.worldCupBetStatusFilter?.value) params.set("status", refs.worldCupBetStatusFilter.value);
+  params.set("pageSize", "100");
+
+  const payload = await api(`/api/admin/sub2api/worldcup/bets?${params.toString()}`);
+  worldCupBetsCache = payload.items || [];
+
+  renderTable(refs.worldCupBetList, [
+    {
+      label: "比赛",
+      render: (item) => item.match
+        ? `<strong>${escapeHtml(item.match.homeTeam)} vs ${escapeHtml(item.match.awayTeam)}</strong><br/><span class="hint">${escapeHtml(formatWorldCupTime(item.match.kickoffAt))}</span>`
+        : escapeHtml(item.matchId)
+    },
+    {
+      label: "账号",
+      render: (item) => `
+        <div style="font-size:12px;line-height:1.5">
+          <div><code>${escapeHtml(item.userId)}</code></div>
+          <div>${escapeHtml(item.email || item.username || "-")}</div>
+        </div>
+      `
+    },
+    {
+      label: "选择",
+      render: (item) => escapeHtml(item.predictionLabel || item.prediction)
+    },
+    {
+      label: "投注/赔率",
+      render: (item) => `${escapeHtml(formatWorldCupAmount(item.stake))} × ${escapeHtml(formatWorldCupAmount(item.odds))}`
+    },
+    {
+      label: "状态",
+      render: (item) => renderStatus(item.status)
+    },
+    {
+      label: "派奖",
+      render: (item) => escapeHtml(formatWorldCupAmount(item.payout))
+    },
+    {
+      label: "时间",
+      render: (item) => `<span style="font-size:12px">${escapeHtml(formatWorldCupTime(item.createdAt))}</span>`
+    },
+    {
+      label: "错误",
+      render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 42))}</span>` : "-"
+    }
+  ], worldCupBetsCache, "暂无竞猜记录");
+  setHint(refs.worldCupBetResult, `共 ${payload.total ?? worldCupBetsCache.length} 条记录，当前显示 ${worldCupBetsCache.length} 条`);
+}
+
+function exportWorldCupBetsCsv() {
+  if (!worldCupBetsCache.length) {
+    setHint(refs.worldCupBetResult, "无数据可导出");
+    return;
+  }
+  const headers = ["连接", "用户ID", "邮箱", "比赛", "选择", "投注", "赔率", "状态", "派奖", "创建时间", "结算时间", "错误"];
+  const escapeCsv = (value) => `"${String(value ?? "").replaceAll("\"", "\"\"")}"`;
+  const lines = [
+    headers.map(escapeCsv).join(","),
+    ...worldCupBetsCache.map((item) => [
+      item.connectionName || item.connectionId,
+      item.userId,
+      item.email,
+      item.match ? `${item.match.homeTeam} vs ${item.match.awayTeam}` : item.matchId,
+      item.predictionLabel,
+      item.stake,
+      item.odds,
+      item.status,
+      item.payout,
+      item.createdAt,
+      item.settledAt,
+      item.errorMessage
+    ].map(escapeCsv).join(","))
+  ];
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `sub2api-worldcup-bets-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setHint(refs.worldCupBetResult, `已导出 ${worldCupBetsCache.length} 条记录`);
+}
+
 window.editSub2ApiConnection = editSub2ApiConnection;
 window.testSub2ApiConnection = testSub2ApiConnection;
 window.deleteSub2ApiConnection = deleteSub2ApiConnection;
 window.editSub2ApiPlan = editSub2ApiPlan;
 window.deleteSub2ApiPlan = deleteSub2ApiPlan;
+window.editWorldCupMatch = editWorldCupMatch;
+window.deleteWorldCupMatch = deleteWorldCupMatch;
+window.settleWorldCupMatch = settleWorldCupMatch;
+window.cancelWorldCupMatch = cancelWorldCupMatch;
 
 if (refs.sub2apiConnectionForm) {
   refs.sub2apiConnectionForm.addEventListener("submit", (event) => {
@@ -2292,7 +2684,47 @@ if (refs.sub2apiOrderRefreshBtn) {
     refreshSub2ApiOrders().catch((error) => setHint(refs.sub2apiOrderResult, `查询失败：${error.message}`));
   });
 }
+if (refs.worldCupMatchForm) {
+  refs.worldCupMatchForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveWorldCupMatch().catch(() => {});
+  });
+}
 
+if (refs.worldCupMatchCancelBtn) {
+  refs.worldCupMatchCancelBtn.addEventListener("click", () => {
+    resetWorldCupMatchForm();
+    setHint(refs.worldCupMatchResult, "");
+  });
+}
+
+if (refs.worldCupMatchRefreshBtn) {
+  refs.worldCupMatchRefreshBtn.addEventListener("click", () => {
+    refreshWorldCupMatches().catch((error) => setHint(refs.worldCupMatchResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.worldCupMatchConnectionFilter) {
+  refs.worldCupMatchConnectionFilter.addEventListener("change", () => {
+    refreshWorldCupMatches().catch(() => {});
+  });
+}
+
+if (refs.worldCupMatchStatusFilter) {
+  refs.worldCupMatchStatusFilter.addEventListener("change", () => {
+    refreshWorldCupMatches().catch(() => {});
+  });
+}
+
+if (refs.worldCupBetRefreshBtn) {
+  refs.worldCupBetRefreshBtn.addEventListener("click", () => {
+    refreshWorldCupBets().catch((error) => setHint(refs.worldCupBetResult, `查询失败：${error.message}`));
+  });
+}
+
+if (refs.worldCupBetExportBtn) {
+  refs.worldCupBetExportBtn.addEventListener("click", exportWorldCupBetsCsv);
+}
 async function refreshAll() {
   if (!getToken()) return;
   await Promise.all([

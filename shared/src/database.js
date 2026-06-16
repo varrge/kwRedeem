@@ -571,6 +571,50 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_worldcup_matches (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      stage TEXT,
+      group_name TEXT,
+      home_team TEXT NOT NULL,
+      away_team TEXT NOT NULL,
+      kickoff_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      home_score INTEGER,
+      away_score INTEGER,
+      result TEXT,
+      odds_home REAL NOT NULL DEFAULT 1.8,
+      odds_draw REAL NOT NULL DEFAULT 3.2,
+      odds_away REAL NOT NULL DEFAULT 1.8,
+      min_stake REAL NOT NULL DEFAULT 0.1,
+      max_stake REAL NOT NULL DEFAULT 2,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      settled_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_worldcup_bets (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      connection_id TEXT NOT NULL,
+      match_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      prediction TEXT NOT NULL,
+      stake REAL NOT NULL,
+      odds REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'debiting',
+      payout REAL NOT NULL DEFAULT 0,
+      remote_debit_response TEXT,
+      remote_credit_response TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      settled_at TEXT
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
@@ -659,6 +703,14 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_account ON sub2api_subscription_orders(connection_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_plan ON sub2api_subscription_orders(plan_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_status ON sub2api_subscription_orders(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_wc_matches_connection ON sub2api_worldcup_matches(connection_id, status, kickoff_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_wc_matches_status ON sub2api_worldcup_matches(status, kickoff_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_wc_bets_match ON sub2api_worldcup_bets(match_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_wc_bets_account ON sub2api_worldcup_bets(connection_id, sub2api_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_wc_bets_status ON sub2api_worldcup_bets(status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sub2api_wc_bets_one_active
+      ON sub2api_worldcup_bets(connection_id, match_id, sub2api_user_id)
+      WHERE status NOT IN ('debit_failed', 'refunded');
   `);
 }
 

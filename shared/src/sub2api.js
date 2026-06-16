@@ -42,6 +42,48 @@ export function normalizeSub2ApiPositiveInteger(value, fieldName) {
   return number;
 }
 
+export const sub2apiWorldCupMatchStatuses = {
+  open: "open",
+  locked: "locked",
+  finished: "finished",
+  settled: "settled",
+  cancelled: "cancelled"
+};
+
+export const sub2apiWorldCupBetStatuses = {
+  debiting: "debiting",
+  placed: "placed",
+  won: "won",
+  lost: "lost",
+  refunded: "refunded",
+  debitFailed: "debit_failed",
+  payoutFailed: "payout_failed",
+  refundFailed: "refund_failed"
+};
+
+export const sub2apiWorldCupPredictions = {
+  home: "home",
+  draw: "draw",
+  away: "away"
+};
+
+export function getSub2ApiWorldCupResult(homeScore, awayScore) {
+  const home = Number(homeScore);
+  const away = Number(awayScore);
+  if (!Number.isInteger(home) || !Number.isInteger(away) || home < 0 || away < 0) {
+    throw new Error("比分必须是非负整数");
+  }
+  if (home > away) return sub2apiWorldCupPredictions.home;
+  if (home < away) return sub2apiWorldCupPredictions.away;
+  return sub2apiWorldCupPredictions.draw;
+}
+
+export function roundSub2ApiWorldCupAmount(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round((amount + Number.EPSILON) * 10000) / 10000;
+}
+
 export function normalizeSub2ApiBaseUrl(value) {
   const raw = String(value ?? "").trim();
   if (!raw) {

@@ -303,8 +303,7 @@ export async function fetchApiFootballWorldCupFixtures(db, {
   const resolvedSettings = getResolvedApiFootballSettings(db, settings, { includeApiKey: true });
   const params = {
     league: resolvedSettings.worldCupLeagueId,
-    season: resolvedSettings.worldCupSeason,
-    timezone: resolvedSettings.timezone
+    season: resolvedSettings.worldCupSeason
   };
   if (next) params.next = next;
   if (fixtureId) params.id = fixtureId;

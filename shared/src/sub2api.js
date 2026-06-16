@@ -67,6 +67,18 @@ export const sub2apiWorldCupPredictions = {
   away: "away"
 };
 
+export const sub2apiWorldCupBetPhases = {
+  preMatch: "pre_match",
+  halftime: "halftime"
+};
+
+export const SUB2API_WORLDCUP_PRE_MATCH_LOCK_MS = 60 * 60 * 1000;
+
+const SUB2API_WORLDCUP_LIVE_API_STATUSES = new Set(["1H", "2H", "ET", "BT", "P", "SUSP", "INT"]);
+const SUB2API_WORLDCUP_HALFTIME_API_STATUSES = new Set(["HT"]);
+const SUB2API_WORLDCUP_FINAL_API_STATUSES = new Set(["FT", "AET", "PEN"]);
+const SUB2API_WORLDCUP_CANCELLED_API_STATUSES = new Set(["PST", "CANC", "ABD", "AWD", "WO"]);
+
 export function getSub2ApiWorldCupResult(homeScore, awayScore) {
   const home = Number(homeScore);
   const away = Number(awayScore);
@@ -82,6 +94,140 @@ export function roundSub2ApiWorldCupAmount(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return 0;
   return Math.round((amount + Number.EPSILON) * 10000) / 10000;
+}
+
+export function getSub2ApiWorldCupBetPhaseLabel(phase) {
+  if (phase === sub2apiWorldCupBetPhases.preMatch) return "赛前盘";
+  if (phase === sub2apiWorldCupBetPhases.halftime) return "中场盘";
+  return phase || "-";
+}
+
+export function normalizeSub2ApiWorldCupApiStatus(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+export function isSub2ApiWorldCupApiStatusHalftime(value) {
+  return SUB2API_WORLDCUP_HALFTIME_API_STATUSES.has(normalizeSub2ApiWorldCupApiStatus(value));
+}
+
+export function isSub2ApiWorldCupApiStatusLive(value) {
+  const status = normalizeSub2ApiWorldCupApiStatus(value);
+  return SUB2API_WORLDCUP_LIVE_API_STATUSES.has(status) || SUB2API_WORLDCUP_HALFTIME_API_STATUSES.has(status);
+}
+
+export function isSub2ApiWorldCupApiStatusFinal(value) {
+  return SUB2API_WORLDCUP_FINAL_API_STATUSES.has(normalizeSub2ApiWorldCupApiStatus(value));
+}
+
+export function isSub2ApiWorldCupApiStatusCancelled(value) {
+  return SUB2API_WORLDCUP_CANCELLED_API_STATUSES.has(normalizeSub2ApiWorldCupApiStatus(value));
+}
+
+export function getSub2ApiWorldCupBettingState(match, nowMs = Date.now()) {
+  if (!match) {
+    return { open: false, phase: null, label: "", reason: "比赛不存在", closesAt: null };
+  }
+  if ([
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  ].includes(match.status)) {
+    return { open: false, phase: null, label: "", reason: "比赛已结束", closesAt: null };
+  }
+
+  const apiStatus = normalizeSub2ApiWorldCupApiStatus(match.api_status_short);
+  if (isSub2ApiWorldCupApiStatusHalftime(apiStatus)) {
+    return {
+      open: true,
+      phase: sub2apiWorldCupBetPhases.halftime,
+      label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.halftime),
+      reason: "",
+      closesAt: null
+    };
+  }
+
+  const kickoffMs = new Date(match.kickoff_at).getTime();
+  if (!Number.isFinite(kickoffMs)) {
+    return { open: false, phase: null, label: "", reason: "开赛时间无效", closesAt: null };
+  }
+  const preMatchClosesAt = kickoffMs - SUB2API_WORLDCUP_PRE_MATCH_LOCK_MS;
+  if (match.status === sub2apiWorldCupMatchStatuses.open && !apiStatus && nowMs < preMatchClosesAt) {
+    return {
+      open: true,
+      phase: sub2apiWorldCupBetPhases.preMatch,
+      label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.preMatch),
+      reason: "",
+      closesAt: new Date(preMatchClosesAt).toISOString()
+    };
+  }
+  if (match.status === sub2apiWorldCupMatchStatuses.open && ["NS", "TBD"].includes(apiStatus) && nowMs < preMatchClosesAt) {
+    return {
+      open: true,
+      phase: sub2apiWorldCupBetPhases.preMatch,
+      label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.preMatch),
+      reason: "",
+      closesAt: new Date(preMatchClosesAt).toISOString()
+    };
+  }
+
+  if (nowMs >= preMatchClosesAt && nowMs < kickoffMs) {
+    return { open: false, phase: sub2apiWorldCupBetPhases.preMatch, label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.preMatch), reason: "开赛前 1 小时已停止下注", closesAt: new Date(preMatchClosesAt).toISOString() };
+  }
+  if (isSub2ApiWorldCupApiStatusLive(apiStatus)) {
+    return { open: false, phase: null, label: "", reason: "比赛进行中，等待中场盘", closesAt: null };
+  }
+  return { open: false, phase: null, label: "", reason: "该比赛已停止竞猜", closesAt: null };
+}
+
+export function isSub2ApiWorldCupMatchInProgress(match, nowMs = Date.now()) {
+  if (!match || [
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  ].includes(match.status)) {
+    return false;
+  }
+  const apiStatus = normalizeSub2ApiWorldCupApiStatus(match.api_status_short);
+  if (isSub2ApiWorldCupApiStatusLive(apiStatus)) return true;
+  if (apiStatus) return false;
+
+  const kickoffMs = new Date(match.kickoff_at).getTime();
+  return Number.isFinite(kickoffMs)
+    && kickoffMs <= nowMs
+    && nowMs - kickoffMs <= 3 * 60 * 60 * 1000;
+}
+
+export function selectSub2ApiWorldCupDisplayMatches(matches, nowMs = Date.now()) {
+  const sorted = [...(matches || [])]
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aTime = new Date(a.kickoff_at ?? a.kickoffAt).getTime();
+      const bTime = new Date(b.kickoff_at ?? b.kickoffAt).getTime();
+      return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+    });
+  const isTerminal = (match) => [
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  ].includes(match.status);
+  const current = sorted.find((match) => isSub2ApiWorldCupMatchInProgress(match, nowMs));
+  const currentTime = current ? new Date(current.kickoff_at ?? current.kickoffAt).getTime() : nowMs;
+  const upcoming = sorted.filter((match) => {
+    if (current && match.id === current.id) return false;
+    if (isTerminal(match) || isSub2ApiWorldCupMatchInProgress(match, nowMs)) return false;
+    const kickoffMs = new Date(match.kickoff_at ?? match.kickoffAt).getTime();
+    return Number.isFinite(kickoffMs) && kickoffMs >= currentTime;
+  });
+
+  const selected = current
+    ? [current, ...upcoming.slice(0, 2)]
+    : upcoming.slice(0, 2);
+  return selected.map((match, index) => ({
+    ...match,
+    display_role: current
+      ? (index === 0 ? "current" : index === 1 ? "next" : "preview")
+      : (index === 0 ? "next" : "preview")
+  }));
 }
 
 export function normalizeSub2ApiBaseUrl(value) {

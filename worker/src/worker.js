@@ -71,7 +71,8 @@ const WORLDCUP_ZAFRONIX_ACTIVE_LIMIT = 3;
 const WORLDCUP_ZAFRONIX_IDLE_LIMIT = 2;
 const WORLDCUP_ZAFRONIX_ACTIVE_BEFORE_MS = 60 * 60 * 1000;
 const WORLDCUP_ZAFRONIX_ACTIVE_AFTER_MS = 4 * 60 * 60 * 1000;
-const WORLDCUP_SPORTTERY_ODDS_URL = "https://webapi.sporttery.cn/gateway/lottery/getFootBallMatchV1.qry?param=90,0&lotteryDrawNum=&sellStatus=0&termLimits=10";
+const WORLDCUP_SPORTTERY_MATCH_ODDS_URL = "https://webapi.sporttery.cn/gateway/uniform/football/getMatchListV1.qry?clientCode=3001";
+const WORLDCUP_SPORTTERY_DRAW_ODDS_URL = "https://webapi.sporttery.cn/gateway/lottery/getFootBallMatchV1.qry?param=90%2C0&lotteryDrawNum=&sellStatus=0&termLimits=10";
 let worldCupSyncRunning = false;
 let worldCupLastDiscoveryAt = 0;
 let worldCupLastTickAt = 0;
@@ -108,6 +109,14 @@ function normalizeWorldCupMatchName(value) {
     .replace(/[（(].*?[）)]/g, "")
     .replace(/[\s_\-·.。]+/g, "")
     .replace(/[^\p{Script=Han}a-z0-9]/gu, "");
+}
+
+function buildWorldCupMatchKey(date, homeTeam, awayTeam) {
+  return [
+    date,
+    normalizeWorldCupMatchName(homeTeam),
+    normalizeWorldCupMatchName(awayTeam)
+  ].join("|");
 }
 
 function randomWorldCupId() {
@@ -724,9 +733,40 @@ function extractSportteryMatchList(json) {
   return [];
 }
 
+function extractSportteryUniformMatchList(json) {
+  const groups = Array.isArray(json?.value?.matchInfoList) ? json.value.matchInfoList : [];
+  return groups.flatMap((group) => Array.isArray(group?.subMatchList) ? group.subMatchList : []);
+}
+
 function parseSportteryOdd(value) {
   const number = Number(String(value || "").trim());
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function parseSportteryOddsPool(item) {
+  if (Array.isArray(item?.oddsList)) {
+    return item.oddsList.find((odds) => String(odds?.poolCode || "").toUpperCase() === "HAD") || null;
+  }
+  return item;
+}
+
+function parseSportteryUniformWorldCupOddsMatch(item) {
+  const pool = parseSportteryOddsPool(item);
+  const home = parseSportteryOdd(pool?.h);
+  const draw = parseSportteryOdd(pool?.d);
+  const away = parseSportteryOdd(pool?.a);
+  const homeTeam = String(item?.homeTeamAllName || item?.homeTeamAbbName || "").trim();
+  const awayTeam = String(item?.awayTeamAllName || item?.awayTeamAbbName || "").trim();
+  const date = String(item?.matchDate || item?.businessDate || "").trim().slice(0, 10);
+  if (!home || !draw || !away || !homeTeam || !awayTeam || !date) return null;
+  return {
+    date,
+    homeTeam,
+    awayTeam,
+    key: buildWorldCupMatchKey(date, homeTeam, awayTeam),
+    reverseKey: buildWorldCupMatchKey(date, awayTeam, homeTeam),
+    odds: { home, draw, away }
+  };
 }
 
 function parseSportteryWorldCupOddsMatch(item) {
@@ -741,11 +781,8 @@ function parseSportteryWorldCupOddsMatch(item) {
     date,
     homeTeam,
     awayTeam,
-    key: [
-      date,
-      normalizeWorldCupMatchName(homeTeam),
-      normalizeWorldCupMatchName(awayTeam)
-    ].join("|"),
+    key: buildWorldCupMatchKey(date, homeTeam, awayTeam),
+    reverseKey: buildWorldCupMatchKey(date, awayTeam, homeTeam),
     odds: { home, draw, away }
   };
 }
@@ -770,20 +807,45 @@ function getSportteryWorldCupOddsTargets(now = nowIso()) {
   );
 }
 
-async function fetchSportteryWorldCupOddsMatches() {
-  const response = await fetch(WORLDCUP_SPORTTERY_ODDS_URL, {
+async function fetchSportteryJson(url) {
+  const response = await fetch(url, {
     headers: {
       Accept: "application/json, text/plain, */*",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      Origin: "https://www.sporttery.cn",
       Referer: "https://www.sporttery.cn/",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-site",
       "User-Agent": BROWSER_UA
     },
     signal: AbortSignal.timeout(12000)
   });
-  const json = await response.json().catch(() => null);
+  const text = await response.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`体彩赔率返回非 JSON 内容，HTTP ${response.status}`);
+  }
   if (!response.ok) {
     throw new Error(json?.errorMessage || json?.message || `体彩赔率 HTTP ${response.status}`);
   }
-  return extractSportteryMatchList(json)
+  if (json?.success === false || (json?.errorCode && String(json.errorCode) !== "0")) {
+    throw new Error(json?.errorMessage || json?.message || `体彩赔率错误 ${json.errorCode}`);
+  }
+  return json;
+}
+
+async function fetchSportteryWorldCupOddsMatches() {
+  const uniformJson = await fetchSportteryJson(WORLDCUP_SPORTTERY_MATCH_ODDS_URL);
+  const uniformMatches = extractSportteryUniformMatchList(uniformJson)
+    .map(parseSportteryUniformWorldCupOddsMatch)
+    .filter(Boolean);
+  if (uniformMatches.length) return uniformMatches;
+
+  const drawJson = await fetchSportteryJson(WORLDCUP_SPORTTERY_DRAW_ODDS_URL);
+  return extractSportteryMatchList(drawJson)
     .map(parseSportteryWorldCupOddsMatch)
     .filter(Boolean);
 }
@@ -796,13 +858,20 @@ async function syncSportteryWorldCupOdds(nowMs) {
     stats.attempted = 1;
     const matches = await fetchSportteryWorldCupOddsMatches();
     stats.returned = matches.length;
-    const oddsByKey = new Map(matches.map((item) => [item.key, item]));
+    const oddsByKey = new Map();
+    for (const item of matches) {
+      oddsByKey.set(item.key, item);
+      oddsByKey.set(item.reverseKey, {
+        ...item,
+        odds: {
+          home: item.odds.away,
+          draw: item.odds.draw,
+          away: item.odds.home
+        }
+      });
+    }
     for (const target of targets) {
-      const key = [
-        getBeijingDateKey(target.kickoff_at),
-        normalizeWorldCupMatchName(target.home_team),
-        normalizeWorldCupMatchName(target.away_team)
-      ].join("|");
+      const key = buildWorldCupMatchKey(getBeijingDateKey(target.kickoff_at), target.home_team, target.away_team);
       const matched = oddsByKey.get(key);
       if (!matched) continue;
       stats.matched += 1;

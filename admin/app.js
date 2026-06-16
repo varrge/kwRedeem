@@ -1,4 +1,5 @@
 const API_BASE = (globalThis.KAWANG_CONFIG?.apiUrl || "http://127.0.0.1:4300").replace(/\/+$/, "");
+const API_BASE_CONFIGURED = Boolean(globalThis.KAWANG_CONFIG?.apiUrl);
 const TOKEN_KEY = "kawang_admin_token";
 const REFRESH_INTERVAL_MS = 5000;
 const UPDATE_POLL_INTERVAL_MS = 3000;
@@ -381,10 +382,18 @@ async function api(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers
+    });
+  } catch (error) {
+    const configHint = API_BASE_CONFIGURED
+      ? "请确认该 API 地址可从当前浏览器访问，并且 HTTPS/反代/CORS 配置正确。"
+      : "未读取到 runtime-config.js，当前退回默认本机 API 地址；线上请在 .env 配置 API_URL 后执行 npm run config:runtime。";
+    throw new Error(`无法连接 API：${API_BASE}。${configHint} 原始错误：${error.message || "Failed to fetch"}`);
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401) {

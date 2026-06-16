@@ -229,7 +229,16 @@
         if (state.sessionToken) {
           headers.Authorization = `Bearer ${state.sessionToken}`;
         }
-        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        let response;
+        try {
+          response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        } catch (error) {
+          const target = API_BASE ? `${API_BASE}${path}` : path;
+          const configHint = API_BASE
+            ? "请确认该 API 地址可从当前浏览器访问，并且 HTTPS/反代/CORS 配置正确。"
+            : "未读取到 runtime-config.js，请确认当前路径下的 runtime-config.js 指向 KaWang API，例如 https://api.vsakura.top。";
+          throw new Error(`无法连接 API：${target}。${configHint} 原始错误：${error.message || "Failed to fetch"}`);
+        }
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(payload.message || "请求失败");

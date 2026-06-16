@@ -312,6 +312,31 @@ window.KAWANG_CONFIG = Object.freeze({"apiUrl":"https://api.xxx.com"});
 
 如果页面仍然请求旧地址，先确认 `runtime-config.js` 已重新生成，再强制刷新页面或清浏览器缓存后重试。
 
+### Sub2api 单独服务器时的嵌入页配置
+
+如果 Sub2api 域名不在 KaWang 服务器上，例如：
+
+```text
+key.vsakura.top      KaWang 前台
+adminkey.vsakura.top KaWang 后台
+api.vsakura.top      KaWang API
+sub.vsakura.top      另一台服务器上的 Sub2api
+```
+
+`sub.vsakura.top` 下的 `_kwredeem` 嵌入页仍然要读取同路径的 `runtime-config.js`。确认这个地址能访问：
+
+```text
+https://sub.vsakura.top/_kwredeem/runtime-config.js
+```
+
+内容必须指向 KaWang API：
+
+```js
+window.KAWANG_CONFIG = Object.freeze({"apiUrl":"https://api.vsakura.top"});
+```
+
+如果这里缺失，`sub2api-worldcup.html`、`sub2api-subscriptions.html`、`sub2api-invites.html` 会把 API 请求发到当前 Sub2api 域名，导致保存/下注/购买等请求失败。
+
 ## 9. 宝塔防火墙
 
 放行：

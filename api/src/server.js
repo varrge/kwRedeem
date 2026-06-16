@@ -33,6 +33,7 @@ import {
   countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
+  extractSub2ApiIdentityFromJwtClaims,
   getSub2ApiWorldCupBetPhaseLabel,
   getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
@@ -1915,7 +1916,12 @@ async function getSub2ApiIdentityFromAccessToken(connection, accessToken, expect
 
   const payload = unwrapSub2ApiRemoteData(result.json);
   try {
-    const identity = extractSub2ApiIdentity(payload);
+    let identity;
+    try {
+      identity = extractSub2ApiIdentity(payload);
+    } catch {
+      identity = extractSub2ApiIdentityFromJwtClaims(token);
+    }
     const normalizedExpectedUserId = String(expectedUserId || "").trim();
     if (normalizedExpectedUserId && normalizedExpectedUserId !== identity.userId) {
       throw new Error("Sub2api 登录 token 与当前用户不匹配");

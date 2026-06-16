@@ -286,6 +286,14 @@ export function extractSub2ApiIdentity(payload) {
   };
 }
 
+export function extractSub2ApiIdentityFromJwtClaims(token) {
+  const payload = jwt.decode(token);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Sub2api 登录 token 内容格式错误");
+  }
+  return extractSub2ApiIdentity(payload);
+}
+
 export function verifySub2ApiSsoToken(token, secret) {
   const payload = jwt.verify(token, secret, { algorithms: ["HS256"] });
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {

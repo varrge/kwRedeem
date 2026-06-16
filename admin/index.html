@@ -814,6 +814,9 @@
                 世界杯竞猜嵌入页地址：<code>/sub2api-worldcup.html?connectionId=&lt;连接ID&gt;</code>。下注会使用 Sub2api 用户余额做小额扣款，结算命中后按后台赔率返还余额；仅建议用于平台内不可提现余额/积分。
               </p>
               <p class="hint">
+                若 Sub2api 域名与 KaWang 不在同一台服务器，例如 <code>sub.vsakura.top</code> 单独部署，而 <code>key.vsakura.top</code>、<code>adminkey.vsakura.top</code>、<code>api.vsakura.top</code> 在 KaWang 服务器，则 <code>sub.vsakura.top/_kwredeem/runtime-config.js</code> 也必须返回 <code>{"apiUrl":"https://api.vsakura.top"}</code>，否则嵌入页会把 API 请求发到错误域名。
+              </p>
+              <p class="hint">
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
               </p>
             </div>

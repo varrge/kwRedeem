@@ -72,7 +72,7 @@ export const sub2apiWorldCupBetPhases = {
   halftime: "halftime"
 };
 
-export const SUB2API_WORLDCUP_PRE_MATCH_LOCK_MS = 60 * 60 * 1000;
+export const SUB2API_WORLDCUP_PRE_MATCH_LOCK_MS = 0;
 
 const SUB2API_WORLDCUP_LIVE_API_STATUSES = new Set(["1H", "2H", "ET", "BT", "P", "SUSP", "INT"]);
 const SUB2API_WORLDCUP_HALFTIME_API_STATUSES = new Set(["HT"]);
@@ -170,9 +170,6 @@ export function getSub2ApiWorldCupBettingState(match, nowMs = Date.now()) {
     };
   }
 
-  if (nowMs >= preMatchClosesAt && nowMs < kickoffMs) {
-    return { open: false, phase: sub2apiWorldCupBetPhases.preMatch, label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.preMatch), reason: "开赛前 1 小时已停止下注", closesAt: new Date(preMatchClosesAt).toISOString() };
-  }
   if (isSub2ApiWorldCupApiStatusLive(apiStatus)) {
     return { open: false, phase: null, label: "", reason: "比赛进行中，等待中场盘", closesAt: null };
   }

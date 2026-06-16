@@ -581,9 +581,21 @@
         return state.matches.find((item) => item.id === state.selectedMatchId) || null;
       }
 
+      function clampStakeToMatchMax(match) {
+        if (!match || !refs.stakeInput.value) return null;
+        const stake = Number(refs.stakeInput.value);
+        const maxStake = Number(match.maxStake);
+        if (!Number.isFinite(stake) || !Number.isFinite(maxStake)) return stake;
+        if (stake > maxStake) {
+          refs.stakeInput.value = formatAmount(maxStake);
+          return maxStake;
+        }
+        return stake;
+      }
+
       function canSubmit() {
         const match = getSelectedMatch();
-        const stake = Number(refs.stakeInput.value);
+        const stake = clampStakeToMatchMax(match);
         return Boolean(
           state.sessionToken
           && match
@@ -675,21 +687,22 @@
 
       function renderSlip() {
         const match = getSelectedMatch();
-        const stake = Number(refs.stakeInput.value);
         refs.slipMatch.textContent = match ? `${match.homeTeam} vs ${match.awayTeam}` : "-";
         refs.slipPrediction.textContent = state.selectedPrediction ? predictionLabel(state.selectedPrediction) : "-";
         refs.slipOdds.textContent = state.selectedOdds ? formatAmount(state.selectedOdds) : "-";
-        refs.slipReturn.textContent = Number.isFinite(stake) && state.selectedOdds
-          ? formatAmount(stake * state.selectedOdds)
-          : "-";
         refs.slipStatus.textContent = match
           ? `${match.bettingPhaseLabel || statusLabel(match.status)} · ${formatAmount(match.minStake)} - ${formatAmount(match.maxStake)}`
           : "未选择比赛";
+        let stake = Number(refs.stakeInput.value);
         if (match) {
           refs.stakeInput.min = match.minStake;
           refs.stakeInput.max = match.maxStake;
           if (!refs.stakeInput.value) refs.stakeInput.value = match.minStake;
+          stake = clampStakeToMatchMax(match);
         }
+        refs.slipReturn.textContent = Number.isFinite(stake) && state.selectedOdds
+          ? formatAmount(stake * state.selectedOdds)
+          : "-";
         refs.submitBetBtn.disabled = !canSubmit();
       }
 
@@ -791,7 +804,7 @@
       async function submitBet() {
         const match = getSelectedMatch();
         if (!match || !canSubmit()) return;
-        const stake = Number(refs.stakeInput.value);
+        const stake = clampStakeToMatchMax(match);
         const phasePrefix = match.bettingPhaseLabel ? `${match.bettingPhaseLabel}，` : "";
         const message = `确认投注 ${match.homeTeam} vs ${match.awayTeam}：${phasePrefix}${predictionLabel(state.selectedPrediction)}，金额 ${formatAmount(stake)}？`;
         if (!window.confirm(message)) return;

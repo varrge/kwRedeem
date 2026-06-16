@@ -3114,7 +3114,7 @@ async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionTo
         { value: sub2apiWorldCupPredictions.draw, label: "平局" },
         { value: sub2apiWorldCupPredictions.away, label: "客胜" }
       ],
-      ruleText: "赛前盘开赛前 1 小时停止下注；中场盘仅在中场休息时开放一次。下注后立即扣除余额，命中后按赔率返还余额。"
+      ruleText: "赛前盘开赛时停止下注；中场盘仅在中场休息时开放一次。下注后立即扣除余额，命中后按赔率返还余额。"
     },
     matches: getSub2ApiWorldCupPublicMatches(connection.id, identity.userId),
     bets: getSub2ApiWorldCupMyBets(connection.id, identity.userId),
@@ -3237,7 +3237,7 @@ const sub2apiWorldCupBetSchema = z.object({
     sub2apiWorldCupPredictions.draw,
     sub2apiWorldCupPredictions.away
   ]),
-  stake: z.coerce.number().min(0.01).max(SUB2API_WORLDCUP_MAX_ADMIN_STAKE)
+  stake: z.coerce.number().min(0.01).refine(Number.isFinite, "投注额不正确")
 });
 
 async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
@@ -3266,8 +3266,13 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     error.statusCode = 403;
     throw error;
   }
-  if (payload.stake < Number(match.min_stake) || payload.stake > Number(match.max_stake)) {
-    const error = new Error(`投注额必须在 ${Number(match.min_stake)} 到 ${Number(match.max_stake)} 之间`);
+  const minStake = Number(match.min_stake);
+  const maxStake = Number(match.max_stake);
+  if (Number.isFinite(maxStake) && payload.stake > maxStake) {
+    payload.stake = roundSub2ApiWorldCupAmount(maxStake);
+  }
+  if (!Number.isFinite(minStake) || payload.stake < minStake) {
+    const error = new Error(`投注额必须不低于 ${Number(match.min_stake)}`);
     error.statusCode = 400;
     throw error;
   }

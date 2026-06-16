@@ -503,7 +503,7 @@ export function parseApiFootballFixture(item, nowMs = Date.now()) {
     status = sub2apiWorldCupMatchStatuses.cancelled;
   } else if (isSub2ApiWorldCupApiStatusLive(statusShort)) {
     status = sub2apiWorldCupMatchStatuses.locked;
-  } else if (Number.isFinite(kickoffMs) && kickoffMs - nowMs <= 60 * 60 * 1000) {
+  } else if (Number.isFinite(kickoffMs) && kickoffMs <= nowMs) {
     status = sub2apiWorldCupMatchStatuses.locked;
   }
 
@@ -553,7 +553,7 @@ export function parseFootballDataMatch(item, nowMs = Date.now()) {
     status = sub2apiWorldCupMatchStatuses.cancelled;
   } else if (isSub2ApiWorldCupApiStatusLive(statusShort)) {
     status = sub2apiWorldCupMatchStatuses.locked;
-  } else if (Number.isFinite(kickoffMs) && kickoffMs - nowMs <= 60 * 60 * 1000) {
+  } else if (Number.isFinite(kickoffMs) && kickoffMs <= nowMs) {
     status = sub2apiWorldCupMatchStatuses.locked;
   }
 
@@ -612,7 +612,7 @@ export function parseZafronixMatch(item, nowMs = Date.now()) {
     status = sub2apiWorldCupMatchStatuses.cancelled;
   } else if (isSub2ApiWorldCupApiStatusLive(statusShort)) {
     status = sub2apiWorldCupMatchStatuses.locked;
-  } else if (Number.isFinite(kickoffMs) && kickoffMs - nowMs <= 60 * 60 * 1000) {
+  } else if (Number.isFinite(kickoffMs) && kickoffMs <= nowMs) {
     status = sub2apiWorldCupMatchStatuses.locked;
   }
 

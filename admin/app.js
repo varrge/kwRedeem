@@ -2360,8 +2360,12 @@ async function runWorldCupManualSync() {
     const emptyHint = Number(discovery.fixturesReturned || 0) === 0
       ? `${provider} 未返回赛事，请检查数据源、赛季、API Key/Token 权限或当前日期是否有赛程。`
       : "";
+    const oddsDetail = odds.source
+      ? `，来源 ${odds.source}，原始 ${odds.source === "uniform" ? (odds.uniformRaw ?? 0) : (odds.drawRaw ?? 0)} 场，解析 ${odds.source === "uniform" ? (odds.uniformParsed ?? 0) : (odds.drawParsed ?? 0)} 场`
+      : "";
+    const oddsError = odds.error ? `，错误：${odds.error}` : "";
     const oddsHint = odds.returned !== undefined || odds.matched !== undefined
-      ? `体彩返回 ${odds.returned ?? 0} 场，匹配 ${odds.matched ?? 0} 场，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`
+      ? `体彩目标 ${odds.targets ?? 0} 场，返回 ${odds.returned ?? 0} 场${oddsDetail}，匹配 ${odds.matched ?? 0} 场，失败 ${odds.failed ?? 0} 次${oddsError}，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`
       : `赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`;
     setHint(
       refs.worldCupApiSettingsResult,

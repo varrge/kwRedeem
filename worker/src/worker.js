@@ -733,9 +733,23 @@ function extractSportteryMatchList(json) {
   return [];
 }
 
+function extractSportteryNestedLists(json, listKey) {
+  if (!json || typeof json !== "object") return [];
+  const lists = [];
+  const stack = [json];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current[listKey])) lists.push(...current[listKey]);
+    for (const value of Object.values(current)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return lists;
+}
+
 function extractSportteryUniformMatchList(json) {
-  const groups = Array.isArray(json?.value?.matchInfoList) ? json.value.matchInfoList : [];
-  return groups.flatMap((group) => Array.isArray(group?.subMatchList) ? group.subMatchList : []);
+  return extractSportteryNestedLists(json, "subMatchList");
 }
 
 function parseSportteryOdd(value) {
@@ -808,10 +822,14 @@ function getSportteryWorldCupOddsTargets(now = nowIso()) {
 }
 
 async function fetchSportteryJson(url) {
-  const response = await fetch(url, {
+  const requestUrl = new URL(url);
+  requestUrl.searchParams.set("_", String(Date.now()));
+  const response = await fetch(requestUrl, {
     headers: {
       Accept: "application/json, text/plain, */*",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
       Origin: "https://www.sporttery.cn",
       Referer: "https://www.sporttery.cn/",
       "Sec-Fetch-Dest": "empty",
@@ -839,24 +857,61 @@ async function fetchSportteryJson(url) {
 
 async function fetchSportteryWorldCupOddsMatches() {
   const uniformJson = await fetchSportteryJson(WORLDCUP_SPORTTERY_MATCH_ODDS_URL);
-  const uniformMatches = extractSportteryUniformMatchList(uniformJson)
+  const uniformItems = extractSportteryUniformMatchList(uniformJson);
+  const uniformMatches = uniformItems
     .map(parseSportteryUniformWorldCupOddsMatch)
     .filter(Boolean);
-  if (uniformMatches.length) return uniformMatches;
+  if (uniformMatches.length) {
+    return {
+      matches: uniformMatches,
+      diagnostics: {
+        source: "uniform",
+        uniformRaw: uniformItems.length,
+        uniformParsed: uniformMatches.length,
+        drawRaw: 0,
+        drawParsed: 0
+      }
+    };
+  }
 
   const drawJson = await fetchSportteryJson(WORLDCUP_SPORTTERY_DRAW_ODDS_URL);
-  return extractSportteryMatchList(drawJson)
+  const drawItems = extractSportteryMatchList(drawJson);
+  const drawMatches = drawItems
     .map(parseSportteryWorldCupOddsMatch)
     .filter(Boolean);
+  return {
+    matches: drawMatches,
+    diagnostics: {
+      source: "draw",
+      uniformRaw: uniformItems.length,
+      uniformParsed: uniformMatches.length,
+      drawRaw: drawItems.length,
+      drawParsed: drawMatches.length
+    }
+  };
 }
 
 async function syncSportteryWorldCupOdds(nowMs) {
   const targets = getSportteryWorldCupOddsTargets(new Date(nowMs).toISOString());
-  const stats = { targets: targets.length, attempted: 0, updated: 0, failed: 0, returned: 0, matched: 0 };
+  const stats = {
+    targets: targets.length,
+    attempted: 0,
+    updated: 0,
+    failed: 0,
+    returned: 0,
+    matched: 0,
+    source: "",
+    uniformRaw: 0,
+    uniformParsed: 0,
+    drawRaw: 0,
+    drawParsed: 0,
+    error: ""
+  };
   if (!targets.length) return stats;
   try {
     stats.attempted = 1;
-    const matches = await fetchSportteryWorldCupOddsMatches();
+    const { matches, diagnostics } = await fetchSportteryWorldCupOddsMatches();
+    Object.assign(stats, diagnostics);
     stats.returned = matches.length;
     const oddsByKey = new Map();
     for (const item of matches) {
@@ -879,6 +934,7 @@ async function syncSportteryWorldCupOdds(nowMs) {
     }
   } catch (error) {
     stats.failed += 1;
+    stats.error = String(error?.message || error || "").slice(0, 180);
     console.warn("[KaWang worker] worldcup sporttery odds:", error.message || error);
   }
   return stats;

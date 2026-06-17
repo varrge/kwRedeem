@@ -2965,7 +2965,10 @@ function assertSub2ApiRemoteEnvelopeOk(result) {
 }
 
 async function getSub2ApiWorldCupRemoteUser(connection, userId) {
-  const result = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(userId)}`);
+  const result = await callSub2ApiRemote(
+    connection,
+    `/api/v1/admin/users/${encodeURIComponent(userId)}?_=${Date.now()}`
+  );
   assertSub2ApiRemoteEnvelopeOk(result);
   const payload = unwrapSub2ApiRemoteData(result.json);
   return payload && typeof payload === "object" ? payload : {};
@@ -3343,9 +3346,17 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     });
     const debitPayload = unwrapSub2ApiRemoteData(debitResult.json);
     const debitBalance = getSub2ApiWorldCupRemoteBalance(debitPayload);
-    balanceAfter = debitBalance === null && balance !== null
-      ? roundSub2ApiWorldCupAmount(balance - payload.stake)
-      : debitBalance;
+    try {
+      const refreshedRemoteUser = await getSub2ApiWorldCupRemoteUser(connection, identity.userId);
+      balanceAfter = getSub2ApiWorldCupRemoteBalance(refreshedRemoteUser);
+    } catch {
+      balanceAfter = null;
+    }
+    if (balanceAfter === null) {
+      balanceAfter = debitBalance === null && balance !== null
+        ? roundSub2ApiWorldCupAmount(balance - payload.stake)
+        : debitBalance;
+    }
     const updatedAt = nowIso();
     db.prepare(`
       UPDATE sub2api_worldcup_bets

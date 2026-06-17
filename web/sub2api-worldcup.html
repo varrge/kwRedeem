@@ -165,10 +165,63 @@
         font-size: 17px;
       }
 
+      .match-tools {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .filter-tabs {
+        display: inline-flex;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-weak);
+      }
+
+      .filter-tab {
+        min-height: 30px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 10px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .filter-tab.active {
+        background: var(--panel);
+        color: var(--accent);
+        box-shadow: 0 1px 4px rgba(25, 36, 60, 0.12);
+      }
+
       .match-list, .history-list, .leaderboard {
         display: grid;
         gap: 10px;
         padding: 14px;
+      }
+
+      .match-list {
+        max-height: min(72vh, 720px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        align-content: start;
+      }
+
+      .match-list::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      .match-list::-webkit-scrollbar-thumb {
+        border: 3px solid transparent;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--muted) 45%, transparent);
+        background-clip: padding-box;
       }
 
       .match-card {
@@ -336,10 +389,14 @@
       @media (max-width: 900px) {
         .shell { width: calc(100vw - 20px); padding-top: 10px; }
         .topbar, .layout, .match-top { grid-template-columns: 1fr; }
+        .panel-head { align-items: flex-start; flex-direction: column; }
+        .match-tools { justify-content: flex-start; width: 100%; }
+        .filter-tabs { width: 100%; overflow-x: auto; }
         .actions { justify-content: stretch; }
         .actions button { flex: 1; }
         .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .bet-slip { position: static; }
+        .match-list { max-height: 64vh; }
       }
 
       @media (max-width: 560px) {
@@ -383,7 +440,15 @@
         <div class="panel">
           <div class="panel-head">
             <h2>比赛</h2>
-            <span id="rule-line" class="hint"></span>
+            <div class="match-tools">
+              <div class="filter-tabs" id="match-filter-tabs" role="tablist" aria-label="比赛筛选">
+                <button class="filter-tab active" type="button" data-filter="all" role="tab" aria-selected="true">全部</button>
+                <button class="filter-tab" type="button" data-filter="open" role="tab" aria-selected="false">可竞猜</button>
+                <button class="filter-tab" type="button" data-filter="mine" role="tab" aria-selected="false">已参与</button>
+                <button class="filter-tab" type="button" data-filter="finished" role="tab" aria-selected="false">已结束</button>
+              </div>
+              <span id="rule-line" class="hint"></span>
+            </div>
           </div>
           <div id="match-list" class="match-list"></div>
         </div>
@@ -444,6 +509,7 @@
         betCount: document.querySelector("#bet-count"),
         payoutValue: document.querySelector("#payout-value"),
         ruleLine: document.querySelector("#rule-line"),
+        matchFilterTabs: document.querySelector("#match-filter-tabs"),
         matchList: document.querySelector("#match-list"),
         slipStatus: document.querySelector("#slip-status"),
         slipMatch: document.querySelector("#slip-match"),
@@ -465,7 +531,8 @@
         leaderboard: [],
         selectedMatchId: "",
         selectedPrediction: "",
-        selectedOdds: 0
+        selectedOdds: 0,
+        matchFilter: "all"
       };
 
       const PREDICTION_LABELS = {
@@ -636,9 +703,38 @@
         return `<div class="hint">${escapeHtml(bet.phaseLabel || "")}已选 ${escapeHtml(bet.predictionLabel)}，投注 ${escapeHtml(formatAmount(bet.stake))}，状态 ${escapeHtml(statusLabel(bet.status))}</div>`;
       }
 
+      function hasMyWorldCupBet(match) {
+        return Boolean(match.myBet || match.myBetForCurrentPhase || match.myBets?.preMatch || match.myBets?.halftime);
+      }
+
+      function isFinishedWorldCupMatch(match) {
+        return ["finished", "settled", "cancelled"].includes(match.status);
+      }
+
+      function getFilteredMatches() {
+        if (state.matchFilter === "open") {
+          return state.matches.filter((item) => item.bettingOpen && !item.myBetForCurrentPhase);
+        }
+        if (state.matchFilter === "mine") {
+          return state.matches.filter(hasMyWorldCupBet);
+        }
+        if (state.matchFilter === "finished") {
+          return state.matches.filter(isFinishedWorldCupMatch);
+        }
+        return state.matches;
+      }
+
+      function renderMatchFilters() {
+        refs.matchFilterTabs.querySelectorAll(".filter-tab").forEach((button) => {
+          const active = button.dataset.filter === state.matchFilter;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", active ? "true" : "false");
+        });
+      }
+
       function renderMatches(matches) {
         if (!matches.length) {
-          refs.matchList.innerHTML = `<div class="empty">暂无比赛</div>`;
+          refs.matchList.innerHTML = `<div class="empty">${state.matchFilter === "all" ? "暂无比赛" : "当前筛选下暂无比赛"}</div>`;
           return;
         }
         refs.matchList.innerHTML = matches.map((item) => {
@@ -744,7 +840,8 @@
         state.bets = payload.bets || [];
         state.leaderboard = payload.leaderboard || [];
         renderSummary(payload);
-        renderMatches(state.matches);
+        renderMatchFilters();
+        renderMatches(getFilteredMatches());
         renderHistory(state.bets);
         renderLeaderboard(state.leaderboard);
         renderSlip();
@@ -842,8 +939,16 @@
         state.selectedPrediction = button.dataset.prediction || "";
         state.selectedOdds = Number(button.dataset.odds || 0);
         refs.stakeInput.value = "";
-        renderMatches(state.matches);
+        renderMatches(getFilteredMatches());
         renderSlip();
+      });
+
+      refs.matchFilterTabs.addEventListener("click", (event) => {
+        const button = event.target.closest(".filter-tab");
+        if (!button) return;
+        state.matchFilter = button.dataset.filter || "all";
+        renderMatchFilters();
+        renderMatches(getFilteredMatches());
       });
 
       refs.stakeInput.addEventListener("input", renderSlip);

@@ -1861,9 +1861,22 @@ function summarizeSub2ApiRemoteResponse(error) {
   return {
     status: info.status,
     ok: info.ok,
+    contentType: info.contentType || "",
     shape: getSub2ApiRemoteShape(info.json),
     textSample: typeof info.text === "string" ? info.text.slice(0, 500) : ""
   };
+}
+
+function assertSub2ApiRemoteJsonResponse(result) {
+  if (result?.json && typeof result.json === "object") return;
+  const text = String(result?.text || "").trim();
+  const contentType = String(result?.contentType || "").toLowerCase();
+  if (contentType.includes("text/html") || text.startsWith("<!doctype") || text.startsWith("<html") || text.startsWith("<script")) {
+    const error = new Error("远程 Sub2api 返回了网页防护页面，请将连接 Base URL 改为服务端可访问的 API 源站地址，或在防护/代理中放行 api.vsakura.top");
+    error.status = result?.status;
+    error.responseInfo = result;
+    throw error;
+  }
 }
 
 async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null, headers = {} } = {}) {
@@ -1882,13 +1895,14 @@ async function callSub2ApiRemote(connection, pathname, { method = "GET", body = 
   });
   const text = await response.text();
   const json = safeParseJson(text, null);
-  const result = { ok: response.ok, status: response.status, text, json };
+  const result = { ok: response.ok, status: response.status, contentType: response.headers.get("content-type") || "", text, json };
   if (!response.ok) {
     const error = new Error(getSub2ApiRemoteMessage(result));
     error.status = response.status;
     error.responseInfo = result;
     throw error;
   }
+  assertSub2ApiRemoteJsonResponse(result);
   assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
 }
@@ -1904,13 +1918,14 @@ async function callSub2ApiUserRemote(connection, pathname, accessToken) {
   });
   const text = await response.text();
   const json = safeParseJson(text, null);
-  const result = { ok: response.ok, status: response.status, text, json };
+  const result = { ok: response.ok, status: response.status, contentType: response.headers.get("content-type") || "", text, json };
   if (!response.ok) {
     const error = new Error(getSub2ApiRemoteMessage(result));
     error.status = response.status;
     error.responseInfo = result;
     throw error;
   }
+  assertSub2ApiRemoteJsonResponse(result);
   assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
 }

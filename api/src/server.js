@@ -3090,8 +3090,12 @@ function getSub2ApiWorldCupLeaderboard(connectionId, limit = 20) {
     .map((item, index) => ({ ...item, rank: index + 1 }));
 }
 
-async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken = null) {
+async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken = null, options = {}) {
   const balance = await getSub2ApiWorldCupBalancePayload(connection, identity.userId);
+  const balanceOverride = Number(options.balanceOverride);
+  const hasBalanceOverride = options.balanceOverride !== null
+    && options.balanceOverride !== undefined
+    && Number.isFinite(balanceOverride);
   return {
     sessionToken,
     account: {
@@ -3104,8 +3108,8 @@ async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionTo
       name: connection.name,
       baseUrl: connection.base_url
     },
-    balance: balance.balance,
-    balanceError: balance.balanceError,
+    balance: hasBalanceOverride ? balanceOverride : balance.balance,
+    balanceError: hasBalanceOverride ? "" : balance.balanceError,
     settings: {
       minStake: SUB2API_WORLDCUP_DEFAULT_MIN_STAKE,
       maxStake: SUB2API_WORLDCUP_DEFAULT_MAX_STAKE,
@@ -3281,6 +3285,7 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
   const now = nowIso();
   const betId = nanoid(16);
   const requestId = `worldcup_${Date.now()}_${nanoid(8)}`;
+  let balanceAfter = null;
   const insertBet = db.transaction(() => {
     const existing = getSub2ApiWorldCupActiveBet(match.id, identity.userId, bettingState.phase);
     if (existing) {
@@ -3336,6 +3341,11 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
       notes: `世界杯竞猜扣款：${match.home_team} 对阵 ${match.away_team}，${bettingState.label}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
       idempotencyKey: `worldcup_bet_${betId}`
     });
+    const debitPayload = unwrapSub2ApiRemoteData(debitResult.json);
+    const debitBalance = getSub2ApiWorldCupRemoteBalance(debitPayload);
+    balanceAfter = debitBalance === null && balance !== null
+      ? roundSub2ApiWorldCupAmount(balance - payload.stake)
+      : debitBalance;
     const updatedAt = nowIso();
     db.prepare(`
       UPDATE sub2api_worldcup_bets
@@ -3384,7 +3394,10 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     LEFT JOIN sub2api_worldcup_matches m ON m.id = b.match_id
     WHERE b.id = ?
   `).get(betId);
-  return serializeSub2ApiWorldCupBet(row);
+  return {
+    ...serializeSub2ApiWorldCupBet(row),
+    balanceAfter
+  };
 }
 
 async function settleSub2ApiWorldCupMatch(match, actor = "system") {
@@ -4146,7 +4159,7 @@ app.post("/api/public/sub2api/worldcup/bets", { preHandler: requireSub2ApiWorldC
 
   try {
     const bet = await placeSub2ApiWorldCupBet({ connection, identity, body: request.body });
-    const payload = await buildSub2ApiWorldCupPublicPayload(connection, identity);
+    const payload = await buildSub2ApiWorldCupPublicPayload(connection, identity, null, { balanceOverride: bet.balanceAfter });
     return reply.code(201).send({ success: true, bet, ...payload });
   } catch (error) {
     return reply.code(error.statusCode || error.status || 400).send({ message: error.message || "竞猜提交失败" });

@@ -3432,7 +3432,8 @@ async function settleSub2ApiWorldCupMatch(match, actor = "system") {
     won: 0,
     lost: 0,
     payoutFailed: 0,
-    payoutTotal: 0
+    payoutTotal: 0,
+    payouts: []
   };
 
   for (const bet of bets) {
@@ -3454,6 +3455,15 @@ async function settleSub2ApiWorldCupMatch(match, actor = "system") {
         notes: `世界杯竞猜派奖：${match.home_team} ${match.home_score}-${match.away_score} ${match.away_team}，投注 ${bet.stake}，赔率 ${bet.odds}`,
         idempotencyKey: `worldcup_payout_${bet.id}`
       });
+      const creditPayload = unwrapSub2ApiRemoteData(creditResult.json);
+      let balanceAfter = getSub2ApiWorldCupRemoteBalance(creditPayload);
+      try {
+        const refreshedRemoteUser = await getSub2ApiWorldCupRemoteUser(connection, bet.sub2api_user_id);
+        const refreshedBalance = getSub2ApiWorldCupRemoteBalance(refreshedRemoteUser);
+        if (refreshedBalance !== null) balanceAfter = refreshedBalance;
+      } catch {
+        // The credit response is still enough to prove the remote add call succeeded.
+      }
       db.prepare(`
         UPDATE sub2api_worldcup_bets
         SET status = ?, payout = ?, remote_credit_response = ?, error_message = NULL,
@@ -3469,6 +3479,13 @@ async function settleSub2ApiWorldCupMatch(match, actor = "system") {
       );
       stats.won += 1;
       stats.payoutTotal = roundSub2ApiWorldCupAmount(stats.payoutTotal + payout);
+      stats.payouts.push({
+        betId: bet.id,
+        userId: bet.sub2api_user_id,
+        payout,
+        balanceAfter,
+        status: sub2apiWorldCupBetStatuses.won
+      });
     } catch (error) {
       db.prepare(`
         UPDATE sub2api_worldcup_bets
@@ -3482,6 +3499,13 @@ async function settleSub2ApiWorldCupMatch(match, actor = "system") {
         bet.id
       );
       stats.payoutFailed += 1;
+      stats.payouts.push({
+        betId: bet.id,
+        userId: bet.sub2api_user_id,
+        payout,
+        errorMessage: error.message || "派奖失败",
+        status: sub2apiWorldCupBetStatuses.payoutFailed
+      });
     }
   }
 

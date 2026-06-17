@@ -2760,7 +2760,16 @@ async function settleWorldCupMatch(id) {
       body: JSON.stringify({ homeScore: Number(homeScore), awayScore: Number(awayScore) })
     });
     const stats = payload.stats || {};
-    setHint(refs.worldCupMatchResult, `结算完成：中奖 ${stats.won || 0}，未中 ${stats.lost || 0}，派奖失败 ${stats.payoutFailed || 0}`);
+    const failedPayouts = Array.isArray(stats.payouts)
+      ? stats.payouts.filter((item) => item.status === "payout_failed")
+      : [];
+    const failureHint = failedPayouts.length
+      ? `；失败明细：${failedPayouts.map((item) => `${item.userId || "-"} ${item.errorMessage || "派奖失败"}`).join("；")}`
+      : "";
+    setHint(
+      refs.worldCupMatchResult,
+      `结算完成：中奖 ${stats.won || 0}，未中 ${stats.lost || 0}，派奖失败 ${stats.payoutFailed || 0}，派奖 ${formatWorldCupAmount(stats.payoutTotal || 0)}${failureHint}`
+    );
     await refreshWorldCupMatches();
     await refreshWorldCupBets();
   } catch (error) {

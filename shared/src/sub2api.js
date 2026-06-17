@@ -135,17 +135,20 @@ export function getSub2ApiWorldCupBettingState(match, nowMs = Date.now()) {
     return { open: false, phase: null, label: "", reason: "比赛已结束", closesAt: null };
   }
 
-  const apiStatus = normalizeSub2ApiWorldCupApiStatus(match.api_status_short);
-  if (isSub2ApiWorldCupApiStatusHalftime(apiStatus)) {
+  const halftimeOpenMs = new Date(match.halftime_open_at || match.halftimeOpenAt || "").getTime();
+  const halftimeCloseMs = new Date(match.halftime_close_at || match.halftimeCloseAt || "").getTime();
+  if (Number.isFinite(halftimeOpenMs) && Number.isFinite(halftimeCloseMs)
+    && nowMs >= halftimeOpenMs && nowMs < halftimeCloseMs) {
     return {
       open: true,
       phase: sub2apiWorldCupBetPhases.halftime,
       label: getSub2ApiWorldCupBetPhaseLabel(sub2apiWorldCupBetPhases.halftime),
       reason: "",
-      closesAt: null
+      closesAt: new Date(halftimeCloseMs).toISOString()
     };
   }
 
+  const apiStatus = normalizeSub2ApiWorldCupApiStatus(match.api_status_short);
   const kickoffMs = new Date(match.kickoff_at).getTime();
   if (!Number.isFinite(kickoffMs)) {
     return { open: false, phase: null, label: "", reason: "开赛时间无效", closesAt: null };
@@ -171,7 +174,10 @@ export function getSub2ApiWorldCupBettingState(match, nowMs = Date.now()) {
   }
 
   if (isSub2ApiWorldCupApiStatusLive(apiStatus)) {
-    return { open: false, phase: null, label: "", reason: "比赛进行中，等待中场盘", closesAt: null };
+    if (Number.isFinite(halftimeOpenMs) && nowMs < halftimeOpenMs) {
+      return { open: false, phase: null, label: "", reason: "比赛进行中，等待中场盘", closesAt: new Date(halftimeOpenMs).toISOString() };
+    }
+    return { open: false, phase: null, label: "", reason: "比赛进行中", closesAt: null };
   }
   return { open: false, phase: null, label: "", reason: "该比赛已停止竞猜", closesAt: null };
 }

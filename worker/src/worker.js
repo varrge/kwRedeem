@@ -76,6 +76,7 @@ const WORLDCUP_SPORTTERY_DRAW_ODDS_URL = "https://webapi.sporttery.cn/gateway/lo
 const WORLDCUP_ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 let worldCupSyncRunning = false;
 let worldCupLastDiscoveryAt = 0;
+let worldCupLastDiscoveryDate = "";
 let worldCupLastTickAt = 0;
 let worldCupMissingKeyLogged = false;
 let worldCupDisabledLogged = false;
@@ -126,6 +127,20 @@ function getBeijingDateKey(value) {
       .map((part) => [part.type, part.value])
   );
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addMinutesIso(value, minutes) {
+  const ms = parseTimeMs(value);
+  if (!ms) return null;
+  return new Date(ms + Number(minutes || 0) * 60 * 1000).toISOString();
+}
+
+function getWorldCupAddedMinutes(parsedFixture, fallback = 0) {
+  const elapsed = Number(parsedFixture?.apiElapsed);
+  if (!Number.isFinite(elapsed)) return fallback;
+  if (elapsed > 45 && elapsed < 70) return Math.max(0, Math.round(elapsed - 45));
+  if (elapsed > 90 && elapsed < 130) return Math.max(0, Math.round(elapsed - 90));
+  return fallback;
 }
 
 function normalizeWorldCupMatchName(value) {
@@ -200,6 +215,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
   }
   const now = nowIso();
   const source = parsedFixture.source || "api-football";
+  const displayDate = getBeijingDateKey(parsedFixture.kickoffAt);
   const sync = db.transaction(() => {
     let count = 0;
     for (const connection of connections) {
@@ -237,6 +253,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
               api_status_long = ?,
               api_elapsed = ?,
               api_last_synced_at = ?,
+              display_date = ?,
               halftime_betting_opened_at = CASE
                 WHEN ? IS NOT NULL AND halftime_betting_opened_at IS NULL THEN ?
                 ELSE halftime_betting_opened_at
@@ -260,6 +277,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
           parsedFixture.apiStatusLong || null,
           parsedFixture.apiElapsed,
           now,
+          displayDate || existing.display_date || null,
           halftimeSyncedAt,
           halftimeSyncedAt,
           now,
@@ -272,11 +290,11 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
             home_score, away_score, result, odds_home, odds_draw, odds_away, min_stake,
             max_stake, note, source, api_fixture_id, api_league_id, api_season,
             api_status_short, api_status_long, api_elapsed, api_last_synced_at,
-            odds_last_synced_at, halftime_betting_opened_at, auto_settle_attempted_at,
+            odds_last_synced_at, halftime_betting_opened_at, display_date, auto_settle_attempted_at,
             created_at, updated_at, settled_at
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.8, 3.2, 1.8, 0.1, 2, NULL,
-                  ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL)
+                  ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, NULL)
         `).run(
           randomWorldCupId(),
           connection.id,
@@ -298,6 +316,7 @@ function upsertApiFootballWorldCupFixture(parsedFixture, connections) {
           parsedFixture.apiElapsed,
           now,
           halftimeSyncedAt,
+          displayDate || null,
           now,
           now
         );
@@ -481,13 +500,10 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
       const response = await fetchZafronixWorldCupMatches(db, { priority: "normal", settings });
       const items = extractZafronixMatchItems(response?.json);
       stats.fixturesReturned = items.length;
-      const selectedMatches = selectZafronixWorldCupMatches(
-        items.map((item) => parseZafronixMatch(item, nowMs)),
-        nowMs,
-        getPinnedZafronixWorldCupFixtureIds()
-      );
-      stats.rowsPruned = pruneLegacyWorldCupProviderMatches()
-        + pruneUnselectedZafronixWorldCupMatches(selectedMatches.map((match) => match.apiFixtureId));
+      const selectedMatches = items
+        .map((item) => parseZafronixMatch(item, nowMs))
+        .filter((match) => match?.apiFixtureId && match.kickoffAt && parseTimeMs(match.kickoffAt));
+      stats.rowsPruned = pruneLegacyWorldCupProviderMatches();
       const seen = new Set();
       let synced = 0;
       for (const match of selectedMatches) {
@@ -498,6 +514,7 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
       stats.fixturesSeen = seen.size;
       stats.rowsSynced = synced;
       worldCupLastDiscoveryAt = nowMs;
+      worldCupLastDiscoveryDate = getApiFootballUsageDate(new Date(nowMs), settings.timezone || "Asia/Shanghai");
       if (synced > 0) {
         console.log(`[KaWang worker] worldcup: synced ${seen.size} Zafronix matches for ${connections.length} Sub2api connections`);
       }
@@ -526,6 +543,7 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
       stats.fixturesSeen = seen.size;
       stats.rowsSynced = synced;
       worldCupLastDiscoveryAt = nowMs;
+      worldCupLastDiscoveryDate = getApiFootballUsageDate(new Date(nowMs), settings.timezone || "Asia/Shanghai");
       if (synced > 0) {
         console.log(`[KaWang worker] worldcup: synced ${seen.size} Football-Data matches for ${connections.length} Sub2api connections`);
       }
@@ -563,6 +581,7 @@ async function discoverApiFootballWorldCupFixtures(connections, nowMs, settings)
     }
   }
   worldCupLastDiscoveryAt = nowMs;
+  worldCupLastDiscoveryDate = getApiFootballUsageDate(new Date(nowMs), settings.timezone || "Asia/Shanghai");
   stats.fixturesSeen = seen.size;
   stats.rowsSynced = synced;
   if (synced > 0) {
@@ -684,6 +703,217 @@ async function syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settin
       stats.failed += 1;
       logApiFootballSyncError(`fixture ${row.api_fixture_id}`, error);
       if (error?.code === "API_FOOTBALL_HARD_LIMIT") break;
+    }
+  }
+  return stats;
+}
+
+async function refreshWorldCupFixtureById(row, connections, nowMs, settings, priority = "emergency") {
+  if (!row?.api_fixture_id) return null;
+  if (settings.provider === "api-football") {
+    return await syncApiFootballFixtureById(row.api_fixture_id, connections, nowMs, settings, priority);
+  }
+  if (settings.provider === "football-data") {
+    const response = await fetchFootballDataWorldCupMatches(db, { priority, settings });
+    const items = Array.isArray(response?.json?.matches) ? response.json.matches : [];
+    const item = items.find((candidate) => String(candidate?.id || "") === String(row.api_fixture_id));
+    if (!item) return null;
+    const parsed = parseFootballDataMatch(item, nowMs);
+    upsertApiFootballWorldCupFixture(parsed, connections);
+    return parsed;
+  }
+  if (settings.provider === "zafronix") {
+    const response = await fetchZafronixWorldCupMatches(db, { priority, settings });
+    const items = extractZafronixMatchItems(response?.json);
+    const item = items.find((candidate) => String(candidate?.id || "") === String(row.api_fixture_id));
+    if (!item) return null;
+    const parsed = parseZafronixMatch(item, nowMs);
+    upsertApiFootballWorldCupFixture(parsed, connections);
+    return parsed;
+  }
+  return null;
+}
+
+async function checkWorldCupHalftimeWindows(connections, nowMs, settings) {
+  const now = new Date(nowMs).toISOString();
+  const rows = db.prepare(`
+    SELECT api_fixture_id,
+           MIN(kickoff_at) AS kickoff_at,
+           MIN(source) AS source,
+           MAX(halftime_schedule_checked_at) AS halftime_schedule_checked_at
+    FROM sub2api_worldcup_matches
+    WHERE source IN ('api-football', 'football-data', 'zafronix')
+      AND api_fixture_id IS NOT NULL
+      AND status NOT IN (?, ?, ?)
+      AND halftime_open_at IS NULL
+      AND datetime(kickoff_at, '+45 minutes') <= datetime(?)
+    GROUP BY api_fixture_id
+    ORDER BY datetime(kickoff_at) ASC
+    LIMIT 10
+  `).all(
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    now
+  );
+
+  const stats = { targets: rows.length, checked: 0, opened: 0, failed: 0 };
+  for (const row of rows) {
+    try {
+      const parsed = await refreshWorldCupFixtureById(row, connections, nowMs, settings, getWorldCupRequestPriority(settings, true));
+      const addedMinutes = getWorldCupAddedMinutes(parsed, 0);
+      const halftimeOpenAt = addMinutesIso(row.kickoff_at, 45 + addedMinutes);
+      const halftimeCloseAt = addMinutesIso(halftimeOpenAt, 15);
+      const checkedAt = nowIso();
+      const result = db.prepare(`
+        UPDATE sub2api_worldcup_matches
+        SET first_half_added_minutes = ?,
+            halftime_open_at = ?,
+            halftime_close_at = ?,
+            halftime_betting_opened_at = COALESCE(halftime_betting_opened_at, ?),
+            halftime_schedule_checked_at = ?,
+            updated_at = ?
+        WHERE api_fixture_id = ?
+          AND source = ?
+          AND status NOT IN (?, ?)
+      `).run(
+        addedMinutes,
+        halftimeOpenAt,
+        halftimeCloseAt,
+        halftimeOpenAt,
+        checkedAt,
+        checkedAt,
+        row.api_fixture_id,
+        row.source,
+        sub2apiWorldCupMatchStatuses.settled,
+        sub2apiWorldCupMatchStatuses.cancelled
+      );
+      stats.checked += 1;
+      stats.opened += result.changes || 0;
+    } catch (error) {
+      stats.failed += 1;
+      logApiFootballSyncError(`halftime ${row.api_fixture_id}`, error);
+      if (isApiFootballLimitError(error)) break;
+    }
+  }
+  return stats;
+}
+
+async function checkWorldCupFinishWindows(connections, nowMs, settings) {
+  const now = new Date(nowMs).toISOString();
+  const rows = db.prepare(`
+    SELECT api_fixture_id,
+           MIN(halftime_close_at) AS halftime_close_at,
+           MIN(source) AS source
+    FROM sub2api_worldcup_matches
+    WHERE source IN ('api-football', 'football-data', 'zafronix')
+      AND api_fixture_id IS NOT NULL
+      AND status NOT IN (?, ?, ?)
+      AND halftime_close_at IS NOT NULL
+      AND finish_check_at IS NULL
+      AND datetime(halftime_close_at, '+45 minutes') <= datetime(?)
+    GROUP BY api_fixture_id
+    ORDER BY datetime(halftime_close_at) ASC
+    LIMIT 10
+  `).all(
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    now
+  );
+
+  const stats = { targets: rows.length, checked: 0, scheduled: 0, failed: 0 };
+  for (const row of rows) {
+    try {
+      const parsed = await refreshWorldCupFixtureById(row, connections, nowMs, settings, getWorldCupRequestPriority(settings, true));
+      const addedMinutes = getWorldCupAddedMinutes(parsed, 0);
+      const finishCheckAt = addMinutesIso(row.halftime_close_at, 45 + addedMinutes);
+      const checkedAt = nowIso();
+      const result = db.prepare(`
+        UPDATE sub2api_worldcup_matches
+        SET second_half_added_minutes = ?,
+            finish_check_at = ?,
+            finish_schedule_checked_at = ?,
+            updated_at = ?
+        WHERE api_fixture_id = ?
+          AND source = ?
+          AND status NOT IN (?, ?)
+      `).run(
+        addedMinutes,
+        finishCheckAt,
+        checkedAt,
+        checkedAt,
+        row.api_fixture_id,
+        row.source,
+        sub2apiWorldCupMatchStatuses.settled,
+        sub2apiWorldCupMatchStatuses.cancelled
+      );
+      stats.checked += 1;
+      stats.scheduled += result.changes || 0;
+    } catch (error) {
+      stats.failed += 1;
+      logApiFootballSyncError(`finish-window ${row.api_fixture_id}`, error);
+      if (isApiFootballLimitError(error)) break;
+    }
+  }
+  return stats;
+}
+
+async function checkWorldCupFinalResults(connections, nowMs, settings) {
+  const retryBefore = new Date(nowMs - 10 * 60 * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT api_fixture_id,
+           MIN(source) AS source,
+           MIN(finish_check_at) AS finish_check_at,
+           MAX(final_result_checked_at) AS final_result_checked_at
+    FROM sub2api_worldcup_matches
+    WHERE source IN ('api-football', 'football-data', 'zafronix')
+      AND api_fixture_id IS NOT NULL
+      AND status NOT IN (?, ?, ?)
+      AND finish_check_at IS NOT NULL
+      AND datetime(finish_check_at) <= datetime(?)
+      AND (final_result_checked_at IS NULL OR final_result_checked_at <= ?)
+    GROUP BY api_fixture_id
+    ORDER BY datetime(finish_check_at) ASC
+    LIMIT 10
+  `).all(
+    sub2apiWorldCupMatchStatuses.finished,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled,
+    new Date(nowMs).toISOString(),
+    retryBefore
+  );
+
+  const stats = { targets: rows.length, checked: 0, finished: 0, settled: 0, failed: 0 };
+  for (const row of rows) {
+    const checkedAt = nowIso();
+    db.prepare(`
+      UPDATE sub2api_worldcup_matches
+      SET final_result_checked_at = ?, updated_at = ?
+      WHERE api_fixture_id = ?
+        AND source = ?
+    `).run(checkedAt, checkedAt, row.api_fixture_id, row.source);
+    try {
+      const parsed = await refreshWorldCupFixtureById(row, connections, nowMs, settings, getWorldCupRequestPriority(settings, true));
+      stats.checked += 1;
+      if (parsed?.status === sub2apiWorldCupMatchStatuses.finished && parsed.result) {
+        stats.finished += 1;
+        const matches = db.prepare(`
+          SELECT id
+          FROM sub2api_worldcup_matches
+          WHERE api_fixture_id = ?
+            AND source = ?
+            AND status = ?
+        `).all(row.api_fixture_id, row.source, sub2apiWorldCupMatchStatuses.finished);
+        for (const match of matches) {
+          await requestWorldCupInternalSettle(match.id);
+          stats.settled += 1;
+        }
+      }
+    } catch (error) {
+      stats.failed += 1;
+      logApiFootballSyncError(`final ${row.api_fixture_id}`, error);
+      if (isApiFootballLimitError(error)) break;
     }
   }
   return stats;
@@ -1226,22 +1456,9 @@ async function autoCancelApiFootballWorldCupMatches(nowMs) {
 
 function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs, settings = {}) {
   if (!connections.length) return false;
-  if (settings.provider === "football-data" || settings.provider === "zafronix") return true;
-  if (!worldCupLastDiscoveryAt || nowMs - worldCupLastDiscoveryAt >= WORLDCUP_DISCOVERY_INTERVAL_MS) return true;
-  const upcomingCount = db.prepare(`
-    SELECT COUNT(DISTINCT api_fixture_id) AS count
-    FROM sub2api_worldcup_matches
-    WHERE source = 'api-football'
-      AND api_fixture_id IS NOT NULL
-      AND status NOT IN (?, ?, ?)
-      AND datetime(kickoff_at) >= datetime(?)
-  `).get(
-    sub2apiWorldCupMatchStatuses.finished,
-    sub2apiWorldCupMatchStatuses.settled,
-    sub2apiWorldCupMatchStatuses.cancelled,
-    new Date(nowMs).toISOString()
-  ).count;
-  return Number(upcomingCount || 0) < 2;
+  const dateKey = getApiFootballUsageDate(new Date(nowMs), settings.timezone || "Asia/Shanghai");
+  if (worldCupLastDiscoveryDate !== dateKey) return true;
+  return !worldCupLastDiscoveryAt;
 }
 
 async function apiFootballWorldCupTick({ force = false, sportteryOddsMatches = [], sportteryBrowserError = "" } = {}) {
@@ -1279,7 +1496,9 @@ async function apiFootballWorldCupTick({ force = false, sportteryOddsMatches = [
     const stats = {
       connections: connections.length,
       discovery: { requests: 0, fixturesReturned: 0, fixturesSeen: 0, rowsSynced: 0, rowsPruned: 0 },
-      tracked: { targets: 0, refreshed: 0, halftimeOddsAttempted: 0, halftimeOddsUpdated: 0, failed: 0 },
+      halftimeWindows: { targets: 0, checked: 0, opened: 0, failed: 0 },
+      finishWindows: { targets: 0, checked: 0, scheduled: 0, failed: 0 },
+      finalResults: { targets: 0, checked: 0, finished: 0, settled: 0, failed: 0 },
       upcomingOdds: { targets: 0, attempted: 0, updated: 0, failed: 0 },
       settle: { targets: 0, settled: 0, failed: 0 },
       cancel: { targets: 0, cancelled: 0, failed: 0 }
@@ -1292,8 +1511,12 @@ async function apiFootballWorldCupTick({ force = false, sportteryOddsMatches = [
         logApiFootballSyncError("discovery", error);
       }
     }
+    if (["api-football", "football-data", "zafronix"].includes(settings.provider)) {
+      stats.halftimeWindows = await checkWorldCupHalftimeWindows(connections, nowMs, settings);
+      stats.finishWindows = await checkWorldCupFinishWindows(connections, nowMs, settings);
+      stats.finalResults = await checkWorldCupFinalResults(connections, nowMs, settings);
+    }
     if (settings.provider === "api-football") {
-      stats.tracked = await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
       stats.upcomingOdds = await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
     } else if (settings.provider === "zafronix") {
       stats.upcomingOdds = await syncSportteryWorldCupOdds(nowMs, sportteryOddsMatches, sportteryBrowserError);

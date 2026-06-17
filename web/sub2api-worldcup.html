@@ -439,7 +439,7 @@
       <section class="layout">
         <div class="panel">
           <div class="panel-head">
-            <h2>比赛</h2>
+            <h2>比赛 <span id="display-date-line" class="hint"></span></h2>
             <div class="match-tools">
               <div class="filter-tabs" id="match-filter-tabs" role="tablist" aria-label="比赛筛选">
                 <button class="filter-tab active" type="button" data-filter="all" role="tab" aria-selected="true">全部</button>
@@ -509,6 +509,7 @@
         betCount: document.querySelector("#bet-count"),
         payoutValue: document.querySelector("#payout-value"),
         ruleLine: document.querySelector("#rule-line"),
+        displayDateLine: document.querySelector("#display-date-line"),
         matchFilterTabs: document.querySelector("#match-filter-tabs"),
         matchList: document.querySelector("#match-list"),
         slipStatus: document.querySelector("#slip-status"),
@@ -696,6 +697,7 @@
         refs.betCount.textContent = bets.length;
         refs.payoutValue.textContent = formatAmount(bets.reduce((sum, item) => sum + Number(item.payout || 0), 0));
         refs.ruleLine.textContent = payload.settings?.ruleText || "";
+        refs.displayDateLine.textContent = payload.displayDate ? `· ${payload.displayDate}` : "";
       }
 
       function renderBetLine(bet) {

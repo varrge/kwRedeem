@@ -46,7 +46,6 @@ import {
   normalizeSub2ApiPositiveInteger,
   reserveSub2ApiInvite,
   roundSub2ApiWorldCupAmount,
-  selectSub2ApiWorldCupDisplayMatches,
   sub2apiConnectionStatuses,
   sub2apiInviteStatuses,
   sub2apiSubscriptionOrderStatuses,
@@ -2933,6 +2932,10 @@ function serializeSub2ApiWorldCupMatch(row, userBets = null) {
     bettingPhaseLabel: bettingState.label,
     bettingClosedReason: bettingState.reason,
     bettingClosesAt: bettingState.closesAt,
+    displayDate: row.display_date || "",
+    halftimeOpenAt: row.halftime_open_at || null,
+    halftimeCloseAt: row.halftime_close_at || null,
+    finishCheckAt: row.finish_check_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     settledAt: row.settled_at || null,
@@ -3065,16 +3068,81 @@ function getSub2ApiWorldCupUserBetMap(connectionId, userId) {
   return map;
 }
 
+function getSub2ApiWorldCupDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value || "");
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date)
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function isSub2ApiWorldCupDisplayDateComplete(rows) {
+  return rows.length > 0 && rows.every((row) => [
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  ].includes(row.status));
+}
+
+function getSub2ApiWorldCupDisplayDate(connectionId, today = getSub2ApiWorldCupDateKey()) {
+  const rowsForDate = (dateKey) => db.prepare(`
+    SELECT status
+    FROM sub2api_worldcup_matches
+    WHERE connection_id = ?
+      AND COALESCE(display_date, date(kickoff_at, '+8 hours')) = ?
+  `).all(connectionId, dateKey);
+
+  const todayRows = rowsForDate(today);
+  if (todayRows.length && !isSub2ApiWorldCupDisplayDateComplete(todayRows)) return today;
+
+  const next = db.prepare(`
+    SELECT COALESCE(display_date, date(kickoff_at, '+8 hours')) AS display_date
+    FROM sub2api_worldcup_matches
+    WHERE connection_id = ?
+      AND COALESCE(display_date, date(kickoff_at, '+8 hours')) >= ?
+    GROUP BY COALESCE(display_date, date(kickoff_at, '+8 hours'))
+    HAVING SUM(CASE WHEN status NOT IN (?, ?) THEN 1 ELSE 0 END) > 0
+    ORDER BY display_date ASC
+    LIMIT 1
+  `).get(
+    connectionId,
+    today,
+    sub2apiWorldCupMatchStatuses.settled,
+    sub2apiWorldCupMatchStatuses.cancelled
+  );
+  if (next?.display_date) return next.display_date;
+  if (todayRows.length) return today;
+
+  const latest = db.prepare(`
+    SELECT COALESCE(display_date, date(kickoff_at, '+8 hours')) AS display_date
+    FROM sub2api_worldcup_matches
+    WHERE connection_id = ?
+    GROUP BY COALESCE(display_date, date(kickoff_at, '+8 hours'))
+    ORDER BY display_date DESC
+    LIMIT 1
+  `).get(connectionId);
+  return latest?.display_date || today;
+}
+
 function getSub2ApiWorldCupPublicMatches(connectionId, userId) {
   const bets = getSub2ApiWorldCupUserBetMap(connectionId, userId);
+  const displayDate = getSub2ApiWorldCupDisplayDate(connectionId);
   const rows = db.prepare(`
     SELECT m.*
     FROM sub2api_worldcup_matches m
     WHERE m.connection_id = ?
+      AND COALESCE(m.display_date, date(m.kickoff_at, '+8 hours')) = ?
     ORDER BY datetime(m.kickoff_at) ASC, m.created_at ASC
-  `).all(connectionId);
-  return selectSub2ApiWorldCupDisplayMatches(rows)
-    .map((row) => serializeSub2ApiWorldCupMatch(row, bets.get(row.id)));
+  `).all(connectionId, displayDate);
+  return {
+    displayDate,
+    items: rows.map((row) => serializeSub2ApiWorldCupMatch(row, bets.get(row.id)))
+  };
 }
 
 function getSub2ApiWorldCupMyBets(connectionId, userId) {
@@ -3127,6 +3195,7 @@ function getSub2ApiWorldCupLeaderboard(connectionId, limit = 20) {
 
 async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken = null, options = {}) {
   const balance = await getSub2ApiWorldCupBalancePayload(connection, identity.userId);
+  const publicMatches = getSub2ApiWorldCupPublicMatches(connection.id, identity.userId);
   const balanceOverride = Number(options.balanceOverride);
   const hasBalanceOverride = options.balanceOverride !== null
     && options.balanceOverride !== undefined
@@ -3155,7 +3224,8 @@ async function buildSub2ApiWorldCupPublicPayload(connection, identity, sessionTo
       ],
       ruleText: "赛前盘开赛时停止下注；中场盘仅在中场休息时开放一次。下注后立即扣除余额，命中后按赔率返还余额。"
     },
-    matches: getSub2ApiWorldCupPublicMatches(connection.id, identity.userId),
+    displayDate: publicMatches.displayDate,
+    matches: publicMatches.items,
     bets: getSub2ApiWorldCupMyBets(connection.id, identity.userId),
     leaderboard: getSub2ApiWorldCupLeaderboard(connection.id)
   };
@@ -5743,9 +5813,9 @@ app.post("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, as
     INSERT INTO sub2api_worldcup_matches (
       id, connection_id, stage, group_name, home_team, away_team, kickoff_at, status,
       home_score, away_score, result, odds_home, odds_draw, odds_away, min_stake,
-      max_stake, note, created_at, updated_at, settled_at
+      max_stake, note, display_date, created_at, updated_at, settled_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
   `).run(
     id,
     payload.connectionId,
@@ -5761,6 +5831,7 @@ app.post("/api/admin/sub2api/worldcup/matches", { preHandler: requireAdmin }, as
     payload.minStake,
     payload.maxStake,
     payload.note || null,
+    getSub2ApiWorldCupDateKey(payload.kickoffAt),
     now,
     now
   );
@@ -5817,11 +5888,12 @@ app.patch("/api/admin/sub2api/worldcup/matches/:id", { preHandler: requireAdmin 
   }
 
   const now = nowIso();
+  const kickoffAt = payload.kickoffAt ?? existing.kickoff_at;
   db.prepare(`
     UPDATE sub2api_worldcup_matches
     SET connection_id = ?, stage = ?, group_name = ?, home_team = ?, away_team = ?,
         kickoff_at = ?, status = ?, odds_home = ?, odds_draw = ?, odds_away = ?,
-        min_stake = ?, max_stake = ?, note = ?, updated_at = ?
+        min_stake = ?, max_stake = ?, note = ?, display_date = ?, updated_at = ?
     WHERE id = ?
   `).run(
     connectionId,
@@ -5829,7 +5901,7 @@ app.patch("/api/admin/sub2api/worldcup/matches/:id", { preHandler: requireAdmin 
     payload.groupName ?? existing.group_name,
     homeTeam,
     awayTeam,
-    payload.kickoffAt ?? existing.kickoff_at,
+    kickoffAt,
     payload.status ?? existing.status,
     payload.oddsHome !== undefined ? roundSub2ApiWorldCupAmount(payload.oddsHome) : Number(existing.odds_home),
     payload.oddsDraw !== undefined ? roundSub2ApiWorldCupAmount(payload.oddsDraw) : Number(existing.odds_draw),
@@ -5837,6 +5909,7 @@ app.patch("/api/admin/sub2api/worldcup/matches/:id", { preHandler: requireAdmin 
     minStake,
     maxStake,
     payload.note ?? existing.note,
+    getSub2ApiWorldCupDateKey(kickoffAt),
     now,
     id
   );

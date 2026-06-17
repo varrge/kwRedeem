@@ -599,6 +599,15 @@ function createSchema(db) {
       api_last_synced_at TEXT,
       odds_last_synced_at TEXT,
       halftime_betting_opened_at TEXT,
+      display_date TEXT,
+      first_half_added_minutes INTEGER,
+      second_half_added_minutes INTEGER,
+      halftime_open_at TEXT,
+      halftime_close_at TEXT,
+      finish_check_at TEXT,
+      halftime_schedule_checked_at TEXT,
+      finish_schedule_checked_at TEXT,
+      final_result_checked_at TEXT,
       auto_settle_attempted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -724,6 +733,15 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "api_last_synced_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "odds_last_synced_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "halftime_betting_opened_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "display_date", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "first_half_added_minutes", "INTEGER");
+  ensureColumn(db, "sub2api_worldcup_matches", "second_half_added_minutes", "INTEGER");
+  ensureColumn(db, "sub2api_worldcup_matches", "halftime_open_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "halftime_close_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "finish_check_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "halftime_schedule_checked_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "finish_schedule_checked_at", "TEXT");
+  ensureColumn(db, "sub2api_worldcup_matches", "final_result_checked_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
   ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");

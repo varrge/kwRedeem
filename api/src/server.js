@@ -30,10 +30,12 @@ import {
 } from "../../shared/src/api-football.js";
 import {
   SUB2API_INVITE_LIMIT,
+  assertSub2ApiRemoteEnvelopeOk,
   countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
   extractSub2ApiIdentityFromJwtClaims,
+  extractRemoteSub2ApiInviteResult,
   getSub2ApiWorldCupBetPhaseLabel,
   getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
@@ -53,6 +55,7 @@ import {
   sub2apiWorldCupBetStatuses,
   sub2apiWorldCupMatchStatuses,
   sub2apiWorldCupPredictions,
+  unwrapSub2ApiRemoteData,
   verifySub2ApiSsoToken
 } from "../../shared/src/sub2api.js";
 import {
@@ -1853,6 +1856,7 @@ async function callSub2ApiRemote(connection, pathname, { method = "GET", body = 
     error.responseInfo = result;
     throw error;
   }
+  assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
 }
 
@@ -1874,6 +1878,7 @@ async function callSub2ApiUserRemote(connection, pathname, accessToken) {
     error.responseInfo = result;
     throw error;
   }
+  assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
 }
 
@@ -1948,35 +1953,6 @@ async function testSub2ApiConnection(connection) {
     throw new Error(getSub2ApiRemoteMessage(result));
   }
   return result;
-}
-
-function unwrapSub2ApiRemoteData(data) {
-  if (data && typeof data === "object" && !Array.isArray(data) && data.data !== undefined) {
-    return data.data;
-  }
-  return data;
-}
-
-function extractRemoteInviteResult(result) {
-  const data = result.json && typeof result.json === "object" ? result.json : {};
-  const payload = unwrapSub2ApiRemoteData(data);
-  const invite = Array.isArray(payload) ? payload[0] : payload;
-  const inviteCode = String(invite?.inviteCode ?? invite?.invite_code ?? invite?.code ?? "").trim();
-  if (!inviteCode) {
-    throw new Error("远程 Sub2api 未返回 inviteCode");
-  }
-  const rawStatus = String(invite?.status || sub2apiInviteStatuses.active).trim();
-  const status = [
-    sub2apiInviteStatuses.processing,
-    sub2apiInviteStatuses.active,
-    sub2apiInviteStatuses.failed
-  ].includes(rawStatus) ? rawStatus : sub2apiInviteStatuses.active;
-  return {
-    inviteCode,
-    remoteInviteId: String(invite?.id ?? invite?.inviteId ?? invite?.invite_id ?? "").trim(),
-    status,
-    expiresAt: invite?.expiresAt ?? invite?.expires_at ?? null
-  };
 }
 
 function cleanupSub2ApiImageSessions() {
@@ -2949,18 +2925,6 @@ function serializeSub2ApiWorldCupRemoteResult(result) {
     });
   } catch {
     return null;
-  }
-}
-
-function assertSub2ApiRemoteEnvelopeOk(result) {
-  const json = result?.json;
-  if (json && typeof json === "object") {
-    if (json.code !== undefined && Number(json.code) !== 0) {
-      throw new Error(getSub2ApiRemoteMessage(result));
-    }
-    if (json.success === false || json.ok === false) {
-      throw new Error(getSub2ApiRemoteMessage(result));
-    }
   }
 }
 
@@ -4422,7 +4386,7 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
         value: 0
       }
     });
-    const inviteResult = extractRemoteInviteResult(remoteResult);
+    const inviteResult = extractRemoteSub2ApiInviteResult(remoteResult);
     const updatedAt = nowIso();
     db.prepare(`
       UPDATE sub2api_invites

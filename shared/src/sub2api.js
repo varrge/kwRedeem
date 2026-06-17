@@ -302,6 +302,72 @@ export function verifySub2ApiSsoToken(token, secret) {
   };
 }
 
+export function unwrapSub2ApiRemoteData(data, depth = 0) {
+  if (depth >= 5) return data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  if (data.data === undefined) return data;
+  return unwrapSub2ApiRemoteData(data.data, depth + 1);
+}
+
+function getSub2ApiInviteCandidate(payload) {
+  if (Array.isArray(payload)) return payload[0] || null;
+  if (!payload || typeof payload !== "object") return null;
+  for (const key of ["items", "list", "records", "codes", "redeem_codes", "invites", "data"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value[0] || null;
+  }
+  return payload;
+}
+
+function pickSub2ApiInviteCode(invite) {
+  for (const key of ["inviteCode", "invite_code", "code"]) {
+    const value = invite?.[key];
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+export function extractRemoteSub2ApiInviteResult(result) {
+  const data = result?.json && typeof result.json === "object" ? result.json : {};
+  const payload = unwrapSub2ApiRemoteData(data);
+  const invite = getSub2ApiInviteCandidate(payload);
+  const inviteCode = pickSub2ApiInviteCode(invite);
+  if (!inviteCode) {
+    throw new Error("远程 Sub2api 未返回 inviteCode");
+  }
+  const rawStatus = String(invite?.status || sub2apiInviteStatuses.active).trim();
+  const status = [
+    sub2apiInviteStatuses.processing,
+    sub2apiInviteStatuses.active,
+    sub2apiInviteStatuses.failed,
+    "unused"
+  ].includes(rawStatus) ? rawStatus : sub2apiInviteStatuses.active;
+  return {
+    inviteCode,
+    remoteInviteId: String(invite?.id ?? invite?.inviteId ?? invite?.invite_id ?? "").trim(),
+    status: status === "unused" ? sub2apiInviteStatuses.active : status,
+    expiresAt: invite?.expiresAt ?? invite?.expires_at ?? null
+  };
+}
+
+export function assertSub2ApiRemoteEnvelopeOk(result, getMessage = null) {
+  const json = result?.json;
+  if (!json || typeof json !== "object") return;
+  const readMessage = () => {
+    if (typeof getMessage === "function") return getMessage(result);
+    return String(json.message || json.msg || json.error || "远程 Sub2api 请求失败").trim() || "远程 Sub2api 请求失败";
+  };
+  const codeNumber = Number(json.code);
+  if (json.code !== undefined && Number.isFinite(codeNumber) && codeNumber !== 0) {
+    throw new Error(readMessage());
+  }
+  if (json.success === false || json.ok === false) {
+    throw new Error(readMessage());
+  }
+}
+
 export function countReservedSub2ApiInvites(db, connectionId, userId) {
   const row = db.prepare(`
     SELECT COUNT(*) AS count

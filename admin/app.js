@@ -2411,8 +2411,7 @@ async function runWorldCupManualSync() {
       setHint(refs.worldCupApiSettingsResult, `浏览器已获取体彩赔率 ${sportteryOddsMatches.length} 场，正在触发 worker 同步赛事...`);
     } catch (error) {
       sportteryBrowserError = String(error?.message || error || "").slice(0, 180);
-      setHint(refs.worldCupApiSettingsResult, `浏览器获取体彩赔率失败：${sportteryBrowserError}`);
-      return;
+      setHint(refs.worldCupApiSettingsResult, `浏览器获取体彩赔率失败：${sportteryBrowserError}。正在改用 ESPN 赔率同步...`);
     }
     const response = await api("/api/admin/sub2api/worldcup/api-football/sync", {
       method: "POST",
@@ -2437,7 +2436,7 @@ async function runWorldCupManualSync() {
       : "";
     const oddsError = odds.error ? `，错误：${odds.error}` : "";
     const oddsHint = odds.returned !== undefined || odds.matched !== undefined
-      ? `体彩目标 ${odds.targets ?? 0} 场，返回 ${odds.returned ?? 0} 场${oddsDetail}，匹配 ${odds.matched ?? 0} 场，失败 ${odds.failed ?? 0} 次${oddsError}，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`
+      ? `赔率目标 ${odds.targets ?? 0} 场，返回 ${odds.returned ?? 0} 场${oddsDetail}，匹配 ${odds.matched ?? 0} 场，失败 ${odds.failed ?? 0} 次${oddsError}，赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`
       : `赔率更新 ${Number(odds.updated || 0) + Number(tracked.halftimeOddsUpdated || 0)} 条`;
     setHint(
       refs.worldCupApiSettingsResult,

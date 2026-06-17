@@ -3299,6 +3299,9 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
   try {
     const remoteUser = await getSub2ApiWorldCupRemoteUser(connection, identity.userId);
     const balance = getSub2ApiWorldCupRemoteBalance(remoteUser);
+    if (balance === null) {
+      throw Object.assign(new Error("远程 Sub2api 余额读取失败，无法提交竞猜"), { statusCode: 502 });
+    }
     if (balance !== null && balance + 1e-9 < payload.stake) {
       throw Object.assign(new Error(`余额不足，当前余额 ${balance}`), { statusCode: 402 });
     }
@@ -3308,18 +3311,24 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
       notes: `世界杯竞猜扣款：${match.home_team} 对阵 ${match.away_team}，${bettingState.label}，${getSub2ApiWorldCupPredictionLabel(payload.prediction)}，投注 ${payload.stake}`,
       idempotencyKey: `worldcup_bet_${betId}`
     });
-    const debitPayload = unwrapSub2ApiRemoteData(debitResult.json);
-    const debitBalance = getSub2ApiWorldCupRemoteBalance(debitPayload);
     try {
       const refreshedRemoteUser = await getSub2ApiWorldCupRemoteUser(connection, identity.userId);
       balanceAfter = getSub2ApiWorldCupRemoteBalance(refreshedRemoteUser);
-    } catch {
-      balanceAfter = null;
+    } catch (error) {
+      throw Object.assign(new Error(`远程 Sub2api 扣款后余额确认失败：${error.message || "读取失败"}`), {
+        statusCode: 502,
+        keepBetDebiting: true
+      });
     }
     if (balanceAfter === null) {
-      balanceAfter = debitBalance === null && balance !== null
-        ? roundSub2ApiWorldCupAmount(balance - payload.stake)
-        : debitBalance;
+      throw Object.assign(new Error("远程 Sub2api 扣款后余额确认失败：响应缺少 balance"), {
+        statusCode: 502,
+        keepBetDebiting: true
+      });
+    }
+    const expectedBalanceAfter = roundSub2ApiWorldCupAmount(balance - payload.stake);
+    if (balanceAfter > expectedBalanceAfter + 1e-6) {
+      throw Object.assign(new Error("远程 Sub2api 余额扣款未生效，请确认远程余额接口支持 subtract 操作"), { statusCode: 502 });
     }
     const updatedAt = nowIso();
     db.prepare(`
@@ -3349,12 +3358,15 @@ async function placeSub2ApiWorldCupBet({ connection, identity, body }) {
     });
   } catch (error) {
     const updatedAt = nowIso();
+    const nextStatus = error.keepBetDebiting
+      ? sub2apiWorldCupBetStatuses.debiting
+      : sub2apiWorldCupBetStatuses.debitFailed;
     db.prepare(`
       UPDATE sub2api_worldcup_bets
       SET status = ?, error_message = ?, updated_at = ?
       WHERE id = ?
     `).run(
-      sub2apiWorldCupBetStatuses.debitFailed,
+      nextStatus,
       error.message || "余额扣款失败",
       updatedAt,
       betId

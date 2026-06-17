@@ -1833,6 +1833,39 @@ function getSub2ApiRemoteMessage(responseInfo = {}) {
   return getReadableErrorMessage(responseInfo.text, "远程 Sub2api 请求失败");
 }
 
+function getSub2ApiRemoteShape(value, depth = 0) {
+  if (depth >= 3) return { type: Array.isArray(value) ? "array" : typeof value };
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      length: value.length,
+      first: value.length ? getSub2ApiRemoteShape(value[0], depth + 1) : null
+    };
+  }
+  if (!value || typeof value !== "object") {
+    return { type: value === null ? "null" : typeof value };
+  }
+  const keys = Object.keys(value).slice(0, 20);
+  const shape = { type: "object", keys };
+  for (const key of ["data", "items", "list", "records", "codes", "redeem_codes", "result", "results", "response", "body"]) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      shape[key] = getSub2ApiRemoteShape(value[key], depth + 1);
+    }
+  }
+  return shape;
+}
+
+function summarizeSub2ApiRemoteResponse(error) {
+  const info = error?.responseInfo;
+  if (!info) return null;
+  return {
+    status: info.status,
+    ok: info.ok,
+    shape: getSub2ApiRemoteShape(info.json),
+    textSample: typeof info.text === "string" ? info.text.slice(0, 500) : ""
+  };
+}
+
 async function callSub2ApiRemote(connection, pathname, { method = "GET", body = null, headers = {} } = {}) {
   const adminToken = decryptSub2ApiAdminToken(connection);
   const response = await fetch(`${connection.base_url}${pathname}`, {
@@ -1894,7 +1927,12 @@ async function generateSub2ApiInvitationCode(connection, requestId) {
       value: 0
     }
   });
-  return extractRemoteSub2ApiInviteResult(result);
+  try {
+    return extractRemoteSub2ApiInviteResult(result);
+  } catch (error) {
+    error.responseInfo = result;
+    throw error;
+  }
 }
 
 async function tryAssignSub2ApiDedicatedGroup(connection, userId, sourceGroupId, targetGroupId, orderId) {
@@ -4447,23 +4485,30 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
     };
   } catch (error) {
     const failedAt = nowIso();
+    const remoteSummary = summarizeSub2ApiRemoteResponse(error);
     db.prepare(`
       UPDATE sub2api_invites
       SET status = ?, remote_response = ?, error_message = ?, updated_at = ?
       WHERE id = ?
     `).run(
       sub2apiInviteStatuses.failed,
-      null,
+      remoteSummary ? JSON.stringify(remoteSummary) : null,
       error.message || "远程 Sub2api 创建邀请码失败",
       failedAt,
       inviteId
     );
-    return reply.code(502).send({
+    const payload = {
       message: error.message || "远程 Sub2api 创建邀请码失败",
       inviteLimit: SUB2API_INVITE_LIMIT,
       used: countReservedSub2ApiInvites(db, connection.id, identity.userId),
       remaining: Math.max(0, SUB2API_INVITE_LIMIT - countReservedSub2ApiInvites(db, connection.id, identity.userId))
-    });
+    };
+    if (remoteSummary) {
+      payload.remoteStatus = remoteSummary.status;
+      payload.remoteShape = remoteSummary.shape;
+      payload.remoteTextSample = remoteSummary.textSample;
+    }
+    return reply.code(502).send(payload);
   }
 });
 

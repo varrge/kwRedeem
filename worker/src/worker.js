@@ -960,11 +960,14 @@ async function syncSportteryWorldCupOdds(nowMs, providedMatches = [], providedEr
         drawRaw: 0,
         drawParsed: 0
       });
+    } else if (providedError) {
+      stats.failed += 1;
+      stats.error = `浏览器获取失败：${providedError}`.slice(0, 180);
+      return stats;
     } else {
       const { matches: fetchedMatches, diagnostics } = await fetchSportteryWorldCupOddsMatches();
       matches = fetchedMatches;
       Object.assign(stats, diagnostics);
-      if (providedError) stats.error = `浏览器获取失败：${providedError}`;
     }
     stats.returned = matches.length;
     const oddsByKey = new Map();

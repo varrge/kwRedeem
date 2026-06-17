@@ -2310,14 +2310,24 @@ function parseWorldCupSportteryBrowserMatch(item) {
 async function fetchWorldCupSportteryBrowserOdds() {
   const url = new URL(WORLD_CUP_SPORTTERY_BROWSER_ODDS_URL);
   url.searchParams.set("_", String(Date.now()));
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache"
-    }
-  });
-  const json = await response.json();
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache"
+      }
+    });
+  } catch (error) {
+    throw new Error(`浏览器无法访问体彩接口：${error?.message || error || "请求失败"}`);
+  }
+  let json;
+  try {
+    json = await response.json();
+  } catch {
+    throw new Error(`体彩接口返回非 JSON 内容，HTTP ${response.status}`);
+  }
   if (!response.ok || json?.success === false || (json?.errorCode && String(json.errorCode) !== "0")) {
     throw new Error(json?.errorMessage || json?.message || `HTTP ${response.status}`);
   }
@@ -2405,7 +2415,8 @@ async function runWorldCupManualSync() {
       setHint(refs.worldCupApiSettingsResult, `浏览器已获取体彩赔率 ${sportteryOddsMatches.length} 场，正在触发 worker 同步赛事...`);
     } catch (error) {
       sportteryBrowserError = String(error?.message || error || "").slice(0, 180);
-      setHint(refs.worldCupApiSettingsResult, `浏览器获取体彩赔率失败：${sportteryBrowserError}。正在改由 worker 尝试同步...`);
+      setHint(refs.worldCupApiSettingsResult, `浏览器获取体彩赔率失败：${sportteryBrowserError}`);
+      return;
     }
     const response = await api("/api/admin/sub2api/worldcup/api-football/sync", {
       method: "POST",

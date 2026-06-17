@@ -820,6 +820,24 @@ function parseSportteryWorldCupOddsMatch(item) {
   };
 }
 
+function normalizeProvidedSportteryWorldCupOddsMatch(item) {
+  const home = parseSportteryOdd(item?.odds?.home ?? item?.home);
+  const draw = parseSportteryOdd(item?.odds?.draw ?? item?.draw);
+  const away = parseSportteryOdd(item?.odds?.away ?? item?.away);
+  const homeTeam = String(item?.homeTeam || "").trim();
+  const awayTeam = String(item?.awayTeam || "").trim();
+  const date = String(item?.date || "").trim().slice(0, 10);
+  if (!home || !draw || !away || !homeTeam || !awayTeam || !date) return null;
+  return {
+    date,
+    homeTeam,
+    awayTeam,
+    key: buildWorldCupMatchKey(date, homeTeam, awayTeam),
+    reverseKey: buildWorldCupMatchKey(date, awayTeam, homeTeam),
+    odds: { home, draw, away }
+  };
+}
+
 function getSportteryWorldCupOddsTargets(now = nowIso()) {
   return db.prepare(`
     SELECT api_fixture_id,
@@ -910,7 +928,7 @@ async function fetchSportteryWorldCupOddsMatches() {
   };
 }
 
-async function syncSportteryWorldCupOdds(nowMs) {
+async function syncSportteryWorldCupOdds(nowMs, providedMatches = [], providedError = "") {
   const targets = getSportteryWorldCupOddsTargets(new Date(nowMs).toISOString());
   const stats = {
     targets: targets.length,
@@ -929,8 +947,25 @@ async function syncSportteryWorldCupOdds(nowMs) {
   if (!targets.length) return stats;
   try {
     stats.attempted = 1;
-    const { matches, diagnostics } = await fetchSportteryWorldCupOddsMatches();
-    Object.assign(stats, diagnostics);
+    let matches = [];
+    const browserMatches = Array.isArray(providedMatches)
+      ? providedMatches.map(normalizeProvidedSportteryWorldCupOddsMatch).filter(Boolean)
+      : [];
+    if (browserMatches.length) {
+      matches = browserMatches;
+      Object.assign(stats, {
+        source: "browser",
+        uniformRaw: providedMatches.length,
+        uniformParsed: browserMatches.length,
+        drawRaw: 0,
+        drawParsed: 0
+      });
+    } else {
+      const { matches: fetchedMatches, diagnostics } = await fetchSportteryWorldCupOddsMatches();
+      matches = fetchedMatches;
+      Object.assign(stats, diagnostics);
+      if (providedError) stats.error = `浏览器获取失败：${providedError}`;
+    }
     stats.returned = matches.length;
     const oddsByKey = new Map();
     for (const item of matches) {
@@ -1090,7 +1125,7 @@ function shouldDiscoverApiFootballWorldCupFixtures(connections, nowMs, settings 
   return Number(upcomingCount || 0) < 2;
 }
 
-async function apiFootballWorldCupTick({ force = false } = {}) {
+async function apiFootballWorldCupTick({ force = false, sportteryOddsMatches = [], sportteryBrowserError = "" } = {}) {
   if (worldCupSyncRunning) {
     return { accepted: false, reason: "already_running" };
   }
@@ -1142,7 +1177,7 @@ async function apiFootballWorldCupTick({ force = false } = {}) {
       stats.tracked = await syncTrackedApiFootballWorldCupFixtures(connections, nowMs, settings);
       stats.upcomingOdds = await syncUpcomingApiFootballWorldCupOdds(nowMs, settings);
     } else if (settings.provider === "zafronix") {
-      stats.upcomingOdds = await syncSportteryWorldCupOdds(nowMs);
+      stats.upcomingOdds = await syncSportteryWorldCupOdds(nowMs, sportteryOddsMatches, sportteryBrowserError);
     }
     stats.settle = await autoSettleFinishedApiFootballWorldCupMatches(nowMs);
     stats.cancel = await autoCancelApiFootballWorldCupMatches(nowMs);
@@ -2782,7 +2817,11 @@ function createWorkerHttpServer() {
 
       if (req.url === "/api/internal/sub2api/worldcup/sync") {
         try {
-          const result = await apiFootballWorldCupTick({ force: true });
+          const result = await apiFootballWorldCupTick({
+            force: true,
+            sportteryOddsMatches: Array.isArray(parsed.sportteryOddsMatches) ? parsed.sportteryOddsMatches : [],
+            sportteryBrowserError: String(parsed.sportteryBrowserError || "")
+          });
           if (result.accepted) {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify(result));

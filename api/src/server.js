@@ -5561,6 +5561,11 @@ app.patch("/api/admin/sub2api/worldcup/api-football/settings", { preHandler: req
 
 app.post("/api/admin/sub2api/worldcup/api-football/sync", { preHandler: requireAdmin }, async (request, reply) => {
   const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sub2api/worldcup/sync`;
+  const requestBody = getBodyObject(request.body);
+  const sportteryOddsMatches = Array.isArray(requestBody.sportteryOddsMatches)
+    ? requestBody.sportteryOddsMatches.slice(0, 300)
+    : [];
+  const sportteryBrowserError = String(requestBody.sportteryBrowserError || "").slice(0, 180);
   let response;
   try {
     response = await fetch(workerUrl, {
@@ -5569,7 +5574,7 @@ app.post("/api/admin/sub2api/worldcup/api-football/sync", { preHandler: requireA
         "Content-Type": "application/json",
         "X-Internal-Secret": env.internalSecret
       },
-      body: "{}",
+      body: JSON.stringify({ sportteryOddsMatches, sportteryBrowserError }),
       signal: AbortSignal.timeout(120000)
     });
   } catch (error) {

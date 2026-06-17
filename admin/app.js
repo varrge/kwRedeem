@@ -2271,6 +2271,60 @@ function getWorldCupProviderKeyPlaceholder(provider) {
   return "请输入 Zafronix API Key";
 }
 
+const WORLD_CUP_SPORTTERY_BROWSER_ODDS_URL = "https://webapi.sporttery.cn/gateway/uniform/football/getMatchListV1.qry?clientCode=3001";
+
+function parseWorldCupSportteryOdd(value) {
+  const number = Number(String(value || "").trim());
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function collectWorldCupSportteryLists(json, key) {
+  if (!json || typeof json !== "object") return [];
+  const result = [];
+  const stack = [json];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current[key])) result.push(...current[key]);
+    for (const value of Object.values(current)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return result;
+}
+
+function parseWorldCupSportteryBrowserMatch(item) {
+  const pool = Array.isArray(item?.oddsList)
+    ? item.oddsList.find((odds) => String(odds?.poolCode || "").toUpperCase() === "HAD")
+    : null;
+  const home = parseWorldCupSportteryOdd(pool?.h);
+  const draw = parseWorldCupSportteryOdd(pool?.d);
+  const away = parseWorldCupSportteryOdd(pool?.a);
+  const homeTeam = String(item?.homeTeamAllName || item?.homeTeamAbbName || "").trim();
+  const awayTeam = String(item?.awayTeamAllName || item?.awayTeamAbbName || "").trim();
+  const date = String(item?.matchDate || item?.businessDate || "").trim().slice(0, 10);
+  if (!home || !draw || !away || !homeTeam || !awayTeam || !date) return null;
+  return { date, homeTeam, awayTeam, odds: { home, draw, away } };
+}
+
+async function fetchWorldCupSportteryBrowserOdds() {
+  const url = new URL(WORLD_CUP_SPORTTERY_BROWSER_ODDS_URL);
+  url.searchParams.set("_", String(Date.now()));
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache"
+    }
+  });
+  const json = await response.json();
+  if (!response.ok || json?.success === false || (json?.errorCode && String(json.errorCode) !== "0")) {
+    throw new Error(json?.errorMessage || json?.message || `HTTP ${response.status}`);
+  }
+  const rawItems = collectWorldCupSportteryLists(json, "subMatchList");
+  return rawItems.map(parseWorldCupSportteryBrowserMatch).filter(Boolean).slice(0, 300);
+}
+
 function fillWorldCupApiSettings(payload) {
   const settings = payload?.settings || {};
   const defaults = payload?.defaults || {};
@@ -2342,11 +2396,20 @@ async function saveWorldCupApiSettings() {
 async function runWorldCupManualSync() {
   if (!refs.worldCupApiManualSyncBtn) return;
   try {
-    setHint(refs.worldCupApiSettingsResult, "正在触发 worker 立即同步赛事...");
+    setHint(refs.worldCupApiSettingsResult, "正在从浏览器获取体彩赔率...");
     setButtonBusy(refs.worldCupApiManualSyncBtn, true, "同步中...");
+    let sportteryOddsMatches = [];
+    let sportteryBrowserError = "";
+    try {
+      sportteryOddsMatches = await fetchWorldCupSportteryBrowserOdds();
+      setHint(refs.worldCupApiSettingsResult, `浏览器已获取体彩赔率 ${sportteryOddsMatches.length} 场，正在触发 worker 同步赛事...`);
+    } catch (error) {
+      sportteryBrowserError = String(error?.message || error || "").slice(0, 180);
+      setHint(refs.worldCupApiSettingsResult, `浏览器获取体彩赔率失败：${sportteryBrowserError}。正在改由 worker 尝试同步...`);
+    }
     const response = await api("/api/admin/sub2api/worldcup/api-football/sync", {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify({ sportteryOddsMatches, sportteryBrowserError })
     });
     fillWorldCupApiSettings(response);
     const usage = response.usage || {};
@@ -2360,8 +2423,10 @@ async function runWorldCupManualSync() {
     const emptyHint = Number(discovery.fixturesReturned || 0) === 0
       ? `${provider} 未返回赛事，请检查数据源、赛季、API Key/Token 权限或当前日期是否有赛程。`
       : "";
+    const oddsRaw = odds.source === "draw" ? (odds.drawRaw ?? 0) : (odds.uniformRaw ?? 0);
+    const oddsParsed = odds.source === "draw" ? (odds.drawParsed ?? 0) : (odds.uniformParsed ?? 0);
     const oddsDetail = odds.source
-      ? `，来源 ${odds.source}，原始 ${odds.source === "uniform" ? (odds.uniformRaw ?? 0) : (odds.drawRaw ?? 0)} 场，解析 ${odds.source === "uniform" ? (odds.uniformParsed ?? 0) : (odds.drawParsed ?? 0)} 场`
+      ? `，来源 ${odds.source}，原始 ${oddsRaw} 场，解析 ${oddsParsed} 场`
       : "";
     const oddsError = odds.error ? `，错误：${odds.error}` : "";
     const oddsHint = odds.returned !== undefined || odds.matched !== undefined

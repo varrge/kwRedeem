@@ -320,7 +320,7 @@ function getSub2ApiInviteCandidate(payload) {
 }
 
 function pickSub2ApiInviteCode(invite) {
-  for (const key of ["inviteCode", "invite_code", "code"]) {
+  for (const key of ["inviteCode", "invite_code", "affCode", "aff_code", "code"]) {
     const value = invite?.[key];
     if (typeof value !== "string") continue;
     const normalized = value.trim();

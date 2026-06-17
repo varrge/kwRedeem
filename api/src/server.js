@@ -1766,13 +1766,14 @@ function buildSub2ApiSubscriptionPublicPayload(connection, identity, sessionToke
   };
 }
 
-function signSub2ApiSessionToken(connection, identity) {
+function signSub2ApiSessionToken(connection, identity, accessToken = "") {
   return jwt.sign({
     scope: "sub2api_public",
     connectionId: connection.id,
     sub2apiUserId: identity.userId,
     email: identity.email || "",
-    username: identity.username || ""
+    username: identity.username || "",
+    accessToken: String(accessToken || "").trim()
   }, env.jwtSecret, { expiresIn: "30m" });
 }
 
@@ -1791,7 +1792,8 @@ async function requireSub2ApiSession(request, reply) {
       connectionId: String(payload.connectionId),
       userId: String(payload.sub2apiUserId),
       email: String(payload.email || ""),
-      username: String(payload.username || "")
+      username: String(payload.username || ""),
+      accessToken: String(payload.accessToken || "")
     };
   } catch {
     return reply.code(401).send({ message: "Sub2api 会话已失效" });
@@ -1880,6 +1882,32 @@ async function callSub2ApiUserRemote(connection, pathname, accessToken) {
   }
   assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
+}
+
+async function getSub2ApiOfficialAffiliateInvite(connection, accessToken) {
+  const token = String(accessToken || "").trim();
+  if (!token) {
+    const error = new Error("缺少远程 Sub2api 登录 token，无法读取官方邀请返利码");
+    error.status = 401;
+    throw error;
+  }
+  const result = await callSub2ApiUserRemote(connection, "/api/v1/user/aff", token);
+  return extractRemoteSub2ApiInviteResult(result);
+}
+
+async function generateSub2ApiLegacyInvitationCode(connection, requestId) {
+  const result = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes/generate", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": requestId
+    },
+    body: {
+      count: 1,
+      type: "invitation",
+      value: 0
+    }
+  });
+  return extractRemoteSub2ApiInviteResult(result);
 }
 
 async function tryAssignSub2ApiDedicatedGroup(connection, userId, sourceGroupId, targetGroupId, orderId) {
@@ -4011,13 +4039,13 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
   try {
     const adminToken = decryptSub2ApiAdminToken(connection);
     const { identity } = verifySub2ApiSsoToken(parsed.data.sso, adminToken);
-    const sessionToken = signSub2ApiSessionToken(connection, identity);
+    const sessionToken = signSub2ApiSessionToken(connection, identity, parsed.data.accessToken);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
     if (parsed.data.accessToken && /缺少 user\.id/.test(String(error.message || ""))) {
       try {
         const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
-        const sessionToken = signSub2ApiSessionToken(connection, identity);
+        const sessionToken = signSub2ApiSessionToken(connection, identity, parsed.data.accessToken);
         return buildSub2ApiPublicPayload(connection, identity, sessionToken);
       } catch (tokenError) {
         return reply.code(401).send({ message: tokenError.message || "Sub2api 登录 token 验证失败" });
@@ -4047,7 +4075,7 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
 
   try {
     const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
-    const sessionToken = signSub2ApiSessionToken(connection, identity);
+    const sessionToken = signSub2ApiSessionToken(connection, identity, parsed.data.accessToken);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
@@ -4387,18 +4415,15 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
   }
 
   try {
-    const remoteResult = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes/generate", {
-      method: "POST",
-      headers: {
-        "Idempotency-Key": requestId
-      },
-      body: {
-        count: 1,
-        type: "invitation",
-        value: 0
+    let inviteResult;
+    try {
+      inviteResult = await getSub2ApiOfficialAffiliateInvite(connection, request.sub2api.accessToken);
+    } catch (officialError) {
+      if (request.sub2api.accessToken && officialError.status !== 404) {
+        throw officialError;
       }
-    });
-    const inviteResult = extractRemoteSub2ApiInviteResult(remoteResult);
+      inviteResult = await generateSub2ApiLegacyInvitationCode(connection, requestId);
+    }
     const updatedAt = nowIso();
     db.prepare(`
       UPDATE sub2api_invites

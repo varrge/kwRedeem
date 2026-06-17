@@ -2313,11 +2313,7 @@ async function fetchWorldCupSportteryBrowserOdds() {
   let response;
   try {
     response = await fetch(url, {
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache"
-      }
+      headers: { Accept: "application/json, text/plain, */*" }
     });
   } catch (error) {
     throw new Error(`浏览器无法访问体彩接口：${error?.message || error || "请求失败"}`);

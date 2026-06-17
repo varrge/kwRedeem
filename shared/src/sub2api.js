@@ -312,15 +312,19 @@ export function unwrapSub2ApiRemoteData(data, depth = 0) {
 function getSub2ApiInviteCandidate(payload) {
   if (Array.isArray(payload)) return payload[0] || null;
   if (!payload || typeof payload !== "object") return null;
-  for (const key of ["items", "list", "records", "codes", "redeem_codes", "invites", "data"]) {
+  for (const key of ["items", "list", "records", "codes", "redeem_codes", "invites", "result", "results", "response", "body", "data"]) {
     const value = payload[key];
     if (Array.isArray(value)) return value[0] || null;
+    if (value && typeof value === "object") {
+      const nested = getSub2ApiInviteCandidate(value);
+      if (nested) return nested;
+    }
   }
   return payload;
 }
 
 function pickSub2ApiInviteCode(invite) {
-  for (const key of ["inviteCode", "invite_code", "affCode", "aff_code", "code"]) {
+  for (const key of ["inviteCode", "invite_code", "code"]) {
     const value = invite?.[key];
     if (typeof value !== "string") continue;
     const normalized = value.trim();
@@ -335,7 +339,7 @@ export function extractRemoteSub2ApiInviteResult(result) {
   const invite = getSub2ApiInviteCandidate(payload);
   const inviteCode = pickSub2ApiInviteCode(invite);
   if (!inviteCode) {
-    throw new Error("远程 Sub2api 未返回 inviteCode");
+    throw new Error("远程 Sub2api 未返回邀请码 code");
   }
   const rawStatus = String(invite?.status || sub2apiInviteStatuses.active).trim();
   const status = [

@@ -30,6 +30,22 @@
 - `日志`：轮询查看后台操作与任务审计
 - `通知监听`：自定义 API 轮询监听 + 飞书 Webhook 通知（见下文）
 
+## Sub2api 集成边界
+
+- `sub.vsakura.top` 是远程官方 Sub2api 服务。
+- `api.vsakura.top` 是本项目 API 服务，负责保存并使用远程 Sub2api admin key。
+- 本仓库内的 `sub2api/` 仅作为官方项目参考，不作为本项目功能改动目标；除非明确要求，不修改该目录。
+- 本项目需要对接 Sub2api 时，应在 `api/`、`shared/`、`web/` 或 `admin/` 内实现系统逻辑，再由本项目 API 使用 admin key 调用远程官方 Sub2api。
+- 邀请码/兑换码生成应走远程官方 admin 接口，例如 redeem-code generate 的 invitation 类型；不要改成本地用户 token 或 `/api/v1/user/aff` 流程。
+- 官方返回的邀请码字段可能是 `data[].code` 或被成功/幂等响应包装后嵌套返回，解析逻辑不能只认 `inviteCode`。
+
+## 世界杯系统集成
+
+- 世界杯竞猜系统内嵌在本项目中，不写入本地 `sub2api/`。
+- 竞猜扣余额应由本项目 API 业务层发起，按已配置的远程 Sub2api admin-key 集成路径处理。
+- 排查“提交竞猜但额度没扣”时，优先检查 `api.vsakura.top` 的部署代码、运行日志、远程 Sub2api 调用结果与事务状态；本地修改需要部署/重启后才会影响线上。
+- 世界杯比赛列表需要提供筛选能力，并使用可滚动列表承载较多比赛。
+
 ## 状态流转
 
 ### 卡密

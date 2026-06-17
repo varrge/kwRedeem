@@ -91,6 +91,24 @@ const BEIJING_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit"
 });
 
+const WORLDCUP_ODDS_TEAM_ALIASES = new Map(Object.entries({
+  algeria: "阿尔及利亚",
+  argentina: "阿根廷",
+  austria: "奥地利",
+  brazil: "巴西",
+  croatia: "克罗地亚",
+  drcongo: "刚果金",
+  congodr: "刚果金",
+  democraticrepublicofthecongo: "刚果金",
+  england: "英格兰",
+  france: "法国",
+  iraq: "伊拉克",
+  jordan: "约旦",
+  norway: "挪威",
+  portugal: "葡萄牙",
+  senegal: "塞内加尔"
+}));
+
 function getBeijingDateKey(value) {
   const date = new Date(value || "");
   if (!Number.isFinite(date.getTime())) return "";
@@ -103,12 +121,13 @@ function getBeijingDateKey(value) {
 }
 
 function normalizeWorldCupMatchName(value) {
-  return String(value || "")
+  const normalized = String(value || "")
     .trim()
     .toLowerCase()
     .replace(/[（(].*?[）)]/g, "")
     .replace(/[\s_\-·.。]+/g, "")
     .replace(/[^\p{Script=Han}a-z0-9]/gu, "");
+  return WORLDCUP_ODDS_TEAM_ALIASES.get(normalized) || normalized;
 }
 
 function buildWorldCupMatchKey(date, homeTeam, awayTeam) {

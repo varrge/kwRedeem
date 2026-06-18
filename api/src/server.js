@@ -1713,6 +1713,55 @@ function getSub2ApiPublicSubscriptionPlans(connectionId) {
   `).all(connectionId, sub2apiSubscriptionPlanStatuses.active).map(serializeSub2ApiSubscriptionPlan);
 }
 
+function readNumberField(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function readRemoteArrayPayload(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  for (const key of ["items", "list", "records", "groups", "data", "result", "results"]) {
+    const nested = readRemoteArrayPayload(value[key]);
+    if (nested.length) return nested;
+  }
+  return [];
+}
+
+async function getSub2ApiRemoteGroupLimitMap(connection) {
+  try {
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/groups/all?include_inactive=true");
+    const groups = readRemoteArrayPayload(unwrapSub2ApiRemoteData(result.json));
+    const limits = new Map();
+    for (const group of groups) {
+      if (!group || typeof group !== "object") continue;
+      const id = Number(group.id ?? group.group_id ?? group.groupId);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      limits.set(id, {
+        dailyLimitUsd: readNumberField(group.daily_limit_usd ?? group.dailyLimitUsd),
+        weeklyLimitUsd: readNumberField(group.weekly_limit_usd ?? group.weeklyLimitUsd),
+        monthlyLimitUsd: readNumberField(group.monthly_limit_usd ?? group.monthlyLimitUsd)
+      });
+    }
+    return limits;
+  } catch {
+    return new Map();
+  }
+}
+
+function attachSub2ApiPlanLimits(plans, groupLimitMap) {
+  return plans.map((plan) => {
+    const limits = groupLimitMap.get(Number(plan.subscriptionGroupId)) || {};
+    return {
+      ...plan,
+      dailyLimitUsd: limits.dailyLimitUsd ?? null,
+      weeklyLimitUsd: limits.weeklyLimitUsd ?? null,
+      monthlyLimitUsd: limits.monthlyLimitUsd ?? null
+    };
+  });
+}
+
 function getSub2ApiPublicSubscriptionOrders(connectionId, userId) {
   return db.prepare(`
     SELECT o.*, p.name AS plan_name, c.name AS connection_name
@@ -1747,7 +1796,9 @@ function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
   };
 }
 
-function buildSub2ApiSubscriptionPublicPayload(connection, identity, sessionToken = null) {
+async function buildSub2ApiSubscriptionPublicPayload(connection, identity, sessionToken = null) {
+  const plans = getSub2ApiPublicSubscriptionPlans(connection.id);
+  const groupLimitMap = await getSub2ApiRemoteGroupLimitMap(connection);
   return {
     sessionToken,
     account: {
@@ -1760,7 +1811,7 @@ function buildSub2ApiSubscriptionPublicPayload(connection, identity, sessionToke
       name: connection.name,
       baseUrl: connection.base_url
     },
-    plans: getSub2ApiPublicSubscriptionPlans(connection.id),
+    plans: attachSub2ApiPlanLimits(plans, groupLimitMap),
     orders: getSub2ApiPublicSubscriptionOrders(connection.id, identity.userId)
   };
 }
@@ -4610,7 +4661,7 @@ app.get("/api/public/sub2api/subscriptions", { preHandler: requireSub2ApiSession
     return reply.code(403).send({ message: "Sub2api 连接已停用" });
   }
 
-  return buildSub2ApiSubscriptionPublicPayload(connection, {
+  return await buildSub2ApiSubscriptionPublicPayload(connection, {
     userId: request.sub2api.userId,
     email: request.sub2api.email,
     username: request.sub2api.username
@@ -4754,10 +4805,11 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
       LEFT JOIN sub2api_connections c ON c.id = o.connection_id
       WHERE o.id = ?
     `).get(orderId);
+    const groupLimitMap = await getSub2ApiRemoteGroupLimitMap(connection);
     return {
       success: true,
       order: serializeSub2ApiSubscriptionOrder(row),
-      plans: getSub2ApiPublicSubscriptionPlans(connection.id),
+      plans: attachSub2ApiPlanLimits(getSub2ApiPublicSubscriptionPlans(connection.id), groupLimitMap),
       orders: getSub2ApiPublicSubscriptionOrders(connection.id, request.sub2api.userId)
     };
   } catch (error) {

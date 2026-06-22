@@ -342,6 +342,17 @@ function pickSub2ApiInviteCode(invite) {
   return "";
 }
 
+function pickSub2ApiTokenValue(payload, keys) {
+  if (!payload || typeof payload !== "object") return "";
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
 export function extractRemoteSub2ApiInviteResult(result) {
   const data = result?.json && typeof result.json === "object" ? result.json : {};
   const payload = unwrapSub2ApiRemoteData(data);
@@ -362,6 +373,22 @@ export function extractRemoteSub2ApiInviteResult(result) {
     remoteInviteId: String(invite?.id ?? invite?.inviteId ?? invite?.invite_id ?? "").trim(),
     status: status === "unused" ? sub2apiInviteStatuses.active : status,
     expiresAt: invite?.expiresAt ?? invite?.expires_at ?? null
+  };
+}
+
+export function extractRemoteSub2ApiRefreshResult(result) {
+  const data = result?.json && typeof result.json === "object" ? result.json : {};
+  const payload = unwrapSub2ApiRemoteData(data);
+  const accessToken = pickSub2ApiTokenValue(payload, ["accessToken", "access_token", "authToken", "auth_token", "token"]);
+  if (!accessToken) {
+    throw new Error("远程 Sub2api 未返回 access_token");
+  }
+  const refreshToken = pickSub2ApiTokenValue(payload, ["refreshToken", "refresh_token"]);
+  const expiresIn = Number(payload?.expiresIn ?? payload?.expires_in ?? 0);
+  return {
+    accessToken,
+    refreshToken,
+    expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? Math.floor(expiresIn) : null
   };
 }
 

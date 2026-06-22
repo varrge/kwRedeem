@@ -844,11 +844,37 @@
       }
 
       function renderAccount(payload) {
+        persistSub2ApiRefreshedAuth(payload);
         state.account = payload.account || {};
         state.connection = payload.connection || {};
         const name = state.account.email || state.account.username || state.account.userId || "-";
         refs.accountLine.textContent = name;
         refs.stageSubtitle.textContent = "";
+      }
+
+      function readSub2ApiAccessToken() {
+        return localStorage.getItem("auth_token")
+          || localStorage.getItem("access_token")
+          || localStorage.getItem("token")
+          || "";
+      }
+
+      function readSub2ApiRefreshToken() {
+        return localStorage.getItem("refresh_token") || "";
+      }
+
+      function persistSub2ApiRefreshedAuth(payload) {
+        const auth = payload?.refreshedAuth;
+        if (!auth || typeof auth !== "object") return;
+        if (auth.accessToken) {
+          localStorage.setItem("auth_token", auth.accessToken);
+        }
+        if (auth.refreshToken) {
+          localStorage.setItem("refresh_token", auth.refreshToken);
+        }
+        if (auth.expiresIn) {
+          localStorage.setItem("token_expires_at", String(Date.now() + Number(auth.expiresIn) * 1000));
+        }
       }
 
       async function initialize() {
@@ -860,8 +886,9 @@
           return;
         }
 
-        const accessToken = localStorage.getItem("auth_token") || localStorage.getItem("access_token") || "";
-        if (!accessToken) {
+        const accessToken = readSub2ApiAccessToken();
+        const refreshToken = readSub2ApiRefreshToken();
+        if (!accessToken && !refreshToken) {
           refs.accountLine.textContent = "未识别登录态";
           setStatus("未读取到 Sub2api 登录态，请确认页面通过 Sub2api 同源反代打开。", "error");
           return;
@@ -871,7 +898,7 @@
           setStatus("正在识别玩家账号...");
           const session = await request("/api/public/sub2api/image/session-from-token", {
             method: "POST",
-            body: JSON.stringify({ connectionId, accessToken })
+            body: JSON.stringify({ connectionId, accessToken, refreshToken })
           });
           state.sessionToken = session.sessionToken || "";
           renderAccount(session);

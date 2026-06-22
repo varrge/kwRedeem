@@ -311,7 +311,33 @@
         `).join("");
       }
 
+      function readSub2ApiAccessToken() {
+        return localStorage.getItem("auth_token")
+          || localStorage.getItem("access_token")
+          || localStorage.getItem("token")
+          || "";
+      }
+
+      function readSub2ApiRefreshToken() {
+        return localStorage.getItem("refresh_token") || "";
+      }
+
+      function persistSub2ApiRefreshedAuth(payload) {
+        const auth = payload?.refreshedAuth;
+        if (!auth || typeof auth !== "object") return;
+        if (auth.accessToken) {
+          localStorage.setItem("auth_token", auth.accessToken);
+        }
+        if (auth.refreshToken) {
+          localStorage.setItem("refresh_token", auth.refreshToken);
+        }
+        if (auth.expiresIn) {
+          localStorage.setItem("token_expires_at", String(Date.now() + Number(auth.expiresIn) * 1000));
+        }
+      }
+
       function render(payload) {
+        persistSub2ApiRefreshedAuth(payload);
         if (payload.sessionToken) state.sessionToken = payload.sessionToken;
         const account = payload.account || {};
         refs.accountLine.textContent = account.email || account.username || account.userId || "-";
@@ -332,11 +358,16 @@
         }
         try {
           setStatus("正在加载...");
+          const accessToken = readSub2ApiAccessToken();
+          const refreshToken = readSub2ApiRefreshToken();
           const payload = sso
-            ? await request("/api/public/sub2api/session", { method: "POST", body: JSON.stringify({ sso }) })
+            ? await request("/api/public/sub2api/session", {
+                method: "POST",
+                body: JSON.stringify({ sso, accessToken, refreshToken })
+              })
             : await request("/api/public/sub2api/session-from-token", {
                 method: "POST",
-                body: JSON.stringify({ connectionId, accessToken: localStorage.getItem("auth_token") || "" })
+                body: JSON.stringify({ connectionId, accessToken, refreshToken })
               });
           render(payload);
           await refresh();

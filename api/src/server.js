@@ -35,6 +35,7 @@ import {
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
   extractSub2ApiIdentityFromJwtClaims,
+  extractRemoteSub2ApiRefreshResult,
   extractRemoteSub2ApiInviteResult,
   getSub2ApiWorldCupBetPhaseLabel,
   getSub2ApiWorldCupBettingState,
@@ -1980,6 +1981,35 @@ async function callSub2ApiUserRemote(connection, pathname, accessToken) {
   return result;
 }
 
+async function refreshSub2ApiAccessToken(connection, refreshToken) {
+  const token = String(refreshToken || "").trim();
+  if (!token) {
+    throw new Error("Sub2api 登录 token 已过期，请重新登录 Sub2api");
+  }
+
+  const response = await fetch(`${connection.base_url}/api/v1/auth/refresh`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ refresh_token: token }),
+    signal: AbortSignal.timeout(10000)
+  });
+  const text = await response.text();
+  const json = safeParseJson(text, null);
+  const result = { ok: response.ok, status: response.status, contentType: response.headers.get("content-type") || "", text, json };
+  if (!response.ok) {
+    const error = new Error(getSub2ApiRemoteMessage(result));
+    error.status = response.status;
+    error.responseInfo = result;
+    throw error;
+  }
+  assertSub2ApiRemoteJsonResponse(result);
+  assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
+  return extractRemoteSub2ApiRefreshResult(result);
+}
+
 async function generateSub2ApiInvitationCode(connection, requestId) {
   const result = await callSub2ApiRemote(connection, "/api/v1/admin/redeem-codes/generate", {
     method: "POST",
@@ -2053,6 +2083,56 @@ async function getSub2ApiIdentityFromAccessToken(connection, accessToken, expect
   } catch (error) {
     throw new Error(error.message || "Sub2api 当前用户信息无效");
   }
+}
+
+function isSub2ApiAuthTokenRejected(error) {
+  if (Number(error?.status || 0) === 401) return true;
+  const message = String(error?.message || "").toLowerCase();
+  return /token.*(expired|invalid|revoked)|jwt.*expired|expired token|token has expired|登录态.*(过期|失效)|token.*过期/.test(message);
+}
+
+async function getSub2ApiIdentityFromBrowserTokens(connection, {
+  accessToken = "",
+  refreshToken = "",
+  expectedUserId = ""
+} = {}) {
+  const normalizedAccessToken = String(accessToken || "").trim();
+  const normalizedRefreshToken = String(refreshToken || "").trim();
+  let refreshedAuth = null;
+
+  if (!normalizedAccessToken && !normalizedRefreshToken) {
+    throw new Error("缺少 Sub2api 登录 token");
+  }
+
+  if (normalizedAccessToken) {
+    try {
+      return {
+        identity: await getSub2ApiIdentityFromAccessToken(connection, normalizedAccessToken, expectedUserId),
+        accessToken: normalizedAccessToken,
+        refreshedAuth
+      };
+    } catch (error) {
+      if (!normalizedRefreshToken || !isSub2ApiAuthTokenRejected(error)) {
+        throw error;
+      }
+    }
+  }
+
+  refreshedAuth = await refreshSub2ApiAccessToken(connection, normalizedRefreshToken);
+  const identity = await getSub2ApiIdentityFromAccessToken(connection, refreshedAuth.accessToken, expectedUserId);
+  return {
+    identity,
+    accessToken: refreshedAuth.accessToken,
+    refreshedAuth
+  };
+}
+
+function attachSub2ApiRefreshedAuth(payload, refreshedAuth) {
+  if (!refreshedAuth) return payload;
+  return {
+    ...payload,
+    refreshedAuth
+  };
 }
 
 async function testSub2ApiConnection(connection) {
@@ -4176,6 +4256,7 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
   const parsed = z.object({
     sso: z.string().min(20),
     accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default(""),
     userId: z.union([z.string(), z.number()]).optional().default("")
   }).safeParse(request.body);
   if (!parsed.success) {
@@ -4203,11 +4284,18 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
     const sessionToken = signSub2ApiSessionToken(connection, identity);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
-    if (parsed.data.accessToken && /缺少 user\.id/.test(String(error.message || ""))) {
+    if (parsed.data.accessToken || parsed.data.refreshToken) {
       try {
-        const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
-        const sessionToken = signSub2ApiSessionToken(connection, identity);
-        return buildSub2ApiPublicPayload(connection, identity, sessionToken);
+        const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+          accessToken: parsed.data.accessToken,
+          refreshToken: parsed.data.refreshToken,
+          expectedUserId: parsed.data.userId
+        });
+        const sessionToken = signSub2ApiSessionToken(connection, session.identity);
+        return attachSub2ApiRefreshedAuth(
+          buildSub2ApiPublicPayload(connection, session.identity, sessionToken),
+          session.refreshedAuth
+        );
       } catch (tokenError) {
         return reply.code(401).send({ message: tokenError.message || "Sub2api 登录 token 验证失败" });
       }
@@ -4219,9 +4307,10 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
 app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
   const parsed = z.object({
     connectionId: z.string().trim().min(1),
-    accessToken: z.string().trim().min(20),
+    accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default(""),
     userId: z.union([z.string(), z.number()]).optional().default("")
-  }).safeParse(request.body);
+  }).refine((value) => value.accessToken || value.refreshToken).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
   }
@@ -4235,9 +4324,16 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
   }
 
   try {
-    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken, parsed.data.userId);
-    const sessionToken = signSub2ApiSessionToken(connection, identity);
-    return buildSub2ApiPublicPayload(connection, identity, sessionToken);
+    const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+      accessToken: parsed.data.accessToken,
+      refreshToken: parsed.data.refreshToken,
+      expectedUserId: parsed.data.userId
+    });
+    const sessionToken = signSub2ApiSessionToken(connection, session.identity);
+    return attachSub2ApiRefreshedAuth(
+      buildSub2ApiPublicPayload(connection, session.identity, sessionToken),
+      session.refreshedAuth
+    );
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
   }
@@ -4246,8 +4342,9 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
 app.post("/api/public/sub2api/image/session-from-token", async (request, reply) => {
   const parsed = z.object({
     connectionId: z.string().trim().min(1),
-    accessToken: z.string().trim().min(20)
-  }).safeParse(request.body);
+    accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default("")
+  }).refine((value) => value.accessToken || value.refreshToken).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
   }
@@ -4261,9 +4358,15 @@ app.post("/api/public/sub2api/image/session-from-token", async (request, reply) 
   }
 
   try {
-    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
-    const sessionToken = signSub2ApiImageSessionToken(connection, identity, parsed.data.accessToken);
-    return buildSub2ApiImagePublicPayload(connection, identity, sessionToken);
+    const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+      accessToken: parsed.data.accessToken,
+      refreshToken: parsed.data.refreshToken
+    });
+    const sessionToken = signSub2ApiImageSessionToken(connection, session.identity, session.accessToken);
+    return attachSub2ApiRefreshedAuth(
+      buildSub2ApiImagePublicPayload(connection, session.identity, sessionToken),
+      session.refreshedAuth
+    );
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
   }
@@ -4271,7 +4374,9 @@ app.post("/api/public/sub2api/image/session-from-token", async (request, reply) 
 
 app.post("/api/public/sub2api/worldcup/session", async (request, reply) => {
   const parsed = z.object({
-    sso: z.string().min(20)
+    sso: z.string().min(20),
+    accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default("")
   }).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少 SSO token" });
@@ -4298,6 +4403,19 @@ app.post("/api/public/sub2api/worldcup/session", async (request, reply) => {
     const sessionToken = signSub2ApiWorldCupSessionToken(connection, identity);
     return await buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken);
   } catch (error) {
+    if (parsed.data.accessToken || parsed.data.refreshToken) {
+      try {
+        const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+          accessToken: parsed.data.accessToken,
+          refreshToken: parsed.data.refreshToken
+        });
+        const sessionToken = signSub2ApiWorldCupSessionToken(connection, session.identity);
+        const payload = await buildSub2ApiWorldCupPublicPayload(connection, session.identity, sessionToken);
+        return attachSub2ApiRefreshedAuth(payload, session.refreshedAuth);
+      } catch (tokenError) {
+        return reply.code(401).send({ message: tokenError.message || "Sub2api 登录 token 验证失败" });
+      }
+    }
     return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
   }
 });
@@ -4305,8 +4423,9 @@ app.post("/api/public/sub2api/worldcup/session", async (request, reply) => {
 app.post("/api/public/sub2api/worldcup/session-from-token", async (request, reply) => {
   const parsed = z.object({
     connectionId: z.string().trim().min(1),
-    accessToken: z.string().trim().min(20)
-  }).safeParse(request.body);
+    accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default("")
+  }).refine((value) => value.accessToken || value.refreshToken).safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
   }
@@ -4320,9 +4439,13 @@ app.post("/api/public/sub2api/worldcup/session-from-token", async (request, repl
   }
 
   try {
-    const identity = await getSub2ApiIdentityFromAccessToken(connection, parsed.data.accessToken);
-    const sessionToken = signSub2ApiWorldCupSessionToken(connection, identity);
-    return await buildSub2ApiWorldCupPublicPayload(connection, identity, sessionToken);
+    const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+      accessToken: parsed.data.accessToken,
+      refreshToken: parsed.data.refreshToken
+    });
+    const sessionToken = signSub2ApiWorldCupSessionToken(connection, session.identity);
+    const payload = await buildSub2ApiWorldCupPublicPayload(connection, session.identity, sessionToken);
+    return attachSub2ApiRefreshedAuth(payload, session.refreshedAuth);
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
   }

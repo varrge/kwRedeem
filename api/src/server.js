@@ -18,6 +18,7 @@ import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateStri
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
 import { purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
+import { purchase383ApiNumber, get383ApiSmsMessages } from "../../shared/src/383api-client.js";
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
@@ -809,6 +810,40 @@ async function syncNexSmsOrder(order) {
   `).run(smsOrderStatuses.ready, code, nowIso(), order.id);
   releaseSmsCard(order.card_id, smsCardStatuses.used);
   createSmsOrderEvent(order.id, "verification_ready", { verificationCode: code, provider: "nexsms" });
+  order.status = smsOrderStatuses.ready;
+  order.verification_code = code;
+  return code;
+}
+
+async function sync383ApiOrder(order) {
+  if (!order || extractSmsVerificationCode(order.verification_code) || !order.provider_payload) return null;
+  const payload = safeParseJson(order.provider_payload, {});
+  if (payload.provider !== "383api" || !payload.apiKeyEncrypted || !order.phone) return null;
+
+  let apiKey;
+  try {
+    apiKey = decryptText(payload.apiKeyEncrypted);
+  } catch {
+    return null;
+  }
+
+  const messages = await get383ApiSmsMessages(apiKey, {
+    phoneNumber: order.phone,
+    projectId: payload.projectId || "",
+    page: 1,
+    pageSize: 50
+  });
+  const message = messages.find((item) => extractSmsVerificationCode(item.content));
+  const code = extractSmsVerificationCode(message?.content) || "";
+  if (!code) return null;
+
+  db.prepare(`
+    UPDATE sms_orders
+    SET status = ?, verification_code = ?, updated_at = ?
+    WHERE id = ?
+  `).run(smsOrderStatuses.ready, code, nowIso(), order.id);
+  releaseSmsCard(order.card_id, smsCardStatuses.used);
+  createSmsOrderEvent(order.id, "verification_ready", { verificationCode: code, provider: "383api", smsId: message?.id ?? null });
   order.status = smsOrderStatuses.ready;
   order.verification_code = code;
   return code;
@@ -8269,6 +8304,61 @@ app.post("/api/public/sms/orders", async (request, reply) => {
     `).run(smsCardStatuses.in_use, orderId, now, card.id);
 
     createSmsOrderEvent(orderId, "number_reserved", { provider: "nexsms", phone: purchased.tel, appName: purchased.appName || null });
+  } else if (card.inventory_source === "383api" || card.sms_provider === "383api") {
+    if (!card.sms_api_key || !card.sms_app_id) {
+      return reply.code(400).send({ message: "383api 站点未配置 API Key 或 project_id" });
+    }
+
+    let apiKey;
+    try {
+      apiKey = decryptText(card.sms_api_key);
+    } catch {
+      return reply.code(400).send({ message: "383api API Key 解密失败" });
+    }
+
+    let purchased;
+    try {
+      purchased = await purchase383ApiNumber(apiKey, {
+        projectId: card.sms_app_id,
+        quantity: 1,
+        prefix: card.sms_prefix_filter || null
+      });
+    } catch (error) {
+      return reply.code(502).send({ message: `383api 买号失败: ${error.message}` });
+    }
+
+    db.prepare(`
+      INSERT INTO sms_orders (
+        id, order_no, site_id, card_id, sms_entry_id, phone, sms_url,
+        verification_code, status, error_message, provider_payload, refunded_at,
+        expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)
+    `).run(
+      orderId,
+      orderNo,
+      card.site_id,
+      card.id,
+      purchased.phoneNumber,
+      smsOrderStatuses.waiting_code,
+      JSON.stringify({
+        provider: "383api",
+        apiKeyEncrypted: card.sms_api_key,
+        projectId: card.sms_app_id,
+        prefix: card.sms_prefix_filter || null,
+        purchase: purchased
+      }),
+      getSmsOrderExpiresAt(purchased.expiresAt, card.sms_poll_timeout_ms),
+      now,
+      now
+    );
+
+    db.prepare(`
+      UPDATE sms_cards
+      SET status = ?, current_order_id = ?, resource_entry_id = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(smsCardStatuses.in_use, orderId, now, card.id);
+
+    createSmsOrderEvent(orderId, "number_reserved", { provider: "383api", phone: purchased.phoneNumber, remoteOrderNumber: purchased.orderNumber || null });
   } else {
     const smsEntry = reserveSmsEntryForOrder();
     if (!smsEntry) {
@@ -8353,6 +8443,9 @@ app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
 
   await syncNexSmsOrder(order).catch((error) => {
     createSmsOrderEvent(order.id, "nexsms_sync_error", { message: error.message });
+  });
+  await sync383ApiOrder(order).catch((error) => {
+    createSmsOrderEvent(order.id, "383api_sync_error", { message: error.message });
   });
 
   let verification = readSmsOrderVerification(order);
@@ -8731,6 +8824,8 @@ app.get("/api/admin/sms/sites", { preHandler: requireAdmin }, async () => {
     smsAppId: row.sms_app_id || null,
     smsCardType: row.sms_card_type ?? null,
     smsExpiry: row.sms_expiry ?? null,
+    smsPrefixFilter: row.sms_prefix_filter || null,
+    smsExcludePrefix: row.sms_exclude_prefix || null,
     status: row.status,
     note: row.note || "",
     cardCount: Number(row.card_count) || 0,
@@ -8744,7 +8839,7 @@ app.post("/api/admin/sms/sites", { preHandler: requireAdmin }, async (request, r
   const schema = z.object({
     name: z.string().min(1),
     slug: z.string().min(1),
-    inventorySource: z.enum(["sms_entries", "nexsms"]).optional().default("sms_entries"),
+    inventorySource: z.enum(["sms_entries", "nexsms", "383api"]).optional().default("sms_entries"),
     apiKey: z.string().optional().default(""),
     appId: z.string().optional().default(""),
     cardType: z.number().int().min(1).max(3).optional().default(1),
@@ -8770,12 +8865,12 @@ app.post("/api/admin/sms/sites", { preHandler: requireAdmin }, async (request, r
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, name.trim(), normalizedSlug, inventorySource, smsSiteStatuses.active, note.trim(), now, now);
 
-  if (inventorySource === "nexsms") {
+  if (inventorySource === "nexsms" || inventorySource === "383api") {
     db.prepare(`
       UPDATE sms_sites
-      SET sms_provider = 'nexsms', sms_api_key = ?, sms_app_id = ?, sms_card_type = ?, sms_expiry = ?, updated_at = ?
+      SET sms_provider = ?, sms_api_key = ?, sms_app_id = ?, sms_card_type = ?, sms_expiry = ?, updated_at = ?
       WHERE id = ?
-    `).run(apiKey ? encryptText(apiKey) : null, appId || null, cardType, expiry, now, id);
+    `).run(inventorySource, apiKey ? encryptText(apiKey) : null, appId || null, cardType, expiry, now, id);
   }
 
   createAuditLog({
@@ -8833,6 +8928,52 @@ app.patch("/api/admin/sms/sites/:id/nexsms", { preHandler: requireAdmin }, async
     resourceType: "sms_site",
     resourceId: siteId,
     detail: { appId: parsed.data.appId.trim(), cardType: parsed.data.cardType, expiry: parsed.data.expiry }
+  });
+
+  return { success: true };
+});
+
+app.patch("/api/admin/sms/sites/:id/383api", { preHandler: requireAdmin }, async (request, reply) => {
+  const siteId = String(request.params.id || "").trim();
+  const site = db.prepare("SELECT id FROM sms_sites WHERE id = ?").get(siteId);
+  if (!site) {
+    return reply.code(404).send({ message: "接码站点不存在" });
+  }
+
+  const schema = z.object({
+    apiKey: z.string().optional().default(""),
+    projectId: z.string().min(1),
+    prefix: z.string().optional().default("")
+  });
+  const parsed = schema.safeParse(request.body || {});
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "383api 配置参数不正确" });
+  }
+
+  const now = nowIso();
+  const encryptedKey = parsed.data.apiKey ? encryptText(parsed.data.apiKey.trim()) : null;
+  if (encryptedKey) {
+    db.prepare(`
+      UPDATE sms_sites
+      SET inventory_source = '383api', sms_provider = '383api', sms_api_key = ?, sms_app_id = ?,
+          sms_prefix_filter = ?, updated_at = ?
+      WHERE id = ?
+    `).run(encryptedKey, parsed.data.projectId.trim(), parsed.data.prefix.trim() || null, now, siteId);
+  } else {
+    db.prepare(`
+      UPDATE sms_sites
+      SET inventory_source = '383api', sms_provider = '383api', sms_app_id = ?,
+          sms_prefix_filter = ?, updated_at = ?
+      WHERE id = ?
+    `).run(parsed.data.projectId.trim(), parsed.data.prefix.trim() || null, now, siteId);
+  }
+
+  createAuditLog({
+    action: "sms_site_383api_config",
+    actor: request.admin.username,
+    resourceType: "sms_site",
+    resourceId: siteId,
+    detail: { projectId: parsed.data.projectId.trim(), prefix: parsed.data.prefix.trim() || null }
   });
 
   return { success: true };

@@ -245,16 +245,17 @@
                   <select id="sms-site-inventory-source">
                     <option value="sms_entries">静态库存</option>
                     <option value="nexsms">NexSMS 动态买号</option>
+                    <option value="383api">383api 动态买号</option>
                   </select>
                 </label>
                 <label class="field">
-                  <span>NexSMS API Key</span>
-                  <input id="sms-site-api-key" type="password" autocomplete="off" placeholder="仅 NexSMS 站点需要" />
+                  <span>动态站点 API Key</span>
+                  <input id="sms-site-api-key" type="password" autocomplete="off" placeholder="NexSMS 或 383api 站点需要" />
                 </label>
                 <div class="grid grid-2">
                   <label class="field">
-                    <span>appId</span>
-                    <input id="sms-site-app-id" placeholder="项目 ID" />
+                    <span>appId / project_id</span>
+                    <input id="sms-site-app-id" placeholder="NexSMS appId 或 383api project_id" />
                   </label>
                   <label class="field">
                     <span>type</span>

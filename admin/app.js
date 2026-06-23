@@ -615,6 +615,15 @@ async function refreshCdkeys() {
   ], payload.items);
 }
 
+function renderSmsProviderInfo(item) {
+  const source = escapeHtml(item.inventorySource || "-");
+  if (!item.smsProvider) return source;
+  if (item.smsProvider === "383api") {
+    return `${source}<br/><code>383api project:${escapeHtml(item.smsAppId || "-")} prefix:${escapeHtml(item.smsPrefixFilter || "-")}</code>`;
+  }
+  return `${source}<br/><code>${escapeHtml(item.smsProvider)} app:${escapeHtml(item.smsAppId || "-")} type:${escapeHtml(item.smsCardType || "-")} expiry:${escapeHtml(item.smsExpiry ?? "-")}</code>`;
+}
+
 async function refreshSmsSites() {
   const payload = await api("/api/admin/sms/sites");
   const items = payload.items || [];
@@ -625,12 +634,20 @@ async function refreshSmsSites() {
   }
   renderTable(refs.smsSiteList, [
     { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.slug)}</code>` },
-    { label: "资源来源", render: (item) => `${escapeHtml(item.inventorySource)}${item.smsProvider ? `<br/><code>${escapeHtml(item.smsProvider)} app:${escapeHtml(item.smsAppId || "-")} type:${escapeHtml(item.smsCardType || "-")} expiry:${escapeHtml(item.smsExpiry ?? "-")}</code>` : ""}` },
+    { label: "资源来源", render: (item) => renderSmsProviderInfo(item) },
     { label: "卡密数", render: (item) => item.cardCount },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "备注", render: (item) => escapeHtml(item.note || "-") },
-    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick="configNexSmsSite('${escapeHtml(item.id)}')">配置</button>` }
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick="configSmsProviderSite('${escapeHtml(item.id)}','${escapeHtml(item.smsProvider || item.inventorySource || "")}')">配置</button>` }
   ], items, "暂无接码站点");
+}
+
+async function configSmsProviderSite(id, provider) {
+  if (provider === "383api") {
+    await config383ApiSite(id);
+    return;
+  }
+  await configNexSmsSite(id);
 }
 
 async function configNexSmsSite(id) {
@@ -651,7 +668,26 @@ async function configNexSmsSite(id) {
   }
 }
 
+async function config383ApiSite(id) {
+  const apiKey = window.prompt("383api API Key（留空则保留原密钥）：") || "";
+  const projectId = window.prompt("383api project_id：");
+  if (!projectId) return;
+  const prefix = window.prompt("号段筛选 prefix（可留空）：", "") || "";
+  try {
+    await api(`/api/admin/sms/sites/${encodeURIComponent(id)}/383api`, {
+      method: "PATCH",
+      body: JSON.stringify({ apiKey: apiKey.trim(), projectId: projectId.trim(), prefix: prefix.trim() })
+    });
+    setHint(refs.smsSiteResult, "383api 配置已保存");
+    await refreshSmsConsole();
+  } catch (error) {
+    setHint(refs.smsSiteResult, error.message);
+  }
+}
+
+window.configSmsProviderSite = configSmsProviderSite;
 window.configNexSmsSite = configNexSmsSite;
+window.config383ApiSite = config383ApiSite;
 async function refreshSmsCards() {
   const payload = await api("/api/admin/sms/cards");
   renderTable(refs.smsCardList, [

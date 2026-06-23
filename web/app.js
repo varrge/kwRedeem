@@ -722,6 +722,16 @@ function renderSmsOrderResult(payload) {
   return `<div class="result-card"><div class="result-grid">${siteHtml}${orderHtml}${phoneHtml}${verificationHtml}</div></div>`;
 }
 
+function isDynamicSmsProvider(card = verifiedSmsCard) {
+  const source = String(card?.inventorySource || card?.site?.inventorySource || "").toLowerCase();
+  const provider = String(card?.smsProvider || card?.site?.smsProvider || "").toLowerCase();
+  return ["nexsms", "383api"].includes(source) || ["nexsms", "383api"].includes(provider);
+}
+
+function shouldShowSmsConfirmBeforeFetch(card = verifiedSmsCard) {
+  return !isDynamicSmsProvider(card);
+}
+
 smsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   stopSmsPolling();
@@ -767,8 +777,10 @@ smsSubmit.addEventListener("click", async () => {
     return;
   }
 
-  const confirmed = await showSmsConfirmModal();
-  if (!confirmed) return;
+  if (shouldShowSmsConfirmBeforeFetch()) {
+    const confirmed = await showSmsConfirmModal();
+    if (!confirmed) return;
+  }
 
   smsSubmit.disabled = true;
   setState(smsResult, "正在分配手机号并创建接码订单...");

@@ -583,6 +583,36 @@ async function updateCdkeyEmailToken(id, currentValue) {
 
 window.updateCdkeyEmailToken = updateCdkeyEmailToken;
 
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("剪贴板写入被拒绝");
+}
+
+async function copyCdkeySession(id, publicKey) {
+  try {
+    const payload = await api(`/api/admin/cdkeys/${encodeURIComponent(id)}/session`);
+    await copyTextToClipboard(payload.sessionJson || "");
+    setHint(refs.singleCdkeyResult, `已复制 ${publicKey || payload.publicKey || "卡密"} 的 Session JSON`);
+  } catch (error) {
+    alert(error.message || "复制失败");
+  }
+}
+
+window.copyCdkeySession = copyCdkeySession;
+
 async function refreshBatches() {
   const payload = await api("/api/admin/batches");
   renderTable(refs.batchList, [
@@ -611,7 +641,11 @@ async function refreshCdkeys() {
         </button>
       </div>
     ` },
-    { label: "状态", render: (item) => renderStatus(item.status) }
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "操作", render: (item) => item.status === "used"
+      ? `<button class="ghost-btn small" type="button" onclick='copyCdkeySession(${JSON.stringify(item.id)}, ${JSON.stringify(item.public_key)})'>复制 Session</button>`
+      : "-"
+    }
   ], payload.items);
 }
 

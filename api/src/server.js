@@ -6987,7 +6987,14 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
     SELECT
       c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at, c.metadata,
       b.name AS batch_name,
-      s.name AS site_name
+      s.name AS site_name,
+      (
+        SELECT ro.order_no
+        FROM redeem_orders ro
+        WHERE ro.cdkey_id = c.id
+        ORDER BY ro.created_at DESC
+        LIMIT 1
+      ) AS latest_order_no
     FROM cdkeys c
     LEFT JOIN cdkey_batches b ON b.id = c.batch_id
     LEFT JOIN sites s ON s.id = c.site_id
@@ -7020,9 +7027,65 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
     note: getCdkeyNote(item.metadata),
     email_token: getCdkeyEmailToken(item.metadata),
     has_email_token: Boolean(getCdkeyEmailToken(item.metadata)),
+    latest_order_no: item.latest_order_no || null,
     support_only: isSupportOnlyCdkey(item.metadata)
   }));
   return { items };
+});
+
+app.get("/api/admin/cdkeys/:id/session", { preHandler: requireAdmin }, async (request, reply) => {
+  const cdkeyId = String(request.params.id || "").trim();
+  const row = db.prepare(`
+    SELECT
+      c.id AS cdkey_id,
+      c.public_key,
+      c.status AS cdkey_status,
+      ro.order_no,
+      ro.session_payload,
+      ro.created_at AS order_created_at
+    FROM cdkeys c
+    LEFT JOIN redeem_orders ro ON ro.id = (
+      SELECT id
+      FROM redeem_orders
+      WHERE cdkey_id = c.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    )
+    WHERE c.id = ?
+  `).get(cdkeyId);
+
+  if (!row) {
+    return reply.code(404).send({ message: "卡密不存在" });
+  }
+  if (row.cdkey_status !== cdkeyStatuses.used) {
+    return reply.code(400).send({ message: "该卡密尚未使用" });
+  }
+  if (!row.session_payload) {
+    return reply.code(404).send({ message: "该卡密暂无 session 信息" });
+  }
+
+  let sessionJson;
+  try {
+    const raw = decryptText(row.session_payload);
+    sessionJson = JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return reply.code(500).send({ message: "Session 信息解密失败" });
+  }
+
+  createAuditLog({
+    action: "cdkey.session.copy",
+    actor: request.admin.username,
+    resourceType: "cdkey",
+    resourceId: row.cdkey_id,
+    detail: { publicKey: row.public_key, orderNo: row.order_no || null }
+  });
+
+  return {
+    publicKey: row.public_key,
+    orderNo: row.order_no || null,
+    orderCreatedAt: row.order_created_at || null,
+    sessionJson
+  };
 });
 
 app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (request) => {
@@ -8180,8 +8243,12 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
       site: {
         id: "legacy_static",
         name: "静态库存",
-        slug: "legacy_static"
+        slug: "legacy_static",
+        inventorySource: "sms_entries",
+        smsProvider: null
       },
+      inventorySource: "sms_entries",
+      smsProvider: null,
       status: entry.status,
       hasActiveOrder: false,
       latestOrder: null
@@ -8201,8 +8268,12 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
     site: {
       id: card.site_id,
       name: card.site_name,
-      slug: card.site_slug
+      slug: card.site_slug,
+      inventorySource: card.inventory_source,
+      smsProvider: card.sms_provider || null
     },
+    inventorySource: card.inventory_source,
+    smsProvider: card.sms_provider || null,
     status: card.status,
     hasActiveOrder: Boolean(card.current_order_id),
     latestOrder: latestOrder ? mapSmsOrderForPublic(latestOrder) : null
@@ -8268,7 +8339,8 @@ app.post("/api/public/sms/orders", async (request, reply) => {
         excludePrefix: card.sms_exclude_prefix || null
       });
     } catch (error) {
-      return reply.code(502).send({ message: `NexSMS 买号失败: ${error.message}` });
+      createSmsOrderEvent(orderId, "purchase_failed", { provider: "nexsms", message: error.message });
+      return reply.code(502).send({ message: "买号失败" });
     }
 
     db.prepare(`
@@ -8324,7 +8396,8 @@ app.post("/api/public/sms/orders", async (request, reply) => {
         prefix: card.sms_prefix_filter || null
       });
     } catch (error) {
-      return reply.code(502).send({ message: `383api 买号失败: ${error.message}` });
+      createSmsOrderEvent(orderId, "purchase_failed", { provider: "383api", message: error.message });
+      return reply.code(502).send({ message: "买号失败" });
     }
 
     db.prepare(`

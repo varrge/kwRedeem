@@ -77,6 +77,7 @@ const app = Fastify({ logger: false });
 const db = getDb();
 const execFileAsync = promisify(execFile);
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+const SMS_PROVIDER_CODE_SYNC_TIMEOUT_MS = 4000;
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
@@ -798,7 +799,9 @@ async function syncNexSmsOrder(order) {
     return null;
   }
 
-  const records = await getPremiumSmsRecords(apiKey, order.phone);
+  const records = await getPremiumSmsRecords(apiKey, order.phone, {
+    timeoutMs: SMS_PROVIDER_CODE_SYNC_TIMEOUT_MS
+  });
   const record = records.find((item) => item.code || item.sms);
   const code = extractSmsVerificationCode(record?.code || record?.sms) || "";
   if (!code) return null;
@@ -831,7 +834,8 @@ async function sync383ApiOrder(order) {
     phoneNumber: order.phone,
     projectId: payload.projectId || "",
     page: 1,
-    pageSize: 50
+    pageSize: 50,
+    timeoutMs: SMS_PROVIDER_CODE_SYNC_TIMEOUT_MS
   });
   const message = messages.find((item) => extractSmsVerificationCode(item.content));
   const code = extractSmsVerificationCode(message?.content) || "";

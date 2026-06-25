@@ -641,11 +641,14 @@ async function refreshCdkeys() {
         </button>
       </div>
     ` },
-    { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "操作", render: (item) => item.status === "used"
-      ? `<button class="ghost-btn small" type="button" onclick='copyCdkeySession(${JSON.stringify(item.id)}, ${JSON.stringify(item.public_key)})'>复制 Session</button>`
-      : "-"
-    }
+    { label: "状态", render: (item) => `
+      <div style="display:grid;gap:8px;justify-items:start;">
+        ${renderStatus(item.status)}
+        ${item.status === "used"
+          ? `<button class="ghost-btn small" type="button" onclick='copyCdkeySession(${JSON.stringify(item.id)}, ${JSON.stringify(item.public_key)})'>复制 Session</button>`
+          : ""}
+      </div>
+    ` }
   ], payload.items);
 }
 

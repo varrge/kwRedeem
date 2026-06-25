@@ -59,10 +59,11 @@ export async function purchasePremiumNumber(apiKey, options) {
   return first;
 }
 
-export async function getPremiumSmsRecords(apiKey, tel) {
+export async function getPremiumSmsRecords(apiKey, tel, options = {}) {
   const data = await request("/api/premium/sms-records", {
     apiKey,
-    query: { page: 1, pageSize: 10, tel }
+    query: { page: 1, pageSize: 10, tel },
+    timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS
   });
   return Array.isArray(data?.list) ? data.list : [];
 }

@@ -42,7 +42,7 @@ let pendingSmsConfirmResolve = null;
 // --- Constants ---
 
 const LIVE_STATUS_POLL_MS = 2000;
-const SMS_POLL_INTERVAL_MS = 10000;
+const SMS_POLL_INTERVAL_MS = 3000;
 const SMS_LEGACY_RETRY_SECONDS = 60;
 
 const STATUS_LABELS = {
@@ -625,11 +625,18 @@ lookupForm.addEventListener("submit", async (event) => {
 // --- SMS Query ---
 
 let smsPollingInterval = null;
+let smsPollingTimeout = null;
+let smsPollingToken = 0;
 
 function stopSmsPolling() {
+  smsPollingToken += 1;
   if (smsPollingInterval) {
     clearInterval(smsPollingInterval);
     smsPollingInterval = null;
+  }
+  if (smsPollingTimeout) {
+    clearTimeout(smsPollingTimeout);
+    smsPollingTimeout = null;
   }
 }
 
@@ -660,37 +667,62 @@ function startSmsSubmitCooldown(seconds = SMS_LEGACY_RETRY_SECONDS) {
 
 function startSmsPolling(orderNo) {
   stopSmsPolling();
-  smsPollingInterval = setInterval(async () => {
+  const token = smsPollingToken;
+  let stopped = false;
+
+  const pollOnce = async () => {
+    if (token !== smsPollingToken) return;
     try {
       const payload = await request(`/api/public/sms/orders/${encodeURIComponent(orderNo)}`);
+      if (token !== smsPollingToken) return;
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
       if (["ready", "timeout"].includes(payload.verificationStatus) || ["ready", "refunded", "failed", "cancelled"].includes(String(payload.status || "").toLowerCase())) {
+        stopped = true;
         stopSmsPolling();
         smsSubmit.disabled = false;
         currentSmsOrderNo = payload.orderNo || null;
       }
     } catch (error) {
       // 轮询请求失败时不中断，下一周期继续
+    } finally {
+      if (!stopped && token === smsPollingToken) {
+        smsPollingTimeout = setTimeout(pollOnce, SMS_POLL_INTERVAL_MS);
+      }
     }
-  }, SMS_POLL_INTERVAL_MS);
+  };
+
+  pollOnce();
 }
 
 function startSmsLegacyPolling(cardKey) {
   stopSmsPolling();
-  smsPollingInterval = setInterval(async () => {
+  const token = smsPollingToken;
+  let stopped = false;
+
+  const pollOnce = async () => {
+    if (token !== smsPollingToken) return;
     try {
       const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(cardKey)}`);
+      if (token !== smsPollingToken) return;
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
       if (["ready", "timeout"].includes(payload.verificationStatus)) {
+        stopped = true;
         stopSmsPolling();
         smsSubmit.disabled = false;
       }
     } catch (error) {
+      stopped = true;
       stopSmsPolling();
       smsSubmit.disabled = false;
       setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
+    } finally {
+      if (!stopped && token === smsPollingToken) {
+        smsPollingTimeout = setTimeout(pollOnce, SMS_POLL_INTERVAL_MS);
+      }
     }
-  }, SMS_POLL_INTERVAL_MS);
+  };
+
+  pollOnce();
 }
 
 document.addEventListener("visibilitychange", () => {

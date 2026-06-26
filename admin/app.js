@@ -41,6 +41,8 @@ const refs = {
   batchImportType: document.querySelector("#batch-import-type"),
   singleSite: document.querySelector("#single-site"),
   singleEmailToken: document.querySelector("#single-email-token"),
+  singleProcessingMode: document.querySelector("#single-processing-mode"),
+  singleManualType: document.querySelector("#single-manual-type"),
   subCardTypeForm: document.querySelector("#sub-card-type-form"),
   subCtName: document.querySelector("#sub-ct-name"),
   subCtTotal: document.querySelector("#sub-ct-total"),
@@ -314,6 +316,15 @@ function maskToken(value) {
 
 function renderStatus(value) {
   return `<span class="table-badge status-${String(value || "").toLowerCase()}">${value || "-"}</span>`;
+}
+
+function renderStatusText(value) {
+  return {
+    pending: "待处理",
+    processing: "处理中",
+    succeeded: "已成功",
+    failed: "失败"
+  }[String(value || "").toLowerCase()] || value || "-";
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -629,7 +640,9 @@ async function refreshCdkeys() {
   renderTable(refs.cdkeyList, [
     { label: "", render: (item) => `<input type="checkbox" class="cdkey-check" value="${item.id}" />` },
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
-    { label: "类型", render: (item) => item.support_only ? `<span class="table-badge status-pending">接码专用</span>` : `<span class="table-badge status-active">普通</span>` },
+    { label: "类型", render: (item) => item.processing_mode === "manual"
+      ? `<span class="table-badge status-processing">人工 ${escapeHtml(item.manual_type || "")}</span>`
+      : item.support_only ? `<span class="table-badge status-pending">接码专用</span>` : `<span class="table-badge status-active">普通</span>` },
     { label: "原始卡密", render: (item) => item.source_key ? `<code style="opacity:0.5">${escapeHtml(item.source_key)}</code>` : "-" },
     { label: "网站", render: (item) => item.site_name || "-" },
     { label: "前缀", render: (item) => item.prefix },
@@ -644,7 +657,7 @@ async function refreshCdkeys() {
     { label: "状态", render: (item) => `
       <div style="display:grid;gap:8px;justify-items:start;">
         ${renderStatus(item.status)}
-        ${item.status === "used"
+        ${item.status === "used" || (item.processing_mode === "manual" && item.status === "locked")
           ? `<button class="ghost-btn small" type="button" onclick='copyCdkeySession(${JSON.stringify(item.id)}, ${JSON.stringify(item.public_key)})'>复制 Session</button>`
           : ""}
       </div>
@@ -780,10 +793,40 @@ async function refreshOrders() {
     { label: "订单号", render: (item) => `<code>${item.order_no}</code>` },
     { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
     { label: "网站", render: (item) => item.site_name || "-" },
+    { label: "处理方式", render: (item) => item.processing_mode === "manual"
+      ? `<span class="table-badge status-processing">人工 ${escapeHtml(item.manual_type || "")}</span>`
+      : `<span class="table-badge status-active">自动</span>` },
     { label: "状态", render: (item) => renderStatus(item.status) },
-    { label: "错误", render: (item) => `<span title="${escapeHtml(item.error_message || "")}">${item.error_message ? (item.error_message.slice(0, 20) + "...") : "-"}</span>` }
+    { label: "错误", render: (item) => `<span title="${escapeHtml(item.error_message || "")}">${item.error_message ? (item.error_message.slice(0, 20) + "...") : "-"}</span>` },
+    { label: "手动更新", render: (item) => `
+      <div style="display:grid;gap:6px;min-width:180px">
+        <select class="manual-order-status" data-order-no="${escapeHtml(item.order_no)}">
+          ${["pending", "processing", "succeeded", "failed"].map((status) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${renderStatusText(status)}</option>`).join("")}
+        </select>
+        <input class="manual-order-error" data-order-no="${escapeHtml(item.order_no)}" placeholder="失败原因（可选）" value="${escapeHtml(item.error_message || "")}" />
+        <button class="ghost-btn small" type="button" onclick='updateOrderStatus(${JSON.stringify(item.order_no)})'>更新状态</button>
+      </div>
+    ` }
   ], payload.items);
 }
+
+async function updateOrderStatus(orderNo) {
+  const statusEl = Array.from(refs.orderList.querySelectorAll(".manual-order-status"))
+    .find((item) => item.dataset.orderNo === orderNo);
+  const errorEl = Array.from(refs.orderList.querySelectorAll(".manual-order-error"))
+    .find((item) => item.dataset.orderNo === orderNo);
+  if (!statusEl) return;
+  await api(`/api/admin/orders/${encodeURIComponent(orderNo)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: statusEl.value,
+      errorMessage: errorEl?.value?.trim() || ""
+    })
+  });
+  await Promise.all([refreshOrders(), refreshCdkeys(), refreshDashboard()]);
+}
+
+window.updateOrderStatus = updateOrderStatus;
 
 async function refreshJobs() {
   const payload = await api("/api/admin/jobs");
@@ -3199,14 +3242,20 @@ refs.singleCdkeyForm.addEventListener("submit", async (event) => {
         siteId: refs.singleSite.value,
         prefix: document.querySelector("#single-prefix").value.trim(),
         note: "",
-        emailToken: refs.singleEmailToken.value.trim()
+        emailToken: refs.singleEmailToken.value.trim(),
+        processingMode: refs.singleProcessingMode.value,
+        manualType: refs.singleManualType.value
       })
     });
     refs.singleCdkeyForm.reset();
     refs.singleSite.value = "site_preset_meimei_site";
+    refs.singleProcessingMode.value = "auto";
+    refs.singleManualType.value = "PLUS";
     setHint(
       refs.singleCdkeyResult,
-      payload.mode === "support"
+      payload.mode === "manual"
+        ? `已生成人工处理卡密: ${payload.publicKey}（${payload.manualType || "-"}）`
+        : payload.mode === "support"
         ? `已生成接码卡密: ${payload.publicKey}`
         : `已添加普通卡密: ${payload.publicKey}`
     );

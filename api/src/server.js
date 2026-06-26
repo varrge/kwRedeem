@@ -237,10 +237,18 @@ function cleanupExpiredEntries() {
   }
 }
 
-setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS);
-setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS);
-setInterval(cleanupSub2ApiImageSessions, 60_000);
-setInterval(cleanupSub2ApiImageJobs, 60_000);
+const backgroundIntervals = [
+  setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS),
+  setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS),
+  setInterval(cleanupSub2ApiImageSessions, 60_000),
+  setInterval(cleanupSub2ApiImageJobs, 60_000)
+];
+app.addHook("onClose", (_instance, done) => {
+  for (const interval of backgroundIntervals) {
+    clearInterval(interval);
+  }
+  done();
+});
 // --- End Verification Cache ---
 
 async function fetchStaticSmsCode(smsUrl) {
@@ -529,6 +537,7 @@ function interpretVerifyResult(siteSlug, remoteResult, defaultCanRedeem) {
 const MEIMEI_SITE_SLUG = "meimei_site";
 const MEIMEI_SITE_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
 const SUPPORT_API_BASE_URL = "https://ai.dengta-learning.online/support/api/support";
+const MANUAL_CDKEY_TYPES = ["PLUS", "x5", "x20"];
 
 async function fetchQueueStatusForSite(site) {
   const slug = String(site?.slug || "").trim().toLowerCase();
@@ -937,11 +946,15 @@ function getOrderDetail(orderNo) {
       s.name AS site_name,
       s.slug AS site_slug,
       s.polling_enabled AS site_polling_enabled,
+      c.processing_mode AS cdkey_processing_mode,
+      c.manual_type AS cdkey_manual_type,
+      c.metadata AS cdkey_metadata,
       j.status AS job_status,
       j.last_error AS job_error,
       j.last_response AS job_response,
       j.attempt_count AS job_attempt_count
     FROM redeem_orders o
+    LEFT JOIN cdkeys c ON c.id = o.cdkey_id
     LEFT JOIN products p ON p.id = o.product_id
     LEFT JOIN sites s ON s.id = o.site_id
     LEFT JOIN activation_jobs j ON j.id = o.latest_job_id
@@ -960,6 +973,18 @@ function getOrderDetail(orderNo) {
     siteName: order.site_name || order.product_title,
     siteSlug: order.site_slug || null,
     status: order.status,
+    processingMode: isManualProcessingCdkey({
+      processing_mode: order.cdkey_processing_mode,
+      metadata: order.cdkey_metadata
+    }) ? "manual" : "auto",
+    manualType: getCdkeyManualType({
+      manual_type: order.cdkey_manual_type,
+      metadata: order.cdkey_metadata
+    }),
+    pollingDisabled: isManualProcessingCdkey({
+      processing_mode: order.cdkey_processing_mode,
+      metadata: order.cdkey_metadata
+    }),
     errorMessage: order.error_message,
     abandonRemainingTime: Boolean(order.abandon_remaining_time),
     sessionPreview: getJsonBodyOrNull(order.session_preview),
@@ -1396,7 +1421,7 @@ function parseCdkeyMetadata(value) {
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 }
 
-function buildCdkeyMetadata(existingValue, { note, emailToken, supportOnly } = {}) {
+function buildCdkeyMetadata(existingValue, { note, emailToken, supportOnly, processingMode, manualType } = {}) {
   const metadata = parseCdkeyMetadata(existingValue);
 
   if (note !== undefined) {
@@ -1426,6 +1451,24 @@ function buildCdkeyMetadata(existingValue, { note, emailToken, supportOnly } = {
     }
   }
 
+  if (processingMode !== undefined) {
+    const normalizedMode = String(processingMode || "auto").trim().toLowerCase();
+    if (normalizedMode === "manual") {
+      metadata.processingMode = "manual";
+    } else {
+      delete metadata.processingMode;
+    }
+  }
+
+  if (manualType !== undefined) {
+    const normalizedManualType = String(manualType ?? "").trim();
+    if (normalizedManualType) {
+      metadata.manualType = normalizedManualType;
+    } else {
+      delete metadata.manualType;
+    }
+  }
+
   return Object.keys(metadata).length ? JSON.stringify(metadata) : null;
 }
 
@@ -1444,6 +1487,21 @@ function getCdkeyNote(metadataValue) {
 function isSupportOnlyCdkey(metadataValue) {
   const metadata = parseCdkeyMetadata(metadataValue);
   return metadata.supportOnly === true;
+}
+
+function getCdkeyProcessingMode(row = {}) {
+  const fieldMode = String(row.processing_mode || "").trim().toLowerCase();
+  if (fieldMode === "manual") return "manual";
+  const metadata = parseCdkeyMetadata(row.metadata);
+  return metadata.processingMode === "manual" ? "manual" : "auto";
+}
+
+function getCdkeyManualType(row = {}) {
+  return String(row.manual_type || parseCdkeyMetadata(row.metadata).manualType || "").trim();
+}
+
+function isManualProcessingCdkey(row = {}) {
+  return getCdkeyProcessingMode(row) === "manual";
 }
 
 function buildSupportAccountPayload(raw = {}, supportCookie = null, authMode = null) {
@@ -1477,6 +1535,8 @@ async function verifyCdkeyForPublic(publicKey) {
       c.prefix,
       c.site_id,
       c.metadata,
+      c.processing_mode,
+      c.manual_type,
       s.name AS site_name,
       s.slug AS site_slug,
       s.verify_api_url,
@@ -1499,7 +1559,9 @@ async function verifyCdkeyForPublic(publicKey) {
   }
 
   const supportOnly = isSupportOnlyCdkey(key.metadata);
-  const sourceKey = supportOnly ? "" : decryptText(key.source_key);
+  const manualProcessing = isManualProcessingCdkey(key);
+  const manualType = getCdkeyManualType(key);
+  const sourceKey = supportOnly || manualProcessing ? "" : decryptText(key.source_key);
   const verifyContext = {
     publicKey: key.public_key,
     sourceKey,
@@ -1514,7 +1576,10 @@ async function verifyCdkeyForPublic(publicKey) {
   const canSupportAccess = key.status === cdkeyStatuses.active
     && String(key.site_slug || "").trim().toLowerCase() === MEIMEI_SITE_SLUG;
 
-  if (canRedeem && key.verify_api_url) {
+  if (manualProcessing) {
+    canRedeem = key.status === cdkeyStatuses.active;
+    remoteMessage = "手动处理卡密，无需远端原始卡密校验";
+  } else if (canRedeem && key.verify_api_url) {
     remoteResult = await callConfiguredApi({
       url: key.verify_api_url,
       method: key.verify_http_method,
@@ -1548,6 +1613,8 @@ async function verifyCdkeyForPublic(publicKey) {
       siteName: key.site_name || "未命名网站",
       siteSlug: key.site_slug || null,
       supportOnly,
+      processingMode: manualProcessing ? "manual" : "auto",
+      manualType,
       canRedeem,
       canSupportAccess,
       hasBoundEmailToken: Boolean(emailToken),
@@ -5052,6 +5119,8 @@ app.post("/api/public/redeem", async (request, reply) => {
         c.id AS cdkey_id,
         c.status AS cdkey_status,
         c.metadata AS cdkey_metadata,
+        c.processing_mode AS cdkey_processing_mode,
+        c.manual_type AS cdkey_manual_type,
         c.site_id,
         s.*
       FROM cdkeys c
@@ -5072,7 +5141,14 @@ app.post("/api/public/redeem", async (request, reply) => {
       return reply.code(400).send({ message: "当前卡密未绑定有效网站" });
     }
 
-    await assertSiteQueueReady(preflight);
+    const manualProcessing = isManualProcessingCdkey({
+      processing_mode: preflight.cdkey_processing_mode,
+      metadata: preflight.cdkey_metadata
+    });
+
+    if (!manualProcessing) {
+      await assertSiteQueueReady(preflight);
+    }
 
     const result = withTransaction(() => {
       const cdkey = db.prepare(`
@@ -5105,7 +5181,9 @@ app.post("/api/public/redeem", async (request, reply) => {
 
       const now = nowIso();
       const orderId = nanoid(18);
-      const jobId = nanoid(18);
+      const manualProcessing = isManualProcessingCdkey(cdkey);
+      const manualType = getCdkeyManualType(cdkey);
+      const jobId = manualProcessing ? null : nanoid(18);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
 
       db.prepare(`
@@ -5127,39 +5205,41 @@ app.post("/api/public/redeem", async (request, reply) => {
         JSON.stringify(session.preview),
         request.ip,
         parsed.data.abandonRemainingTime ? 1 : 0,
-        orderStatuses.processing,
+        manualProcessing ? orderStatuses.pending : orderStatuses.processing,
         jobId,
         now,
         now
       );
 
-      db.prepare(`
-        INSERT INTO activation_jobs (
-          id, order_id, cdkey_id, activation_endpoint_id, site_id, dedupe_key, status, payload,
-          attempt_count, max_attempts, next_retry_at, last_error, last_response,
-          locked_at, locked_by, delivered_at, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
-      `).run(
-        jobId,
-        orderId,
-        cdkey.id,
-        site.activation_endpoint_id || cdkey.activation_endpoint_id,
-        site.id,
-        `redeem:${orderNo}`,
-        jobStatuses.pending,
-        JSON.stringify({
-          orderNo,
-          publicKey,
-          siteId: site.id,
-          abandonRemainingTime: parsed.data.abandonRemainingTime,
-          session: session.parsed
-        }),
-        site.max_retries || 3,
-        now,
-        now,
-        now
-      );
+      if (!manualProcessing) {
+        db.prepare(`
+          INSERT INTO activation_jobs (
+            id, order_id, cdkey_id, activation_endpoint_id, site_id, dedupe_key, status, payload,
+            attempt_count, max_attempts, next_retry_at, last_error, last_response,
+            locked_at, locked_by, delivered_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
+        `).run(
+          jobId,
+          orderId,
+          cdkey.id,
+          site.activation_endpoint_id || cdkey.activation_endpoint_id,
+          site.id,
+          `redeem:${orderNo}`,
+          jobStatuses.pending,
+          JSON.stringify({
+            orderNo,
+            publicKey,
+            siteId: site.id,
+            abandonRemainingTime: parsed.data.abandonRemainingTime,
+            session: session.parsed
+          }),
+          site.max_retries || 3,
+          now,
+          now,
+          now
+        );
+      }
 
       db.prepare(`
         UPDATE cdkeys
@@ -5172,10 +5252,21 @@ app.post("/api/public/redeem", async (request, reply) => {
         actor: "public",
         resourceType: "redeem_order",
         resourceId: orderId,
-        detail: { publicKey, orderNo, abandonRemainingTime: parsed.data.abandonRemainingTime }
+        detail: {
+          publicKey,
+          orderNo,
+          abandonRemainingTime: parsed.data.abandonRemainingTime,
+          processingMode: manualProcessing ? "manual" : "auto",
+          manualType
+        }
       });
 
-      return { orderNo };
+      return {
+        orderNo,
+        processingMode: manualProcessing ? "manual" : "auto",
+        manualType,
+        pollingDisabled: manualProcessing
+      };
     });
 
     return result;
@@ -6908,7 +6999,9 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     prefix: z.string().min(1),
     siteId: z.string().min(1),
     note: z.string().optional().default(""),
-    emailToken: z.string().optional().default("")
+    emailToken: z.string().optional().default(""),
+    processingMode: z.enum(["auto", "manual"]).optional().default("auto"),
+    manualType: z.enum(MANUAL_CDKEY_TYPES).optional()
   });
 
   const parsed = schema.safeParse(request.body);
@@ -6923,8 +7016,13 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
 
   const sourceKey = parsed.data.sourceKey.trim();
   const emailToken = parsed.data.emailToken.trim();
+  const manualProcessing = parsed.data.processingMode === "manual";
+  const manualType = parsed.data.manualType || "";
   const supportOnly = !sourceKey && Boolean(emailToken);
-  if (!sourceKey && !emailToken) {
+  if (manualProcessing && !manualType) {
+    return reply.code(400).send({ message: "请选择手工处理卡密类型" });
+  }
+  if (!manualProcessing && !sourceKey && !emailToken) {
     return reply.code(400).send({ message: "请至少填写原始卡密或 email_token" });
   }
   if (supportOnly && String(site.slug || "").trim().toLowerCase() !== MEIMEI_SITE_SLUG) {
@@ -6934,14 +7032,16 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
   const now = nowIso();
   const id = nanoid(18);
   const publicKey = getUniquePublicKey(parsed.data.prefix);
-  const storedSourceKey = sourceKey || `support-card:${publicKey}`;
+  const storedSourceKey = manualProcessing
+    ? `manual-card:${manualType}:${publicKey}`
+    : sourceKey || `support-card:${publicKey}`;
 
   db.prepare(`
     INSERT INTO cdkeys (
       id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix, status,
-      locked_at, locked_by_order_id, used_at, disabled_reason, metadata, created_at, updated_at
+      locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, created_at, updated_at
     )
-    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
+    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)
   `).run(
     id,
     site.product_id || "prod_demo",
@@ -6954,8 +7054,12 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     buildCdkeyMetadata(null, {
       note: parsed.data.note,
       emailToken,
-      supportOnly
+      supportOnly,
+      processingMode: manualProcessing ? "manual" : "auto",
+      manualType: manualProcessing ? manualType : ""
     }),
+    manualProcessing ? "manual" : "auto",
+    manualProcessing ? manualType : null,
     now,
     now
   );
@@ -6970,14 +7074,18 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
       prefix: parsed.data.prefix,
       publicKey,
       hasEmailToken: Boolean(emailToken),
-      supportOnly
+      supportOnly,
+      processingMode: manualProcessing ? "manual" : "auto",
+      manualType
     }
   });
 
   return {
     id,
     publicKey,
-    mode: supportOnly ? "support" : "standard"
+    mode: manualProcessing ? "manual" : supportOnly ? "support" : "standard",
+    processingMode: manualProcessing ? "manual" : "auto",
+    manualType
   };
 });
 
@@ -6989,7 +7097,7 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   let sql = `
     SELECT
-      c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at, c.metadata,
+      c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at, c.metadata, c.processing_mode, c.manual_type,
       b.name AS batch_name,
       s.name AS site_name,
       (
@@ -7027,12 +7135,14 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
 
   const items = db.prepare(sql).all(...params).map((item) => ({
     ...item,
-    source_key: isSupportOnlyCdkey(item.metadata) ? "" : decryptText(item.source_key),
+    source_key: isSupportOnlyCdkey(item.metadata) || isManualProcessingCdkey(item) ? "" : decryptText(item.source_key),
     note: getCdkeyNote(item.metadata),
     email_token: getCdkeyEmailToken(item.metadata),
     has_email_token: Boolean(getCdkeyEmailToken(item.metadata)),
     latest_order_no: item.latest_order_no || null,
-    support_only: isSupportOnlyCdkey(item.metadata)
+    support_only: isSupportOnlyCdkey(item.metadata),
+    processing_mode: getCdkeyProcessingMode(item),
+    manual_type: getCdkeyManualType(item)
   }));
   return { items };
 });
@@ -7061,8 +7171,8 @@ app.get("/api/admin/cdkeys/:id/session", { preHandler: requireAdmin }, async (re
   if (!row) {
     return reply.code(404).send({ message: "卡密不存在" });
   }
-  if (row.cdkey_status !== cdkeyStatuses.used) {
-    return reply.code(400).send({ message: "该卡密尚未使用" });
+  if (![cdkeyStatuses.locked, cdkeyStatuses.used].includes(row.cdkey_status)) {
+    return reply.code(400).send({ message: "该卡密尚未提交 session" });
   }
   if (!row.session_payload) {
     return reply.code(404).send({ message: "该卡密暂无 session 信息" });
@@ -7100,7 +7210,7 @@ app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (r
 
   let sql = `
     SELECT
-      c.public_key, c.source_key, c.prefix, c.status, c.metadata, c.created_at,
+      c.public_key, c.source_key, c.prefix, c.status, c.metadata, c.processing_mode, c.manual_type, c.created_at,
       b.name AS batch_name,
       s.name AS site_name
     FROM cdkeys c
@@ -7132,7 +7242,7 @@ app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (r
   const rows = db.prepare(sql).all(...params);
   const items = rows.map((row) => {
     let sourceKey = "";
-    if (!isSupportOnlyCdkey(row.metadata)) {
+    if (!isSupportOnlyCdkey(row.metadata) && !isManualProcessingCdkey(row)) {
       try {
         sourceKey = decryptText(row.source_key) || "";
       } catch {
@@ -7248,7 +7358,7 @@ app.post("/api/admin/cdkeys/export-source-keys", { preHandler: requireAdmin }, a
 
   const placeholders = parsed.data.ids.map(() => "?").join(",");
   const rows = db.prepare(`
-    SELECT id, source_key, metadata
+    SELECT id, source_key, metadata, processing_mode, manual_type
     FROM cdkeys
     WHERE id IN (${placeholders})
   `).all(...parsed.data.ids);
@@ -7260,7 +7370,7 @@ app.post("/api/admin/cdkeys/export-source-keys", { preHandler: requireAdmin }, a
     .map((id) => {
       const row = rowMap.get(id);
       let sourceKey = "";
-      if (!isSupportOnlyCdkey(row.metadata)) {
+      if (!isSupportOnlyCdkey(row.metadata) && !isManualProcessingCdkey(row)) {
         try {
           sourceKey = decryptText(row.source_key);
         } catch (error) {
@@ -7278,13 +7388,78 @@ app.get("/api/admin/orders", { preHandler: requireAdmin }, async () => {
   const items = db.prepare(`
     SELECT
       o.order_no, o.public_key, o.status, o.error_message, o.created_at,
+      c.processing_mode, c.manual_type, c.metadata AS cdkey_metadata,
       s.name AS site_name
     FROM redeem_orders o
+    LEFT JOIN cdkeys c ON c.id = o.cdkey_id
     LEFT JOIN sites s ON s.id = o.site_id
     ORDER BY o.created_at DESC
     LIMIT 200
-  `).all();
+  `).all().map((item) => ({
+    ...item,
+    processing_mode: isManualProcessingCdkey({
+      processing_mode: item.processing_mode,
+      metadata: item.cdkey_metadata
+    }) ? "manual" : "auto",
+    manual_type: getCdkeyManualType({
+      manual_type: item.manual_type,
+      metadata: item.cdkey_metadata
+    })
+  }));
   return { items };
+});
+
+app.patch("/api/admin/orders/:orderNo/status", { preHandler: requireAdmin }, async (request, reply) => {
+  const schema = z.object({
+    status: z.enum([orderStatuses.pending, orderStatuses.processing, orderStatuses.succeeded, orderStatuses.failed]),
+    errorMessage: z.string().optional().default("")
+  });
+  const parsed = schema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "订单状态参数不正确" });
+  }
+
+  const orderNo = String(request.params.orderNo || "").trim().toUpperCase();
+  const order = db.prepare("SELECT id, order_no, cdkey_id FROM redeem_orders WHERE order_no = ?").get(orderNo);
+  if (!order) {
+    return reply.code(404).send({ message: "订单不存在" });
+  }
+
+  const now = nowIso();
+  const completedAt = [orderStatuses.succeeded, orderStatuses.failed].includes(parsed.data.status) ? now : null;
+  const errorMessage = parsed.data.status === orderStatuses.failed
+    ? parsed.data.errorMessage.trim() || "管理员手动标记失败"
+    : parsed.data.errorMessage.trim() || null;
+
+  db.prepare(`
+    UPDATE redeem_orders
+    SET status = ?, error_message = ?, completed_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(parsed.data.status, errorMessage, completedAt, now, order.id);
+
+  if (parsed.data.status === orderStatuses.succeeded) {
+    db.prepare(`
+      UPDATE cdkeys
+      SET status = ?, used_at = COALESCE(used_at, ?), updated_at = ?
+      WHERE id = ?
+    `).run(cdkeyStatuses.used, now, now, order.cdkey_id);
+  } else if (parsed.data.status === orderStatuses.failed) {
+    db.prepare(`
+      UPDATE cdkeys
+      SET status = ?, locked_at = NULL, locked_by_order_id = NULL, updated_at = ?
+      WHERE id = ? AND status = ? AND locked_by_order_id = ?
+    `).run(cdkeyStatuses.active, now, order.cdkey_id, cdkeyStatuses.locked, order.id);
+  }
+
+  createAuditLog({
+    action: "order.status_update",
+    actor: request.admin.username,
+    resourceType: "redeem_order",
+    resourceId: order.id,
+    detail: { orderNo: order.order_no, status: parsed.data.status, errorMessage }
+  });
+
+  return getOrderDetail(order.order_no);
 });
 
 app.get("/api/admin/jobs", { preHandler: requireAdmin }, async () => {
@@ -10547,16 +10722,19 @@ app.setErrorHandler((error, _request, reply) => {
   });
 });
 
-app.listen({
-  port: env.port,
-  host: "127.0.0.1",
-  listenTextResolver: () => `KaWang API listening on http://127.0.0.1:${env.port}`
-}).catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.env.KAWANG_SKIP_LISTEN !== "1") {
+  app.listen({
+    port: env.port,
+    host: "127.0.0.1",
+    listenTextResolver: () => `KaWang API listening on http://127.0.0.1:${env.port}`
+  }).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 export {
+  app,
   verificationCache,
   CACHE_TTL_MS,
   CACHE_CLEANUP_INTERVAL_MS,

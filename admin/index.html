@@ -143,6 +143,21 @@
                   <textarea id="single-email-token" rows="3" placeholder="只填 email_token、网站和前缀，即可生成一张新的接码卡密"></textarea>
                 </label>
                 <label class="field">
+                  <span>处理方式</span>
+                  <select id="single-processing-mode">
+                    <option value="auto">自动提交原始卡密</option>
+                    <option value="manual">人工处理 session</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>人工卡密类型</span>
+                  <select id="single-manual-type">
+                    <option value="PLUS">PLUS</option>
+                    <option value="x5">x5</option>
+                    <option value="x20">x20</option>
+                  </select>
+                </label>
+                <label class="field">
                   <span>原始卡密（兼容模式，可留空）</span>
                   <input id="single-source-key" placeholder="如需兼容旧流程可填写；接码专用卡密可直接留空" />
                 </label>
@@ -150,7 +165,7 @@
                   <span>卡密前缀</span>
                   <input id="single-prefix" placeholder="例如 GPT" />
                 </label>
-                <div class="hint">推荐主流程：选择 `老妹plus` 站点，留空原始卡密，只填写 `email_token` 后生成新的接码卡密。</div>
+                <div class="hint">接码卡密填写 email_token；人工处理卡密选择人工方式与类型，可留空原始卡密和 email_token。</div>
                 <button type="submit" class="primary-btn">生成 / 添加卡密</button>
               </form>
               <div id="single-cdkey-result" class="hint"></div>

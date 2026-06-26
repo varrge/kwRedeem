@@ -182,6 +182,7 @@ function stopRedeemStatusPolling() {
 }
 
 function shouldKeepPolling(order = {}) {
+  if (order.pollingDisabled) return false;
   const live = String(order.liveTaskStatus || "").toLowerCase();
   if (live === "completed" || live === "failed") return false;
   const orderStatus = String(order.status || "").toLowerCase();
@@ -294,6 +295,7 @@ function renderVerifyResult(payload) {
 }
 
 function renderRedeemSuccess(payload) {
+  const manualProcessing = payload.processingMode === "manual" || payload.pollingDisabled;
   const hasLiveTask = Boolean(payload.liveTaskStatus);
   const liveStatus = hasLiveTask
     ? (payload.liveTaskStatus === "completed" ? "succeeded" : payload.liveTaskStatus)
@@ -305,7 +307,9 @@ function renderRedeemSuccess(payload) {
   const liveErrorMessage = String(payload.liveErrorMessage || "").trim();
 
   let statusHint;
-  if (hasLiveTask) {
+  if (manualProcessing) {
+    statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
+  } else if (hasLiveTask) {
     statusHint = liveErrorMessage || payload.liveMessage || "任务状态会自动刷新。";
   } else {
     statusHint = {
@@ -332,6 +336,7 @@ function renderRedeemSuccess(payload) {
       ${renderStatusBadge(liveStatus)}
       <div class="result-grid">
         <div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo)}</strong></div>
+        ${manualProcessing ? `<div class="result-item"><span>处理方式</span><strong>人工处理${payload.manualType ? ` / ${escapeHtml(payload.manualType)}` : ""}</strong></div>` : ""}
         <div class="result-item"><span>实时任务状态</span><strong>${renderStatusText(liveStatus)}</strong></div>
         ${queueHtml}
         ${progressHtml}
@@ -513,8 +518,10 @@ async function executeRedeem(sessionPayload, abandonRemainingTime) {
 
   orderNoInput.value = payload.orderNo;
   goToStep(3);
-  await refreshRedeemStatus(payload.orderNo);
-  startRedeemStatusPolling(payload.orderNo);
+  const order = await refreshRedeemStatus(payload.orderNo);
+  if (!payload.pollingDisabled && !order.pollingDisabled) {
+    startRedeemStatusPolling(payload.orderNo);
+  }
 }
 
 // --- Event Handlers ---

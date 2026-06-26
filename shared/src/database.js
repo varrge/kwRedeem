@@ -224,6 +224,8 @@ function createSchema(db) {
       used_at TEXT,
       disabled_reason TEXT,
       metadata TEXT,
+      processing_mode TEXT NOT NULL DEFAULT 'auto',
+      manual_type TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -677,6 +679,8 @@ function createSchema(db) {
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
+  ensureColumn(db, "cdkeys", "processing_mode", "TEXT NOT NULL DEFAULT 'auto'");
+  ensureColumn(db, "cdkeys", "manual_type", "TEXT");
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");

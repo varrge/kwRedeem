@@ -251,9 +251,12 @@ const refs = {
 let autoRefreshTimer = null;
 let updatePollTimer = null;
 let currentTab = "dashboard";
+const tablePaginationState = new Map();
+const DEFAULT_TABLE_PAGE_SIZE = 20;
+const TABLE_PAGE_SIZE_OPTIONS = [10, 20, 50];
 const quotaSubCardState = {
   page: 1,
-  pageSize: Number(refs.quotaSubCardPageSize?.value || 50),
+  pageSize: Number(refs.quotaSubCardPageSize?.value || DEFAULT_TABLE_PAGE_SIZE),
   status: refs.quotaSubCardStatus?.value || "",
   total: 0
 };
@@ -305,6 +308,11 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function escapeCssIdentifier(value) {
+  if (globalThis.CSS?.escape) return CSS.escape(String(value));
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 function maskToken(value) {
@@ -418,20 +426,238 @@ async function api(path, options = {}) {
   return payload;
 }
 
-function renderTable(container, columns, rows, emptyText = "暂无数据") {
-  if (!rows.length) {
+function getTablePaginationKey(container) {
+  return container?.id || `table-${Math.random().toString(36).slice(2)}`;
+}
+
+function getTableState(container) {
+  const key = getTablePaginationKey(container);
+  if (!tablePaginationState.has(key)) {
+    tablePaginationState.set(key, { page: 1, pageSize: DEFAULT_TABLE_PAGE_SIZE });
+  }
+  return tablePaginationState.get(key);
+}
+
+function resetTablePage(container) {
+  const state = getTableState(container);
+  state.page = 1;
+}
+
+function renderPaginationControls(container, state, total, pageRows, options = {}) {
+  if (options.paginate === false) return "";
+  const pageSize = Math.max(1, state.pageSize || DEFAULT_TABLE_PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, state.page || 1), totalPages);
+  const start = total ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, (page - 1) * pageSize + pageRows.length);
+  const key = getTablePaginationKey(container);
+  const pageSizeOptions = TABLE_PAGE_SIZE_OPTIONS.map((size) => `
+    <option value="${size}" ${size === pageSize ? "selected" : ""}>${size} / 页</option>
+  `).join("");
+
+  return `
+    <div class="table-pagination" data-table-pagination="${escapeHtml(key)}">
+      <div class="pagination-summary">显示 ${start}-${end} / ${total} 条</div>
+      <div class="pagination-actions">
+        <label class="pagination-size">
+          <span>每页</span>
+          <select class="small-select" data-table-page-size="${escapeHtml(key)}">${pageSizeOptions}</select>
+        </label>
+        <button class="ghost-btn small" type="button" data-table-page="${escapeHtml(key)}" data-page="1" ${page <= 1 ? "disabled" : ""}>首页</button>
+        <button class="ghost-btn small" type="button" data-table-page="${escapeHtml(key)}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>上一页</button>
+        <span class="pagination-page">第 ${page} / ${totalPages} 页</span>
+        <button class="ghost-btn small" type="button" data-table-page="${escapeHtml(key)}" data-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>下一页</button>
+        <button class="ghost-btn small" type="button" data-table-page="${escapeHtml(key)}" data-page="${totalPages}" ${page >= totalPages ? "disabled" : ""}>末页</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindTablePagination(container, columns, rows, emptyText, options) {
+  if (options.paginate === false) return;
+  const key = getTablePaginationKey(container);
+  const escapedKey = escapeCssIdentifier(key);
+  container.querySelectorAll(`[data-table-page="${escapedKey}"]`).forEach((button) => {
+    button.addEventListener("click", () => {
+      const state = tablePaginationState.get(key) || { page: 1, pageSize: DEFAULT_TABLE_PAGE_SIZE };
+      state.page = Number(button.dataset.page || 1);
+      tablePaginationState.set(key, state);
+      if (typeof options.onPageChange === "function") {
+        options.onPageChange(state.page, state.pageSize);
+        return;
+      }
+      renderTable(container, columns, rows, emptyText, options);
+    });
+  });
+  container.querySelectorAll(`[data-table-page-size="${escapedKey}"]`).forEach((select) => {
+    select.addEventListener("change", () => {
+      const state = tablePaginationState.get(key) || { page: 1, pageSize: DEFAULT_TABLE_PAGE_SIZE };
+      state.page = 1;
+      state.pageSize = Number(select.value || DEFAULT_TABLE_PAGE_SIZE);
+      tablePaginationState.set(key, state);
+      if (typeof options.onPageChange === "function") {
+        options.onPageChange(state.page, state.pageSize);
+        return;
+      }
+      renderTable(container, columns, rows, emptyText, options);
+    });
+  });
+}
+
+function renderTable(container, columns, rows, emptyText = "暂无数据", options = {}) {
+  if (!container) return;
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const key = getTablePaginationKey(container);
+  const currentState = tablePaginationState.get(key) || { page: 1, pageSize: options.pageSize || DEFAULT_TABLE_PAGE_SIZE };
+  if (options.page) currentState.page = Number(options.page);
+  if (options.pageSize) currentState.pageSize = Number(options.pageSize);
+  tablePaginationState.set(key, currentState);
+
+  const total = Number(options.total ?? safeRows.length);
+  const pageSize = Math.max(1, currentState.pageSize || DEFAULT_TABLE_PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  currentState.page = Math.min(Math.max(1, currentState.page || 1), totalPages);
+
+  const pageRows = options.paginate === false || options.server === true
+    ? safeRows
+    : safeRows.slice((currentState.page - 1) * pageSize, currentState.page * pageSize);
+
+  if (!safeRows.length) {
     container.innerHTML = `<p class="hint centered mt-24">${emptyText}</p>`;
     return;
   }
 
   const head = columns.map((item) => `<th>${item.label}</th>`).join("");
-  const body = rows.map((row) => `
+  const body = pageRows.map((row) => `
     <tr>
       ${columns.map((column) => `<td>${column.render(row)}</td>`).join("")}
     </tr>
   `).join("");
 
-  container.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  container.innerHTML = `
+    <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+    ${renderPaginationControls(container, currentState, total, pageRows, options)}
+  `;
+  bindTablePagination(container, columns, safeRows, emptyText, options);
+}
+
+function closestCard(element) {
+  return element?.closest?.(".card") || null;
+}
+
+function closestSection(element, selector) {
+  return element?.closest?.(selector) || null;
+}
+
+function uniqueElements(elements) {
+  return Array.from(new Set(elements.filter(Boolean)));
+}
+
+function setupModuleSubtabs() {
+  const groups = [
+    {
+      panel: "cards",
+      tabs: [
+        { id: "create", label: "生成卡密", elements: [closestSection(refs.singleCdkeyForm, ".grid")] },
+        { id: "batches", label: "批次历史", elements: [closestCard(refs.batchList)] },
+        { id: "cdkeys", label: "卡密明细", elements: [closestCard(refs.cdkeyList)] }
+      ]
+    },
+    {
+      panel: "sms",
+      tabs: [
+        { id: "setup", label: "站点与生成", elements: [closestSection(refs.smsSiteForm, ".grid")] },
+        { id: "inventory-import", label: "库存导入", elements: [closestCard(refs.smsBatchForm)] },
+        { id: "sites", label: "接码站点", elements: [closestCard(refs.smsSiteList)] },
+        { id: "cards", label: "接码卡密", elements: [closestCard(refs.smsCardList)] },
+        { id: "orders", label: "接码订单", elements: [closestCard(refs.smsOrderList)] },
+        { id: "inventory", label: "库存记录", elements: [closestCard(refs.smsList)] }
+      ]
+    },
+    {
+      panel: "jobs",
+      tabs: [
+        { id: "orders", label: "兑换订单", elements: [closestCard(refs.orderList)] },
+        { id: "jobs", label: "激活任务", elements: [closestCard(refs.jobList)] }
+      ]
+    },
+    {
+      panel: "subscriptions",
+      tabs: [
+        { id: "create", label: "新增卡种", elements: [closestCard(refs.subCardTypeForm)] },
+        { id: "types", label: "卡种列表", elements: [closestCard(refs.subCardTypeList)] },
+        { id: "requests", label: "订阅申请", elements: [closestCard(refs.subRequestList)] }
+      ]
+    },
+    {
+      panel: "notifications",
+      tabs: [
+        { id: "settings", label: "飞书设置", elements: [closestCard(refs.notifySettingsForm)] },
+        { id: "form", label: "添加监听", elements: [closestCard(refs.notifyMonitorForm)] },
+        { id: "monitors", label: "当前监听", elements: [closestCard(refs.notifyMonitorList)] },
+        { id: "events", label: "通知事件", elements: [closestCard(refs.notifyEventList)] }
+      ]
+    },
+    {
+      panel: "quota",
+      tabs: [
+        { id: "overview", label: "概览", elements: [refs.quotaStats, closestCard(refs.quotaApiKeyForm)] },
+        { id: "import", label: "卡密导入", elements: [closestCard(refs.quotaImportForm), refs.quotaImportDetailCard] },
+        { id: "sources", label: "API 密钥", elements: [closestCard(refs.quotaSourceCardList)] },
+        { id: "sub-create", label: "创建子卡密", elements: [closestCard(refs.quotaSubCardForm)] },
+        { id: "sub-list", label: "子卡密", elements: [closestCard(refs.quotaSubCardList), refs.quotaSubCardDetailCard] },
+        { id: "settings", label: "系统设置", elements: [closestCard(refs.quotaSettingsForm)] }
+      ]
+    },
+    {
+      panel: "sub2api",
+      tabs: [
+        { id: "connections", label: "连接管理", elements: [closestCard(refs.sub2apiConnectionForm), closestCard(refs.sub2apiConnectionList)] },
+        { id: "help", label: "嵌入说明", elements: [document.querySelector("#sub2api-connection-form")?.closest(".grid")?.querySelector(".card:nth-child(2)")] },
+        { id: "invites", label: "邀请码", elements: [closestCard(refs.sub2apiInviteList)] },
+        { id: "plans", label: "套餐", elements: [closestCard(refs.sub2apiPlanForm), closestCard(refs.sub2apiPlanList)] },
+        { id: "orders", label: "订单", elements: [closestCard(refs.sub2apiOrderList)] },
+        { id: "worldcup-api", label: "世界杯 API", elements: [closestCard(refs.worldCupApiSettingsForm)] },
+        { id: "worldcup-matches", label: "比赛", elements: [closestSection(refs.worldCupMatchForm, ".grid"), closestCard(refs.worldCupMatchList)] },
+        { id: "worldcup-bets", label: "竞猜", elements: [closestCard(refs.worldCupBetList)] }
+      ]
+    }
+  ];
+
+  for (const group of groups) {
+    const panel = document.querySelector(`.tab-panel[data-panel="${group.panel}"]`);
+    const header = panel?.querySelector(".content-header");
+    if (!panel || !header || header.querySelector(".module-tabs")) continue;
+    const tabs = group.tabs
+      .map((tab) => ({ ...tab, elements: uniqueElements(tab.elements) }))
+      .filter((tab) => tab.elements.length);
+    if (tabs.length < 2) continue;
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "module-tabs";
+    tabBar.innerHTML = tabs.map((tab, index) => `
+      <button class="module-tab ${index === 0 ? "active" : ""}" type="button" data-module-tab="${escapeHtml(group.panel)}:${escapeHtml(tab.id)}">${escapeHtml(tab.label)}</button>
+    `).join("");
+    header.appendChild(tabBar);
+
+    const showTab = (tabId) => {
+      tabs.forEach((tab) => {
+        const active = tab.id === tabId;
+        tab.elements.forEach((element) => element.classList.toggle("hidden", !active));
+      });
+      tabBar.querySelectorAll(".module-tab").forEach((button) => {
+        button.classList.toggle("active", button.dataset.moduleTab === `${group.panel}:${tabId}`);
+      });
+    };
+
+    tabBar.addEventListener("click", (event) => {
+      const button = event.target.closest(".module-tab");
+      if (!button) return;
+      const tabId = button.dataset.moduleTab.split(":")[1];
+      showTab(tabId);
+    });
+    showTab(tabs[0].id);
+  }
 }
 
 function populateSiteSelects(items) {
@@ -765,7 +991,12 @@ async function refreshSmsOrders() {
 }
 
 async function refreshSmsEntries() {
-  const payload = await api("/api/admin/sms/entries");
+  const state = getTableState(refs.smsList);
+  const params = new URLSearchParams({
+    page: String(state.page || 1),
+    pageSize: String(state.pageSize || DEFAULT_TABLE_PAGE_SIZE)
+  });
+  const payload = await api(`/api/admin/sms/entries?${params.toString()}`);
   renderTable(refs.smsList, [
     { label: "", render: (item) => `<input type="checkbox" class="sms-check" value="${item.id}" data-public-key="${escapeHtml(item.publicKey)}" data-phone="${escapeHtml(item.phone)}" data-sms-url="${escapeHtml(item.smsUrl)}" />` },
     { label: "库存卡密", render: (item) => `<code>${escapeHtml(item.publicKey)}</code>` },
@@ -775,7 +1006,15 @@ async function refreshSmsEntries() {
     { label: "批次名称", render: (item) => escapeHtml(item.batchName || "-") },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "创建时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt)}</span>` }
-  ], payload.items || [], "暂无静态库存记录");
+  ], payload.items || [], "暂无静态库存记录", {
+    server: true,
+    total: Number(payload.total ?? payload.items?.length ?? 0),
+    page: Number(payload.page ?? state.page),
+    pageSize: Number(payload.pageSize ?? state.pageSize),
+    onPageChange: () => refreshSmsEntries().catch((error) => {
+      refs.smsList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
+    })
+  });
 }
 
 async function refreshSmsConsole() {
@@ -2155,11 +2394,13 @@ function getSelectedSub2ApiInviteCodes() {
 
 async function refreshSub2ApiInvites() {
   if (!refs.sub2apiInviteList) return;
+  const state = getTableState(refs.sub2apiInviteList);
   const params = new URLSearchParams();
   if (refs.sub2apiInviteConnectionFilter?.value) params.set("connectionId", refs.sub2apiInviteConnectionFilter.value);
   if (refs.sub2apiInviteUserFilter?.value.trim()) params.set("userId", refs.sub2apiInviteUserFilter.value.trim());
   if (refs.sub2apiInviteStatusFilter?.value) params.set("status", refs.sub2apiInviteStatusFilter.value);
-  params.set("pageSize", "100");
+  params.set("page", String(state.page || 1));
+  params.set("pageSize", String(state.pageSize || DEFAULT_TABLE_PAGE_SIZE));
 
   const payload = await api(`/api/admin/sub2api/invites?${params.toString()}`);
   sub2apiInvitesCache = payload.items || [];
@@ -2201,7 +2442,15 @@ async function refreshSub2ApiInvites() {
       label: "错误",
       render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 36))}</span>` : "-"
     }
-  ], sub2apiInvitesCache, "暂无邀请码记录");
+  ], sub2apiInvitesCache, "暂无邀请码记录", {
+    server: true,
+    total: Number(payload.total ?? sub2apiInvitesCache.length),
+    page: Number(payload.page ?? state.page),
+    pageSize: Number(payload.pageSize ?? state.pageSize),
+    onPageChange: () => refreshSub2ApiInvites().catch((error) => {
+      refs.sub2apiInviteList.innerHTML = `<p class="hint centered">加载邀请码失败：${escapeHtml(error.message)}</p>`;
+    })
+  });
   setHint(refs.sub2apiInviteResult, `共 ${payload.total ?? sub2apiInvitesCache.length} 条记录，当前显示 ${sub2apiInvitesCache.length} 条`);
 }
 
@@ -2324,11 +2573,13 @@ async function deleteSub2ApiPlan(id) {
 
 async function refreshSub2ApiOrders() {
   if (!refs.sub2apiOrderList) return;
+  const state = getTableState(refs.sub2apiOrderList);
   const params = new URLSearchParams();
   if (refs.sub2apiOrderConnectionFilter?.value) params.set("connectionId", refs.sub2apiOrderConnectionFilter.value);
   if (refs.sub2apiOrderUserFilter?.value.trim()) params.set("userId", refs.sub2apiOrderUserFilter.value.trim());
   if (refs.sub2apiOrderStatusFilter?.value) params.set("status", refs.sub2apiOrderStatusFilter.value);
-  params.set("pageSize", "100");
+  params.set("page", String(state.page || 1));
+  params.set("pageSize", String(state.pageSize || DEFAULT_TABLE_PAGE_SIZE));
   const payload = await api(`/api/admin/sub2api/subscription-orders?${params.toString()}`);
   sub2apiOrdersCache = payload.items || [];
   renderTable(refs.sub2apiOrderList, [
@@ -2360,7 +2611,15 @@ async function refreshSub2ApiOrders() {
       label: "错误",
       render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 42))}</span>` : "-"
     }
-  ], sub2apiOrdersCache, "暂无订阅订单");
+  ], sub2apiOrdersCache, "暂无订阅订单", {
+    server: true,
+    total: Number(payload.total ?? sub2apiOrdersCache.length),
+    page: Number(payload.page ?? state.page),
+    pageSize: Number(payload.pageSize ?? state.pageSize),
+    onPageChange: () => refreshSub2ApiOrders().catch((error) => {
+      refs.sub2apiOrderList.innerHTML = `<p class="hint centered">加载订阅订单失败：${escapeHtml(error.message)}</p>`;
+    })
+  });
   setHint(refs.sub2apiOrderResult, `共 ${payload.total ?? sub2apiOrdersCache.length} 条记录，当前显示 ${sub2apiOrdersCache.length} 条`);
 }
 
@@ -2912,12 +3171,14 @@ async function cancelWorldCupMatch(id) {
 
 async function refreshWorldCupBets() {
   if (!refs.worldCupBetList) return;
+  const state = getTableState(refs.worldCupBetList);
   const params = new URLSearchParams();
   if (refs.worldCupBetConnectionFilter?.value) params.set("connectionId", refs.worldCupBetConnectionFilter.value);
   if (refs.worldCupBetMatchFilter?.value) params.set("matchId", refs.worldCupBetMatchFilter.value);
   if (refs.worldCupBetUserFilter?.value.trim()) params.set("userId", refs.worldCupBetUserFilter.value.trim());
   if (refs.worldCupBetStatusFilter?.value) params.set("status", refs.worldCupBetStatusFilter.value);
-  params.set("pageSize", "100");
+  params.set("page", String(state.page || 1));
+  params.set("pageSize", String(state.pageSize || DEFAULT_TABLE_PAGE_SIZE));
 
   const payload = await api(`/api/admin/sub2api/worldcup/bets?${params.toString()}`);
   worldCupBetsCache = payload.items || [];
@@ -2962,7 +3223,15 @@ async function refreshWorldCupBets() {
       label: "错误",
       render: (item) => item.errorMessage ? `<span style="color:var(--error)" title="${escapeHtml(item.errorMessage)}">${escapeHtml(item.errorMessage.slice(0, 42))}</span>` : "-"
     }
-  ], worldCupBetsCache, "暂无竞猜记录");
+  ], worldCupBetsCache, "暂无竞猜记录", {
+    server: true,
+    total: Number(payload.total ?? worldCupBetsCache.length),
+    page: Number(payload.page ?? state.page),
+    pageSize: Number(payload.pageSize ?? state.pageSize),
+    onPageChange: () => refreshWorldCupBets().catch((error) => {
+      refs.worldCupBetList.innerHTML = `<p class="hint centered">加载竞猜记录失败：${escapeHtml(error.message)}</p>`;
+    })
+  });
   setHint(refs.worldCupBetResult, `共 ${payload.total ?? worldCupBetsCache.length} 条记录，当前显示 ${worldCupBetsCache.length} 条`);
 }
 
@@ -3032,6 +3301,7 @@ if (refs.sub2apiConnectionRefreshBtn) {
 
 if (refs.sub2apiInviteRefreshBtn) {
   refs.sub2apiInviteRefreshBtn.addEventListener("click", () => {
+    resetTablePage(refs.sub2apiInviteList);
     refreshSub2ApiInvites().catch((error) => setHint(refs.sub2apiInviteResult, `查询失败：${error.message}`));
   });
 }
@@ -3078,6 +3348,7 @@ if (refs.sub2apiPlanRefreshBtn) {
 
 if (refs.sub2apiOrderRefreshBtn) {
   refs.sub2apiOrderRefreshBtn.addEventListener("click", () => {
+    resetTablePage(refs.sub2apiOrderList);
     refreshSub2ApiOrders().catch((error) => setHint(refs.sub2apiOrderResult, `查询失败：${error.message}`));
   });
 }
@@ -3147,6 +3418,7 @@ if (refs.worldCupMatchStatusFilter) {
 
 if (refs.worldCupBetRefreshBtn) {
   refs.worldCupBetRefreshBtn.addEventListener("click", () => {
+    resetTablePage(refs.worldCupBetList);
     refreshWorldCupBets().catch((error) => setHint(refs.worldCupBetResult, `查询失败：${error.message}`));
   });
 }
@@ -3908,7 +4180,7 @@ if (refs.quotaSubCardStatus) {
 
 if (refs.quotaSubCardPageSize) {
   refs.quotaSubCardPageSize.addEventListener("change", () => {
-    quotaSubCardState.pageSize = Number(refs.quotaSubCardPageSize.value || 50);
+    quotaSubCardState.pageSize = Number(refs.quotaSubCardPageSize.value || DEFAULT_TABLE_PAGE_SIZE);
     refreshQuotaSubCards(1).catch((error) => {
       if (refs.quotaSubCardList) {
         refs.quotaSubCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
@@ -4268,6 +4540,7 @@ refs.logoutBtn.addEventListener("click", () => {
   setAuthState(false);
 });
 
+setupModuleSubtabs();
 switchTab(currentTab);
 
 if (getToken()) {

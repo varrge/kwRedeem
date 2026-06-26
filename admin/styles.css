@@ -209,12 +209,47 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 32px;
+  gap: 24px;
 }
 
 .content-header h2 { margin: 0 0 8px; font-size: 28px; }
 .content-header p { margin: 0; color: var(--muted); }
 
 .tab-panel.hidden { display: none; }
+
+.module-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: min(720px, 60vw);
+}
+
+.module-tab {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  min-height: 34px;
+  padding: 9px 12px;
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+.module-tab:hover {
+  border-color: rgba(113, 167, 255, 0.35);
+  color: var(--text);
+}
+
+.module-tab.active {
+  background: rgba(113, 167, 255, 0.14);
+  border-color: rgba(113, 167, 255, 0.45);
+  color: var(--primary);
+}
 
 /* Components */
 .card {
@@ -376,6 +411,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .pagination-summary,
@@ -626,6 +669,14 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
 }
 
 @media (max-width: 720px) {
+  .content-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .module-tabs {
+    justify-content: flex-start;
+    max-width: none;
+  }
   .grid-4 { grid-template-columns: 1fr; }
   .grid-span-4 { grid-column: auto; }
   .notify-rule-row {

@@ -1466,6 +1466,16 @@ function formatLastStatus(value) {
   return map[value] || value || "-";
 }
 
+function formatCurrency(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "¥0";
+  const rounded = Math.round((number + Number.EPSILON) * 10000) / 10000;
+  const text = Number.isInteger(rounded)
+    ? String(rounded)
+    : rounded.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return `¥${text}`;
+}
+
 async function refreshNotificationSettings() {
   if (!refs.notifyGlobalWebhook) return;
   const payload = await api("/api/admin/notifications/settings");
@@ -2482,7 +2492,7 @@ async function refreshSub2ApiPlans() {
     },
     {
       label: "金额/天数",
-      render: (item) => `<strong>${Number(item.price).toFixed(4)}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
+      render: (item) => `<strong>${escapeHtml(formatCurrency(item.price))}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
     },
     {
       label: "分组",
@@ -2593,7 +2603,7 @@ async function refreshSub2ApiOrders() {
     },
     {
       label: "金额/天数",
-      render: (item) => `<strong>${Number(item.price).toFixed(4)}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
+      render: (item) => `<strong>${escapeHtml(formatCurrency(item.price))}</strong><br/><span class="hint">${escapeHtml(item.validityDays)} 天</span>`
     },
     {
       label: "分组",

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
-import { safeParseJson } from "./templates.js";
+import { encodeRequestBody, safeParseJson } from "./templates.js";
 import { resolveProjectPath } from "./env.js";
 import { notificationMatchModes, notificationMonitorTypes, notificationRuleOperators } from "./constants.js";
 
@@ -238,6 +238,31 @@ function sanitizeBrowserHeaders(headers) {
   );
 }
 
+function hasHeader(headers, name) {
+  const normalized = String(name || "").toLowerCase();
+  return Object.keys(headers || {}).some((key) => String(key).toLowerCase() === normalized);
+}
+
+function buildMonitorHeaders(headers, defaults = {}) {
+  const normalizedDefaults = { ...defaults };
+  if (hasHeader(headers, "content-type")) {
+    for (const key of Object.keys(normalizedDefaults)) {
+      if (key.toLowerCase() === "content-type") delete normalizedDefaults[key];
+    }
+  }
+  return {
+    ...normalizedDefaults,
+    ...headers
+  };
+}
+
+function buildMonitorBody(bodySource, headers) {
+  if (!bodySource) return undefined;
+  const parsed = safeParseJson(bodySource, null);
+  const body = parsed === null ? String(bodySource) : parsed;
+  return encodeRequestBody(body, headers);
+}
+
 async function fetchBrowserMonitorEndpoint(monitor, { timeoutMsOverride } = {}) {
   const method = String(monitor.http_method || monitor.httpMethod || "GET").toUpperCase();
   const headersSource = monitor.headers_json ?? monitor.headersJson ?? "";
@@ -265,11 +290,9 @@ async function fetchBrowserMonitorEndpoint(monitor, { timeoutMsOverride } = {}) 
     }
   }
 
-  let bodyString;
-  if (method !== "GET" && method !== "HEAD" && bodySource) {
-    const parsed = safeParseJson(bodySource, null);
-    bodyString = parsed === null ? String(bodySource) : JSON.stringify(parsed);
-  }
+  const bodyString = method !== "GET" && method !== "HEAD"
+    ? buildMonitorBody(bodySource, headers)
+    : undefined;
 
   let context;
   try {
@@ -304,13 +327,12 @@ async function fetchBrowserMonitorEndpoint(monitor, { timeoutMsOverride } = {}) 
 
     const response = await context.request.fetch(requestUrl, {
       method,
-      headers: {
+      headers: buildMonitorHeaders(headers, {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
         ...(origin ? { Origin: origin } : {}),
-        ...(referer ? { Referer: referer } : {}),
-        ...headers
-      },
+        ...(referer ? { Referer: referer } : {})
+      }),
       ...(method === "GET" || method === "HEAD" ? {} : { data: bodyString || "" }),
       timeout: timeoutMs
     });
@@ -381,22 +403,15 @@ export async function fetchMonitorEndpoint(monitor, { timeoutMsOverride } = {}) 
     }
   }
 
-  let bodyString;
-  if (method !== "GET" && method !== "HEAD" && bodySource) {
-    const parsed = safeParseJson(bodySource, null);
-    if (parsed === null) {
-      bodyString = String(bodySource);
-    } else {
-      bodyString = JSON.stringify(parsed);
-    }
-  }
+  const bodyString = method !== "GET" && method !== "HEAD"
+    ? buildMonitorBody(bodySource, headers)
+    : undefined;
 
-  const fetchHeaders = {
+  const fetchHeaders = buildMonitorHeaders(headers, {
     "User-Agent": NOTIFICATION_BROWSER_UA,
     "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/json",
-    ...headers
-  };
+    "Content-Type": "application/json"
+  });
 
   try {
     const response = await fetch(url, {

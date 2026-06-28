@@ -46,6 +46,8 @@ export function shouldSendFormBody(headers = {}) {
 
 export function encodeRequestBody(body, headers = {}) {
   if (shouldSendFormBody(headers)) {
+    if (typeof body === "string") return body;
+
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(body && typeof body === "object" ? body : {})) {
       if (value === null || value === undefined) continue;

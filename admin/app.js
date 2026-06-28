@@ -3749,8 +3749,11 @@ if (refs.notifyMonitorForm) {
       try {
         JSON.parse(bodyValue);
       } catch (error) {
-        setStatusMessage(refs.notifyFormResult, `Body 不是合法 JSON：${error.message}`, "error");
-        return;
+        const isLikelyRawText = bodyValue.includes("=") || bodyValue.includes("&");
+        if (!isLikelyRawText) {
+          setStatusMessage(refs.notifyFormResult, `Body 不是合法 JSON：${error.message}`, "error");
+          return;
+        }
       }
     }
 

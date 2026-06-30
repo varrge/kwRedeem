@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import { getDb } from "../../shared/src/database.js";
-import { env } from "../../shared/src/env.js";
+import { env, resolveProjectPath } from "../../shared/src/env.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
 import { decryptText } from "../../shared/src/secure.js";
@@ -45,6 +46,11 @@ import { getAvailableQuota } from "../../shared/src/quota-calc.js";
 const db = getDb();
 const workerId = `worker-${process.pid}`;
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+const maintenancePath = resolveProjectPath("data", "maintenance.json");
+
+function isMaintenanceEnabled() {
+  return fs.existsSync(maintenancePath);
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -3145,6 +3151,12 @@ function createWorkerHttpServer() {
       return;
     }
 
+    if (isMaintenanceEnabled()) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "系统正在迁移维护，请稍后再试", code: "MAINTENANCE_MODE" }));
+      return;
+    }
+
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", async () => {
@@ -3218,18 +3230,21 @@ export { createWorkerHttpServer, workerHttpServer };
 console.log(`[KaWang worker] started with poll interval ${env.workerPollMs}ms`);
 
 setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   tick().catch((error) => {
     console.error("[KaWang worker]", error);
   });
 }, env.workerPollMs);
 
 setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   notificationTick().catch((error) => {
     console.error("[KaWang worker] notification", error);
   });
 }, NOTIFICATION_TICK_INTERVAL_MS);
 
 setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   try {
     quotaUnlockTick();
   } catch (error) {
@@ -3238,35 +3253,39 @@ setInterval(() => {
 }, QUOTA_UNLOCK_INTERVAL_MS);
 
 setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   quotaLowStockTick().catch((error) => {
     console.error("[KaWang worker] quota-low-stock", error);
   });
 }, QUOTA_LOW_STOCK_INTERVAL_MS);
 
 setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   apiFootballWorldCupTick().catch((error) => {
     console.error("[KaWang worker] worldcup", error);
   });
 }, 30000);
 
-tick().catch((error) => {
-  console.error("[KaWang worker]", error);
-});
+if (!isMaintenanceEnabled()) {
+  tick().catch((error) => {
+    console.error("[KaWang worker]", error);
+  });
 
-notificationTick().catch((error) => {
-  console.error("[KaWang worker] notification", error);
-});
+  notificationTick().catch((error) => {
+    console.error("[KaWang worker] notification", error);
+  });
 
-try {
-  quotaUnlockTick();
-} catch (error) {
-  console.error("[KaWang worker] quota-unlock", error);
+  try {
+    quotaUnlockTick();
+  } catch (error) {
+    console.error("[KaWang worker] quota-unlock", error);
+  }
+
+  quotaLowStockTick().catch((error) => {
+    console.error("[KaWang worker] quota-low-stock", error);
+  });
+
+  apiFootballWorldCupTick().catch((error) => {
+    console.error("[KaWang worker] worldcup", error);
+  });
 }
-
-quotaLowStockTick().catch((error) => {
-  console.error("[KaWang worker] quota-low-stock", error);
-});
-
-apiFootballWorldCupTick().catch((error) => {
-  console.error("[KaWang worker] worldcup", error);
-});

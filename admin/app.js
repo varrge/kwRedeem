@@ -37,6 +37,14 @@ const refs = {
   startUpdateBtn: document.querySelector("#start-update-btn"),
   systemUpdateHint: document.querySelector("#system-update-hint"),
   systemUpdateLog: document.querySelector("#system-update-log"),
+  migrationBackupBtn: document.querySelector("#migration-backup-btn"),
+  migrationBackupResult: document.querySelector("#migration-backup-result"),
+  migrationRestoreFile: document.querySelector("#migration-restore-file"),
+  migrationValidateBtn: document.querySelector("#migration-validate-btn"),
+  migrationRestoreSummary: document.querySelector("#migration-restore-summary"),
+  migrationConfirmInput: document.querySelector("#migration-confirm-input"),
+  migrationRestoreBtn: document.querySelector("#migration-restore-btn"),
+  migrationRestoreResult: document.querySelector("#migration-restore-result"),
   batchSite: document.querySelector("#batch-site"),
   batchImportType: document.querySelector("#batch-import-type"),
   singleSite: document.querySelector("#single-site"),
@@ -266,6 +274,7 @@ let sub2apiPlansCache = [];
 let sub2apiOrdersCache = [];
 let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
+let migrationRestoreUploadId = null;
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -1143,6 +1152,128 @@ async function refreshSystemUpdateStatus() {
   if (!["running", "checking"].includes(payload.updateState?.status)) {
     stopUpdatePolling();
     await refreshSystemVersion();
+  }
+}
+
+function getDownloadFilename(response, fallback) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  return match?.[1] || fallback;
+}
+
+async function downloadMigrationBackup() {
+  const token = getToken();
+  setButtonBusy(refs.migrationBackupBtn, true, "生成中...");
+  setHint(refs.migrationBackupResult, "正在生成敏感迁移包，请稍候...");
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/migration/backup`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || "生成备份失败");
+    }
+    const blob = await response.blob();
+    const filename = getDownloadFilename(response, `kawang-migration-${Date.now()}-sensitive.tar.gz`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setHint(refs.migrationBackupResult, `已生成并下载：${filename}`);
+  } catch (error) {
+    setHint(refs.migrationBackupResult, error.message);
+  } finally {
+    setButtonBusy(refs.migrationBackupBtn, false);
+  }
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.onerror = () => reject(new Error("读取迁移包失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderMigrationSummary(payload) {
+  const manifest = payload.manifest || {};
+  const rows = [
+    ["类型", manifest.type || "-"],
+    ["生成时间", manifest.createdAt || "-"],
+    ["包含 .env", manifest.includesEnv ? "是" : "否"],
+    ["数据库大小", manifest.database?.size ? `${manifest.database.size} bytes` : "-"],
+    ["文件", (payload.files || []).join(", ")]
+  ];
+  refs.migrationRestoreSummary.innerHTML = `
+    <table>
+      <tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody>
+    </table>
+  `;
+}
+
+async function validateMigrationPackage() {
+  const file = refs.migrationRestoreFile?.files?.[0];
+  if (!file) {
+    setHint(refs.migrationRestoreResult, "请先选择迁移包");
+    return;
+  }
+  migrationRestoreUploadId = null;
+  refs.migrationRestoreBtn.disabled = true;
+  setButtonBusy(refs.migrationValidateBtn, true, "校验中...");
+  setHint(refs.migrationRestoreResult, "正在上传并校验迁移包...");
+  try {
+    const contentBase64 = await readFileAsBase64(file);
+    const payload = await api("/api/admin/migration/validate", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, contentBase64 })
+    });
+    migrationRestoreUploadId = payload.uploadId;
+    renderMigrationSummary(payload);
+    refs.migrationRestoreBtn.disabled = refs.migrationConfirmInput.value.trim() !== "确认恢复";
+    setHint(refs.migrationRestoreResult, "校验通过。确认无误后输入“确认恢复”执行恢复。");
+  } catch (error) {
+    refs.migrationRestoreSummary.innerHTML = "";
+    setHint(refs.migrationRestoreResult, error.message);
+  } finally {
+    setButtonBusy(refs.migrationValidateBtn, false);
+  }
+}
+
+async function restoreMigrationPackage() {
+  if (!migrationRestoreUploadId) {
+    setHint(refs.migrationRestoreResult, "请先校验迁移包");
+    return;
+  }
+  const confirmation = refs.migrationConfirmInput.value.trim();
+  if (confirmation !== "确认恢复") {
+    setHint(refs.migrationRestoreResult, "请输入“确认恢复”后再执行");
+    return;
+  }
+  if (!window.confirm("确认恢复迁移包？该操作会覆盖当前 .env 和数据库文件。")) return;
+  setButtonBusy(refs.migrationRestoreBtn, true, "恢复中...");
+  setHint(refs.migrationRestoreResult, "正在恢复，请不要关闭页面...");
+  try {
+    const payload = await api("/api/admin/migration/restore", {
+      method: "POST",
+      body: JSON.stringify({ uploadId: migrationRestoreUploadId, confirmation })
+    });
+    migrationRestoreUploadId = null;
+    refs.migrationRestoreBtn.disabled = true;
+    const commands = (payload.restartCommands || []).join("\n");
+    refs.migrationRestoreResult.innerHTML = `
+      <div>恢复完成，维护模式已开启。恢复前备份：<code>${escapeHtml(payload.preRestoreBackupDir || "-")}</code></div>
+      <pre class="log-viewer mt-12">${escapeHtml(commands)}</pre>
+    `;
+  } catch (error) {
+    setHint(refs.migrationRestoreResult, error.message);
+  } finally {
+    setButtonBusy(refs.migrationRestoreBtn, false);
+    if (!migrationRestoreUploadId) refs.migrationRestoreBtn.disabled = true;
   }
 }
 
@@ -3492,6 +3623,29 @@ refs.startUpdateBtn.addEventListener("click", async () => {
   } catch (error) {
     setHint(refs.systemUpdateHint, error.message);
   }
+});
+
+refs.migrationBackupBtn?.addEventListener("click", () => {
+  downloadMigrationBackup().catch((error) => setHint(refs.migrationBackupResult, error.message));
+});
+
+refs.migrationValidateBtn?.addEventListener("click", () => {
+  validateMigrationPackage().catch((error) => setHint(refs.migrationRestoreResult, error.message));
+});
+
+refs.migrationConfirmInput?.addEventListener("input", () => {
+  refs.migrationRestoreBtn.disabled = !migrationRestoreUploadId || refs.migrationConfirmInput.value.trim() !== "确认恢复";
+});
+
+refs.migrationRestoreFile?.addEventListener("change", () => {
+  migrationRestoreUploadId = null;
+  refs.migrationRestoreBtn.disabled = true;
+  refs.migrationRestoreSummary.innerHTML = "";
+  setHint(refs.migrationRestoreResult, "");
+});
+
+refs.migrationRestoreBtn?.addEventListener("click", () => {
+  restoreMigrationPackage().catch((error) => setHint(refs.migrationRestoreResult, error.message));
 });
 
 refs.loginForm.addEventListener("submit", async (event) => {

@@ -81,6 +81,9 @@
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
+          <button class="nav-item" data-tab="migration">
+            <span class="icon">💾</span> 备份迁移
+          </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -1187,6 +1190,44 @@
             <div class="card">
               <div class="card-header"><h3>更新日志</h3></div>
               <pre id="system-update-log" class="log-viewer">暂无日志</pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- Migration -->
+        <section class="tab-panel hidden" data-panel="migration">
+          <div class="content-header">
+            <h2>备份迁移</h2>
+            <p>创建和恢复包含 .env 与数据库的敏感迁移包。</p>
+          </div>
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>创建备份</h3></div>
+              <p class="hint">备份包包含 .env 原文和业务数据库，请按敏感文件保管。</p>
+              <div class="action-row mt-16">
+                <button id="migration-backup-btn" class="primary-btn">生成并下载迁移包</button>
+              </div>
+              <div id="migration-backup-result" class="hint mt-12"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>恢复迁移包</h3></div>
+              <p class="hint">恢复会进入维护模式，覆盖 .env 和数据库文件；完成后需要重启 PM2。</p>
+              <label>
+                <span>迁移包（.tar.gz）</span>
+                <input id="migration-restore-file" type="file" accept=".gz,.tgz,application/gzip" />
+              </label>
+              <div class="action-row mt-16">
+                <button id="migration-validate-btn" class="ghost-btn">校验迁移包</button>
+              </div>
+              <div id="migration-restore-summary" class="table-wrapper mt-16"></div>
+              <label class="mt-16">
+                <span>执行恢复前请输入：确认恢复</span>
+                <input id="migration-confirm-input" placeholder="确认恢复" autocomplete="off" />
+              </label>
+              <div class="action-row mt-16">
+                <button id="migration-restore-btn" class="primary-btn" disabled>执行恢复</button>
+              </div>
+              <div id="migration-restore-result" class="hint mt-12"></div>
             </div>
           </div>
         </section>

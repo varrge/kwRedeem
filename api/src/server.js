@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -83,6 +84,13 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
+const maintenancePath = path.join(projectRoot, "data", "maintenance.json");
+const migrationTmpDir = path.join(projectRoot, "tmp", "migration");
+const migrationUploads = new Map();
+const MIGRATION_MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MIGRATION_PACKAGE_TYPE = "kawang.full_server_migration.v1";
+const MIGRATION_ALLOWED_PATHS = new Set(["manifest.json", ".env", "data/kawang.db", "data/kawang.db-wal", "data/kawang.db-shm"]);
+const RESTORE_CONFIRMATION_TEXT = "确认恢复";
 const SMS_ORDER_TIMEOUT_MS = 60 * 1000;
 const QUOTA_AUTO_CLAIM_MAX_ACTIVE = 3;
 const QUOTA_AUTO_CLAIM_SESSION_TTL_MS = 45_000;
@@ -454,6 +462,189 @@ function createAuditLog({ action, actor = "system", resourceType, resourceId = n
     INSERT INTO admin_audit_logs (id, action, actor, resource_type, resource_id, detail, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(nanoid(16), action, actor, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
+}
+
+function createAuditLogInDatabase(databasePath, { action, actor = "system", resourceType, resourceId = null, detail = null }) {
+  const targetDb = new Database(databasePath);
+  try {
+    targetDb.prepare(`
+      INSERT INTO admin_audit_logs (id, action, actor, resource_type, resource_id, detail, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(nanoid(16), action, actor, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
+  } finally {
+    targetDb.close();
+  }
+}
+
+function isMaintenanceEnabled() {
+  return fs.existsSync(maintenancePath);
+}
+
+function readMaintenanceState() {
+  if (!isMaintenanceEnabled()) return { enabled: false };
+  try {
+    return { enabled: true, ...JSON.parse(fs.readFileSync(maintenancePath, "utf8")) };
+  } catch {
+    return { enabled: true };
+  }
+}
+
+function writeMaintenanceState(reason, actor) {
+  fs.mkdirSync(path.dirname(maintenancePath), { recursive: true });
+  fs.writeFileSync(maintenancePath, JSON.stringify({ reason, actor, startedAt: nowIso() }, null, 2));
+}
+
+function isUserBusinessApi(request) {
+  const url = request.url || "";
+  if (url.startsWith("/api/admin/") || url.startsWith("/api/mock/")) return false;
+  return url.startsWith("/api/public/");
+}
+
+app.addHook("onRequest", async (request, reply) => {
+  if (isMaintenanceEnabled() && isUserBusinessApi(request)) {
+    return reply.code(503).send({
+      message: "系统正在迁移维护，请稍后再试",
+      code: "MAINTENANCE_MODE"
+    });
+  }
+});
+
+function assertSafeMigrationPath(entryPath) {
+  const normalized = String(entryPath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized || path.isAbsolute(normalized) || normalized.includes("../") || normalized === "..") {
+    throw new Error(`迁移包包含非法路径：${entryPath}`);
+  }
+  if (!MIGRATION_ALLOWED_PATHS.has(normalized)) {
+    throw new Error(`迁移包包含非白名单文件：${normalized}`);
+  }
+  return normalized;
+}
+
+function getMigrationRestartCommands() {
+  return [
+    "npm run db:init",
+    "npm run config:runtime",
+    "pm2 startOrGracefulReload ecosystem.config.cjs --update-env"
+  ];
+}
+
+async function createMigrationPackage(actor) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const workDir = path.join(migrationTmpDir, `backup-${stamp}`);
+  const packagePath = path.join(migrationTmpDir, `kawang-migration-${stamp}-sensitive.tar.gz`);
+  const files = [".env", "data/kawang.db"];
+  fs.rmSync(workDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(workDir, "data"), { recursive: true });
+
+  const envPath = path.join(projectRoot, ".env");
+  if (!fs.existsSync(envPath)) {
+    throw new Error("缺少 .env，无法创建完整迁移包");
+  }
+  fs.copyFileSync(envPath, path.join(workDir, ".env"));
+  await db.backup(path.join(workDir, "data", "kawang.db"));
+
+  const manifest = {
+    type: MIGRATION_PACKAGE_TYPE,
+    createdAt: nowIso(),
+    createdBy: actor,
+    sensitive: true,
+    includesEnv: true,
+    files,
+    database: {
+      path: "data/kawang.db",
+      size: fs.statSync(path.join(workDir, "data", "kawang.db")).size
+    }
+  };
+  fs.writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+  fs.mkdirSync(migrationTmpDir, { recursive: true });
+  await execFileAsync("tar", ["-czf", packagePath, "-C", workDir, "."]);
+  fs.rmSync(workDir, { recursive: true, force: true });
+  return { packagePath, filename: path.basename(packagePath), manifest };
+}
+
+async function validateMigrationPackageFromBuffer(buffer, filename, actor) {
+  if (!buffer?.length) throw new Error("迁移包为空");
+  if (buffer.length > MIGRATION_MAX_UPLOAD_BYTES) throw new Error("迁移包超过 200MB 限制");
+
+  const uploadId = nanoid(16);
+  const uploadDir = path.join(migrationTmpDir, `upload-${uploadId}`);
+  const packagePath = path.join(uploadDir, "package.tar.gz");
+  const extractDir = path.join(uploadDir, "extract");
+  try {
+    fs.mkdirSync(extractDir, { recursive: true });
+    fs.writeFileSync(packagePath, buffer);
+
+    const { stdout } = await execFileAsync("tar", ["-tzf", packagePath]);
+    const entries = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+    const files = entries
+      .filter((entry) => !entry.endsWith("/"))
+      .map(assertSafeMigrationPath);
+    if (!files.includes("manifest.json")) throw new Error("迁移包缺少 manifest.json");
+    if (!files.includes(".env")) throw new Error("迁移包缺少 .env");
+    if (!files.includes("data/kawang.db")) throw new Error("迁移包缺少 data/kawang.db");
+
+    await execFileAsync("tar", ["-xzf", packagePath, "-C", extractDir]);
+    const manifestPath = path.join(extractDir, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (manifest?.type !== MIGRATION_PACKAGE_TYPE) {
+      throw new Error("manifest 类型不是 KaWang 迁移包");
+    }
+    for (const file of files) {
+      const filePath = path.join(extractDir, file);
+      if (file !== "manifest.json" && !fs.existsSync(filePath)) {
+        throw new Error(`迁移包缺少文件：${file}`);
+      }
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile()) {
+        throw new Error(`迁移包文件类型不允许：${file}`);
+      }
+    }
+
+    migrationUploads.set(uploadId, {
+      uploadId,
+      packagePath,
+      extractDir,
+      filename: filename || "package.tar.gz",
+      files,
+      manifest,
+      uploadedBy: actor,
+      uploadedAt: nowIso()
+    });
+    return { uploadId, files, manifest };
+  } catch (error) {
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function backupExistingMigrationAssets(actor) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const backupDir = path.join(projectRoot, "backups", `pre-restore-${stamp}-sensitive`);
+  fs.mkdirSync(path.join(backupDir, "data"), { recursive: true });
+  for (const relativePath of [".env", "data/kawang.db", "data/kawang.db-wal", "data/kawang.db-shm"]) {
+    const source = path.join(projectRoot, relativePath);
+    if (fs.existsSync(source)) {
+      const target = path.join(backupDir, relativePath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    }
+  }
+  fs.writeFileSync(path.join(backupDir, "README.txt"), `Sensitive pre-restore backup created by ${actor} at ${nowIso()}.\n`);
+  return backupDir;
+}
+
+function restoreMigrationAssets(upload) {
+  for (const relativePath of [".env", "data/kawang.db", "data/kawang.db-wal", "data/kawang.db-shm"]) {
+    const source = path.join(upload.extractDir, relativePath);
+    const target = path.join(projectRoot, relativePath);
+    if (fs.existsSync(source)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.rmSync(target, { force: true });
+      fs.copyFileSync(source, target);
+    } else if (relativePath !== ".env" && fs.existsSync(target)) {
+      fs.rmSync(target, { force: true });
+    }
+  }
 }
 
 function parseSessionPayload(rawValue) {
@@ -6489,6 +6680,131 @@ app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async (
   updateState,
   log: readUpdateLog()
 }));
+
+app.get("/api/admin/migration/status", { preHandler: requireAdmin }, async () => ({
+  maintenance: readMaintenanceState(),
+  restartCommands: getMigrationRestartCommands(),
+  confirmationText: RESTORE_CONFIRMATION_TEXT
+}));
+
+app.get("/api/admin/migration/backup", { preHandler: requireAdmin }, async (request, reply) => {
+  try {
+    const result = await createMigrationPackage(request.admin.username);
+    const stat = fs.statSync(result.packagePath);
+    createAuditLog({
+      action: "migration.backup.create",
+      actor: request.admin.username,
+      resourceType: "migration_package",
+      resourceId: result.filename,
+      detail: {
+        filename: result.filename,
+        size: stat.size,
+        files: result.manifest.files,
+        includesEnv: true
+      }
+    });
+
+    const stream = fs.createReadStream(result.packagePath);
+    stream.on("close", () => {
+      fs.rmSync(result.packagePath, { force: true });
+    });
+    reply
+      .header("Content-Type", "application/gzip")
+      .header("Content-Disposition", `attachment; filename="${result.filename}"`)
+      .header("Content-Length", stat.size);
+    return reply.send(stream);
+  } catch (error) {
+    return reply.code(500).send({ message: error.message || "创建迁移备份失败" });
+  }
+});
+
+app.post("/api/admin/migration/validate", {
+  preHandler: requireAdmin,
+  bodyLimit: Math.ceil(MIGRATION_MAX_UPLOAD_BYTES * 1.4)
+}, async (request, reply) => {
+  const payload = getBodyObject(request.body);
+  const filename = String(payload.filename || "package.tar.gz");
+  const base64 = String(payload.contentBase64 || "").replace(/^data:[^,]+,/, "");
+  if (!base64) return reply.code(400).send({ message: "请上传迁移包" });
+
+  try {
+    const buffer = Buffer.from(base64, "base64");
+    const result = await validateMigrationPackageFromBuffer(buffer, filename, request.admin.username);
+    createAuditLog({
+      action: "migration.restore.validate",
+      actor: request.admin.username,
+      resourceType: "migration_package",
+      resourceId: result.uploadId,
+      detail: {
+        filename,
+        files: result.files,
+        includesEnv: true,
+        databaseSize: result.manifest?.database?.size || null
+      }
+    });
+    return result;
+  } catch (error) {
+    createAuditLog({
+      action: "migration.restore.validate_failed",
+      actor: request.admin.username,
+      resourceType: "migration_package",
+      detail: { filename, message: error.message }
+    });
+    return reply.code(400).send({ message: error.message || "迁移包校验失败" });
+  }
+});
+
+app.post("/api/admin/migration/restore", { preHandler: requireAdmin }, async (request, reply) => {
+  const payload = getBodyObject(request.body);
+  const uploadId = String(payload.uploadId || "");
+  const confirmation = String(payload.confirmation || "");
+  const upload = migrationUploads.get(uploadId);
+  if (!upload) return reply.code(404).send({ message: "迁移包已失效，请重新上传校验" });
+  if (confirmation !== RESTORE_CONFIRMATION_TEXT) {
+    return reply.code(400).send({ message: `请输入“${RESTORE_CONFIRMATION_TEXT}”后再恢复` });
+  }
+
+  let preRestoreBackupDir = null;
+  try {
+    writeMaintenanceState("migration_restore", request.admin.username);
+    preRestoreBackupDir = backupExistingMigrationAssets(request.admin.username);
+    restoreMigrationAssets(upload);
+    migrationUploads.delete(uploadId);
+    fs.rmSync(path.dirname(upload.packagePath), { recursive: true, force: true });
+    createAuditLogInDatabase(path.join(projectRoot, "data", "kawang.db"), {
+      action: "migration.restore.apply",
+      actor: request.admin.username,
+      resourceType: "migration_package",
+      resourceId: uploadId,
+      detail: {
+        filename: upload.filename,
+        files: upload.files,
+        preRestoreBackupDir,
+        restartRequired: true
+      }
+    });
+
+    return {
+      message: "迁移包已恢复到磁盘。当前 API 进程仍使用旧数据库连接，请按提示重启服务。",
+      maintenance: readMaintenanceState(),
+      preRestoreBackupDir,
+      restartCommands: getMigrationRestartCommands()
+    };
+  } catch (error) {
+    createAuditLog({
+      action: "migration.restore.failed",
+      actor: request.admin.username,
+      resourceType: "migration_package",
+      resourceId: uploadId,
+      detail: {
+        filename: upload.filename,
+        preRestoreBackupDir,
+        message: error.message
+      }
+    });
+    return reply.code(500).send({ message: error.message || "恢复迁移包失败", preRestoreBackupDir });
+  }
+});
 
 app.get("/api/admin/sites", { preHandler: requireAdmin }, async () => {
   const items = db.prepare(`

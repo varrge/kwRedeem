@@ -176,10 +176,19 @@ const refs = {
   sub2apiInviteUserFilter: document.querySelector("#sub2api-invite-user-filter"),
   sub2apiInviteStatusFilter: document.querySelector("#sub2api-invite-status-filter"),
   sub2apiInviteRefreshBtn: document.querySelector("#sub2api-invite-refresh-btn"),
+  sub2apiInviteSyncBtn: document.querySelector("#sub2api-invite-sync-btn"),
   sub2apiInviteCopyBtn: document.querySelector("#sub2api-invite-copy-btn"),
   sub2apiInviteExportBtn: document.querySelector("#sub2api-invite-export-btn"),
   sub2apiInviteList: document.querySelector("#sub2api-invite-list"),
   sub2apiInviteResult: document.querySelector("#sub2api-invite-result"),
+  sub2apiLevelLoadBtn: document.querySelector("#sub2api-level-load-btn"),
+  sub2apiLevelSaveBtn: document.querySelector("#sub2api-level-save-btn"),
+  sub2apiLevelJson: document.querySelector("#sub2api-level-json"),
+  sub2apiLevelResult: document.querySelector("#sub2api-level-result"),
+  sub2apiRebateStatusFilter: document.querySelector("#sub2api-rebate-status-filter"),
+  sub2apiRebateRefreshBtn: document.querySelector("#sub2api-rebate-refresh-btn"),
+  sub2apiRebateList: document.querySelector("#sub2api-rebate-list"),
+  sub2apiRebateResult: document.querySelector("#sub2api-rebate-result"),
   sub2apiPlanForm: document.querySelector("#sub2api-plan-form"),
   sub2apiPlanFormTitle: document.querySelector("#sub2api-plan-form-title"),
   sub2apiPlanEditId: document.querySelector("#sub2api-plan-edit-id"),
@@ -270,6 +279,7 @@ const quotaSubCardState = {
 };
 let sub2apiConnectionsCache = [];
 let sub2apiInvitesCache = [];
+let sub2apiRebatesCache = [];
 let sub2apiPlansCache = [];
 let sub2apiOrdersCache = [];
 let worldCupMatchesCache = [];
@@ -2595,6 +2605,92 @@ async function refreshSub2ApiInvites() {
   setHint(refs.sub2apiInviteResult, `共 ${payload.total ?? sub2apiInvitesCache.length} 条记录，当前显示 ${sub2apiInvitesCache.length} 条`);
 }
 
+async function syncSub2ApiInvites() {
+  const body = {};
+  if (refs.sub2apiInviteConnectionFilter?.value) body.connectionId = refs.sub2apiInviteConnectionFilter.value;
+  const payload = await api("/api/admin/sub2api/invites/sync", {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+  setHint(refs.sub2apiInviteResult, `同步完成：更新 ${payload.updated || 0} 条，生成返利 ${payload.rebatesCreated || 0} 条`);
+  await refreshSub2ApiInvites();
+  await refreshSub2ApiRebates().catch(() => {});
+}
+
+async function loadSub2ApiInviterLevels() {
+  if (!refs.sub2apiLevelJson) return;
+  const payload = await api("/api/admin/sub2api/inviter-levels");
+  refs.sub2apiLevelJson.value = JSON.stringify((payload.levels || []).map((level) => ({
+    id: level.id,
+    name: level.name,
+    spendThreshold: level.spendThreshold,
+    lifetimeInviteLimit: level.lifetimeInviteLimit,
+    unusedInviteLimit: level.unusedInviteLimit,
+    rebateRate: level.rebateRate,
+    sortOrder: level.sortOrder,
+    status: level.status === "disabled" ? "disabled" : "active"
+  })), null, 2);
+  setHint(refs.sub2apiLevelResult, `已读取 ${payload.levels?.length || 0} 个等级`);
+}
+
+async function saveSub2ApiInviterLevels() {
+  const levels = JSON.parse(refs.sub2apiLevelJson.value || "[]");
+  const payload = await api("/api/admin/sub2api/inviter-levels", {
+    method: "PUT",
+    body: JSON.stringify({ levels })
+  });
+  refs.sub2apiLevelJson.value = JSON.stringify(payload.levels || levels, null, 2);
+  setHint(refs.sub2apiLevelResult, `保存成功，已处理 ${payload.recalculation?.users || 0} 个已知用户，同步成功 ${payload.recalculation?.synced || 0} 个`);
+}
+
+async function refreshSub2ApiRebates() {
+  if (!refs.sub2apiRebateList) return;
+  const state = getTableState(refs.sub2apiRebateList);
+  const params = new URLSearchParams();
+  if (refs.sub2apiRebateStatusFilter?.value) params.set("status", refs.sub2apiRebateStatusFilter.value);
+  params.set("page", String(state.page || 1));
+  params.set("pageSize", String(state.pageSize || DEFAULT_TABLE_PAGE_SIZE));
+  const payload = await api(`/api/admin/sub2api/invite-rebates?${params.toString()}`);
+  sub2apiRebatesCache = payload.items || [];
+  renderTable(refs.sub2apiRebateList, [
+    { label: "邀请人", render: (item) => `<code>${escapeHtml(item.inviterUserId || "-")}</code>` },
+    { label: "被邀请人", render: (item) => `${escapeHtml(item.inviteeDisplay || "-")}` },
+    { label: "邀请码", render: (item) => `<code>${escapeHtml(item.inviteCode || "-")}</code>` },
+    { label: "首次余额", render: (item) => `${escapeHtml(item.sourceType)}<br/>${formatBalance(item.firstAmount)}` },
+    { label: "返利", render: (item) => `${formatBalance(item.rebateAmount)}<br/><span class="muted">${escapeHtml(item.rebateRate)}%</span>` },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>` },
+    {
+      label: "操作",
+      render: (item) => `
+        <div class="inline-actions">
+          ${item.status === "pending" ? `<button class="ghost-btn tiny sub2api-rebate-action" data-id="${escapeHtml(item.id)}" data-action="approve">通过</button><button class="ghost-btn tiny sub2api-rebate-action" data-id="${escapeHtml(item.id)}" data-action="reject">驳回</button>` : ""}
+          ${item.status === "approved" ? `<button class="ghost-btn tiny sub2api-rebate-action" data-id="${escapeHtml(item.id)}" data-action="revoke">撤销</button>` : ""}
+        </div>
+      `
+    }
+  ], sub2apiRebatesCache, "暂无返利记录", {
+    server: true,
+    total: Number(payload.total ?? sub2apiRebatesCache.length),
+    page: Number(payload.page ?? state.page),
+    pageSize: Number(payload.pageSize ?? state.pageSize),
+    onPageChange: () => refreshSub2ApiRebates().catch((error) => {
+      refs.sub2apiRebateList.innerHTML = `<p class="hint centered">加载返利失败：${escapeHtml(error.message)}</p>`;
+    })
+  });
+  setHint(refs.sub2apiRebateResult, `共 ${payload.total ?? sub2apiRebatesCache.length} 条返利记录`);
+}
+
+async function runSub2ApiRebateAction(id, action) {
+  const reason = window.prompt("备注/原因", action) || "";
+  const payload = await api(`/api/admin/sub2api/invite-rebates/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+  setHint(refs.sub2apiRebateResult, `操作成功：${payload.rebate?.status || action}`);
+  await refreshSub2ApiRebates();
+}
+
 function resetSub2ApiPlanForm() {
   if (!refs.sub2apiPlanForm) return;
   refs.sub2apiPlanForm.reset();
@@ -2986,6 +3082,12 @@ async function refreshSub2ApiConsole() {
   });
   await refreshSub2ApiInvites().catch((error) => {
     if (refs.sub2apiInviteList) refs.sub2apiInviteList.innerHTML = `<p class="hint centered">加载邀请码失败：${escapeHtml(error.message)}</p>`;
+  });
+  await loadSub2ApiInviterLevels().catch((error) => {
+    setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`);
+  });
+  await refreshSub2ApiRebates().catch((error) => {
+    if (refs.sub2apiRebateList) refs.sub2apiRebateList.innerHTML = `<p class="hint centered">加载返利失败：${escapeHtml(error.message)}</p>`;
   });
   await refreshWorldCupMatches().catch((error) => {
     if (refs.worldCupMatchList) refs.worldCupMatchList.innerHTML = `<p class="hint centered">加载比赛失败：${escapeHtml(error.message)}</p>`;
@@ -3447,6 +3549,12 @@ if (refs.sub2apiInviteRefreshBtn) {
   });
 }
 
+if (refs.sub2apiInviteSyncBtn) {
+  refs.sub2apiInviteSyncBtn.addEventListener("click", () => {
+    syncSub2ApiInvites().catch((error) => setHint(refs.sub2apiInviteResult, `同步失败：${error.message}`));
+  });
+}
+
 if (refs.sub2apiInviteCopyBtn) {
   refs.sub2apiInviteCopyBtn.addEventListener("click", async () => {
     const codes = getSelectedSub2ApiInviteCodes();
@@ -3465,6 +3573,34 @@ if (refs.sub2apiInviteCopyBtn) {
 
 if (refs.sub2apiInviteExportBtn) {
   refs.sub2apiInviteExportBtn.addEventListener("click", exportSub2ApiInvitesCsv);
+}
+
+if (refs.sub2apiLevelLoadBtn) {
+  refs.sub2apiLevelLoadBtn.addEventListener("click", () => {
+    loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `读取失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiLevelSaveBtn) {
+  refs.sub2apiLevelSaveBtn.addEventListener("click", () => {
+    saveSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `保存失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiRebateRefreshBtn) {
+  refs.sub2apiRebateRefreshBtn.addEventListener("click", () => {
+    resetTablePage(refs.sub2apiRebateList);
+    refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiRebateList) {
+  refs.sub2apiRebateList.addEventListener("click", (event) => {
+    const button = event.target.closest(".sub2api-rebate-action");
+    if (!button) return;
+    runSub2ApiRebateAction(button.dataset.id, button.dataset.action)
+      .catch((error) => setHint(refs.sub2apiRebateResult, `操作失败：${error.message}`));
+  });
 }
 
 if (refs.sub2apiPlanForm) {

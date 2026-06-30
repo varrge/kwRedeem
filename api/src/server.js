@@ -33,24 +33,28 @@ import {
 import {
   SUB2API_INVITE_LIMIT,
   assertSub2ApiRemoteEnvelopeOk,
-  countReservedSub2ApiInvites,
   decodeSub2ApiSsoSelector,
   extractSub2ApiIdentity,
   extractSub2ApiIdentityFromJwtClaims,
   extractRemoteSub2ApiRefreshResult,
   extractRemoteSub2ApiInviteResult,
+  getSub2ApiInviterLevelForSpend,
   getSub2ApiWorldCupBetPhaseLabel,
   getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
+  getSub2ApiNextInviterLevel,
   isSub2ApiWorldCupMatchInProgress,
   normalizeSub2ApiBaseUrl,
   normalizeSub2ApiAmount,
+  normalizeSub2ApiInviteRebateRate,
   normalizeSub2ApiPositiveInteger,
   reserveSub2ApiInvite,
+  roundSub2ApiInviteRebateAmount,
   roundSub2ApiWorldCupAmount,
   sub2apiConnectionStatuses,
   sub2apiInviteStatuses,
+  sub2apiInviteRebateStatuses,
   sub2apiSubscriptionOrderStatuses,
   sub2apiSubscriptionPlanStatuses,
   sub2apiWorldCupBetPhases,
@@ -58,6 +62,7 @@ import {
   sub2apiWorldCupMatchStatuses,
   sub2apiWorldCupPredictions,
   unwrapSub2ApiRemoteData,
+  upsertSub2ApiKnownUser,
   verifySub2ApiSsoToken
 } from "../../shared/src/sub2api.js";
 import {
@@ -1902,9 +1907,69 @@ function serializeSub2ApiInvite(row) {
     username: row.username || "",
     inviteCode: row.invite_code || "",
     remoteInviteId: row.remote_invite_id || "",
+    usedByUserId: row.used_by_user_id || "",
+    usedByEmail: row.used_by_email || "",
+    usedByUsername: row.used_by_username || "",
+    usedByDisplay: maskSub2ApiIdentity(row.used_by_email || row.used_by_username || row.used_by_user_id || ""),
+    usedAt: row.used_at || null,
+    abnormalReason: row.abnormal_reason || "",
     status: row.status,
     errorMessage: row.error_message || "",
     expiresAt: row.expires_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function maskSub2ApiIdentity(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const at = raw.indexOf("@");
+  if (at > 0) {
+    const name = raw.slice(0, at);
+    return `${name.slice(0, 2)}***${raw.slice(at)}`;
+  }
+  if (raw.length <= 4) return `${raw[0] || ""}***`;
+  return `${raw.slice(0, 2)}***${raw.slice(-2)}`;
+}
+
+function serializeSub2ApiInviterLevel(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    spendThreshold: Number(row.spend_threshold || 0),
+    lifetimeInviteLimit: Number(row.lifetime_invite_limit || 0),
+    unusedInviteLimit: Number(row.unused_invite_limit || 0),
+    rebateRate: Number(row.rebate_rate || 0),
+    sortOrder: Number(row.sort_order || 0),
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function serializeSub2ApiInviteRebate(row, { publicView = false } = {}) {
+  return {
+    id: row.id,
+    inviteId: row.invite_id,
+    connectionId: row.connection_id,
+    inviterUserId: row.inviter_user_id,
+    inviteeUserId: publicView ? "" : row.invitee_user_id,
+    inviteeDisplay: maskSub2ApiIdentity(row.invitee_email || row.invitee_username || row.invitee_user_id || ""),
+    inviteCode: row.invite_code,
+    sourceType: row.source_type,
+    sourceRemoteId: row.source_remote_id || "",
+    sourceOccurredAt: row.source_occurred_at,
+    firstAmount: Number(row.first_amount || 0),
+    rebateRate: Number(row.rebate_rate || 0),
+    rebateAmount: Number(row.rebate_amount || 0),
+    levelId: row.level_id || "",
+    status: row.status,
+    reviewReason: row.review_reason || "",
+    remoteBalanceResult: row.remote_balance_response ? "recorded" : "",
+    approvedAt: row.approved_at || null,
+    rejectedAt: row.rejected_at || null,
+    revokedAt: row.revoked_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2027,6 +2092,258 @@ function readRemoteArrayPayload(value) {
   return [];
 }
 
+function readRemoteTotalPayload(value) {
+  if (!value || typeof value !== "object") return null;
+  for (const key of ["total", "count"]) {
+    const number = Number(value[key]);
+    if (Number.isFinite(number)) return number;
+  }
+  for (const key of ["data", "result", "response", "body"]) {
+    const total = readRemoteTotalPayload(value[key]);
+    if (total !== null) return total;
+  }
+  return null;
+}
+
+async function listSub2ApiRemotePages(connection, pathname, params = {}, maxPages = 20) {
+  const items = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const search = new URLSearchParams({ ...params, page: String(page), page_size: "200" });
+    const result = await callSub2ApiRemote(connection, `${pathname}?${search.toString()}`);
+    const payload = unwrapSub2ApiRemoteData(result.json);
+    const pageItems = readRemoteArrayPayload(payload);
+    items.push(...pageItems);
+    const total = readRemoteTotalPayload(payload);
+    if (pageItems.length < 200 || (total !== null && items.length >= total)) break;
+  }
+  return items;
+}
+
+function readRemoteId(value) {
+  const raw = value?.id ?? value?.ID ?? value?.redeem_code_id ?? value?.redeemCodeId ?? value?.order_id ?? value?.orderId ?? "";
+  return String(raw ?? "").trim();
+}
+
+function readRemoteUserId(value) {
+  const raw = value?.used_by ?? value?.usedBy ?? value?.user_id ?? value?.userId ?? "";
+  return String(raw ?? "").trim();
+}
+
+function readRemoteTime(...values) {
+  for (const value of values) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+    const ms = new Date(raw).getTime();
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return null;
+}
+
+function readRemoteAmount(value, keys) {
+  for (const key of keys) {
+    const amount = Number(value?.[key]);
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  return 0;
+}
+
+function getSub2ApiKnownUser(connectionId, userId) {
+  return db.prepare(`
+    SELECT u.*, l.name AS level_name, l.rebate_rate, l.lifetime_invite_limit, l.unused_invite_limit
+    FROM sub2api_known_users u
+    LEFT JOIN sub2api_inviter_levels l ON l.id = u.effective_level_id
+    WHERE u.connection_id = ? AND u.sub2api_user_id = ?
+  `).get(connectionId, userId);
+}
+
+function ensureSub2ApiKnownUser(connectionId, identity, subscriptionSpend = null) {
+  return upsertSub2ApiKnownUser(db, {
+    id: `sub2api_user_${nanoid(16)}`,
+    connectionId,
+    userId: String(identity.userId || identity.sub2api_user_id || identity.id || ""),
+    email: identity.email || "",
+    username: identity.username || identity.name || "",
+    subscriptionSpend,
+    now: nowIso()
+  });
+}
+
+function getSub2ApiPublicRebates(connectionId, userId) {
+  return db.prepare(`
+    SELECT r.*, i.used_by_email AS invitee_email, i.used_by_username AS invitee_username
+    FROM sub2api_invite_rebates r
+    LEFT JOIN sub2api_invites i ON i.id = r.invite_id
+    WHERE r.connection_id = ?
+      AND r.inviter_user_id = ?
+    ORDER BY r.created_at DESC
+    LIMIT 50
+  `).all(connectionId, userId).map((row) => serializeSub2ApiInviteRebate(row, { publicView: true }));
+}
+
+function getSub2ApiRebateSummary(connectionId, userId) {
+  const rows = db.prepare(`
+    SELECT status, COALESCE(SUM(rebate_amount), 0) AS amount
+    FROM sub2api_invite_rebates
+    WHERE connection_id = ? AND inviter_user_id = ?
+    GROUP BY status
+  `).all(connectionId, userId);
+  const summary = { pending: 0, paid: 0, rejectedOrRevoked: 0 };
+  for (const row of rows) {
+    const amount = Number(row.amount || 0);
+    if (row.status === sub2apiInviteRebateStatuses.pending) summary.pending += amount;
+    if (row.status === sub2apiInviteRebateStatuses.approved) summary.paid += amount;
+    if ([sub2apiInviteRebateStatuses.rejected, sub2apiInviteRebateStatuses.revoked].includes(row.status)) {
+      summary.rejectedOrRevoked += amount;
+    }
+  }
+  return summary;
+}
+
+async function syncSub2ApiSubscriptionSpend(connection, userId) {
+  const orders = await listSub2ApiRemotePages(connection, "/api/v1/admin/payment/orders", {
+    user_id: String(userId),
+    status: "COMPLETED",
+    order_type: "subscription"
+  });
+  return orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0);
+}
+
+async function syncSub2ApiInviteUsage(connection, inviterUserId = "") {
+  const rows = db.prepare(`
+    SELECT *
+    FROM sub2api_invites
+    WHERE connection_id = ?
+      AND invite_code IS NOT NULL
+      AND invite_code <> ''
+      ${inviterUserId ? "AND sub2api_user_id = ?" : ""}
+  `).all(...(inviterUserId ? [connection.id, inviterUserId] : [connection.id]));
+  if (!rows.length) return { updated: 0, rebatesCreated: 0 };
+  const byCode = new Map(rows.map((row) => [String(row.invite_code || "").trim(), row]));
+  const remoteCodes = await listSub2ApiRemotePages(connection, "/api/v1/admin/redeem-codes", { type: "invitation" });
+  let updated = 0;
+  let rebatesCreated = 0;
+  for (const remote of remoteCodes) {
+    const code = String(remote?.code ?? remote?.invite_code ?? remote?.invitation_code ?? "").trim();
+    const invite = byCode.get(code);
+    if (!invite) continue;
+    const usedBy = readRemoteUserId(remote);
+    const usedAt = readRemoteTime(remote?.used_at, remote?.usedAt);
+    const status = usedBy
+      ? (usedBy === String(invite.sub2api_user_id) ? sub2apiInviteStatuses.abnormal : sub2apiInviteStatuses.used)
+      : invite.status;
+    db.prepare(`
+      UPDATE sub2api_invites
+      SET used_by_user_id = COALESCE(?, used_by_user_id),
+          used_by_email = COALESCE(?, used_by_email),
+          used_by_username = COALESCE(?, used_by_username),
+          used_at = COALESCE(?, used_at),
+          status = ?,
+          abnormal_reason = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      usedBy || null,
+      remote?.used_by_email || remote?.usedByEmail || null,
+      remote?.used_by_username || remote?.usedByUsername || null,
+      usedAt,
+      status,
+      status === sub2apiInviteStatuses.abnormal ? "self_used" : null,
+      nowIso(),
+      invite.id
+    );
+    updated += 1;
+    if (usedBy && usedBy !== String(invite.sub2api_user_id)) {
+      ensureSub2ApiKnownUser(connection.id, {
+        userId: usedBy,
+        email: remote?.used_by_email || remote?.usedByEmail || "",
+        username: remote?.used_by_username || remote?.usedByUsername || ""
+      });
+      const created = await maybeCreateSub2ApiInviteRebate(connection, invite.id);
+      if (created) rebatesCreated += 1;
+    }
+  }
+  return { updated, rebatesCreated };
+}
+
+async function findSub2ApiFirstBalanceAcquisition(connection, userId, afterIso) {
+  const afterMs = new Date(afterIso || 0).getTime();
+  const candidates = [];
+  const orders = await listSub2ApiRemotePages(connection, "/api/v1/admin/payment/orders", {
+    user_id: String(userId),
+    status: "COMPLETED",
+    order_type: "balance"
+  });
+  for (const order of orders) {
+    const occurredAt = readRemoteTime(order?.paid_at, order?.paidAt, order?.completed_at, order?.completedAt, order?.updated_at, order?.updatedAt);
+    if (!occurredAt || new Date(occurredAt).getTime() < afterMs) continue;
+    const amount = readRemoteAmount(order, ["pay_amount", "payAmount", "amount"]);
+    if (amount > 0) candidates.push({ sourceType: "payment", remoteId: readRemoteId(order), occurredAt, amount });
+  }
+  const codes = await listSub2ApiRemotePages(connection, "/api/v1/admin/redeem-codes", { type: "balance" });
+  for (const code of codes) {
+    if (readRemoteUserId(code) !== String(userId)) continue;
+    const occurredAt = readRemoteTime(code?.used_at, code?.usedAt);
+    if (!occurredAt || new Date(occurredAt).getTime() < afterMs) continue;
+    const amount = readRemoteAmount(code, ["value", "amount", "balance"]);
+    if (amount > 0) candidates.push({ sourceType: "redeem_code", remoteId: readRemoteId(code), occurredAt, amount });
+  }
+  candidates.sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime());
+  return candidates[0] || null;
+}
+
+async function maybeCreateSub2ApiInviteRebate(connection, inviteId) {
+  const invite = db.prepare("SELECT * FROM sub2api_invites WHERE id = ?").get(inviteId);
+  if (!invite?.used_by_user_id || invite.abnormal_reason) return null;
+  const exists = db.prepare("SELECT id FROM sub2api_invite_rebates WHERE invite_id = ?").get(inviteId);
+  if (exists) return null;
+  const first = await findSub2ApiFirstBalanceAcquisition(connection, invite.used_by_user_id, invite.used_at || invite.created_at);
+  if (!first) return null;
+  const inviter = getSub2ApiKnownUser(connection.id, invite.sub2api_user_id)
+    || ensureSub2ApiKnownUser(connection.id, { userId: invite.sub2api_user_id, email: invite.email, username: invite.username });
+  const level = getSub2ApiInviterLevelForSpend(db, inviter.subscription_spend, inviter.override_level_id || "");
+  const rate = Number(level?.rebate_rate || 0);
+  const amount = roundSub2ApiInviteRebateAmount(first.amount * rate / 100);
+  const now = nowIso();
+  const rebateId = `sub2api_rebate_${nanoid(16)}`;
+  db.prepare(`
+    INSERT INTO sub2api_invite_rebates (
+      id, invite_id, connection_id, inviter_user_id, invitee_user_id, invite_code,
+      source_type, source_remote_id, source_occurred_at, first_amount, rebate_rate,
+      rebate_amount, level_id, status, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    rebateId,
+    invite.id,
+    connection.id,
+    invite.sub2api_user_id,
+    invite.used_by_user_id,
+    invite.invite_code,
+    first.sourceType,
+    first.remoteId || null,
+    first.occurredAt,
+    first.amount,
+    rate,
+    amount,
+    level?.id || null,
+    sub2apiInviteRebateStatuses.pending,
+    now,
+    now
+  );
+  return db.prepare("SELECT * FROM sub2api_invite_rebates WHERE id = ?").get(rebateId);
+}
+
+async function syncSub2ApiPublicInviteData(connection, identity, { force = false } = {}) {
+  ensureSub2ApiKnownUser(connection.id, identity);
+  const known = getSub2ApiKnownUser(connection.id, identity.userId);
+  const lastSyncMs = new Date(known?.spend_synced_at || 0).getTime();
+  if (force || !Number.isFinite(lastSyncMs) || Date.now() - lastSyncMs > 60_000) {
+    const spend = await syncSub2ApiSubscriptionSpend(connection, identity.userId);
+    ensureSub2ApiKnownUser(connection.id, identity, spend);
+  }
+  await syncSub2ApiInviteUsage(connection, identity.userId);
+}
+
 async function getSub2ApiRemoteGroupLimitMap(connection) {
   try {
     const result = await callSub2ApiRemote(connection, "/api/v1/admin/groups/all?include_inactive=true");
@@ -2074,7 +2391,9 @@ function getSub2ApiPublicSubscriptionOrders(connectionId, userId) {
 }
 
 function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
+  ensureSub2ApiKnownUser(connection.id, identity);
   const quota = getSub2ApiInviteQuota(db, connection.id, identity.userId, SUB2API_INVITE_LIMIT);
+  const nextLevel = getSub2ApiNextInviterLevel(db, quota.subscriptionSpend);
   return {
     sessionToken,
     account: {
@@ -2088,8 +2407,22 @@ function buildSub2ApiPublicPayload(connection, identity, sessionToken = null) {
       baseUrl: connection.base_url
     },
     inviteLimit: quota.limit,
+    unusedInviteLimit: quota.unusedLimit,
     used: quota.used,
+    unusedUsed: quota.unusedUsed,
     remaining: quota.remaining,
+    lifetimeRemaining: quota.lifetimeRemaining,
+    unusedRemaining: quota.unusedRemaining,
+    level: {
+      id: quota.levelId,
+      name: quota.levelName,
+      rebateRate: quota.rebateRate,
+      subscriptionSpend: quota.subscriptionSpend,
+      nextLevelName: nextLevel?.name || "",
+      nextLevelNeedSpend: nextLevel ? Math.max(0, Number(nextLevel.spend_threshold || 0) - Number(quota.subscriptionSpend || 0)) : 0
+    },
+    rebateSummary: getSub2ApiRebateSummary(connection.id, identity.userId),
+    rebates: getSub2ApiPublicRebates(connection.id, identity.userId),
     invites: getSub2ApiPublicInvites(connection.id, identity.userId)
   };
 }
@@ -4579,6 +4912,7 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
     const adminToken = decryptSub2ApiAdminToken(connection);
     const { identity } = verifySub2ApiSsoToken(parsed.data.sso, adminToken);
     const sessionToken = signSub2ApiSessionToken(connection, identity);
+    await syncSub2ApiPublicInviteData(connection, identity).catch(() => null);
     return buildSub2ApiPublicPayload(connection, identity, sessionToken);
   } catch (error) {
     if (parsed.data.accessToken || parsed.data.refreshToken) {
@@ -4589,6 +4923,7 @@ app.post("/api/public/sub2api/session", async (request, reply) => {
           expectedUserId: parsed.data.userId
         });
         const sessionToken = signSub2ApiSessionToken(connection, session.identity);
+        await syncSub2ApiPublicInviteData(connection, session.identity).catch(() => null);
         return attachSub2ApiRefreshedAuth(
           buildSub2ApiPublicPayload(connection, session.identity, sessionToken),
           session.refreshedAuth
@@ -4627,6 +4962,7 @@ app.post("/api/public/sub2api/session-from-token", async (request, reply) => {
       expectedUserId: parsed.data.userId
     });
     const sessionToken = signSub2ApiSessionToken(connection, session.identity);
+    await syncSub2ApiPublicInviteData(connection, session.identity).catch(() => null);
     return attachSub2ApiRefreshedAuth(
       buildSub2ApiPublicPayload(connection, session.identity, sessionToken),
       session.refreshedAuth
@@ -4948,11 +5284,13 @@ app.get("/api/public/sub2api/invites", { preHandler: requireSub2ApiSession }, as
     return reply.code(403).send({ message: "Sub2api 连接已停用" });
   }
 
-  return buildSub2ApiPublicPayload(connection, {
+  const identity = {
     userId: request.sub2api.userId,
     email: request.sub2api.email,
     username: request.sub2api.username
-  });
+  };
+  await syncSub2ApiPublicInviteData(connection, identity, { force: request.query?.sync === "1" }).catch(() => null);
+  return buildSub2ApiPublicPayload(connection, identity);
 });
 
 app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSession }, async (request, reply) => {
@@ -4976,6 +5314,7 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
     email: request.sub2api.email,
     username: request.sub2api.username
   };
+  ensureSub2ApiKnownUser(connection.id, identity);
   const reserved = reserveSub2ApiInvite(db, {
     id: inviteId,
     requestId,
@@ -4988,9 +5327,11 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
 
   if (!reserved.ok) {
     return reply.code(403).send({
-      message: `每个账号最多申请 ${SUB2API_INVITE_LIMIT} 个邀请码`,
+      message: "当前等级的邀请码额度已用完",
       inviteLimit: reserved.quota.limit,
+      unusedInviteLimit: reserved.quota.unusedLimit,
       used: reserved.quota.used,
+      unusedUsed: reserved.quota.unusedUsed,
       remaining: reserved.quota.remaining
     });
   }
@@ -5055,9 +5396,7 @@ app.post("/api/public/sub2api/invites/apply", { preHandler: requireSub2ApiSessio
     );
     const payload = {
       message: error.message || "远程 Sub2api 创建邀请码失败",
-      inviteLimit: SUB2API_INVITE_LIMIT,
-      used: countReservedSub2ApiInvites(db, connection.id, identity.userId),
-      remaining: Math.max(0, SUB2API_INVITE_LIMIT - countReservedSub2ApiInvites(db, connection.id, identity.userId))
+      ...getSub2ApiInviteQuota(db, connection.id, identity.userId, SUB2API_INVITE_LIMIT)
     };
     if (remoteSummary) {
       payload.remoteStatus = remoteSummary.status;
@@ -5784,7 +6123,9 @@ app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (reque
   const allowedStatuses = new Set([
     sub2apiInviteStatuses.processing,
     sub2apiInviteStatuses.active,
-    sub2apiInviteStatuses.failed
+    sub2apiInviteStatuses.failed,
+    sub2apiInviteStatuses.used,
+    sub2apiInviteStatuses.abnormal
   ]);
   if (status && allowedStatuses.has(status)) {
     conditions.push("i.status = ?");
@@ -5812,6 +6153,190 @@ app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (reque
     page,
     pageSize
   };
+});
+
+app.post("/api/admin/sub2api/invites/sync", { preHandler: requireAdmin }, async (request, reply) => {
+  const connectionId = String(request.body?.connectionId || request.query?.connectionId || "").trim();
+  const connection = connectionId
+    ? db.prepare("SELECT * FROM sub2api_connections WHERE id = ? AND status <> ?").get(connectionId, sub2apiConnectionStatuses.deleted)
+    : db.prepare("SELECT * FROM sub2api_connections WHERE status = ? ORDER BY created_at DESC LIMIT 1").get(sub2apiConnectionStatuses.active);
+  if (!connection) return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  const result = await syncSub2ApiInviteUsage(connection);
+  return { success: true, ...result };
+});
+
+app.get("/api/admin/sub2api/inviter-levels", { preHandler: requireAdmin }, async () => {
+  const levels = db.prepare(`
+    SELECT *
+    FROM sub2api_inviter_levels
+    WHERE status <> 'deleted'
+    ORDER BY spend_threshold ASC, sort_order ASC, created_at ASC
+  `).all().map(serializeSub2ApiInviterLevel);
+  return { levels };
+});
+
+async function refreshKnownSub2ApiUserLevels(connectionId = "") {
+  const rows = db.prepare(`
+    SELECT u.*, c.*
+    FROM sub2api_known_users u
+    JOIN sub2api_connections c ON c.id = u.connection_id
+    WHERE c.status = ?
+      ${connectionId ? "AND u.connection_id = ?" : ""}
+  `).all(...(connectionId ? [sub2apiConnectionStatuses.active, connectionId] : [sub2apiConnectionStatuses.active]));
+  let synced = 0;
+  for (const row of rows) {
+    let spend = Number(row.subscription_spend || 0);
+    try {
+      spend = await syncSub2ApiSubscriptionSpend(row, row.sub2api_user_id);
+      synced += 1;
+    } catch {
+      // ponytail: keep rule saves usable if a remote user scan fails; admin can retry sync.
+    }
+    upsertSub2ApiKnownUser(db, {
+      id: `sub2api_user_${nanoid(16)}`,
+      connectionId: row.connection_id,
+      userId: row.sub2api_user_id,
+      email: row.email || "",
+      username: row.username || "",
+      subscriptionSpend: spend,
+      now: nowIso()
+    });
+  }
+  return { users: rows.length, synced };
+}
+
+app.put("/api/admin/sub2api/inviter-levels", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    levels: z.array(z.object({
+      id: z.string().trim().optional().default(""),
+      name: z.string().trim().min(1),
+      spendThreshold: z.coerce.number().min(0),
+      lifetimeInviteLimit: z.coerce.number().int().min(0),
+      unusedInviteLimit: z.coerce.number().int().min(0),
+      rebateRate: z.coerce.number().min(0).max(100),
+      sortOrder: z.coerce.number().int().optional().default(0),
+      status: z.enum(["active", "disabled"]).optional().default("active")
+    })).min(1)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ message: "等级配置不正确" });
+
+  const now = nowIso();
+  const seen = new Set();
+  withTransaction(() => {
+    for (const level of parsed.data.levels) {
+      const id = level.id || `sub2api_level_${nanoid(12)}`;
+      seen.add(id);
+      db.prepare(`
+        INSERT INTO sub2api_inviter_levels (
+          id, name, spend_threshold, lifetime_invite_limit, unused_invite_limit,
+          rebate_rate, sort_order, status, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          spend_threshold = excluded.spend_threshold,
+          lifetime_invite_limit = excluded.lifetime_invite_limit,
+          unused_invite_limit = excluded.unused_invite_limit,
+          rebate_rate = excluded.rebate_rate,
+          sort_order = excluded.sort_order,
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `).run(
+        id,
+        level.name,
+        level.spendThreshold,
+        level.lifetimeInviteLimit,
+        level.unusedInviteLimit,
+        normalizeSub2ApiInviteRebateRate(level.rebateRate),
+        level.sortOrder,
+        level.status,
+        now,
+        now
+      );
+    }
+    if (seen.size) {
+      db.prepare(`UPDATE sub2api_inviter_levels SET status = 'deleted', updated_at = ? WHERE id NOT IN (${Array.from(seen).map(() => "?").join(",")})`)
+        .run(now, ...seen);
+    }
+  });
+  const recalculation = await refreshKnownSub2ApiUserLevels();
+  return {
+    success: true,
+    recalculation,
+    levels: db.prepare("SELECT * FROM sub2api_inviter_levels WHERE status <> 'deleted' ORDER BY spend_threshold ASC, sort_order ASC").all().map(serializeSub2ApiInviterLevel)
+  };
+});
+
+app.get("/api/admin/sub2api/invite-rebates", { preHandler: requireAdmin }, async (request) => {
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(200, Math.max(1, Math.floor(Number(request.query.pageSize) || 50)));
+  const status = String(request.query.status || "").trim();
+  const conditions = [];
+  const params = [];
+  if (status) {
+    conditions.push("r.status = ?");
+    params.push(status);
+  }
+  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM sub2api_invite_rebates r ${whereSql}`).get(...params).count;
+  const rows = db.prepare(`
+    SELECT r.*, i.used_by_email AS invitee_email, i.used_by_username AS invitee_username
+    FROM sub2api_invite_rebates r
+    LEFT JOIN sub2api_invites i ON i.id = r.invite_id
+    ${whereSql}
+    ORDER BY r.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, (page - 1) * pageSize);
+  return { items: rows.map(serializeSub2ApiInviteRebate), total, page, pageSize };
+});
+
+app.post("/api/admin/sub2api/invite-rebates/:id/:action", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const action = String(request.params.action || "").trim();
+  const reason = String(request.body?.reason || "").trim();
+  const rebate = db.prepare(`
+    SELECT r.*, c.*
+    FROM sub2api_invite_rebates r
+    JOIN sub2api_connections c ON c.id = r.connection_id
+    WHERE r.id = ?
+  `).get(id);
+  if (!rebate) return reply.code(404).send({ message: "返利记录不存在" });
+  const now = nowIso();
+  if (action === "reject") {
+    if (rebate.status !== sub2apiInviteRebateStatuses.pending) return reply.code(409).send({ message: "只有待审核返利可以驳回" });
+    db.prepare("UPDATE sub2api_invite_rebates SET status = ?, review_reason = ?, rejected_at = ?, updated_at = ? WHERE id = ?")
+      .run(sub2apiInviteRebateStatuses.rejected, reason || "rejected", now, now, id);
+  } else if (action === "approve") {
+    if (rebate.status !== sub2apiInviteRebateStatuses.pending) return reply.code(409).send({ message: "只有待审核返利可以通过" });
+    const note = `registration invite rebate: invite=${rebate.invite_code}, invitee=${rebate.invitee_user_id}, rebate=${rebate.id}`;
+    const result = await callSub2ApiRemote(rebate, `/api/v1/admin/users/${encodeURIComponent(String(rebate.inviter_user_id))}/balance`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `${rebate.id}:approve` },
+      body: { balance: Number(rebate.rebate_amount), operation: "add", notes: note }
+    });
+    db.prepare(`
+      UPDATE sub2api_invite_rebates
+      SET status = ?, review_reason = ?, remote_balance_response = ?, approved_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(sub2apiInviteRebateStatuses.approved, reason || "approved", JSON.stringify(result.json ?? result.text ?? null), now, now, id);
+  } else if (action === "revoke") {
+    if (rebate.status !== sub2apiInviteRebateStatuses.approved) return reply.code(409).send({ message: "只有已到账返利可以撤销" });
+    const note = `revoke registration invite rebate: rebate=${rebate.id}`;
+    const result = await callSub2ApiRemote(rebate, `/api/v1/admin/users/${encodeURIComponent(String(rebate.inviter_user_id))}/balance`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `${rebate.id}:revoke` },
+      body: { balance: Number(rebate.rebate_amount), operation: "subtract", notes: note }
+    });
+    db.prepare(`
+      UPDATE sub2api_invite_rebates
+      SET status = ?, review_reason = ?, remote_balance_response = ?, revoked_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(sub2apiInviteRebateStatuses.revoked, reason || "revoked", JSON.stringify(result.json ?? result.text ?? null), now, now, id);
+  } else {
+    return reply.code(400).send({ message: "不支持的返利操作" });
+  }
+  const row = db.prepare("SELECT * FROM sub2api_invite_rebates WHERE id = ?").get(id);
+  return { success: true, rebate: serializeSub2ApiInviteRebate(row) };
 });
 
 app.get("/api/admin/sub2api/subscription-plans", { preHandler: requireAdmin }, async (request) => {

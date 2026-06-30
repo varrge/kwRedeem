@@ -535,6 +535,60 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_inviter_levels (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      spend_threshold REAL NOT NULL DEFAULT 0,
+      lifetime_invite_limit INTEGER NOT NULL DEFAULT 3,
+      unused_invite_limit INTEGER NOT NULL DEFAULT 3,
+      rebate_rate REAL NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_known_users (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      subscription_spend REAL NOT NULL DEFAULT 0,
+      auto_level_id TEXT,
+      override_level_id TEXT,
+      effective_level_id TEXT,
+      spend_synced_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(connection_id, sub2api_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_invite_rebates (
+      id TEXT PRIMARY KEY,
+      invite_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      inviter_user_id TEXT NOT NULL,
+      invitee_user_id TEXT NOT NULL,
+      invite_code TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_remote_id TEXT,
+      source_occurred_at TEXT NOT NULL,
+      first_amount REAL NOT NULL,
+      rebate_rate REAL NOT NULL,
+      rebate_amount REAL NOT NULL,
+      level_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      review_reason TEXT,
+      remote_balance_response TEXT,
+      approved_at TEXT,
+      rejected_at TEXT,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(invite_id)
+    );
+
     CREATE TABLE IF NOT EXISTS sub2api_subscription_plans (
       id TEXT PRIMARY KEY,
       connection_id TEXT NOT NULL,
@@ -760,6 +814,11 @@ function createSchema(db) {
   ensureColumn(db, "api_football_settings", "sync_interval_ms", "INTEGER NOT NULL DEFAULT 60000");
   ensureColumn(db, "api_football_settings", "updated_at", "TEXT");
   ensureColumn(db, "api_football_settings", "updated_by", "TEXT");
+  ensureColumn(db, "sub2api_invites", "used_by_user_id", "TEXT");
+  ensureColumn(db, "sub2api_invites", "used_by_email", "TEXT");
+  ensureColumn(db, "sub2api_invites", "used_by_username", "TEXT");
+  ensureColumn(db, "sub2api_invites", "used_at", "TEXT");
+  ensureColumn(db, "sub2api_invites", "abnormal_reason", "TEXT");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
@@ -794,6 +853,10 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_account ON sub2api_invites(connection_id, sub2api_user_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_connection ON sub2api_invites(connection_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_invites_status ON sub2api_invites(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_inviter_levels_status ON sub2api_inviter_levels(status, spend_threshold);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_known_users_connection ON sub2api_known_users(connection_id, sub2api_user_id);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_invite_rebates_status ON sub2api_invite_rebates(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_invite_rebates_inviter ON sub2api_invite_rebates(connection_id, inviter_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_plans_connection ON sub2api_subscription_plans(connection_id, status, sort_order);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_account ON sub2api_subscription_orders(connection_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_plan ON sub2api_subscription_orders(plan_id, created_at);
@@ -1170,6 +1233,17 @@ function seedDefaults(db) {
 
   for (const presetSite of presetSites) {
     upsertSite(db, presetSite, { preserveExistingStatus: true });
+  }
+
+  const hasInviterLevel = db.prepare("SELECT COUNT(*) AS count FROM sub2api_inviter_levels").get();
+  if (hasInviterLevel.count === 0) {
+    db.prepare(`
+      INSERT INTO sub2api_inviter_levels (
+        id, name, spend_threshold, lifetime_invite_limit, unused_invite_limit,
+        rebate_rate, sort_order, status, created_at, updated_at
+      )
+      VALUES (?, ?, 0, 3, 3, 0, 0, 'active', ?, ?)
+    `).run("sub2api_inviter_level_default", "默认", now, now);
   }
 
   db.prepare(`

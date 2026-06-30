@@ -5,7 +5,16 @@ export const SUB2API_INVITE_LIMIT = 3;
 export const sub2apiInviteStatuses = {
   processing: "processing",
   active: "active",
-  failed: "failed"
+  failed: "failed",
+  used: "used",
+  abnormal: "abnormal"
+};
+
+export const sub2apiInviteRebateStatuses = {
+  pending: "pending",
+  approved: "approved",
+  rejected: "rejected",
+  revoked: "revoked"
 };
 
 export const sub2apiConnectionStatuses = {
@@ -415,16 +424,169 @@ export function countReservedSub2ApiInvites(db, connectionId, userId) {
     WHERE connection_id = ?
       AND sub2api_user_id = ?
       AND status <> ?
-  `).get(connectionId, userId, sub2apiInviteStatuses.failed);
+      AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+  `).get(connectionId, userId, sub2apiInviteStatuses.failed, new Date().toISOString());
   return Number(row?.count || 0);
 }
 
-export function getSub2ApiInviteQuota(db, connectionId, userId, limit = SUB2API_INVITE_LIMIT) {
-  const used = countReservedSub2ApiInvites(db, connectionId, userId);
+export function roundSub2ApiInviteRebateAmount(value) {
+  const cents = Math.round((Number(value) || 0) * 100);
+  return cents / 100;
+}
+
+export function normalizeSub2ApiInviteRebateRate(value) {
+  const rate = Number(value);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+    throw new Error("返利比例必须在 0 到 100 之间");
+  }
+  return Math.round(rate * 10000) / 10000;
+}
+
+export function getSub2ApiInviterLevels(db) {
+  try {
+    return db.prepare(`
+      SELECT *
+      FROM sub2api_inviter_levels
+      WHERE status = 'active'
+      ORDER BY spend_threshold ASC, sort_order ASC, created_at ASC
+    `).all();
+  } catch {
+    return [];
+  }
+}
+
+export function getSub2ApiInviterLevelForSpend(db, spend, overrideLevelId = "") {
+  const levels = getSub2ApiInviterLevels(db);
+  if (!levels.length) return null;
+  if (overrideLevelId) {
+    const override = levels.find((level) => level.id === overrideLevelId);
+    if (override) return override;
+  }
+  const amount = Number(spend) || 0;
+  let matched = levels[0];
+  for (const level of levels) {
+    if (Number(level.spend_threshold || 0) <= amount) matched = level;
+  }
+  return matched;
+}
+
+export function getSub2ApiNextInviterLevel(db, spend) {
+  const amount = Number(spend) || 0;
+  return getSub2ApiInviterLevels(db).find((level) => Number(level.spend_threshold || 0) > amount) || null;
+}
+
+export function upsertSub2ApiKnownUser(db, {
+  id,
+  connectionId,
+  userId,
+  email = "",
+  username = "",
+  subscriptionSpend = null,
+  now
+}) {
+  const current = db.prepare(`
+    SELECT *
+    FROM sub2api_known_users
+    WHERE connection_id = ? AND sub2api_user_id = ?
+  `).get(connectionId, userId);
+  const spend = subscriptionSpend === null || subscriptionSpend === undefined
+    ? Number(current?.subscription_spend || 0)
+    : Number(subscriptionSpend) || 0;
+  const level = getSub2ApiInviterLevelForSpend(db, spend, current?.override_level_id || "");
+  const autoLevel = getSub2ApiInviterLevelForSpend(db, spend, "");
+  if (current) {
+    db.prepare(`
+      UPDATE sub2api_known_users
+      SET email = COALESCE(?, email), username = COALESCE(?, username),
+          subscription_spend = ?, auto_level_id = ?, effective_level_id = ?,
+          spend_synced_at = CASE WHEN ? IS NULL THEN spend_synced_at ELSE ? END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      email || null,
+      username || null,
+      spend,
+      autoLevel?.id || null,
+      level?.id || null,
+      subscriptionSpend,
+      now,
+      now,
+      current.id
+    );
+    return { ...current, subscription_spend: spend, auto_level_id: autoLevel?.id || null, effective_level_id: level?.id || null };
+  }
+  db.prepare(`
+    INSERT INTO sub2api_known_users (
+      id, connection_id, sub2api_user_id, email, username, subscription_spend,
+      auto_level_id, effective_level_id, spend_synced_at, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    connectionId,
+    userId,
+    email || null,
+    username || null,
+    spend,
+    autoLevel?.id || null,
+    level?.id || null,
+    subscriptionSpend === null || subscriptionSpend === undefined ? null : now,
+    now,
+    now
+  );
+  return db.prepare("SELECT * FROM sub2api_known_users WHERE id = ?").get(id);
+}
+
+export function getSub2ApiInviteQuota(db, connectionId, userId, limit = SUB2API_INVITE_LIMIT, now = new Date().toISOString()) {
+  let known = null;
+  try {
+    known = db.prepare(`
+      SELECT u.*, l.lifetime_invite_limit, l.unused_invite_limit, l.rebate_rate, l.name AS level_name
+      FROM sub2api_known_users u
+      LEFT JOIN sub2api_inviter_levels l ON l.id = u.effective_level_id
+      WHERE u.connection_id = ? AND u.sub2api_user_id = ?
+    `).get(connectionId, userId);
+  } catch {
+    known = null;
+  }
+  const level = known?.effective_level_id
+    ? known
+    : getSub2ApiInviterLevelForSpend(db, known?.subscription_spend || 0, known?.override_level_id || "");
+  const lifetimeLimit = Number(level?.lifetime_invite_limit ?? limit);
+  const unusedLimit = Number(level?.unused_invite_limit ?? limit);
+  const lifetimeUsed = Number(db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sub2api_invites
+    WHERE connection_id = ?
+      AND sub2api_user_id = ?
+      AND status <> ?
+      AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+  `).get(connectionId, userId, sub2apiInviteStatuses.failed, now)?.count || 0);
+  const unusedUsed = Number(db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sub2api_invites
+    WHERE connection_id = ?
+      AND sub2api_user_id = ?
+      AND status IN (?, ?)
+      AND (used_at IS NULL OR used_at = '')
+      AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+  `).get(connectionId, userId, sub2apiInviteStatuses.processing, sub2apiInviteStatuses.active, now)?.count || 0);
+  const lifetimeRemaining = lifetimeLimit === 0 ? null : Math.max(0, lifetimeLimit - lifetimeUsed);
+  const unusedRemaining = unusedLimit === 0 ? null : Math.max(0, unusedLimit - unusedUsed);
+  const remainingValues = [lifetimeRemaining, unusedRemaining].filter((value) => value !== null);
+  const remaining = remainingValues.length ? Math.min(...remainingValues) : null;
   return {
-    limit,
-    used,
-    remaining: Math.max(0, limit - used)
+    limit: lifetimeLimit,
+    unusedLimit,
+    used: lifetimeUsed,
+    unusedUsed,
+    remaining,
+    lifetimeRemaining,
+    unusedRemaining,
+    rebateRate: Number(level?.rebate_rate || 0),
+    levelId: level?.effective_level_id || level?.id || null,
+    levelName: level?.level_name || level?.name || "默认",
+    subscriptionSpend: Number(known?.subscription_spend || 0)
   };
 }
 
@@ -439,7 +601,7 @@ export function reserveSub2ApiInvite(db, {
 }, limit = SUB2API_INVITE_LIMIT) {
   const reserve = db.transaction(() => {
     const quota = getSub2ApiInviteQuota(db, connectionId, userId, limit);
-    if (quota.remaining <= 0) {
+    if (quota.remaining !== null && quota.remaining <= 0) {
       return { ok: false, quota };
     }
     db.prepare(`

@@ -53,7 +53,7 @@
 
       .sub2api-stats {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 12px;
         margin-bottom: 20px;
       }
@@ -79,6 +79,11 @@
       .invite-list {
         display: grid;
         gap: 10px;
+      }
+
+      .section-title {
+        margin: 20px 0 10px;
+        font-size: 16px;
       }
 
       .invite-row {
@@ -163,20 +168,46 @@
 
         <div class="sub2api-stats">
           <article class="sub2api-stat">
-            <span>总额度</span>
-            <strong id="limit-value">-</strong>
+            <span>当前等级</span>
+            <strong id="level-value">-</strong>
           </article>
           <article class="sub2api-stat">
-            <span>已申请</span>
+            <span>返利比例</span>
+            <strong id="rate-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>终身已申请</span>
             <strong id="used-value">-</strong>
           </article>
           <article class="sub2api-stat">
-            <span>剩余</span>
-            <strong id="remaining-value">-</strong>
+            <span>当前可申请</span>
+            <strong id="limit-value">-</strong>
           </article>
         </div>
 
+        <div class="sub2api-stats">
+          <article class="sub2api-stat">
+            <span>待审核返利</span>
+            <strong id="pending-rebate-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>已到账返利</span>
+            <strong id="paid-rebate-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>已驳回/撤销</span>
+            <strong id="closed-rebate-value">-</strong>
+          </article>
+          <article class="sub2api-stat">
+            <span>距离下一级还需消费</span>
+            <strong id="next-level-value">-</strong>
+          </article>
+        </div>
+
+        <h2 class="section-title">我的邀请码</h2>
         <div id="invite-list" class="invite-list"></div>
+        <h2 class="section-title">邀请返利</h2>
+        <div id="rebate-list" class="invite-list"></div>
         <div id="status-line" class="status-line"></div>
       </section>
     </main>
@@ -189,16 +220,23 @@
         accountLine: document.querySelector("#account-line"),
         applyBtn: document.querySelector("#apply-btn"),
         refreshBtn: document.querySelector("#refresh-btn"),
+        levelValue: document.querySelector("#level-value"),
+        rateValue: document.querySelector("#rate-value"),
         limitValue: document.querySelector("#limit-value"),
         usedValue: document.querySelector("#used-value"),
-        remainingValue: document.querySelector("#remaining-value"),
+        pendingRebateValue: document.querySelector("#pending-rebate-value"),
+        paidRebateValue: document.querySelector("#paid-rebate-value"),
+        closedRebateValue: document.querySelector("#closed-rebate-value"),
+        nextLevelValue: document.querySelector("#next-level-value"),
         inviteList: document.querySelector("#invite-list"),
+        rebateList: document.querySelector("#rebate-list"),
         statusLine: document.querySelector("#status-line")
       };
       const state = {
         sessionToken: "",
         initialized: false,
-        remaining: 0
+        remaining: 0,
+        lastRefreshAt: 0
       };
 
       function escapeHtml(value) {
@@ -219,6 +257,15 @@
         if (!button.dataset.idleText) button.dataset.idleText = button.textContent;
         button.disabled = busy;
         button.textContent = busy ? text : button.dataset.idleText;
+      }
+
+      function formatAmount(value) {
+        const number = Number(value || 0);
+        return Number.isFinite(number) ? number.toFixed(2) : "0.00";
+      }
+
+      function formatQuota(value) {
+        return value === null || value === undefined ? "无限" : String(value);
       }
 
       async function request(path, options = {}) {
@@ -277,28 +324,45 @@
           state.sessionToken = payload.sessionToken;
         }
         const account = payload.account || {};
+        const level = payload.level || {};
+        const summary = payload.rebateSummary || {};
         const displayName = account.email || account.username || account.userId || "-";
         refs.accountLine.textContent = displayName;
-        refs.limitValue.textContent = payload.inviteLimit ?? "-";
+        refs.levelValue.textContent = level.name || "-";
+        refs.rateValue.textContent = `${Number(level.rebateRate || 0)}%`;
+        refs.limitValue.textContent = formatQuota(payload.remaining);
         refs.usedValue.textContent = payload.used ?? "-";
-        refs.remainingValue.textContent = payload.remaining ?? "-";
-        state.remaining = Number(payload.remaining || 0);
+        refs.pendingRebateValue.textContent = formatAmount(summary.pending);
+        refs.paidRebateValue.textContent = formatAmount(summary.paid);
+        refs.closedRebateValue.textContent = formatAmount(summary.rejectedOrRevoked);
+        refs.nextLevelValue.textContent = level.nextLevelName ? formatAmount(level.nextLevelNeedSpend) : "已满级";
+        state.remaining = payload.remaining === null || payload.remaining === undefined ? Infinity : Number(payload.remaining || 0);
         refs.applyBtn.disabled = !state.sessionToken || state.remaining <= 0;
 
         const invites = payload.invites || [];
         if (!invites.length) {
           refs.inviteList.innerHTML = `<p class="hint centered">暂无邀请码</p>`;
-          return;
-        }
-        refs.inviteList.innerHTML = invites.map((item) => `
+        } else {
+          refs.inviteList.innerHTML = invites.map((item) => `
           <article class="invite-row">
             <div>
               <div class="invite-code">${escapeHtml(item.inviteCode || "-")}</div>
-              <div class="invite-meta">${escapeHtml(item.status || "-")} · ${escapeHtml(item.createdAt || "-")}</div>
+              <div class="invite-meta">${escapeHtml(item.status || "-")} · ${escapeHtml(item.usedByDisplay ? `使用人 ${item.usedByDisplay}` : "未使用")} · ${escapeHtml(item.createdAt || "-")}</div>
             </div>
             <button class="ghost-btn copy-btn" type="button" data-code="${escapeHtml(item.inviteCode || "")}">复制</button>
           </article>
-        `).join("");
+          `).join("");
+        }
+
+        const rebates = payload.rebates || [];
+        refs.rebateList.innerHTML = rebates.length ? rebates.map((item) => `
+          <article class="invite-row">
+            <div>
+              <div class="invite-code">${escapeHtml(item.inviteeDisplay || "-")} · ${formatAmount(item.rebateAmount)}</div>
+              <div class="invite-meta">${escapeHtml(item.status || "-")} · 首次${escapeHtml(item.sourceType || "-")} ${formatAmount(item.firstAmount)} · ${escapeHtml(item.rebateRate)}%</div>
+            </div>
+          </article>
+        `).join("") : `<p class="hint centered">暂无返利记录</p>`;
       }
 
       async function initialize() {
@@ -344,9 +408,14 @@
 
       async function refresh() {
         if (!state.sessionToken) return;
+        if (Date.now() - state.lastRefreshAt < 60000) {
+          setStatus("刷新太频繁，请 60 秒后再试");
+          return;
+        }
         try {
           setBusy(refs.refreshBtn, true, "刷新中...");
-          const payload = await request("/api/public/sub2api/invites");
+          state.lastRefreshAt = Date.now();
+          const payload = await request("/api/public/sub2api/invites?sync=1");
           render(payload);
           setStatus("");
         } catch (error) {

@@ -1014,15 +1014,48 @@
                   <option value="">全部状态</option>
                   <option value="processing">processing</option>
                   <option value="active">active</option>
+                  <option value="used">used</option>
+                  <option value="abnormal">abnormal</option>
                   <option value="failed">failed</option>
                 </select>
                 <button id="sub2api-invite-refresh-btn" class="ghost-btn small">查询</button>
+                <button id="sub2api-invite-sync-btn" class="ghost-btn small">同步远端</button>
                 <button id="sub2api-invite-copy-btn" class="ghost-btn small">复制邀请码</button>
                 <button id="sub2api-invite-export-btn" class="ghost-btn small">导出 CSV</button>
               </div>
             </div>
             <div id="sub2api-invite-list" class="table-wrapper"></div>
             <div id="sub2api-invite-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>邀请等级规则</h3>
+              <div class="header-actions">
+                <button id="sub2api-level-load-btn" class="ghost-btn small">读取</button>
+                <button id="sub2api-level-save-btn" class="primary-btn small">保存并重算</button>
+              </div>
+            </div>
+            <textarea id="sub2api-level-json" class="monospace-input" rows="8" placeholder='[{"name":"默认","spendThreshold":0,"lifetimeInviteLimit":3,"unusedInviteLimit":3,"rebateRate":5}]'></textarea>
+            <div id="sub2api-level-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>邀请返利审核</h3>
+              <div class="header-actions">
+                <select id="sub2api-rebate-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="pending">pending</option>
+                  <option value="approved">approved</option>
+                  <option value="rejected">rejected</option>
+                  <option value="revoked">revoked</option>
+                </select>
+                <button id="sub2api-rebate-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-rebate-list" class="table-wrapper"></div>
+            <div id="sub2api-rebate-result" class="hint"></div>
           </div>
 
           <div class="grid grid-2 mt-24">

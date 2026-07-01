@@ -183,6 +183,7 @@ const refs = {
   sub2apiInviteList: document.querySelector("#sub2api-invite-list"),
   sub2apiInviteResult: document.querySelector("#sub2api-invite-result"),
   sub2apiLevelLoadBtn: document.querySelector("#sub2api-level-load-btn"),
+  sub2apiLevelTemplate: document.querySelector("#sub2api-level-template"),
   sub2apiLevelRecommendedBtn: document.querySelector("#sub2api-level-recommended-btn"),
   sub2apiLevelAddBtn: document.querySelector("#sub2api-level-add-btn"),
   sub2apiLevelSaveBtn: document.querySelector("#sub2api-level-save-btn"),
@@ -289,13 +290,29 @@ let sub2apiOrdersCache = [];
 let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
 let migrationRestoreUploadId = null;
-const SUB2API_RECOMMENDED_LEVELS = [
-  { id: "sub2api_inviter_level_default", name: "小牛牛", spendThreshold: 0, lifetimeInviteLimit: 3, unusedInviteLimit: 2, rebateRate: 3, sortOrder: 0, status: "active" },
-  { id: "sub2api_inviter_level_bronze", name: "青铜牛牛", spendThreshold: 50, lifetimeInviteLimit: 6, unusedInviteLimit: 3, rebateRate: 5, sortOrder: 10, status: "active" },
-  { id: "sub2api_inviter_level_silver", name: "白银牛牛", spendThreshold: 200, lifetimeInviteLimit: 12, unusedInviteLimit: 5, rebateRate: 8, sortOrder: 20, status: "active" },
-  { id: "sub2api_inviter_level_gold", name: "黄金牛牛", spendThreshold: 500, lifetimeInviteLimit: 25, unusedInviteLimit: 8, rebateRate: 10, sortOrder: 30, status: "active" },
-  { id: "sub2api_inviter_level_partner", name: "合伙牛牛", spendThreshold: 1000, lifetimeInviteLimit: 0, unusedInviteLimit: 12, rebateRate: 12, sortOrder: 40, status: "active" }
-];
+const SUB2API_LEVEL_TEMPLATES = {
+  niu: [
+    { id: "sub2api_inviter_level_default", name: "小牛牛", spendThreshold: 0, lifetimeInviteLimit: 3, unusedInviteLimit: 2, rebateRate: 3, sortOrder: 0, status: "active" },
+    { id: "sub2api_inviter_level_bronze", name: "青铜牛牛", spendThreshold: 50, lifetimeInviteLimit: 6, unusedInviteLimit: 3, rebateRate: 5, sortOrder: 10, status: "active" },
+    { id: "sub2api_inviter_level_silver", name: "白银牛牛", spendThreshold: 200, lifetimeInviteLimit: 12, unusedInviteLimit: 5, rebateRate: 8, sortOrder: 20, status: "active" },
+    { id: "sub2api_inviter_level_gold", name: "黄金牛牛", spendThreshold: 500, lifetimeInviteLimit: 25, unusedInviteLimit: 8, rebateRate: 10, sortOrder: 30, status: "active" },
+    { id: "sub2api_inviter_level_partner", name: "合伙牛牛", spendThreshold: 1000, lifetimeInviteLimit: 0, unusedInviteLimit: 12, rebateRate: 12, sortOrder: 40, status: "active" }
+  ],
+  steady: [
+    { id: "sub2api_inviter_level_default", name: "小牛牛", spendThreshold: 0, lifetimeInviteLimit: 3, unusedInviteLimit: 2, rebateRate: 2, sortOrder: 0, status: "active" },
+    { id: "sub2api_inviter_level_bronze", name: "青铜牛牛", spendThreshold: 50, lifetimeInviteLimit: 5, unusedInviteLimit: 2, rebateRate: 3, sortOrder: 10, status: "active" },
+    { id: "sub2api_inviter_level_silver", name: "白银牛牛", spendThreshold: 200, lifetimeInviteLimit: 10, unusedInviteLimit: 4, rebateRate: 5, sortOrder: 20, status: "active" },
+    { id: "sub2api_inviter_level_gold", name: "黄金牛牛", spendThreshold: 500, lifetimeInviteLimit: 20, unusedInviteLimit: 6, rebateRate: 8, sortOrder: 30, status: "active" },
+    { id: "sub2api_inviter_level_partner", name: "合伙牛牛", spendThreshold: 1000, lifetimeInviteLimit: 0, unusedInviteLimit: 10, rebateRate: 10, sortOrder: 40, status: "active" }
+  ],
+  growth: [
+    { id: "sub2api_inviter_level_default", name: "小牛牛", spendThreshold: 0, lifetimeInviteLimit: 5, unusedInviteLimit: 3, rebateRate: 5, sortOrder: 0, status: "active" },
+    { id: "sub2api_inviter_level_bronze", name: "青铜牛牛", spendThreshold: 50, lifetimeInviteLimit: 10, unusedInviteLimit: 5, rebateRate: 8, sortOrder: 10, status: "active" },
+    { id: "sub2api_inviter_level_silver", name: "白银牛牛", spendThreshold: 200, lifetimeInviteLimit: 20, unusedInviteLimit: 8, rebateRate: 10, sortOrder: 20, status: "active" },
+    { id: "sub2api_inviter_level_gold", name: "黄金牛牛", spendThreshold: 500, lifetimeInviteLimit: 40, unusedInviteLimit: 12, rebateRate: 12, sortOrder: 30, status: "active" },
+    { id: "sub2api_inviter_level_partner", name: "合伙牛牛", spendThreshold: 1000, lifetimeInviteLimit: 0, unusedInviteLimit: 20, rebateRate: 15, sortOrder: 40, status: "active" }
+  ]
+};
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -3674,9 +3691,11 @@ if (refs.sub2apiLevelLoadBtn) {
 
 if (refs.sub2apiLevelRecommendedBtn) {
   refs.sub2apiLevelRecommendedBtn.addEventListener("click", () => {
-    sub2apiLevelsCache = SUB2API_RECOMMENDED_LEVELS.map((level) => ({ ...level }));
+    const templateName = refs.sub2apiLevelTemplate?.value || "niu";
+    const template = SUB2API_LEVEL_TEMPLATES[templateName] || SUB2API_LEVEL_TEMPLATES.niu;
+    sub2apiLevelsCache = template.map((level) => ({ ...level }));
     renderSub2ApiInviterLevels();
-    setHint(refs.sub2apiLevelResult, "已填入推荐配置，确认后点击“保存并重算”。");
+    setHint(refs.sub2apiLevelResult, "已套用模板，确认后点击“保存并重算”。");
   });
 }
 

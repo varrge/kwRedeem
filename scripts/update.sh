@@ -18,6 +18,12 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  log "当前 Node.js 版本是 $(node -v)，本项目要求 Node.js 20+。请升级后再执行 npm install。"
+  exit 1
+fi
+
 if ! command -v pm2 >/dev/null 2>&1; then
   log "缺少 pm2，无法重启线上服务。"
   exit 1

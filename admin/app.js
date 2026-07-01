@@ -1201,15 +1201,6 @@ async function downloadMigrationBackup() {
   }
 }
 
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
-    reader.onerror = () => reject(new Error("读取迁移包失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function renderMigrationSummary(payload) {
   const manifest = payload.manifest || {};
   const rows = [
@@ -1237,10 +1228,13 @@ async function validateMigrationPackage() {
   setButtonBusy(refs.migrationValidateBtn, true, "校验中...");
   setHint(refs.migrationRestoreResult, "正在上传并校验迁移包...");
   try {
-    const contentBase64 = await readFileAsBase64(file);
     const payload = await api("/api/admin/migration/validate", {
       method: "POST",
-      body: JSON.stringify({ filename: file.name, contentBase64 })
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Filename": file.name
+      },
+      body: file
     });
     migrationRestoreUploadId = payload.uploadId;
     renderMigrationSummary(payload);

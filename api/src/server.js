@@ -283,6 +283,13 @@ await app.register(cors, {
   methods: ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"]
 });
 
+app.addContentTypeParser("application/octet-stream", {
+  parseAs: "buffer",
+  bodyLimit: MIGRATION_MAX_UPLOAD_BYTES
+}, (_request, body, done) => {
+  done(null, body);
+});
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -7248,12 +7255,13 @@ app.post("/api/admin/migration/validate", {
   bodyLimit: Math.ceil(MIGRATION_MAX_UPLOAD_BYTES * 1.4)
 }, async (request, reply) => {
   const payload = getBodyObject(request.body);
-  const filename = String(payload.filename || "package.tar.gz");
-  const base64 = String(payload.contentBase64 || "").replace(/^data:[^,]+,/, "");
-  if (!base64) return reply.code(400).send({ message: "请上传迁移包" });
+  const rawFilename = request.headers["x-filename"];
+  const filename = String(Array.isArray(rawFilename) ? rawFilename[0] : rawFilename || payload.filename || "package.tar.gz");
 
   try {
-    const buffer = Buffer.from(base64, "base64");
+    const base64 = String(payload.contentBase64 || "").replace(/^data:[^,]+,/, "");
+    const buffer = Buffer.isBuffer(request.body) ? request.body : Buffer.from(base64, "base64");
+    if (!buffer.length) return reply.code(400).send({ message: "请上传迁移包" });
     const result = await validateMigrationPackageFromBuffer(buffer, filename, request.admin.username);
     createAuditLog({
       action: "migration.restore.validate",

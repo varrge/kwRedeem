@@ -78,6 +78,9 @@
           <button class="nav-item" data-tab="sub2api">
             <span class="icon">🔗</span> Sub2api 工具
           </button>
+          <button class="nav-item" data-tab="sub2api-rebates">
+            <span class="icon">🤝</span> 邀请返利
+          </button>
           <button class="nav-item" data-tab="system">
             <span class="icon">🔄</span> 系统更新
           </button>
@@ -1028,43 +1031,6 @@
             <div id="sub2api-invite-result" class="hint"></div>
           </div>
 
-          <div class="card mt-24">
-            <div class="card-header">
-              <h3>邀请等级规则</h3>
-              <div class="header-actions">
-                <button id="sub2api-level-load-btn" class="ghost-btn small">读取</button>
-                <select id="sub2api-level-template" class="small-select">
-                  <option value="niu">牛牛推荐</option>
-                  <option value="steady">稳健低返</option>
-                  <option value="growth">拉新高返</option>
-                </select>
-                <button id="sub2api-level-recommended-btn" class="ghost-btn small">推荐配置</button>
-                <button id="sub2api-level-add-btn" class="ghost-btn small">新增等级</button>
-                <button id="sub2api-level-save-btn" class="primary-btn small">保存并重算</button>
-              </div>
-            </div>
-            <div id="sub2api-level-list" class="table-wrapper"></div>
-            <div id="sub2api-level-result" class="hint"></div>
-          </div>
-
-          <div class="card mt-24">
-            <div class="card-header">
-              <h3>邀请返利审核</h3>
-              <div class="header-actions">
-                <select id="sub2api-rebate-status-filter" class="small-select">
-                  <option value="">全部状态</option>
-                  <option value="pending">pending</option>
-                  <option value="approved">approved</option>
-                  <option value="rejected">rejected</option>
-                  <option value="revoked">revoked</option>
-                </select>
-                <button id="sub2api-rebate-refresh-btn" class="ghost-btn small">刷新</button>
-              </div>
-            </div>
-            <div id="sub2api-rebate-list" class="table-wrapper"></div>
-            <div id="sub2api-rebate-result" class="hint"></div>
-          </div>
-
           <div class="grid grid-2 mt-24">
             <div class="card">
               <div class="card-header"><h3 id="worldcup-match-form-title">添加世界杯比赛</h3></div>
@@ -1212,6 +1178,51 @@
           </div>
         </section>
 
+        <!-- Sub2api Rebates -->
+        <section class="tab-panel hidden" data-panel="sub2api-rebates">
+          <div class="content-header">
+            <h2>邀请返利</h2>
+            <p>管理邀请等级模板、返利比例和返利审核</p>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>邀请等级规则</h3>
+              <div class="header-actions">
+                <button id="sub2api-level-load-btn" class="ghost-btn small">读取</button>
+                <select id="sub2api-level-template" class="small-select">
+                  <option value="niu">牛牛推荐</option>
+                  <option value="steady">稳健低返</option>
+                  <option value="growth">拉新高返</option>
+                </select>
+                <button id="sub2api-level-recommended-btn" class="ghost-btn small">套用模板</button>
+                <button id="sub2api-level-add-btn" class="ghost-btn small">新增等级</button>
+                <button id="sub2api-level-save-btn" class="primary-btn small">保存并重算</button>
+              </div>
+            </div>
+            <div id="sub2api-level-list" class="table-wrapper"></div>
+            <div id="sub2api-level-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>邀请返利审核</h3>
+              <div class="header-actions">
+                <select id="sub2api-rebate-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="pending">pending</option>
+                  <option value="approved">approved</option>
+                  <option value="rejected">rejected</option>
+                  <option value="revoked">revoked</option>
+                </select>
+                <button id="sub2api-rebate-refresh-btn" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-rebate-list" class="table-wrapper"></div>
+            <div id="sub2api-rebate-result" class="hint"></div>
+          </div>
+        </section>
+
         <!-- System -->
         <section class="tab-panel hidden" data-panel="system">
           <div class="content-header">
@@ -1276,7 +1287,7 @@
     </div>
 
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-    <script src="./runtime-config.js?v=20260701"></script>
-    <script type="module" src="./app.js?v=20260701"></script>
+    <script src="./runtime-config.js?v=20260701-rebates"></script>
+    <script type="module" src="./app.js?v=20260701-rebates"></script>
   </body>
 </html>

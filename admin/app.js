@@ -408,6 +408,10 @@ function switchTab(tabName) {
   if (tabName === "sub2api" && getToken()) {
     refreshSub2ApiConsole().catch(() => {});
   }
+  if (tabName === "sub2api-rebates" && getToken()) {
+    loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`));
+    refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `加载返利失败：${error.message}`));
+  }
 }
 
 function startAutoRefresh() {

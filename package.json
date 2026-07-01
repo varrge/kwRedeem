@@ -7,7 +7,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "bootstrap": "npm install",
+    "bootstrap": "bash scripts/bootstrap.sh",
     "db:init": "node api/src/init-db.js",
     "dev:api": "node api/src/server.js",
     "dev:worker": "node worker/src/worker.js",

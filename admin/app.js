@@ -33,6 +33,7 @@ const refs = {
   retryJobsBtn: document.querySelector("#retry-jobs-btn"),
   logList: document.querySelector("#log-list"),
   systemVersionCards: document.querySelector("#system-version-cards"),
+  checkEnvironmentBtn: document.querySelector("#check-environment-btn"),
   checkUpdateBtn: document.querySelector("#check-update-btn"),
   startUpdateBtn: document.querySelector("#start-update-btn"),
   systemUpdateHint: document.querySelector("#system-update-hint"),
@@ -1118,7 +1119,9 @@ function renderSystemInfo(payload) {
   const isBusy = ["running", "checking"].includes(state.status);
   const localChanges = payload.localChanges || state.localChanges || [];
   const hasLocalChanges = payload.hasLocalChanges || state.hasLocalChanges || localChanges.length > 0;
+  const gitEnvironment = payload.isGitRepo === false ? "异常" : payload.upstream === "" ? "缺 upstream" : "正常";
   const cards = [
+    ["Git 环境", gitEnvironment],
     ["分支", payload.branch || state.branch || "-"],
     ["本地版本", shortCommit(payload.localCommit || state.localCommit)],
     ["远端版本", shortCommit(payload.remoteCommit || state.remoteCommit)],
@@ -1140,14 +1143,24 @@ function renderSystemInfo(payload) {
     : `最后状态: ${state.status || "idle"}`);
     
   refs.systemUpdateLog.textContent = payload.log || "暂无日志";
+  refs.checkEnvironmentBtn.disabled = isBusy;
   refs.checkUpdateBtn.disabled = isBusy;
-  refs.startUpdateBtn.disabled = isBusy;
+  refs.startUpdateBtn.disabled = isBusy || gitEnvironment !== "正常";
 
   if (isBusy && !updatePollTimer) startUpdatePolling();
 }
 
 async function refreshSystemVersion() {
   const payload = await api("/api/admin/system/version");
+  renderSystemInfo(payload);
+}
+
+async function checkSystemEnvironment() {
+  setHint(refs.systemUpdateHint, "正在检测环境...");
+  const payload = await api("/api/admin/system/check-environment", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
   renderSystemInfo(payload);
 }
 
@@ -3725,6 +3738,10 @@ refs.navItems.forEach((button) => {
 
 refs.healthCheckAllBtn.addEventListener("click", () => {
   healthCheckAll().catch((error) => setHint(refs.siteResult, error.message));
+});
+
+refs.checkEnvironmentBtn?.addEventListener("click", () => {
+  checkSystemEnvironment().catch((error) => setHint(refs.systemUpdateHint, error.message));
 });
 
 refs.checkUpdateBtn.addEventListener("click", async () => {

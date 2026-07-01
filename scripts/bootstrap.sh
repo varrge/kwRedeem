@@ -20,7 +20,9 @@ if [ ! -f ".env" ]; then
   echo "已生成 .env，请按需修改后继续。"
 fi
 
+bash scripts/ensure-git.sh
 npm install
 npm run db:init
+npm run config:runtime
 
 echo "KaWang 初始化完成。"

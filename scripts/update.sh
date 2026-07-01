@@ -29,10 +29,7 @@ if ! command -v pm2 >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  log "当前目录不是 Git 仓库，无法使用在线更新。"
-  exit 1
-fi
+bash scripts/ensure-git.sh
 
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$CURRENT_BRANCH" = "HEAD" ]; then

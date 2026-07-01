@@ -7112,6 +7112,58 @@ app.get("/api/admin/system/version", { preHandler: requireAdmin }, async () => {
   }
 });
 
+app.post("/api/admin/system/check-environment", { preHandler: requireAdmin }, async () => {
+  if (updateState.status === "running" || updateState.status === "checking") {
+    return {
+      message: "已有更新任务正在执行",
+      updateState,
+      log: readUpdateLog()
+    };
+  }
+
+  appendUpdateLog("开始检测部署环境");
+  try {
+    const { stdout, stderr } = await execFileAsync("bash", ["scripts/ensure-git.sh"], {
+      cwd: projectRoot,
+      env: process.env,
+      timeout: 120000
+    });
+    if (stdout.trim()) appendUpdateLog(stdout.trim());
+    if (stderr.trim()) appendUpdateLog(stderr.trim());
+    const version = await getGitVersionInfo(false);
+    writeUpdateState({
+      status: "idle",
+      endedAt: nowIso(),
+      localCommit: version.localCommit,
+      remoteCommit: version.remoteCommit,
+      branch: version.branch,
+      hasUpdate: version.hasUpdate,
+      error: version.isGitRepo ? null : "Git 环境不可用"
+    });
+    appendUpdateLog(version.isGitRepo ? "部署环境检测通过" : "部署环境检测未通过：Git 环境不可用");
+    return {
+      ...version,
+      updateState,
+      log: readUpdateLog()
+    };
+  } catch (error) {
+    if (error.stdout?.trim()) appendUpdateLog(error.stdout.trim());
+    if (error.stderr?.trim()) appendUpdateLog(error.stderr.trim());
+    writeUpdateState({
+      status: "failed",
+      endedAt: nowIso(),
+      error: error.message
+    });
+    appendUpdateLog(`部署环境检测失败：${error.message}`);
+    return {
+      isGitRepo: false,
+      message: error.message,
+      updateState,
+      log: readUpdateLog()
+    };
+  }
+});
+
 app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async () => {
   if (updateState.status === "running" || updateState.status === "checking") {
     return {
@@ -7131,6 +7183,11 @@ app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async (
 
   try {
     const version = await getGitVersionInfo(true);
+    if (!version.isGitRepo || !version.upstream || !version.remoteCommit) {
+      const error = new Error("Git 环境不可用，请先点击“检测环境”");
+      error.versionPartial = version;
+      throw error;
+    }
     writeUpdateState({
       status: "idle",
       endedAt: nowIso(),

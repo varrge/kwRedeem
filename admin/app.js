@@ -183,8 +183,10 @@ const refs = {
   sub2apiInviteList: document.querySelector("#sub2api-invite-list"),
   sub2apiInviteResult: document.querySelector("#sub2api-invite-result"),
   sub2apiLevelLoadBtn: document.querySelector("#sub2api-level-load-btn"),
+  sub2apiLevelRecommendedBtn: document.querySelector("#sub2api-level-recommended-btn"),
+  sub2apiLevelAddBtn: document.querySelector("#sub2api-level-add-btn"),
   sub2apiLevelSaveBtn: document.querySelector("#sub2api-level-save-btn"),
-  sub2apiLevelJson: document.querySelector("#sub2api-level-json"),
+  sub2apiLevelList: document.querySelector("#sub2api-level-list"),
   sub2apiLevelResult: document.querySelector("#sub2api-level-result"),
   sub2apiRebateStatusFilter: document.querySelector("#sub2api-rebate-status-filter"),
   sub2apiRebateRefreshBtn: document.querySelector("#sub2api-rebate-refresh-btn"),
@@ -281,11 +283,19 @@ const quotaSubCardState = {
 let sub2apiConnectionsCache = [];
 let sub2apiInvitesCache = [];
 let sub2apiRebatesCache = [];
+let sub2apiLevelsCache = [];
 let sub2apiPlansCache = [];
 let sub2apiOrdersCache = [];
 let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
 let migrationRestoreUploadId = null;
+const SUB2API_RECOMMENDED_LEVELS = [
+  { id: "sub2api_inviter_level_default", name: "小牛牛", spendThreshold: 0, lifetimeInviteLimit: 3, unusedInviteLimit: 2, rebateRate: 3, sortOrder: 0, status: "active" },
+  { id: "sub2api_inviter_level_bronze", name: "青铜牛牛", spendThreshold: 50, lifetimeInviteLimit: 6, unusedInviteLimit: 3, rebateRate: 5, sortOrder: 10, status: "active" },
+  { id: "sub2api_inviter_level_silver", name: "白银牛牛", spendThreshold: 200, lifetimeInviteLimit: 12, unusedInviteLimit: 5, rebateRate: 8, sortOrder: 20, status: "active" },
+  { id: "sub2api_inviter_level_gold", name: "黄金牛牛", spendThreshold: 500, lifetimeInviteLimit: 25, unusedInviteLimit: 8, rebateRate: 10, sortOrder: 30, status: "active" },
+  { id: "sub2api_inviter_level_partner", name: "合伙牛牛", spendThreshold: 1000, lifetimeInviteLimit: 0, unusedInviteLimit: 12, rebateRate: 12, sortOrder: 40, status: "active" }
+];
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -2625,9 +2635,9 @@ async function syncSub2ApiInvites() {
 }
 
 async function loadSub2ApiInviterLevels() {
-  if (!refs.sub2apiLevelJson) return;
+  if (!refs.sub2apiLevelList) return;
   const payload = await api("/api/admin/sub2api/inviter-levels");
-  refs.sub2apiLevelJson.value = JSON.stringify((payload.levels || []).map((level) => ({
+  sub2apiLevelsCache = (payload.levels || []).map((level) => ({
     id: level.id,
     name: level.name,
     spendThreshold: level.spendThreshold,
@@ -2636,17 +2646,91 @@ async function loadSub2ApiInviterLevels() {
     rebateRate: level.rebateRate,
     sortOrder: level.sortOrder,
     status: level.status === "disabled" ? "disabled" : "active"
-  })), null, 2);
-  setHint(refs.sub2apiLevelResult, `已读取 ${payload.levels?.length || 0} 个等级`);
+  }));
+  renderSub2ApiInviterLevels();
+  setHint(refs.sub2apiLevelResult, `已读取 ${sub2apiLevelsCache.length} 个等级`);
+}
+
+function renderSub2ApiInviterLevels() {
+  if (!refs.sub2apiLevelList) return;
+  if (!sub2apiLevelsCache.length) {
+    refs.sub2apiLevelList.innerHTML = `<p class="hint centered">暂无等级，点击“推荐配置”或“新增等级”开始配置。</p>`;
+    return;
+  }
+  refs.sub2apiLevelList.innerHTML = `
+    <table class="sub2api-level-table">
+      <thead>
+        <tr>
+          <th>等级名称</th>
+          <th>累计订阅消费</th>
+          <th>终身可申请</th>
+          <th>未使用上限</th>
+          <th>返利比例</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sub2apiLevelsCache.map((level, index) => `
+          <tr data-level-index="${index}" data-level-id="${escapeHtml(level.id || "")}">
+            <td><input class="small-input sub2api-level-name" value="${escapeHtml(level.name || "")}" placeholder="默认" /></td>
+            <td><input class="small-input sub2api-level-spend" type="number" min="0" step="0.0001" value="${escapeHtml(level.spendThreshold ?? 0)}" /></td>
+            <td><input class="small-input sub2api-level-lifetime" type="number" min="0" step="1" value="${escapeHtml(level.lifetimeInviteLimit ?? 0)}" /></td>
+            <td><input class="small-input sub2api-level-unused" type="number" min="0" step="1" value="${escapeHtml(level.unusedInviteLimit ?? 0)}" /></td>
+            <td><input class="small-input sub2api-level-rebate" type="number" min="0" max="100" step="0.01" value="${escapeHtml(level.rebateRate ?? 0)}" /></td>
+            <td>
+              <select class="small-select sub2api-level-status">
+                <option value="active"${level.status === "disabled" ? "" : " selected"}>active</option>
+                <option value="disabled"${level.status === "disabled" ? " selected" : ""}>disabled</option>
+              </select>
+            </td>
+            <td><button class="ghost-btn tiny sub2api-level-remove" type="button">删除</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function collectSub2ApiInviterLevels() {
+  const rows = Array.from(refs.sub2apiLevelList.querySelectorAll("tr[data-level-index]"));
+  return rows.map((row, index) => ({
+    id: row.dataset.levelId || "",
+    name: row.querySelector(".sub2api-level-name").value.trim(),
+    spendThreshold: Number(row.querySelector(".sub2api-level-spend").value || 0),
+    lifetimeInviteLimit: Number(row.querySelector(".sub2api-level-lifetime").value || 0),
+    unusedInviteLimit: Number(row.querySelector(".sub2api-level-unused").value || 0),
+    rebateRate: Number(row.querySelector(".sub2api-level-rebate").value || 0),
+    sortOrder: index * 10,
+    status: row.querySelector(".sub2api-level-status").value
+  }));
+}
+
+function addSub2ApiInviterLevel(level = {}) {
+  const nextIndex = sub2apiLevelsCache.length;
+  sub2apiLevelsCache.push({
+    id: level.id || "",
+    name: level.name || `等级 ${nextIndex + 1}`,
+    spendThreshold: level.spendThreshold ?? 0,
+    lifetimeInviteLimit: level.lifetimeInviteLimit ?? 3,
+    unusedInviteLimit: level.unusedInviteLimit ?? 2,
+    rebateRate: level.rebateRate ?? 5,
+    sortOrder: level.sortOrder ?? nextIndex * 10,
+    status: level.status || "active"
+  });
+  renderSub2ApiInviterLevels();
 }
 
 async function saveSub2ApiInviterLevels() {
-  const levels = JSON.parse(refs.sub2apiLevelJson.value || "[]");
+  const levels = collectSub2ApiInviterLevels();
+  if (!levels.length) throw new Error("至少保留一个等级");
+  if (levels.some((level) => !level.name)) throw new Error("等级名称不能为空");
   const payload = await api("/api/admin/sub2api/inviter-levels", {
     method: "PUT",
     body: JSON.stringify({ levels })
   });
-  refs.sub2apiLevelJson.value = JSON.stringify(payload.levels || levels, null, 2);
+  sub2apiLevelsCache = payload.levels || levels;
+  renderSub2ApiInviterLevels();
   setHint(refs.sub2apiLevelResult, `保存成功，已处理 ${payload.recalculation?.users || 0} 个已知用户，同步成功 ${payload.recalculation?.synced || 0} 个`);
 }
 
@@ -3588,9 +3672,39 @@ if (refs.sub2apiLevelLoadBtn) {
   });
 }
 
+if (refs.sub2apiLevelRecommendedBtn) {
+  refs.sub2apiLevelRecommendedBtn.addEventListener("click", () => {
+    sub2apiLevelsCache = SUB2API_RECOMMENDED_LEVELS.map((level) => ({ ...level }));
+    renderSub2ApiInviterLevels();
+    setHint(refs.sub2apiLevelResult, "已填入推荐配置，确认后点击“保存并重算”。");
+  });
+}
+
+if (refs.sub2apiLevelAddBtn) {
+  refs.sub2apiLevelAddBtn.addEventListener("click", () => {
+    sub2apiLevelsCache = refs.sub2apiLevelList?.querySelector("tr[data-level-index]")
+      ? collectSub2ApiInviterLevels()
+      : sub2apiLevelsCache;
+    addSub2ApiInviterLevel();
+    setHint(refs.sub2apiLevelResult, "已新增等级，填写后点击“保存并重算”。");
+  });
+}
+
 if (refs.sub2apiLevelSaveBtn) {
   refs.sub2apiLevelSaveBtn.addEventListener("click", () => {
     saveSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `保存失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiLevelList) {
+  refs.sub2apiLevelList.addEventListener("click", (event) => {
+    const button = event.target.closest(".sub2api-level-remove");
+    if (!button) return;
+    const row = button.closest("tr[data-level-index]");
+    const index = Number(row?.dataset.levelIndex);
+    sub2apiLevelsCache = collectSub2ApiInviterLevels().filter((_, itemIndex) => itemIndex !== index);
+    renderSub2ApiInviterLevels();
+    setHint(refs.sub2apiLevelResult, "已删除等级，点击“保存并重算”后生效。");
   });
 }
 

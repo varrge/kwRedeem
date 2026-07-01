@@ -492,6 +492,18 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
   padding: 6px 12px;
   font-size: 13px;
 }
+
+.sub2api-level-table {
+  min-width: 980px;
+}
+
+.sub2api-level-table .small-input {
+  width: 130px;
+}
+
+.sub2api-level-table .sub2api-level-name {
+  width: 150px;
+}
 .actions-row {
   display: flex;
   align-items: center;

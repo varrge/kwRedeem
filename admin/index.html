@@ -1033,10 +1033,12 @@
               <h3>邀请等级规则</h3>
               <div class="header-actions">
                 <button id="sub2api-level-load-btn" class="ghost-btn small">读取</button>
+                <button id="sub2api-level-recommended-btn" class="ghost-btn small">推荐配置</button>
+                <button id="sub2api-level-add-btn" class="ghost-btn small">新增等级</button>
                 <button id="sub2api-level-save-btn" class="primary-btn small">保存并重算</button>
               </div>
             </div>
-            <textarea id="sub2api-level-json" class="monospace-input" rows="8" placeholder='[{"name":"默认","spendThreshold":0,"lifetimeInviteLimit":3,"unusedInviteLimit":3,"rebateRate":5}]'></textarea>
+            <div id="sub2api-level-list" class="table-wrapper"></div>
             <div id="sub2api-level-result" class="hint"></div>
           </div>
 

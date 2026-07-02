@@ -477,6 +477,15 @@ export function getSub2ApiLocalSubscriptionSpend(db, connectionId, userId) {
   }
 }
 
+export function getSub2ApiInviteRebateForReview(db, id) {
+  return db.prepare(`
+    SELECT r.*, c.base_url, c.admin_token
+    FROM sub2api_invite_rebates r
+    JOIN sub2api_connections c ON c.id = r.connection_id
+    WHERE r.id = ?
+  `).get(id);
+}
+
 export function normalizeSub2ApiInviteRebateRate(value) {
   const rate = Number(value);
   if (!Number.isFinite(rate) || rate < 0 || rate > 100) {

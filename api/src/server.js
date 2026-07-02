@@ -43,6 +43,7 @@ import {
   getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
+  getSub2ApiInviteRebateForReview,
   getSub2ApiLocalSubscriptionSpend,
   getSub2ApiNextInviterLevel,
   isSub2ApiWorldCupMatchInProgress,
@@ -6310,12 +6311,7 @@ app.post("/api/admin/sub2api/invite-rebates/:id/:action", { preHandler: requireA
   const id = String(request.params.id || "").trim();
   const action = String(request.params.action || "").trim();
   const reason = String(request.body?.reason || "").trim();
-  const rebate = db.prepare(`
-    SELECT r.*, c.*
-    FROM sub2api_invite_rebates r
-    JOIN sub2api_connections c ON c.id = r.connection_id
-    WHERE r.id = ?
-  `).get(id);
+  let rebate = getSub2ApiInviteRebateForReview(db, id);
   if (!rebate) return reply.code(404).send({ message: "返利记录不存在" });
   const now = nowIso();
   if (action === "reject") {
@@ -6324,6 +6320,11 @@ app.post("/api/admin/sub2api/invite-rebates/:id/:action", { preHandler: requireA
       .run(sub2apiInviteRebateStatuses.rejected, reason || "rejected", now, now, id);
   } else if (action === "approve") {
     if (rebate.status !== sub2apiInviteRebateStatuses.pending) return reply.code(409).send({ message: "只有待审核返利可以通过" });
+    if (Number(rebate.rebate_amount || 0) <= 0) {
+      recalculatePendingSub2ApiInviteRebates(db);
+      rebate = getSub2ApiInviteRebateForReview(db, id);
+    }
+    if (Number(rebate.rebate_amount || 0) <= 0) return reply.code(409).send({ message: "返利金额为 0，不能通过；请先保存等级并重算" });
     const note = `registration invite rebate: invite=${rebate.invite_code}, invitee=${rebate.invitee_user_id}, rebate=${rebate.id}`;
     const result = await callSub2ApiRemote(rebate, `/api/v1/admin/users/${encodeURIComponent(String(rebate.inviter_user_id))}/balance`, {
       method: "POST",

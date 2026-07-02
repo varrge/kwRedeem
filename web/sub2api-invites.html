@@ -268,6 +268,24 @@
         return value === null || value === undefined ? "无限" : String(value);
       }
 
+      function statusLabel(value) {
+        return {
+          active: "可用",
+          used: "已使用",
+          pending: "待审核",
+          approved: "已到账",
+          rejected: "已驳回",
+          revoked: "已撤销",
+          disabled: "已禁用"
+        }[String(value || "").toLowerCase()] || value || "-";
+      }
+
+      function sourceTypeLabel(value) {
+        return {
+          redeem_code: "兑换码"
+        }[String(value || "").toLowerCase()] || value || "-";
+      }
+
       async function request(path, options = {}) {
         const headers = {
           "Content-Type": "application/json",
@@ -347,7 +365,7 @@
           <article class="invite-row">
             <div>
               <div class="invite-code">${escapeHtml(item.inviteCode || "-")}</div>
-              <div class="invite-meta">${escapeHtml(item.status || "-")} · ${escapeHtml(item.usedByDisplay ? `使用人 ${item.usedByDisplay}` : "未使用")} · ${escapeHtml(item.createdAt || "-")}</div>
+              <div class="invite-meta">${escapeHtml(statusLabel(item.status))} · ${escapeHtml(item.usedByDisplay ? `使用人 ${item.usedByDisplay}` : "未使用")} · ${escapeHtml(item.createdAt || "-")}</div>
             </div>
             <button class="ghost-btn copy-btn" type="button" data-code="${escapeHtml(item.inviteCode || "")}">复制</button>
           </article>
@@ -359,7 +377,7 @@
           <article class="invite-row">
             <div>
               <div class="invite-code">${escapeHtml(item.inviteeDisplay || "-")} · ${formatAmount(item.rebateAmount)}</div>
-              <div class="invite-meta">${escapeHtml(item.status || "-")} · 首次${escapeHtml(item.sourceType || "-")} ${formatAmount(item.firstAmount)} · ${escapeHtml(item.rebateRate)}%</div>
+              <div class="invite-meta">${escapeHtml(statusLabel(item.status))} · 首次${escapeHtml(sourceTypeLabel(item.sourceType))} ${formatAmount(item.firstAmount)} · ${escapeHtml(item.rebateRate)}%</div>
             </div>
           </article>
         `).join("") : `<p class="hint centered">暂无返利记录</p>`;

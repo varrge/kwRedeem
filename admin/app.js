@@ -191,6 +191,7 @@ const refs = {
   sub2apiLevelList: document.querySelector("#sub2api-level-list"),
   sub2apiLevelResult: document.querySelector("#sub2api-level-result"),
   sub2apiRebateStatusFilter: document.querySelector("#sub2api-rebate-status-filter"),
+  sub2apiRebateSyncBtn: document.querySelector("#sub2api-rebate-sync-btn"),
   sub2apiRebateRefreshBtn: document.querySelector("#sub2api-rebate-refresh-btn"),
   sub2apiRebateList: document.querySelector("#sub2api-rebate-list"),
   sub2apiRebateResult: document.querySelector("#sub2api-rebate-result"),
@@ -370,17 +371,60 @@ function maskToken(value) {
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 }
 
-function renderStatus(value) {
-  return `<span class="table-badge status-${String(value || "").toLowerCase()}">${value || "-"}</span>`;
+const STATUS_LABELS = {
+  active: "启用",
+  disabled: "禁用",
+  deleted: "已删除",
+  pending: "待处理",
+  processing: "处理中",
+  succeeded: "已成功",
+  failed: "失败",
+  approved: "已通过",
+  rejected: "已驳回",
+  revoked: "已撤销",
+  used: "已使用",
+  unused: "未使用",
+  locked: "已锁定",
+  void: "已作废",
+  abnormal: "异常",
+  open: "开放中",
+  finished: "已结束",
+  closed: "已关闭",
+  settled: "已结算",
+  cancelled: "已取消",
+  payout_pending: "待派奖",
+  payout_failed: "派奖失败",
+  payout_succeeded: "派奖成功"
+};
+
+const SUB2API_REBATE_STATUS_LABELS = {
+  pending: "待审核",
+  approved: "已到账",
+  rejected: "已驳回",
+  revoked: "已撤销"
+};
+
+const SUB2API_SOURCE_TYPE_LABELS = {
+  redeem_code: "兑换码"
+};
+
+const SUB2API_REBATE_ACTION_LABELS = {
+  approve: "通过",
+  reject: "驳回",
+  revoke: "撤销"
+};
+
+function getStatusLabel(value, labels = STATUS_LABELS) {
+  const normalized = String(value || "").toLowerCase();
+  return labels[normalized] || value || "-";
+}
+
+function renderStatus(value, labels = STATUS_LABELS) {
+  return `<span class="table-badge status-${String(value || "").toLowerCase()}">${escapeHtml(getStatusLabel(value, labels))}</span>`;
 }
 
 function renderStatusText(value) {
-  return {
-    pending: "待处理",
-    processing: "处理中",
-    succeeded: "已成功",
-    failed: "失败"
-  }[String(value || "").toLowerCase()] || value || "-";
+  return getStatusLabel(value);
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -2100,7 +2144,7 @@ async function refreshQuotaSourceCards() {
     const payload = await api("/api/admin/quota/cards?status=active&pageSize=100");
     const items = payload.cards || payload.items || [];
     if (!items.length) {
-      refs.quotaSourceCardList.innerHTML = `<p class="hint centered">暂无 active 源卡密</p>`;
+      refs.quotaSourceCardList.innerHTML = `<p class="hint centered">暂无可用源卡密</p>`;
     } else {
       renderTable(refs.quotaSourceCardList, [
         { label: "", render: (item) => `<input type="checkbox" class="quota-source-card-check" value="${escapeHtml(item.id)}" />` },
@@ -2116,7 +2160,7 @@ async function refreshQuotaSourceCards() {
           label: "操作",
           render: (item) => `<button class="ghost-btn small" type="button" onclick="editQuotaSourceCard('${escapeHtml(item.id)}')">修改</button> <button class="ghost-btn small" type="button" onclick="deleteQuotaSourceCard('${escapeHtml(item.id)}')">删除</button>`,
         },
-      ], items, "暂无 active API 密钥");
+      ], items, "暂无可用 API 密钥");
     }
   } catch (error) {
     refs.quotaSourceCardList.innerHTML = `<p class="hint centered">加载失败：${escapeHtml(error.message)}</p>`;
@@ -2133,7 +2177,7 @@ async function handleQuotaSourceCardsMerge() {
     setHint(refs.quotaSourceCardsMergeResult, "至少选择 2 张卡密");
     return;
   }
-  if (!window.confirm(`确认合并 ${cardIds.length} 张 active 卡密？原卡密会被标记为 used，新建一张合并卡密。`)) {
+  if (!window.confirm(`确认合并 ${cardIds.length} 张可用卡密？原卡密会被标记为已使用，新建一张合并卡密。`)) {
     return;
   }
   setButtonBusy(refs.quotaSourceCardsMergeBtn, true, "合并中...");
@@ -2370,10 +2414,10 @@ async function cancelQuotaSubCard(id) {
 }
 
 async function unlockQuotaSubCard(id) {
-  if (!window.confirm("确认恢复该 locked 子卡密为 active？")) return;
+  if (!window.confirm("确认把这张已锁定子卡密恢复为可用？")) return;
   try {
     await api(`/api/admin/quota/sub-cards/${id}/unlock`, { method: "POST", body: JSON.stringify({}) });
-    setHint(refs.quotaSubCardResult, "子卡密已恢复为 active");
+    setHint(refs.quotaSubCardResult, "子卡密已恢复为可用");
     await refreshQuotaSubCards();
   } catch (error) {
     setHint(refs.quotaSubCardResult, `恢复失败：${error.message}`);
@@ -2398,12 +2442,12 @@ function resetSub2ApiConnectionForm() {
 function populateSub2ApiConnectionFilter() {
   const filterOptions = [`<option value="">全部连接</option>`]
     .concat(sub2apiConnectionsCache.map((item) => `
-      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
     `))
     .join("");
   const formOptions = [`<option value="">选择连接</option>`]
     .concat(sub2apiConnectionsCache.map((item) => `
-      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+      <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
     `))
     .join("");
 
@@ -2434,7 +2478,7 @@ function populateSub2ApiConnectionFilter() {
     const currentOrder = refs.sub2apiOrderConnectionFilter.value;
     refs.sub2apiOrderConnectionFilter.innerHTML = [`<option value="">全部连接</option>`]
       .concat(sub2apiConnectionsCache.map((item) => `
-        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
       `))
       .join("");
     if (sub2apiConnectionsCache.some((item) => item.id === currentOrder)) {
@@ -2446,7 +2490,7 @@ function populateSub2ApiConnectionFilter() {
     const currentPlan = refs.sub2apiPlanConnection.value;
     refs.sub2apiPlanConnection.innerHTML = [`<option value="">选择连接</option>`]
       .concat(sub2apiConnectionsCache.map((item) => `
-        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
       `))
       .join("");
     if (sub2apiConnectionsCache.some((item) => item.id === currentPlan)) {
@@ -2652,7 +2696,9 @@ async function syncSub2ApiInvites() {
     method: "POST",
     body: JSON.stringify(body)
   });
-  setHint(refs.sub2apiInviteResult, `同步完成：更新 ${payload.updated || 0} 条，生成返利 ${payload.rebatesCreated || 0} 条`);
+  const message = `同步完成：同步 ${payload.connections || 1} 个连接，更新 ${payload.updated || 0} 条，生成返利 ${payload.rebatesCreated || 0} 条`;
+  setHint(refs.sub2apiInviteResult, message);
+  setHint(refs.sub2apiRebateResult, message);
   await refreshSub2ApiInvites();
   await refreshSub2ApiRebates().catch(() => {});
 }
@@ -2703,8 +2749,8 @@ function renderSub2ApiInviterLevels() {
             <td><input class="small-input sub2api-level-rebate" type="number" min="0" max="100" step="0.01" value="${escapeHtml(level.rebateRate ?? 0)}" /></td>
             <td>
               <select class="small-select sub2api-level-status">
-                <option value="active"${level.status === "disabled" ? "" : " selected"}>active</option>
-                <option value="disabled"${level.status === "disabled" ? " selected" : ""}>disabled</option>
+                <option value="active"${level.status === "disabled" ? "" : " selected"}>启用</option>
+                <option value="disabled"${level.status === "disabled" ? " selected" : ""}>禁用</option>
               </select>
             </td>
             <td><button class="ghost-btn tiny sub2api-level-remove" type="button">删除</button></td>
@@ -2771,9 +2817,9 @@ async function refreshSub2ApiRebates() {
     { label: "邀请人", render: (item) => `<code>${escapeHtml(item.inviterUserId || "-")}</code>` },
     { label: "被邀请人", render: (item) => `${escapeHtml(item.inviteeDisplay || "-")}` },
     { label: "邀请码", render: (item) => `<code>${escapeHtml(item.inviteCode || "-")}</code>` },
-    { label: "首次余额", render: (item) => `${escapeHtml(item.sourceType)}<br/>${formatBalance(item.firstAmount)}` },
+    { label: "首次余额", render: (item) => `${escapeHtml(SUB2API_SOURCE_TYPE_LABELS[item.sourceType] || item.sourceType || "-")}<br/>${formatBalance(item.firstAmount)}` },
     { label: "返利", render: (item) => `${formatBalance(item.rebateAmount)}<br/><span class="muted">${escapeHtml(item.rebateRate)}%</span>` },
-    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "状态", render: (item) => renderStatus(item.status, SUB2API_REBATE_STATUS_LABELS) },
     { label: "时间", render: (item) => `<span style="font-size:12px">${escapeHtml(item.createdAt || "-")}</span>` },
     {
       label: "操作",
@@ -2797,12 +2843,13 @@ async function refreshSub2ApiRebates() {
 }
 
 async function runSub2ApiRebateAction(id, action) {
-  const reason = window.prompt("备注/原因", action) || "";
+  const actionLabel = SUB2API_REBATE_ACTION_LABELS[action] || action;
+  const reason = window.prompt("备注/原因", actionLabel) || "";
   const payload = await api(`/api/admin/sub2api/invite-rebates/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, {
     method: "POST",
     body: JSON.stringify({ reason })
   });
-  setHint(refs.sub2apiRebateResult, `操作成功：${payload.rebate?.status || action}`);
+  setHint(refs.sub2apiRebateResult, `操作成功：${getStatusLabel(payload.rebate?.status || action, SUB2API_REBATE_STATUS_LABELS)}`);
   await refreshSub2ApiRebates();
 }
 
@@ -3738,6 +3785,12 @@ if (refs.sub2apiRebateRefreshBtn) {
   refs.sub2apiRebateRefreshBtn.addEventListener("click", () => {
     resetTablePage(refs.sub2apiRebateList);
     refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiRebateSyncBtn) {
+  refs.sub2apiRebateSyncBtn.addEventListener("click", () => {
+    syncSub2ApiInvites().catch((error) => setHint(refs.sub2apiRebateResult, `同步失败：${error.message}`));
   });
 }
 

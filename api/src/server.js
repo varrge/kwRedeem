@@ -6173,12 +6173,18 @@ app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (reque
 
 app.post("/api/admin/sub2api/invites/sync", { preHandler: requireAdmin }, async (request, reply) => {
   const connectionId = String(request.body?.connectionId || request.query?.connectionId || "").trim();
-  const connection = connectionId
-    ? db.prepare("SELECT * FROM sub2api_connections WHERE id = ? AND status <> ?").get(connectionId, sub2apiConnectionStatuses.deleted)
-    : db.prepare("SELECT * FROM sub2api_connections WHERE status = ? ORDER BY created_at DESC LIMIT 1").get(sub2apiConnectionStatuses.active);
-  if (!connection) return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
-  const result = await syncSub2ApiInviteUsage(connection);
-  return { success: true, ...result };
+  const connections = connectionId
+    ? db.prepare("SELECT * FROM sub2api_connections WHERE id = ? AND status <> ?").all(connectionId, sub2apiConnectionStatuses.deleted)
+    : db.prepare("SELECT * FROM sub2api_connections WHERE status = ? ORDER BY created_at DESC").all(sub2apiConnectionStatuses.active);
+  if (!connections.length) return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  let updated = 0;
+  let rebatesCreated = 0;
+  for (const connection of connections) {
+    const result = await syncSub2ApiInviteUsage(connection);
+    updated += result.updated || 0;
+    rebatesCreated += result.rebatesCreated || 0;
+  }
+  return { success: true, connections: connections.length, updated, rebatesCreated };
 });
 
 app.get("/api/admin/sub2api/inviter-levels", { preHandler: requireAdmin }, async () => {

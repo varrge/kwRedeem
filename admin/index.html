@@ -739,9 +739,9 @@
               <div class="header-actions">
                 <select id="quota-sub-card-status" class="small-select" aria-label="子卡密状态">
                   <option value="">全部状态</option>
-                  <option value="active">active</option>
-                  <option value="locked">locked</option>
-                  <option value="void">void</option>
+                  <option value="active">启用</option>
+                  <option value="locked">已锁定</option>
+                  <option value="void">已作废</option>
                 </select>
                 <select id="quota-sub-card-page-size" class="small-select" aria-label="每页数量">
                   <option value="10">10 / 页</option>
@@ -809,8 +809,8 @@
                 <label class="field">
                   <span>状态</span>
                   <select id="sub2api-connection-status">
-                    <option value="active">active</option>
-                    <option value="disabled">disabled</option>
+                    <option value="active">启用</option>
+                    <option value="disabled">禁用</option>
                   </select>
                 </label>
                 <div class="actions-row">
@@ -949,8 +949,8 @@
               <label class="field">
                 <span>状态</span>
                 <select id="sub2api-plan-status">
-                  <option value="active">active</option>
-                  <option value="disabled">disabled</option>
+                  <option value="active">启用</option>
+                  <option value="disabled">禁用</option>
                 </select>
               </label>
               <label class="field grid-span-4">
@@ -985,9 +985,9 @@
                 <input id="sub2api-order-user-filter" class="small-input" placeholder="用户 ID" />
                 <select id="sub2api-order-status-filter" class="small-select">
                   <option value="">全部状态</option>
-                  <option value="processing">processing</option>
-                  <option value="succeeded">succeeded</option>
-                  <option value="failed">failed</option>
+                  <option value="processing">处理中</option>
+                  <option value="succeeded">已成功</option>
+                  <option value="failed">失败</option>
                 </select>
                 <button id="sub2api-order-refresh-btn" class="ghost-btn small">查询</button>
               </div>
@@ -1016,11 +1016,11 @@
                 <input id="sub2api-invite-user-filter" class="small-input" placeholder="用户 ID" />
                 <select id="sub2api-invite-status-filter" class="small-select">
                   <option value="">全部状态</option>
-                  <option value="processing">processing</option>
-                  <option value="active">active</option>
-                  <option value="used">used</option>
-                  <option value="abnormal">abnormal</option>
-                  <option value="failed">failed</option>
+                  <option value="processing">处理中</option>
+                  <option value="active">可用</option>
+                  <option value="used">已使用</option>
+                  <option value="abnormal">异常</option>
+                  <option value="failed">失败</option>
                 </select>
                 <button id="sub2api-invite-refresh-btn" class="ghost-btn small">查询</button>
                 <button id="sub2api-invite-sync-btn" class="ghost-btn small">同步远端</button>
@@ -1069,11 +1069,11 @@
                   <label class="field">
                     <span>状态</span>
                     <select id="worldcup-match-status">
-                      <option value="open">open</option>
-                      <option value="locked">locked</option>
-                      <option value="finished">finished</option>
-                      <option value="settled">settled</option>
-                      <option value="cancelled">cancelled</option>
+                      <option value="open">开放中</option>
+                      <option value="locked">已锁定</option>
+                      <option value="finished">已结束</option>
+                      <option value="settled">已结算</option>
+                      <option value="cancelled">已取消</option>
                     </select>
                   </label>
                 </div>
@@ -1136,11 +1136,11 @@
                 </select>
                 <select id="worldcup-match-status-filter" class="small-select">
                   <option value="">全部状态</option>
-                  <option value="open">open</option>
-                  <option value="locked">locked</option>
-                  <option value="finished">finished</option>
-                  <option value="settled">settled</option>
-                  <option value="cancelled">cancelled</option>
+                  <option value="open">开放中</option>
+                  <option value="locked">已锁定</option>
+                  <option value="finished">已结束</option>
+                  <option value="settled">已结算</option>
+                  <option value="cancelled">已取消</option>
                 </select>
                 <button id="worldcup-match-refresh-btn" class="ghost-btn small">刷新</button>
               </div>
@@ -1211,11 +1211,12 @@
               <div class="header-actions">
                 <select id="sub2api-rebate-status-filter" class="small-select">
                   <option value="">全部状态</option>
-                  <option value="pending">pending</option>
-                  <option value="approved">approved</option>
-                  <option value="rejected">rejected</option>
-                  <option value="revoked">revoked</option>
+                  <option value="pending">待审核</option>
+                  <option value="approved">已到账</option>
+                  <option value="rejected">已驳回</option>
+                  <option value="revoked">已撤销</option>
                 </select>
+                <button id="sub2api-rebate-sync-btn" class="ghost-btn small">同步远端</button>
                 <button id="sub2api-rebate-refresh-btn" class="ghost-btn small">刷新</button>
               </div>
             </div>

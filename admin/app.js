@@ -11,6 +11,7 @@ const refs = {
   loginResult: document.querySelector("#login-result"),
   refreshBtn: document.querySelector("#refresh-btn"),
   logoutBtn: document.querySelector("#logout-btn"),
+  sidebarVersion: document.querySelector("#sidebar-version"),
   sessionStatus: document.querySelector("#session-status"),
   stats: document.querySelector("#stats"),
   dashboardLogs: document.querySelector("#dashboard-logs"),
@@ -1151,6 +1152,7 @@ function renderSystemInfo(payload) {
   const localChanges = payload.localChanges || state.localChanges || [];
   const hasLocalChanges = payload.hasLocalChanges || state.hasLocalChanges || localChanges.length > 0;
   const gitEnvironment = payload.isGitRepo === false ? "异常" : payload.upstream === "" ? "缺 upstream" : "正常";
+  if (refs.sidebarVersion) refs.sidebarVersion.textContent = `v0.1.0 · ${shortCommit(payload.localCommit || state.localCommit)}`;
   const cards = [
     ["Git 环境", gitEnvironment],
     ["分支", payload.branch || state.branch || "-"],

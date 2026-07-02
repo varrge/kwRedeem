@@ -2754,7 +2754,8 @@ async function saveSub2ApiInviterLevels() {
   });
   sub2apiLevelsCache = payload.levels || levels;
   renderSub2ApiInviterLevels();
-  setHint(refs.sub2apiLevelResult, `保存成功，已处理 ${payload.recalculation?.users || 0} 个已知用户，同步成功 ${payload.recalculation?.synced || 0} 个`);
+  await refreshSub2ApiRebates();
+  setHint(refs.sub2apiLevelResult, `保存成功，已处理 ${payload.recalculation?.users || 0} 个已知用户，同步成功 ${payload.recalculation?.synced || 0} 个，重算返利 ${payload.recalculation?.rebates?.updated || 0} 条`);
 }
 
 async function refreshSub2ApiRebates() {

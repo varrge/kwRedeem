@@ -43,12 +43,14 @@ import {
   getSub2ApiWorldCupBettingState,
   getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
+  getSub2ApiLocalSubscriptionSpend,
   getSub2ApiNextInviterLevel,
   isSub2ApiWorldCupMatchInProgress,
   normalizeSub2ApiBaseUrl,
   normalizeSub2ApiAmount,
   normalizeSub2ApiInviteRebateRate,
   normalizeSub2ApiPositiveInteger,
+  recalculatePendingSub2ApiInviteRebates,
   reserveSub2ApiInvite,
   roundSub2ApiInviteRebateAmount,
   roundSub2ApiWorldCupAmount,
@@ -2207,12 +2209,18 @@ function getSub2ApiRebateSummary(connectionId, userId) {
 }
 
 async function syncSub2ApiSubscriptionSpend(connection, userId) {
-  const orders = await listSub2ApiRemotePages(connection, "/api/v1/admin/payment/orders", {
-    user_id: String(userId),
-    status: "COMPLETED",
-    order_type: "subscription"
-  });
-  return orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0);
+  const localSpend = getSub2ApiLocalSubscriptionSpend(db, connection.id, String(userId));
+  try {
+    const orders = await listSub2ApiRemotePages(connection, "/api/v1/admin/payment/orders", {
+      user_id: String(userId),
+      status: "COMPLETED",
+      order_type: "subscription"
+    });
+    return localSpend + orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0);
+  } catch (error) {
+    if (localSpend > 0) return localSpend;
+    throw error;
+  }
 }
 
 async function syncSub2ApiInviteUsage(connection, inviterUserId = "") {
@@ -6267,6 +6275,7 @@ app.put("/api/admin/sub2api/inviter-levels", { preHandler: requireAdmin }, async
     }
   });
   const recalculation = await refreshKnownSub2ApiUserLevels();
+  recalculation.rebates = recalculatePendingSub2ApiInviteRebates(db);
   return {
     success: true,
     recalculation,

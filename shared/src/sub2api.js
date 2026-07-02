@@ -434,6 +434,49 @@ export function roundSub2ApiInviteRebateAmount(value) {
   return cents / 100;
 }
 
+export function recalculatePendingSub2ApiInviteRebates(db, now = new Date().toISOString()) {
+  const rows = db.prepare(`
+    SELECT *
+    FROM sub2api_invite_rebates
+    WHERE status = ?
+  `).all(sub2apiInviteRebateStatuses.pending);
+  let updated = 0;
+  for (const row of rows) {
+    const inviter = db.prepare(`
+      SELECT *
+      FROM sub2api_known_users
+      WHERE connection_id = ? AND sub2api_user_id = ?
+    `).get(row.connection_id, row.inviter_user_id);
+    if (!inviter) continue;
+    const level = getSub2ApiInviterLevelForSpend(db, inviter.subscription_spend, inviter.override_level_id || "");
+    if (!level) continue;
+    const rate = Number(level.rebate_rate || 0);
+    const amount = roundSub2ApiInviteRebateAmount(Number(row.first_amount || 0) * rate / 100);
+    db.prepare(`
+      UPDATE sub2api_invite_rebates
+      SET rebate_rate = ?, rebate_amount = ?, level_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(rate, amount, level.id, now, row.id);
+    updated += 1;
+  }
+  return { checked: rows.length, updated };
+}
+
+export function getSub2ApiLocalSubscriptionSpend(db, connectionId, userId) {
+  try {
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(price), 0) AS amount
+      FROM sub2api_subscription_orders
+      WHERE connection_id = ?
+        AND sub2api_user_id = ?
+        AND status = ?
+    `).get(connectionId, userId, sub2apiSubscriptionOrderStatuses.succeeded);
+    return Number(row?.amount || 0);
+  } catch {
+    return 0;
+  }
+}
+
 export function normalizeSub2ApiInviteRebateRate(value) {
   const rate = Number(value);
   if (!Number.isFinite(rate) || rate < 0 || rate > 100) {

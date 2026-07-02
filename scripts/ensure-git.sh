@@ -29,7 +29,7 @@ fi
 
 git fetch origin "$BRANCH" --prune
 git symbolic-ref HEAD "refs/heads/$BRANCH"
-git reset --mixed "origin/$BRANCH" >/dev/null
+git reset --hard "origin/$BRANCH" >/dev/null
 git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
 
 log "Git 环境已就绪：$BRANCH -> origin/$BRANCH"

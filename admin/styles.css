@@ -395,6 +395,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   overflow-x: auto;
 }
 
+.cdkey-table table {
+  min-width: 1180px;
+}
+
+.cdkey-table th,
+.cdkey-table td {
+  white-space: nowrap;
+}
+
 .quota-sub-card-table {
   max-height: min(560px, 65vh);
   overflow: auto;
@@ -484,6 +493,9 @@ tr:hover td { background: rgba(255,255,255,0.01); }
 .status-disabled, .status-failed, .status-void { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
 .status-approved { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
 .status-rejected { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
+.status-operational { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
+.status-degraded, .status-unknown { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
+.status-error { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
 
 .stability-stable { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
 .stability-bumpy { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }

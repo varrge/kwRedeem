@@ -197,6 +197,9 @@
                     <option value="support" selected>接码卡密（email_token）</option>
                     <option value="auto">自动识别</option>
                     <option value="normal">普通卡密</option>
+                    <option value="manual_PLUS">人工处理（PLUS）</option>
+                    <option value="manual_x5">人工处理（x5）</option>
+                    <option value="manual_x20">人工处理（x20）</option>
                   </select>
                 </label>
                 <label class="field">
@@ -210,7 +213,7 @@
                 <div class="hint">
                   推荐主流程：选择“接码卡密（email_token）”，每行填写 `email_token`，或 `前缀 | email_token`。<br />
                   自动识别：`原始卡密` 或 `原始卡密 | email_token`。<br />
-                  普通卡密：仅支持 `原始卡密`。
+                  普通卡密：仅支持 `原始卡密`。人工处理：每行生成一张人工卡密。
                 </div>
                 <button type="submit" class="primary-btn">开始导入</button>
               </form>
@@ -239,7 +242,7 @@
                 <button id="cdkey-action-btn" class="primary-btn small">执行</button>
               </div>
             </div>
-            <div id="cdkey-list" class="table-wrapper"></div>
+            <div id="cdkey-list" class="table-wrapper cdkey-table"></div>
           </div>
         </section>
 
@@ -799,11 +802,11 @@
                   <input id="sub2api-connection-name" placeholder="例如 主站 Sub2api" />
                 </label>
                 <label class="field">
-                  <span>Base URL</span>
+                  <span>基础地址</span>
                   <input id="sub2api-connection-base-url" placeholder="https://sub2api.example.com" />
                 </label>
                 <label class="field">
-                  <span>Admin Token</span>
+                  <span>管理令牌</span>
                   <input id="sub2api-connection-admin-token" type="password" autocomplete="off" placeholder="创建时必填；编辑时留空则保持不变" />
                 </label>
                 <label class="field">
@@ -843,6 +846,18 @@
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。
               </p>
             </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>上游监控</h3>
+              <div class="header-actions">
+                <select id="sub2api-upstream-monitor-connection" class="small-select" aria-label="上游监控连接"></select>
+                <button id="sub2api-upstream-monitor-refresh-btn" class="ghost-btn" type="button">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-upstream-monitor-list" class="table-wrapper"></div>
+            <div id="sub2api-upstream-monitor-result" class="hint"></div>
           </div>
 
           <div class="card mt-24">

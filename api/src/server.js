@@ -46,6 +46,7 @@ import {
   getSub2ApiInviteRebateForReview,
   getSub2ApiLocalSubscriptionSpend,
   getSub2ApiNextInviterLevel,
+  getOverdueSub2ApiInviteRebateIds,
   isSub2ApiWorldCupMatchInProgress,
   normalizeSub2ApiBaseUrl,
   normalizeSub2ApiAmount,
@@ -107,6 +108,8 @@ const SUB2API_IMAGE_SESSION_TTL_MS = 30 * 60 * 1000;
 const SUB2API_IMAGE_KEYS_TTL_MS = 2 * 60 * 1000;
 const SUB2API_IMAGE_GENERATE_TIMEOUT_MS = 180 * 1000;
 const SUB2API_IMAGE_JOB_TTL_MS = 30 * 60 * 1000;
+const SUB2API_INVITE_REBATE_AUTO_APPROVE_MS = 24 * 60 * 60 * 1000;
+const SUB2API_INVITE_REBATE_AUTO_APPROVE_INTERVAL_MS = 10 * 60 * 1000;
 const SUB2API_IMAGE_RESPONSES_MODEL = "gpt-5.5";
 const SUB2API_IMAGE_MAX_COUNT = 5;
 const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
@@ -140,6 +143,7 @@ const quotaAutoClaimSessions = new Map();
 const quotaAutoClaimQueue = [];
 const sub2apiImageSessions = new Map();
 const sub2apiImageJobs = new Map();
+let sub2apiInviteRebateAutoApproveRunning = false;
 
 function cleanupQuotaAutoClaimSessions() {
   const now = Date.now();
@@ -257,7 +261,10 @@ const backgroundIntervals = [
   setInterval(cleanupExpiredEntries, CACHE_CLEANUP_INTERVAL_MS),
   setInterval(cleanupQuotaAutoClaimSessions, QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS),
   setInterval(cleanupSub2ApiImageSessions, 60_000),
-  setInterval(cleanupSub2ApiImageJobs, 60_000)
+  setInterval(cleanupSub2ApiImageJobs, 60_000),
+  setInterval(() => autoApproveOverdueSub2ApiInviteRebates().catch((error) => {
+    console.error("[sub2api-rebate-auto-approve]", error);
+  }), SUB2API_INVITE_REBATE_AUTO_APPROVE_INTERVAL_MS)
 ];
 app.addHook("onClose", (_instance, done) => {
   for (const interval of backgroundIntervals) {
@@ -1902,6 +1909,21 @@ function serializeSub2ApiConnection(row) {
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function serializeRemoteSub2ApiMonitor(item) {
+  return {
+    id: item.id,
+    name: item.name || "",
+    provider: item.provider || "",
+    endpoint: item.endpoint || "",
+    primaryModel: item.primary_model || item.primaryModel || "",
+    primaryStatus: item.primary_status || item.primaryStatus || "",
+    primaryLatencyMs: item.primary_latency_ms ?? item.primaryLatencyMs ?? null,
+    availability7d: item.availability_7d ?? item.availability7d ?? null,
+    enabled: item.enabled !== false,
+    lastCheckedAt: item.last_checked_at || item.lastCheckedAt || null
   };
 }
 
@@ -6116,6 +6138,43 @@ app.post("/api/admin/sub2api/connections/:id/test", { preHandler: requireAdmin }
   }
 });
 
+app.get("/api/admin/sub2api/connections/:id/upstream-monitors", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(request.query.pageSize || request.query.page_size) || 50)));
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  for (const key of ["provider", "enabled", "search"]) {
+    const value = String(request.query[key] || "").trim();
+    if (value) params.set(key, value);
+  }
+
+  try {
+    const result = await callSub2ApiRemote(connection, `/api/v1/admin/channel-monitors?${params.toString()}`);
+    const payload = unwrapSub2ApiRemoteData(result.json);
+    const items = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : []);
+    return {
+      items: items.map(serializeRemoteSub2ApiMonitor),
+      total: Number(payload?.total ?? items.length),
+      page: Number(payload?.page ?? page),
+      pageSize: Number(payload?.page_size ?? payload?.pageSize ?? pageSize)
+    };
+  } catch (error) {
+    if (Number(error.status) === 404) {
+      return reply.code(404).send({ message: "远程 Sub2api 未启用上游监控接口；Docker 部署请确认镜像版本支持渠道监控，环境变量 OPS_ENABLED=true，并在 Sub2api 后台设置里启用渠道监控" });
+    }
+    return reply.code(Number(error.status || 502)).send({ message: error.message || "读取上游监控失败" });
+  }
+});
+
 app.get("/api/admin/sub2api/invites", { preHandler: requireAdmin }, async (request) => {
   const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
   const pageSize = Math.min(200, Math.max(1, Math.floor(Number(request.query.pageSize) || 50)));
@@ -6313,6 +6372,68 @@ app.get("/api/admin/sub2api/invite-rebates", { preHandler: requireAdmin }, async
   return { items: rows.map(serializeSub2ApiInviteRebate), total, page, pageSize };
 });
 
+function getOverdueSub2ApiInviteRebateIdsForAutoApprove(now = Date.now()) {
+  const cutoff = new Date(now - SUB2API_INVITE_REBATE_AUTO_APPROVE_MS).toISOString();
+  return getOverdueSub2ApiInviteRebateIds(db, cutoff);
+}
+
+async function approveSub2ApiInviteRebate(id, reason) {
+  let rebate = getSub2ApiInviteRebateForReview(db, id);
+  if (!rebate) {
+    const error = new Error("返利记录不存在");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (rebate.status !== sub2apiInviteRebateStatuses.pending) {
+    const error = new Error("只有待审核返利可以通过");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (Number(rebate.rebate_amount || 0) <= 0) {
+    recalculatePendingSub2ApiInviteRebates(db);
+    rebate = getSub2ApiInviteRebateForReview(db, id);
+  }
+  if (Number(rebate.rebate_amount || 0) <= 0) {
+    const error = new Error("返利金额为 0，不能通过；请先保存等级并重算");
+    error.statusCode = 409;
+    throw error;
+  }
+  const now = nowIso();
+  const note = `registration invite rebate: invite=${rebate.invite_code}, invitee=${rebate.invitee_user_id}, rebate=${rebate.id}`;
+  const result = await callSub2ApiRemote(rebate, `/api/v1/admin/users/${encodeURIComponent(String(rebate.inviter_user_id))}/balance`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `${rebate.id}:approve` },
+    body: { balance: Number(rebate.rebate_amount), operation: "add", notes: note }
+  });
+  db.prepare(`
+    UPDATE sub2api_invite_rebates
+    SET status = ?, review_reason = ?, remote_balance_response = ?, approved_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(sub2apiInviteRebateStatuses.approved, reason || "通过", JSON.stringify(result.json ?? result.text ?? null), now, now, id);
+  return db.prepare("SELECT * FROM sub2api_invite_rebates WHERE id = ?").get(id);
+}
+
+async function autoApproveOverdueSub2ApiInviteRebates() {
+  if (sub2apiInviteRebateAutoApproveRunning) return { approved: 0, failed: 0 };
+  sub2apiInviteRebateAutoApproveRunning = true;
+  let approved = 0;
+  let failed = 0;
+  try {
+    for (const id of getOverdueSub2ApiInviteRebateIdsForAutoApprove()) {
+      try {
+        await approveSub2ApiInviteRebate(id, "超过24小时未处理，系统自动通过");
+        approved += 1;
+      } catch (error) {
+        failed += 1;
+        console.error("[sub2api-rebate-auto-approve]", id, error.message || error);
+      }
+    }
+    return { approved, failed };
+  } finally {
+    sub2apiInviteRebateAutoApproveRunning = false;
+  }
+}
+
 app.post("/api/admin/sub2api/invite-rebates/:id/:action", { preHandler: requireAdmin }, async (request, reply) => {
   const id = String(request.params.id || "").trim();
   const action = String(request.params.action || "").trim();
@@ -6325,23 +6446,12 @@ app.post("/api/admin/sub2api/invite-rebates/:id/:action", { preHandler: requireA
     db.prepare("UPDATE sub2api_invite_rebates SET status = ?, review_reason = ?, rejected_at = ?, updated_at = ? WHERE id = ?")
       .run(sub2apiInviteRebateStatuses.rejected, reason || "rejected", now, now, id);
   } else if (action === "approve") {
-    if (rebate.status !== sub2apiInviteRebateStatuses.pending) return reply.code(409).send({ message: "只有待审核返利可以通过" });
-    if (Number(rebate.rebate_amount || 0) <= 0) {
-      recalculatePendingSub2ApiInviteRebates(db);
-      rebate = getSub2ApiInviteRebateForReview(db, id);
+    try {
+      const row = await approveSub2ApiInviteRebate(id, reason || "人工通过");
+      return { success: true, rebate: serializeSub2ApiInviteRebate(row) };
+    } catch (error) {
+      return reply.code(Number(error.statusCode || error.status || 500)).send({ message: error.message || "通过失败" });
     }
-    if (Number(rebate.rebate_amount || 0) <= 0) return reply.code(409).send({ message: "返利金额为 0，不能通过；请先保存等级并重算" });
-    const note = `registration invite rebate: invite=${rebate.invite_code}, invitee=${rebate.invitee_user_id}, rebate=${rebate.id}`;
-    const result = await callSub2ApiRemote(rebate, `/api/v1/admin/users/${encodeURIComponent(String(rebate.inviter_user_id))}/balance`, {
-      method: "POST",
-      headers: { "Idempotency-Key": `${rebate.id}:approve` },
-      body: { balance: Number(rebate.rebate_amount), operation: "add", notes: note }
-    });
-    db.prepare(`
-      UPDATE sub2api_invite_rebates
-      SET status = ?, review_reason = ?, remote_balance_response = ?, approved_at = ?, updated_at = ?
-      WHERE id = ?
-    `).run(sub2apiInviteRebateStatuses.approved, reason || "approved", JSON.stringify(result.json ?? result.text ?? null), now, now, id);
   } else if (action === "revoke") {
     if (rebate.status !== sub2apiInviteRebateStatuses.approved) return reply.code(409).send({ message: "只有已到账返利可以撤销" });
     const note = `revoke registration invite rebate: rebate=${rebate.id}`;
@@ -7722,8 +7832,8 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     name: z.string().min(2),
     prefix: z.string().min(1),
     siteId: z.string().min(1),
-    importType: z.enum(["auto", "support", "normal"]).optional().default("auto"),
-    rawKeys: z.string().min(2),
+    importType: z.enum(["auto", "support", "normal", "manual_PLUS", "manual_x5", "manual_x20"]).optional().default("auto"),
+    rawKeys: z.string().min(1),
     note: z.string().optional().default("")
   });
   const parsed = schema.safeParse(request.body);
@@ -7738,12 +7848,25 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
 
   const defaultPrefix = parsed.data.prefix.trim();
   const importType = parsed.data.importType;
+  const manualType = importType.startsWith("manual_") ? importType.slice("manual_".length) : "";
   const rawEntries = Array.from(new Map(
     parsed.data.rawKeys
       .split(/\r?\n/)
-      .flatMap((line) => {
+      .flatMap((line, lineIndex) => {
         const trimmedLine = String(line ?? "").trim();
         if (!trimmedLine) return [];
+
+        if (manualType) {
+          return [{
+            sourceKey: "",
+            emailToken: "",
+            supportOnly: false,
+            processingMode: "manual",
+            manualType,
+            prefix: defaultPrefix,
+            lineIndex
+          }];
+        }
 
         if (importType === "support") {
           if (trimmedLine.includes("|")) {
@@ -7809,8 +7932,13 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
           }))
           .filter((item) => item.sourceKey);
       })
-      .filter((item) => item.emailToken || item.sourceKey)
-      .map((item) => [`${item.prefix}::${item.sourceKey}::${item.emailToken}::${item.supportOnly ? 1 : 0}`, item])
+      .filter((item) => item.emailToken || item.sourceKey || item.processingMode === "manual")
+      .map((item) => [
+        item.processingMode === "manual"
+          ? `${item.prefix}::manual::${item.manualType}::${item.lineIndex}`
+          : `${item.prefix}::${item.sourceKey}::${item.emailToken}::${item.supportOnly ? 1 : 0}`,
+        item
+      ])
   ).values());
 
   if (!rawEntries.length) {
@@ -7847,20 +7975,26 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     const insertKey = db.prepare(`
       INSERT INTO cdkeys (
         id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix, status,
-        locked_at, locked_by_order_id, used_at, disabled_reason, metadata, created_at, updated_at
+        locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)
     `);
 
     let supportOnlyCount = 0;
     let normalCount = 0;
+    let manualCount = 0;
 
     for (const entry of rawEntries) {
       const supportOnly = Boolean(entry.supportOnly);
+      const manualProcessing = entry.processingMode === "manual";
       const sourceKey = String(entry.sourceKey || "").trim();
       const emailToken = String(entry.emailToken || "").trim();
+      const entryManualType = String(entry.manualType || "").trim();
       const cardPrefix = String(entry.prefix || defaultPrefix).trim() || defaultPrefix;
-      const storedSourceKey = supportOnly
+      const publicKey = getUniquePublicKey(cardPrefix);
+      const storedSourceKey = manualProcessing
+        ? `manual-card:${entryManualType}:${publicKey}`
+        : supportOnly
         ? (sourceKey || `support-card:${cardPrefix}:${Date.now()}:${nanoid(6)}`)
         : sourceKey;
 
@@ -7871,18 +8005,24 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
         site.activation_endpoint_id || "endpoint_demo",
         site.id,
         encryptText(storedSourceKey),
-        getUniquePublicKey(cardPrefix),
+        publicKey,
         cardPrefix,
         cdkeyStatuses.active,
         buildCdkeyMetadata(null, {
           emailToken,
-          supportOnly
+          supportOnly,
+          processingMode: manualProcessing ? "manual" : "auto",
+          manualType: manualProcessing ? entryManualType : ""
         }),
+        manualProcessing ? "manual" : "auto",
+        manualProcessing ? entryManualType : null,
         now,
         now
       );
 
-      if (supportOnly) {
+      if (manualProcessing) {
+        manualCount += 1;
+      } else if (supportOnly) {
         supportOnlyCount += 1;
       } else {
         normalCount += 1;
@@ -7900,7 +8040,8 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
         siteId: site.id,
         importType,
         supportOnlyCount,
-        normalCount
+        normalCount,
+        manualCount
       }
     });
 
@@ -7908,7 +8049,8 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
       batchId,
       importedCount: rawEntries.length,
       supportOnlyCount,
-      normalCount
+      normalCount,
+      manualCount
     };
   });
 

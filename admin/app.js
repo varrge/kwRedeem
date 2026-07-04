@@ -174,6 +174,10 @@ const refs = {
   sub2apiConnectionRefreshBtn: document.querySelector("#sub2api-connection-refresh-btn"),
   sub2apiConnectionResult: document.querySelector("#sub2api-connection-result"),
   sub2apiConnectionList: document.querySelector("#sub2api-connection-list"),
+  sub2apiUpstreamMonitorConnection: document.querySelector("#sub2api-upstream-monitor-connection"),
+  sub2apiUpstreamMonitorRefreshBtn: document.querySelector("#sub2api-upstream-monitor-refresh-btn"),
+  sub2apiUpstreamMonitorList: document.querySelector("#sub2api-upstream-monitor-list"),
+  sub2apiUpstreamMonitorResult: document.querySelector("#sub2api-upstream-monitor-result"),
   sub2apiInviteConnectionFilter: document.querySelector("#sub2api-invite-connection-filter"),
   sub2apiInviteUserFilter: document.querySelector("#sub2api-invite-user-filter"),
   sub2apiInviteStatusFilter: document.querySelector("#sub2api-invite-status-filter"),
@@ -376,6 +380,7 @@ const STATUS_LABELS = {
   disabled: "禁用",
   deleted: "已删除",
   pending: "待处理",
+  ok: "正常",
   processing: "处理中",
   succeeded: "已成功",
   failed: "失败",
@@ -412,6 +417,20 @@ const SUB2API_REBATE_ACTION_LABELS = {
   approve: "通过",
   reject: "驳回",
   revoke: "撤销"
+};
+
+const SUB2API_MONITOR_STATUS_LABELS = {
+  operational: "正常",
+  degraded: "波动",
+  failed: "失败",
+  error: "异常",
+  unknown: "未知"
+};
+
+const SUB2API_MONITOR_PROVIDER_LABELS = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Gemini"
 };
 
 function getStatusLabel(value, labels = STATUS_LABELS) {
@@ -710,6 +729,7 @@ function setupModuleSubtabs() {
       tabs: [
         { id: "connections", label: "连接管理", elements: [closestCard(refs.sub2apiConnectionForm), closestCard(refs.sub2apiConnectionList)] },
         { id: "help", label: "嵌入说明", elements: [document.querySelector("#sub2api-connection-form")?.closest(".grid")?.querySelector(".card:nth-child(2)")] },
+        { id: "upstream-monitor", label: "上游监控", elements: [closestCard(refs.sub2apiUpstreamMonitorList)] },
         { id: "invites", label: "邀请码", elements: [closestCard(refs.sub2apiInviteList)] },
         { id: "plans", label: "套餐", elements: [closestCard(refs.sub2apiPlanForm), closestCard(refs.sub2apiPlanList)] },
         { id: "orders", label: "订单", elements: [closestCard(refs.sub2apiOrderList)] },
@@ -2499,6 +2519,20 @@ function populateSub2ApiConnectionFilter() {
       refs.sub2apiPlanConnection.value = sub2apiConnectionsCache[0].id;
     }
   }
+
+  if (refs.sub2apiUpstreamMonitorConnection) {
+    const currentMonitor = refs.sub2apiUpstreamMonitorConnection.value;
+    refs.sub2apiUpstreamMonitorConnection.innerHTML = [`<option value="">选择连接</option>`]
+      .concat(sub2apiConnectionsCache.map((item) => `
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
+      `))
+      .join("");
+    if (sub2apiConnectionsCache.some((item) => item.id === currentMonitor)) {
+      refs.sub2apiUpstreamMonitorConnection.value = currentMonitor;
+    } else if (sub2apiConnectionsCache.length) {
+      refs.sub2apiUpstreamMonitorConnection.value = sub2apiConnectionsCache[0].id;
+    }
+  }
 }
 
 async function refreshSub2ApiConnections() {
@@ -2513,11 +2547,11 @@ async function refreshSub2ApiConnections() {
       render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.id)}</code>`
     },
     {
-      label: "Base URL",
+      label: "基础地址",
       render: (item) => `<code style="font-size:12px;word-break:break-all">${escapeHtml(item.baseUrl)}</code>`
     },
     {
-      label: "Admin Token",
+      label: "管理令牌",
       render: (item) => item.hasAdminToken ? "已保存" : "未配置"
     },
     {
@@ -2529,7 +2563,7 @@ async function refreshSub2ApiConnections() {
       render: (item) => `
         <div style="font-size:12px;line-height:1.5">
           <div>${escapeHtml(item.lastTestAt || "未测试")}</div>
-          <div style="color:${item.lastTestStatus === "failed" ? "var(--error)" : "var(--muted)"}">${escapeHtml(item.lastTestStatus || "-")}${item.lastTestError ? ` · ${escapeHtml(item.lastTestError)}` : ""}</div>
+          <div style="color:${item.lastTestStatus === "failed" ? "var(--error)" : "var(--muted)"}">${escapeHtml(getStatusLabel(item.lastTestStatus))}${item.lastTestError ? ` · ${escapeHtml(item.lastTestError)}` : ""}</div>
         </div>
       `
     },
@@ -2542,6 +2576,26 @@ async function refreshSub2ApiConnections() {
       `
     }
   ], sub2apiConnectionsCache, "暂无 Sub2api 连接");
+}
+
+async function refreshSub2ApiUpstreamMonitors() {
+  if (!refs.sub2apiUpstreamMonitorList) return;
+  const connectionId = refs.sub2apiUpstreamMonitorConnection?.value || sub2apiConnectionsCache[0]?.id || "";
+  if (!connectionId) {
+    refs.sub2apiUpstreamMonitorList.innerHTML = `<p class="hint centered">请先添加 Sub2api 连接</p>`;
+    return;
+  }
+  const payload = await api(`/api/admin/sub2api/connections/${encodeURIComponent(connectionId)}/upstream-monitors`);
+  renderTable(refs.sub2apiUpstreamMonitorList, [
+    { label: "名称", render: (item) => `<strong>${escapeHtml(item.name || "-")}</strong><br/><span class="hint">${escapeHtml(SUB2API_MONITOR_PROVIDER_LABELS[item.provider] || item.provider || "-")}</span>` },
+    { label: "模型", render: (item) => escapeHtml(item.primaryModel || "-") },
+    { label: "状态", render: (item) => renderStatus(item.primaryStatus || "unknown", SUB2API_MONITOR_STATUS_LABELS) },
+    { label: "延迟", render: (item) => item.primaryLatencyMs === null || item.primaryLatencyMs === undefined ? "-" : `${escapeHtml(item.primaryLatencyMs)} 毫秒` },
+    { label: "七日可用率", render: (item) => item.availability7d === null || item.availability7d === undefined ? "-" : `${Number(item.availability7d).toFixed(2)}%` },
+    { label: "启用", render: (item) => item.enabled ? "是" : "否" },
+    { label: "最近检测", render: (item) => escapeHtml(item.lastCheckedAt || "-") }
+  ], payload.items || [], "远程 Sub2api 暂无监控数据");
+  setHint(refs.sub2apiUpstreamMonitorResult, `已读取上游监控：${payload.total ?? payload.items?.length ?? 0} 条`);
 }
 
 function editSub2ApiConnection(id) {
@@ -3236,6 +3290,9 @@ async function refreshSub2ApiConsole() {
   await refreshSub2ApiConnections().catch((error) => {
     if (refs.sub2apiConnectionList) refs.sub2apiConnectionList.innerHTML = `<p class="hint centered">加载连接失败：${escapeHtml(error.message)}</p>`;
   });
+  await refreshSub2ApiUpstreamMonitors().catch((error) => {
+    if (refs.sub2apiUpstreamMonitorList) refs.sub2apiUpstreamMonitorList.innerHTML = `<p class="hint centered">加载上游监控失败：${escapeHtml(error.message)}</p>`;
+  });
   await refreshSub2ApiPlans().catch((error) => {
     if (refs.sub2apiPlanList) refs.sub2apiPlanList.innerHTML = `<p class="hint centered">加载订阅套餐失败：${escapeHtml(error.message)}</p>`;
   });
@@ -3704,6 +3761,18 @@ if (refs.sub2apiConnectionRefreshBtn) {
   });
 }
 
+if (refs.sub2apiUpstreamMonitorRefreshBtn) {
+  refs.sub2apiUpstreamMonitorRefreshBtn.addEventListener("click", () => {
+    refreshSub2ApiUpstreamMonitors().catch((error) => setHint(refs.sub2apiUpstreamMonitorResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiUpstreamMonitorConnection) {
+  refs.sub2apiUpstreamMonitorConnection.addEventListener("change", () => {
+    refreshSub2ApiUpstreamMonitors().catch((error) => setHint(refs.sub2apiUpstreamMonitorResult, `加载失败：${error.message}`));
+  });
+}
+
 if (refs.sub2apiInviteRefreshBtn) {
   refs.sub2apiInviteRefreshBtn.addEventListener("click", () => {
     resetTablePage(refs.sub2apiInviteList);
@@ -4060,7 +4129,7 @@ refs.batchForm.addEventListener("submit", async (event) => {
     refs.batchImportType.value = "support";
     setHint(
       refs.batchResult,
-      `成功导入 ${payload.importedCount} 条（接码专用 ${payload.supportOnlyCount || 0} / 普通 ${payload.normalCount || 0}）`
+      `成功导入 ${payload.importedCount} 条（接码专用 ${payload.supportOnlyCount || 0} / 普通 ${payload.normalCount || 0} / 人工处理 ${payload.manualCount || 0}）`
     );
     await refreshAll();
   } catch (error) {

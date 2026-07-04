@@ -462,6 +462,16 @@ export function recalculatePendingSub2ApiInviteRebates(db, now = new Date().toIS
   return { checked: rows.length, updated };
 }
 
+export function getOverdueSub2ApiInviteRebateIds(db, cutoffIso, limit = 50) {
+  return db.prepare(`
+    SELECT id
+    FROM sub2api_invite_rebates
+    WHERE status = ? AND created_at <= ?
+    ORDER BY created_at ASC
+    LIMIT ?
+  `).all(sub2apiInviteRebateStatuses.pending, cutoffIso, limit).map((row) => row.id);
+}
+
 export function getSub2ApiLocalSubscriptionSpend(db, connectionId, userId) {
   try {
     const row = db.prepare(`

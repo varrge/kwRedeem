@@ -840,6 +840,9 @@
                 世界杯竞猜嵌入页地址：<code>/sub2api-worldcup.html?connectionId=&lt;连接ID&gt;</code>。下注会使用 Sub2api 用户余额做小额扣款，结算命中后按后台赔率返还余额；仅建议用于平台内不可提现余额/积分。
               </p>
               <p class="hint">
+                报错指南嵌入页地址：<code>/sub2api-error-guide.html</code>。该页不需要用户登录态，可直接配置为 Sub2api 自定义 iframe 页面；建议同样反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-error-guide.html</code>。
+              </p>
+              <p class="hint">
                 若 Sub2api 域名与 KaWang 不在同一台服务器，例如 <code>sub.vsakura.top</code> 单独部署，而 <code>key.vsakura.top</code>、<code>adminkey.vsakura.top</code>、<code>api.vsakura.top</code> 在 KaWang 服务器，则 <code>sub.vsakura.top/_kwredeem/runtime-config.js</code> 也必须返回 <code>{"apiUrl":"https://api.vsakura.top"}</code>，否则嵌入页会把 API 请求发到错误域名。
               </p>
               <p class="hint">
@@ -858,6 +861,20 @@
             </div>
             <div id="sub2api-upstream-monitor-list" class="table-wrapper"></div>
             <div id="sub2api-upstream-monitor-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>模型路由</h3>
+              <div class="header-actions">
+                <select id="sub2api-model-route-connection" class="small-select" aria-label="模型路由连接"></select>
+                <input id="sub2api-model-route-filter" class="small-input" placeholder="搜索模型 / 分组 / 渠道" />
+                <button id="sub2api-model-route-refresh-btn" class="ghost-btn" type="button">刷新</button>
+              </div>
+            </div>
+            <div id="sub2api-model-route-summary" class="hint"></div>
+            <div id="sub2api-model-route-list" class="table-wrapper"></div>
+            <div id="sub2api-model-route-result" class="hint"></div>
           </div>
 
           <div class="card mt-24">

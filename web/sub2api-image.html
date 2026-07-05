@@ -620,9 +620,10 @@
               <label for="model-select">模型</label>
               <select id="model-select">
                 <option value="gpt-image-2">gpt-image-2</option>
+                <option value="gpt-image-2-2026-04-21">gpt-image-2-2026-04-21</option>
                 <option value="gpt-image-1.5">gpt-image-1.5</option>
                 <option value="gpt-image-1">gpt-image-1</option>
-                <option value="dall-e-3">dall-e-3</option>
+                <option value="gpt-image-1-mini">gpt-image-1-mini</option>
               </select>
             </div>
 
@@ -641,10 +642,26 @@
               <div id="ratio-grid" class="ratio-grid">
                 <button class="ratio-btn active" type="button" data-value="auto">自动</button>
                 <button class="ratio-btn" type="button" data-value="1:1">1:1</button>
-                <button class="ratio-btn" type="button" data-value="16:9">16:9</button>
-                <button class="ratio-btn" type="button" data-value="4:3">4:3</button>
-                <button class="ratio-btn" type="button" data-value="3:4">3:4</button>
-                <button class="ratio-btn" type="button" data-value="9:16">9:16</button>
+                <button class="ratio-btn" type="button" data-value="3:2">3:2</button>
+                <button class="ratio-btn" type="button" data-value="2:3">2:3</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">格式</div>
+              <div id="format-grid" class="quality-grid">
+                <button class="format-btn active quality-btn" type="button" data-value="png">PNG</button>
+                <button class="format-btn quality-btn" type="button" data-value="webp">WebP</button>
+                <button class="format-btn quality-btn" type="button" data-value="jpeg">JPEG</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">背景</div>
+              <div id="background-grid" class="quality-grid">
+                <button class="background-btn active quality-btn" type="button" data-value="auto">自动</button>
+                <button class="background-btn quality-btn" type="button" data-value="opaque">不透明</button>
+                <button class="background-btn quality-btn" type="button" data-value="transparent">透明</button>
               </div>
             </div>
 
@@ -654,7 +671,7 @@
                 <span id="count-value" class="count-value">1</span>
               </div>
               <div class="count-line">
-                <input id="count-range" type="range" min="1" max="5" step="1" value="1" />
+                <input id="count-range" type="range" min="1" max="10" step="1" value="1" />
               </div>
             </div>
 
@@ -748,6 +765,8 @@
         sessionToken: "",
         mode: "text",
         quality: "auto",
+        outputFormat: "png",
+        background: "auto",
         aspectRatio: "auto",
         references: [],
         lastImages: [],
@@ -931,6 +950,17 @@
           button.classList.toggle("active", button.dataset.mode === state.mode);
         });
         refs.referenceZone.classList.toggle("active", state.mode === "image");
+        syncModelOptions();
+      }
+
+      function syncModelOptions() {
+        const editModels = ["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1", "gpt-image-1-mini"];
+        for (const option of refs.modelSelect.options) {
+          option.disabled = state.mode === "image" && !editModels.includes(option.value);
+        }
+        if (refs.modelSelect.selectedOptions[0]?.disabled) {
+          refs.modelSelect.value = "gpt-image-2";
+        }
       }
 
       function renderReferences() {
@@ -1009,6 +1039,13 @@
         return image.dataUrl || image.url || "";
       }
 
+      function getImageExtension(image) {
+        const src = getImageSrc(image);
+        if (src.startsWith("data:image/jpeg")) return "jpg";
+        if (src.startsWith("data:image/webp")) return "webp";
+        return "png";
+      }
+
       function renderResults(payload) {
         state.lastImages = payload.images || [];
         if (!state.lastImages.length) {
@@ -1075,10 +1112,9 @@
       function downloadImage(image, index = 0) {
         const src = getImageSrc(image);
         if (!src) return;
-        const format = "png";
         const a = document.createElement("a");
         a.href = src;
-        a.download = `sub2api-image-${Date.now()}-${index + 1}.${format}`;
+        a.download = `sub2api-image-${Date.now()}-${index + 1}.${getImageExtension(image)}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1106,7 +1142,7 @@
           prompt: prompt.slice(0, 80),
           createdAt: new Date().toISOString(),
           image: getImageSrc(image)
-        })).filter((item) => item.image);
+        })).filter((item) => item.image && item.image.length < 900000);
 
         let history = [];
         try {
@@ -1177,7 +1213,8 @@
               prompt,
               model: refs.modelSelect.value,
               quality: state.quality,
-              outputFormat: "png",
+              outputFormat: state.outputFormat,
+              background: state.background,
               aspectRatio: state.aspectRatio,
               count: Number(refs.countRange.value || 1),
               referenceImages: state.mode === "image" ? state.references.map((item) => item.dataUrl) : []
@@ -1212,6 +1249,22 @@
           document.querySelectorAll(".ratio-btn").forEach((item) => item.classList.remove("active"));
           button.classList.add("active");
           state.aspectRatio = getSelectedButtonValue(".ratio-btn", "auto");
+        });
+      });
+
+      document.querySelectorAll(".format-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".format-btn").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          state.outputFormat = getSelectedButtonValue(".format-btn", "png");
+        });
+      });
+
+      document.querySelectorAll(".background-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".background-btn").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          state.background = getSelectedButtonValue(".background-btn", "auto");
         });
       });
 

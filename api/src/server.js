@@ -111,14 +111,16 @@ const SUB2API_IMAGE_JOB_TTL_MS = 30 * 60 * 1000;
 const SUB2API_INVITE_REBATE_AUTO_APPROVE_MS = 24 * 60 * 60 * 1000;
 const SUB2API_INVITE_REBATE_AUTO_APPROVE_INTERVAL_MS = 10 * 60 * 1000;
 const SUB2API_IMAGE_RESPONSES_MODEL = "gpt-5.5";
-const SUB2API_IMAGE_MAX_COUNT = 5;
+const SUB2API_IMAGE_MAX_COUNT = 10;
 const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
 const SUB2API_IMAGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const SUB2API_IMAGE_BODY_LIMIT = 96 * 1024 * 1024;
-const SUB2API_IMAGE_MODELS = Object.freeze(["gpt-image-2", "gpt-image-1.5", "gpt-image-1", "dall-e-3"]);
+const SUB2API_IMAGE_MODELS = Object.freeze(["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]);
+const SUB2API_IMAGE_EDIT_MODELS = Object.freeze(["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1", "gpt-image-1-mini"]);
 const SUB2API_IMAGE_QUALITIES = Object.freeze(["auto", "low", "medium", "high"]);
 const SUB2API_IMAGE_FORMATS = Object.freeze(["png", "webp", "jpeg"]);
-const SUB2API_IMAGE_ASPECT_RATIOS = Object.freeze(["auto", "1:1", "16:9", "4:3", "3:4", "9:16"]);
+const SUB2API_IMAGE_BACKGROUNDS = Object.freeze(["auto", "opaque", "transparent"]);
+const SUB2API_IMAGE_ASPECT_RATIOS = Object.freeze(["auto", "1:1", "3:2", "2:3"]);
 const SUB2API_WORLDCUP_DEFAULT_MIN_STAKE = 0.1;
 const SUB2API_WORLDCUP_DEFAULT_MAX_STAKE = 2;
 const SUB2API_WORLDCUP_MAX_ADMIN_STAKE = 100;
@@ -1927,6 +1929,96 @@ function serializeRemoteSub2ApiMonitor(item) {
   };
 }
 
+function extractRemoteList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of ["items", "list", "records", "results", "data"]) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+}
+
+function getRemoteModelsListConfig(group) {
+  const cfg = group?.models_list_config || group?.modelsListConfig || {};
+  const models = Array.isArray(cfg.models) ? cfg.models : [];
+  return {
+    enabled: Boolean(cfg.enabled) && models.length > 0,
+    models: models.map((model) => String(model || "").trim()).filter(Boolean)
+  };
+}
+
+function addUniqueModel(target, value) {
+  const model = String(value || "").trim();
+  if (model) target.add(model);
+}
+
+function buildRemoteSub2ApiRoutes(groups, channels, candidateMap) {
+  const groupsById = new Map(groups.map((group) => [String(group.id), group]));
+  const rows = [];
+  const modelSet = new Set();
+
+  for (const group of groups) {
+    const cfg = getRemoteModelsListConfig(group);
+    for (const model of candidateMap.get(String(group.id)) || cfg.models || []) addUniqueModel(modelSet, model);
+  }
+
+  for (const channel of channels) {
+    const groupIds = Array.isArray(channel.group_ids || channel.groupIds) ? (channel.group_ids || channel.groupIds) : [];
+    const pricing = Array.isArray(channel.model_pricing || channel.modelPricing) ? (channel.model_pricing || channel.modelPricing) : [];
+    const mappingByPlatform = channel.model_mapping || channel.modelMapping || {};
+
+    for (const groupId of groupIds) {
+      const group = groupsById.get(String(groupId));
+      const platform = String(group?.platform || "").trim();
+      const models = new Set();
+      for (const item of pricing) {
+        const pricingPlatform = String(item.platform || "anthropic").trim();
+        if (platform && pricingPlatform && pricingPlatform !== platform) continue;
+        for (const model of item.models || []) addUniqueModel(models, model);
+      }
+      for (const source of Object.keys(mappingByPlatform[platform] || {})) addUniqueModel(models, source);
+      for (const model of candidateMap.get(String(groupId)) || []) addUniqueModel(models, model);
+
+      const mappings = mappingByPlatform[platform] || {};
+      for (const model of models) {
+        const mappedModel = String(mappings[model] || model).trim();
+        addUniqueModel(modelSet, model);
+        addUniqueModel(modelSet, mappedModel);
+        rows.push({
+          groupId: group?.id ?? groupId,
+          groupName: group?.name || `Group ${groupId}`,
+          groupStatus: group?.status || "",
+          platform,
+          channelId: channel.id,
+          channelName: channel.name || `Channel ${channel.id}`,
+          channelStatus: channel.status || "",
+          sourceModel: model,
+          mappedModel,
+          mapped: mappedModel !== model,
+          billingModelSource: channel.billing_model_source || channel.billingModelSource || "",
+          restrictModels: Boolean(channel.restrict_models ?? channel.restrictModels)
+        });
+      }
+    }
+  }
+
+  rows.sort((a, b) => [a.platform, a.groupName, a.channelName, a.sourceModel].join("\t").localeCompare(
+    [b.platform, b.groupName, b.channelName, b.sourceModel].join("\t")
+  ));
+  return { routes: rows, models: Array.from(modelSet).sort((a, b) => a.localeCompare(b)) };
+}
+
+async function fetchRemoteSub2ApiGroups(connection) {
+  try {
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/groups/all?include_inactive=true");
+    return extractRemoteList(unwrapSub2ApiRemoteData(result.json));
+  } catch (error) {
+    if (Number(error.status) !== 404) throw error;
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/groups?page=1&page_size=1000");
+    return extractRemoteList(unwrapSub2ApiRemoteData(result.json));
+  }
+}
+
 function serializeSub2ApiInvite(row) {
   return {
     id: row.id,
@@ -2847,6 +2939,7 @@ function serializeSub2ApiImageJob(job) {
     model: job.model,
     quality: job.quality,
     outputFormat: job.outputFormat,
+    background: job.background,
     aspectRatio: job.aspectRatio,
     count: job.count,
     createdAt: job.createdAt,
@@ -2875,8 +2968,10 @@ function buildSub2ApiImagePublicPayload(connection, identity, sessionToken = nul
     },
     options: {
       models: SUB2API_IMAGE_MODELS,
+      editModels: SUB2API_IMAGE_EDIT_MODELS,
       qualities: SUB2API_IMAGE_QUALITIES,
       formats: SUB2API_IMAGE_FORMATS,
+      backgrounds: SUB2API_IMAGE_BACKGROUNDS,
       aspectRatios: SUB2API_IMAGE_ASPECT_RATIOS,
       maxCount: SUB2API_IMAGE_MAX_COUNT,
       maxReferenceImages: SUB2API_IMAGE_MAX_REFERENCE_IMAGES,
@@ -3152,8 +3247,8 @@ function getSub2ApiImageSize(aspectRatio) {
   const normalized = String(aspectRatio || "auto").trim();
   if (normalized === "auto") return "auto";
   if (normalized === "1:1") return "1024x1024";
-  if (normalized === "16:9" || normalized === "4:3") return "1536x1024";
-  if (normalized === "3:4" || normalized === "9:16") return "1024x1536";
+  if (normalized === "3:2") return "1536x1024";
+  if (normalized === "2:3") return "1024x1536";
   return "auto";
 }
 
@@ -3245,6 +3340,7 @@ function walkForSub2ApiImageCall(value) {
 }
 
 function extractSub2ApiResponsesImageItems(raw) {
+  const items = [];
   let partialB64 = "";
   let partialPrompt = "";
   for (const line of String(raw || "").split(/\r?\n/)) {
@@ -3260,13 +3356,16 @@ function extractSub2ApiResponsesImageItems(raw) {
     }
     if (event.type === "response.output_item.done" && event.item?.type === "image_generation_call") {
       if (event.item.result) {
-        return [{ b64_json: event.item.result, revised_prompt: event.item.revised_prompt || "" }];
+        items.push({ b64_json: event.item.result, revised_prompt: event.item.revised_prompt || "" });
+        continue;
       }
       if (partialB64) {
-        return [{ b64_json: partialB64, revised_prompt: partialPrompt }];
+        items.push({ b64_json: partialB64, revised_prompt: partialPrompt });
+        partialB64 = "";
       }
     }
   }
+  if (items.length) return items;
 
   const parsed = safeParseJson(raw, null);
   const found = walkForSub2ApiImageCall(parsed);
@@ -3358,20 +3457,22 @@ async function normalizeSub2ApiImageResult(item, outputFormat) {
   return null;
 }
 
-function buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, size }) {
+function buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, background, size, count }) {
   return {
     type: "image_generation",
     model,
     action: mode === "image" ? "edit" : "generate",
+    n: count,
     size: size === "auto" ? "auto" : size,
     quality,
+    background,
     output_format: outputFormat,
     moderation: "low",
     partial_images: 0
   };
 }
 
-function buildSub2ApiResponsesBody({ mode, prompt, model, quality, outputFormat, size, referenceImages = [] }) {
+function buildSub2ApiResponsesBody({ mode, prompt, model, quality, outputFormat, background, size, count, referenceImages = [] }) {
   const content = [{ type: "input_text", text: prompt }];
   if (mode === "image") {
     for (const dataUrl of referenceImages) {
@@ -3382,11 +3483,24 @@ function buildSub2ApiResponsesBody({ mode, prompt, model, quality, outputFormat,
     model: SUB2API_IMAGE_RESPONSES_MODEL,
     instructions: "You are a tool runner. Pass the user prompt to image_generation VERBATIM. DO NOT rewrite, expand, polish, or revise it in any way. Use the exact text the user gave.",
     input: [{ role: "user", content }],
-    tools: [buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, size })],
+    tools: [buildSub2ApiResponsesImageTool({ mode, model, quality, outputFormat, background, size, count })],
     tool_choice: { type: "image_generation" },
     reasoning: { effort: "xhigh" },
     store: false,
     stream: true
+  };
+}
+
+function buildSub2ApiImagesJsonBody({ prompt, model, quality, outputFormat, background, size, count }) {
+  return {
+    model,
+    prompt,
+    n: count,
+    size,
+    quality,
+    background,
+    output_format: outputFormat,
+    moderation: "low"
   };
 }
 
@@ -3402,52 +3516,30 @@ function shouldFallbackToSub2ApiImagesApi(error) {
   );
 }
 
-async function textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size }) {
+async function textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, background, size, count }) {
   try {
-    const body = buildSub2ApiResponsesBody({
-      mode: "text",
-      prompt,
-      model,
-      quality,
-      outputFormat,
-      size
-    });
-    const items = await callSub2ApiResponses(connection, apiKey, body);
+    const body = buildSub2ApiImagesJsonBody({ prompt, model, quality, outputFormat, background, size, count });
+    const json = await callSub2ApiOpenAiJson(connection, apiKey, "/v1/images/generations", body);
+    const items = extractSub2ApiImageItems(json);
     if (items.length) return items;
   } catch (error) {
     if (!shouldFallbackToSub2ApiImagesApi(error)) throw error;
   }
 
-  const body = {
-    model,
+  const body = buildSub2ApiResponsesBody({
+    mode: "text",
     prompt,
-    n: 1,
-    size,
+    model,
     quality,
-    output_format: outputFormat,
-    response_format: "b64_json"
-  };
-  const json = await callSub2ApiOpenAiJson(connection, apiKey, "/v1/images/generations", body);
-  return extractSub2ApiImageItems(json);
+    outputFormat,
+    background,
+    size,
+    count
+  });
+  return callSub2ApiResponses(connection, apiKey, body);
 }
 
-async function referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size, referenceImages }) {
-  try {
-    const body = buildSub2ApiResponsesBody({
-      mode: "image",
-      prompt,
-      model,
-      quality,
-      outputFormat,
-      size,
-      referenceImages
-    });
-    const items = await callSub2ApiResponses(connection, apiKey, body);
-    if (items.length) return items;
-  } catch (error) {
-    if (!shouldFallbackToSub2ApiImagesApi(error)) throw error;
-  }
-
+async function referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, background, size, count, referenceImages }) {
   const form = new FormData();
   referenceImages.forEach((dataUrl, index) => {
     const parsed = parseSub2ApiImageDataUrl(dataUrl);
@@ -3457,27 +3549,44 @@ async function referenceToSub2ApiImage({ connection, apiKey, prompt, model, qual
   });
   form.append("model", model);
   form.append("prompt", prompt);
-  form.append("n", "1");
+  form.append("n", String(count));
   form.append("size", size === "auto" ? "1024x1024" : size);
   form.append("quality", quality);
+  form.append("background", background);
   form.append("output_format", outputFormat);
-  form.append("response_format", "b64_json");
+  form.append("moderation", "low");
 
-  const json = await callSub2ApiOpenAiForm(connection, apiKey, "/v1/images/edits", form);
-  return extractSub2ApiImageItems(json);
+  try {
+    const json = await callSub2ApiOpenAiForm(connection, apiKey, "/v1/images/edits", form);
+    const items = extractSub2ApiImageItems(json);
+    if (items.length) return items;
+  } catch (error) {
+    if (!shouldFallbackToSub2ApiImagesApi(error)) throw error;
+  }
+
+  const body = buildSub2ApiResponsesBody({
+    mode: "image",
+    prompt,
+    model,
+    quality,
+    outputFormat,
+    background,
+    size,
+    count,
+    referenceImages
+  });
+  return callSub2ApiResponses(connection, apiKey, body);
 }
 
-async function generateSub2ApiImages({ mode, connection, apiKey, prompt, model, quality, outputFormat, size, count, referenceImages }) {
+async function generateSub2ApiImages({ mode, connection, apiKey, prompt, model, quality, outputFormat, background, size, count, referenceImages }) {
+  const rawItems = mode === "image"
+    ? await referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, background, size, count, referenceImages })
+    : await textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, background, size, count });
   const images = [];
-  for (let i = 0; i < count; i += 1) {
-    const rawItems = mode === "image"
-      ? await referenceToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size, referenceImages })
-      : await textToSub2ApiImage({ connection, apiKey, prompt, model, quality, outputFormat, size });
-    for (const item of rawItems) {
-      const normalized = await normalizeSub2ApiImageResult(item, outputFormat);
-      if (normalized) images.push(normalized);
-      if (images.length >= count) break;
-    }
+  for (const item of rawItems) {
+    const normalized = await normalizeSub2ApiImageResult(item, outputFormat);
+    if (normalized) images.push(normalized);
+    if (images.length >= count) break;
   }
   return images.slice(0, count);
 }
@@ -3489,6 +3598,7 @@ const sub2apiImageGenerateSchema = z.object({
   model: z.string().trim().optional().default("gpt-image-2"),
   quality: z.string().trim().optional().default("auto"),
   outputFormat: z.string().trim().optional().default("png"),
+  background: z.string().trim().optional().default("auto"),
   aspectRatio: z.string().trim().optional().default("auto"),
   count: z.coerce.number().int().min(1).max(SUB2API_IMAGE_MAX_COUNT).optional().default(1),
   referenceImages: z.array(z.string()).max(SUB2API_IMAGE_MAX_REFERENCE_IMAGES).optional().default([])
@@ -3510,11 +3620,17 @@ function prepareSub2ApiImageGenerateRequest(body) {
   }
 
   const model = SUB2API_IMAGE_MODELS.includes(payload.model) ? payload.model : "gpt-image-2";
+  if (payload.mode === "image" && !SUB2API_IMAGE_EDIT_MODELS.includes(model)) {
+    const error = new Error("该模型不支持参考图修改，请选择 gpt-image-2、gpt-image-1 或 gpt-image-1-mini");
+    error.statusCode = 400;
+    throw error;
+  }
   const quality = SUB2API_IMAGE_QUALITIES.includes(payload.quality) ? payload.quality : "auto";
   const outputFormat = SUB2API_IMAGE_FORMATS.includes(payload.outputFormat) ? payload.outputFormat : "png";
+  const background = SUB2API_IMAGE_BACKGROUNDS.includes(payload.background) ? payload.background : "auto";
   const aspectRatio = SUB2API_IMAGE_ASPECT_RATIOS.includes(payload.aspectRatio) ? payload.aspectRatio : "auto";
   const size = getSub2ApiImageSize(aspectRatio);
-  return { payload, model, quality, outputFormat, aspectRatio, size };
+  return { payload, model, quality, outputFormat, background, aspectRatio, size };
 }
 
 function auditSub2ApiImageGenerateFailure({ jobId, payload, connection, imageSession, model, error }) {
@@ -3542,6 +3658,7 @@ async function completeSub2ApiImageGeneration({
   model,
   quality,
   outputFormat,
+  background,
   aspectRatio,
   size
 }) {
@@ -3554,6 +3671,7 @@ async function completeSub2ApiImageGeneration({
     model,
     quality,
     outputFormat,
+    background,
     size,
     count: payload.count,
     referenceImages: payload.referenceImages
@@ -3570,6 +3688,7 @@ async function completeSub2ApiImageGeneration({
     model,
     quality,
     outputFormat,
+    background,
     aspectRatio,
     size,
     count: payload.count,
@@ -3589,6 +3708,7 @@ async function completeSub2ApiImageGeneration({
       model,
       quality,
       outputFormat,
+      background,
       aspectRatio,
       count: payload.count,
       returned: images.length,
@@ -5223,6 +5343,7 @@ app.post("/api/public/sub2api/image/jobs", {
     model: prepared.model,
     quality: prepared.quality,
     outputFormat: prepared.outputFormat,
+    background: prepared.background,
     aspectRatio: prepared.aspectRatio,
     count: prepared.payload.count,
     createdAt: nowIso(),
@@ -5242,6 +5363,7 @@ app.post("/api/public/sub2api/image/jobs", {
       model: prepared.model,
       quality: prepared.quality,
       outputFormat: prepared.outputFormat,
+      background: prepared.background,
       aspectRatio: prepared.aspectRatio,
       size: prepared.size
     });
@@ -5293,6 +5415,7 @@ app.post("/api/public/sub2api/image/generate", {
       model: prepared.model,
       quality: prepared.quality,
       outputFormat: prepared.outputFormat,
+      background: prepared.background,
       aspectRatio: prepared.aspectRatio,
       size: prepared.size
     });
@@ -6172,6 +6295,65 @@ app.get("/api/admin/sub2api/connections/:id/upstream-monitors", { preHandler: re
       return reply.code(404).send({ message: "远程 Sub2api 未启用上游监控接口；Docker 部署请确认镜像版本支持渠道监控，环境变量 OPS_ENABLED=true，并在 Sub2api 后台设置里启用渠道监控" });
     }
     return reply.code(Number(error.status || 502)).send({ message: error.message || "读取上游监控失败" });
+  }
+});
+
+app.get("/api/admin/sub2api/connections/:id/model-routes", { preHandler: requireAdmin }, async (request, reply) => {
+  const id = String(request.params.id || "").trim();
+  const connection = db.prepare(`
+    SELECT *
+    FROM sub2api_connections
+    WHERE id = ? AND status <> ?
+  `).get(id, sub2apiConnectionStatuses.deleted);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在" });
+  }
+
+  try {
+    const [groups, channelsResult] = await Promise.all([
+      fetchRemoteSub2ApiGroups(connection),
+      callSub2ApiRemote(connection, "/api/v1/admin/channels?page=1&page_size=1000")
+    ]);
+    const channels = extractRemoteList(unwrapSub2ApiRemoteData(channelsResult.json));
+    const activeGroups = groups.filter((group) => String(group.status || "active") !== "deleted");
+
+    const candidateEntries = await Promise.all(activeGroups.map(async (group) => {
+      try {
+        const params = new URLSearchParams();
+        if (group.platform) params.set("platform", String(group.platform));
+        const result = await callSub2ApiRemote(connection, `/api/v1/admin/groups/${encodeURIComponent(group.id)}/models-list-candidates${params.size ? `?${params}` : ""}`);
+        const payload = unwrapSub2ApiRemoteData(result.json);
+        return [String(group.id), Array.isArray(payload?.models) ? payload.models : extractRemoteList(payload)];
+      } catch {
+        return [String(group.id), getRemoteModelsListConfig(group).models];
+      }
+    }));
+    const candidateMap = new Map(candidateEntries);
+    const { routes, models } = buildRemoteSub2ApiRoutes(activeGroups, channels, candidateMap);
+
+    return {
+      connection: serializeSub2ApiConnection(connection),
+      groups: activeGroups.map((group) => ({
+        id: group.id,
+        name: group.name || "",
+        platform: group.platform || "",
+        status: group.status || "",
+        modelsListConfig: getRemoteModelsListConfig(group),
+        candidateModels: candidateMap.get(String(group.id)) || []
+      })),
+      channels: channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name || "",
+        status: channel.status || "",
+        groupIds: channel.group_ids || channel.groupIds || [],
+        billingModelSource: channel.billing_model_source || channel.billingModelSource || "",
+        restrictModels: Boolean(channel.restrict_models ?? channel.restrictModels)
+      })),
+      models,
+      routes
+    };
+  } catch (error) {
+    return reply.code(Number(error.status || 502)).send({ message: error.message || "读取 Sub2api 模型路由失败" });
   }
 });
 

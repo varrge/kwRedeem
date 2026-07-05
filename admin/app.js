@@ -178,6 +178,12 @@ const refs = {
   sub2apiUpstreamMonitorRefreshBtn: document.querySelector("#sub2api-upstream-monitor-refresh-btn"),
   sub2apiUpstreamMonitorList: document.querySelector("#sub2api-upstream-monitor-list"),
   sub2apiUpstreamMonitorResult: document.querySelector("#sub2api-upstream-monitor-result"),
+  sub2apiModelRouteConnection: document.querySelector("#sub2api-model-route-connection"),
+  sub2apiModelRouteFilter: document.querySelector("#sub2api-model-route-filter"),
+  sub2apiModelRouteRefreshBtn: document.querySelector("#sub2api-model-route-refresh-btn"),
+  sub2apiModelRouteSummary: document.querySelector("#sub2api-model-route-summary"),
+  sub2apiModelRouteList: document.querySelector("#sub2api-model-route-list"),
+  sub2apiModelRouteResult: document.querySelector("#sub2api-model-route-result"),
   sub2apiInviteConnectionFilter: document.querySelector("#sub2api-invite-connection-filter"),
   sub2apiInviteUserFilter: document.querySelector("#sub2api-invite-user-filter"),
   sub2apiInviteStatusFilter: document.querySelector("#sub2api-invite-status-filter"),
@@ -293,6 +299,7 @@ let sub2apiRebatesCache = [];
 let sub2apiLevelsCache = [];
 let sub2apiPlansCache = [];
 let sub2apiOrdersCache = [];
+let sub2apiModelRoutesCache = null;
 let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
 let migrationRestoreUploadId = null;
@@ -730,6 +737,7 @@ function setupModuleSubtabs() {
         { id: "connections", label: "连接管理", elements: [closestCard(refs.sub2apiConnectionForm), closestCard(refs.sub2apiConnectionList)] },
         { id: "help", label: "嵌入说明", elements: [document.querySelector("#sub2api-connection-form")?.closest(".grid")?.querySelector(".card:nth-child(2)")] },
         { id: "upstream-monitor", label: "上游监控", elements: [closestCard(refs.sub2apiUpstreamMonitorList)] },
+        { id: "model-routes", label: "模型路由", elements: [closestCard(refs.sub2apiModelRouteList)] },
         { id: "invites", label: "邀请码", elements: [closestCard(refs.sub2apiInviteList)] },
         { id: "plans", label: "套餐", elements: [closestCard(refs.sub2apiPlanForm), closestCard(refs.sub2apiPlanList)] },
         { id: "orders", label: "订单", elements: [closestCard(refs.sub2apiOrderList)] },
@@ -2533,6 +2541,20 @@ function populateSub2ApiConnectionFilter() {
       refs.sub2apiUpstreamMonitorConnection.value = sub2apiConnectionsCache[0].id;
     }
   }
+
+  if (refs.sub2apiModelRouteConnection) {
+    const currentRoute = refs.sub2apiModelRouteConnection.value;
+    refs.sub2apiModelRouteConnection.innerHTML = [`<option value="">选择连接</option>`]
+      .concat(sub2apiConnectionsCache.map((item) => `
+        <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${escapeHtml(getStatusLabel(item.status))}）</option>
+      `))
+      .join("");
+    if (sub2apiConnectionsCache.some((item) => item.id === currentRoute)) {
+      refs.sub2apiModelRouteConnection.value = currentRoute;
+    } else if (sub2apiConnectionsCache.length) {
+      refs.sub2apiModelRouteConnection.value = sub2apiConnectionsCache[0].id;
+    }
+  }
 }
 
 async function refreshSub2ApiConnections() {
@@ -2596,6 +2618,62 @@ async function refreshSub2ApiUpstreamMonitors() {
     { label: "最近检测", render: (item) => escapeHtml(item.lastCheckedAt || "-") }
   ], payload.items || [], "远程 Sub2api 暂无监控数据");
   setHint(refs.sub2apiUpstreamMonitorResult, `已读取上游监控：${payload.total ?? payload.items?.length ?? 0} 条`);
+}
+
+function renderModelRouteChain(item) {
+  const source = escapeHtml(item.sourceModel || "-");
+  const target = escapeHtml(item.mappedModel || "-");
+  return item.mapped ? `<code>${source}</code> → <code>${target}</code>` : `<code>${source}</code>`;
+}
+
+async function refreshSub2ApiModelRoutes({ force = false } = {}) {
+  if (!refs.sub2apiModelRouteList) return;
+  const connectionId = refs.sub2apiModelRouteConnection?.value || sub2apiConnectionsCache[0]?.id || "";
+  if (!connectionId) {
+    refs.sub2apiModelRouteList.innerHTML = `<p class="hint centered">请先添加 Sub2api 连接</p>`;
+    setHint(refs.sub2apiModelRouteSummary, "");
+    return;
+  }
+
+  if (force || !sub2apiModelRoutesCache || sub2apiModelRoutesCache.connectionId !== connectionId) {
+    sub2apiModelRoutesCache = {
+      connectionId,
+      payload: await api(`/api/admin/sub2api/connections/${encodeURIComponent(connectionId)}/model-routes`)
+    };
+  }
+  const payload = sub2apiModelRoutesCache.payload;
+  const keyword = String(refs.sub2apiModelRouteFilter?.value || "").trim().toLowerCase();
+  const routes = (payload.routes || []).filter((item) => {
+    if (!keyword) return true;
+    return [
+      item.platform,
+      item.groupName,
+      item.channelName,
+      item.sourceModel,
+      item.mappedModel,
+      item.billingModelSource
+    ].some((value) => String(value || "").toLowerCase().includes(keyword));
+  });
+
+  if (refs.sub2apiModelRouteSummary) {
+    const models = payload.models || [];
+    refs.sub2apiModelRouteSummary.innerHTML = `
+      <div>模型 ${models.length} 个，路由 ${payload.routes?.length || 0} 条，分组 ${payload.groups?.length || 0} 个，渠道 ${payload.channels?.length || 0} 个。</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        ${models.slice(0, 80).map((model) => `<span class="table-badge">${escapeHtml(model)}</span>`).join("")}
+        ${models.length > 80 ? `<span class="hint">另有 ${models.length - 80} 个</span>` : ""}
+      </div>
+    `;
+  }
+  renderTable(refs.sub2apiModelRouteList, [
+    { label: "平台", render: (item) => escapeHtml(item.platform || "-") },
+    { label: "分组", render: (item) => `<strong>${escapeHtml(item.groupName || "-")}</strong><br/><span class="hint">${escapeHtml(getStatusLabel(item.groupStatus))}</span>` },
+    { label: "渠道", render: (item) => `<strong>${escapeHtml(item.channelName || "-")}</strong><br/><span class="hint">${escapeHtml(getStatusLabel(item.channelStatus))}</span>` },
+    { label: "模型路由", render: renderModelRouteChain },
+    { label: "计费来源", render: (item) => escapeHtml(item.billingModelSource || "-") },
+    { label: "限制模型", render: (item) => item.restrictModels ? "是" : "否" }
+  ], routes, "暂无模型路由数据");
+  setHint(refs.sub2apiModelRouteResult, keyword ? `筛选命中 ${routes.length} 条` : `已读取 ${routes.length} 条模型路由`);
 }
 
 function editSub2ApiConnection(id) {
@@ -3293,6 +3371,9 @@ async function refreshSub2ApiConsole() {
   await refreshSub2ApiUpstreamMonitors().catch((error) => {
     if (refs.sub2apiUpstreamMonitorList) refs.sub2apiUpstreamMonitorList.innerHTML = `<p class="hint centered">加载上游监控失败：${escapeHtml(error.message)}</p>`;
   });
+  await refreshSub2ApiModelRoutes().catch((error) => {
+    if (refs.sub2apiModelRouteList) refs.sub2apiModelRouteList.innerHTML = `<p class="hint centered">加载模型路由失败：${escapeHtml(error.message)}</p>`;
+  });
   await refreshSub2ApiPlans().catch((error) => {
     if (refs.sub2apiPlanList) refs.sub2apiPlanList.innerHTML = `<p class="hint centered">加载订阅套餐失败：${escapeHtml(error.message)}</p>`;
   });
@@ -3770,6 +3851,27 @@ if (refs.sub2apiUpstreamMonitorRefreshBtn) {
 if (refs.sub2apiUpstreamMonitorConnection) {
   refs.sub2apiUpstreamMonitorConnection.addEventListener("change", () => {
     refreshSub2ApiUpstreamMonitors().catch((error) => setHint(refs.sub2apiUpstreamMonitorResult, `加载失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiModelRouteRefreshBtn) {
+  refs.sub2apiModelRouteRefreshBtn.addEventListener("click", () => {
+    resetTablePage(refs.sub2apiModelRouteList);
+    refreshSub2ApiModelRoutes({ force: true }).catch((error) => setHint(refs.sub2apiModelRouteResult, `刷新失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiModelRouteConnection) {
+  refs.sub2apiModelRouteConnection.addEventListener("change", () => {
+    resetTablePage(refs.sub2apiModelRouteList);
+    refreshSub2ApiModelRoutes({ force: true }).catch((error) => setHint(refs.sub2apiModelRouteResult, `加载失败：${error.message}`));
+  });
+}
+
+if (refs.sub2apiModelRouteFilter) {
+  refs.sub2apiModelRouteFilter.addEventListener("input", () => {
+    resetTablePage(refs.sub2apiModelRouteList);
+    refreshSub2ApiModelRoutes().catch((error) => setHint(refs.sub2apiModelRouteResult, `筛选失败：${error.message}`));
   });
 }
 

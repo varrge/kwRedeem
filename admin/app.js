@@ -2828,7 +2828,7 @@ async function syncSub2ApiInvites() {
     method: "POST",
     body: JSON.stringify(body)
   });
-  const message = `同步完成：同步 ${payload.connections || 1} 个连接，更新 ${payload.updated || 0} 条，生成返利 ${payload.rebatesCreated || 0} 条`;
+  const message = `同步完成：同步 ${payload.connections || 1} 个连接，更新邀请码 ${payload.updated || 0} 条，生成返利 ${payload.rebatesCreated || 0} 条`;
   setHint(refs.sub2apiInviteResult, message);
   setHint(refs.sub2apiRebateResult, message);
   await refreshSub2ApiInvites();

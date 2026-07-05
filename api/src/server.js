@@ -2358,35 +2358,48 @@ async function syncSub2ApiInviteUsage(connection, inviterUserId = "") {
     if (!invite) continue;
     const usedBy = readRemoteUserId(remote);
     const usedAt = readRemoteTime(remote?.used_at, remote?.usedAt);
+    const usedByEmail = remote?.used_by_email || remote?.usedByEmail || null;
+    const usedByUsername = remote?.used_by_username || remote?.usedByUsername || null;
     const status = usedBy
       ? (usedBy === String(invite.sub2api_user_id) ? sub2apiInviteStatuses.abnormal : sub2apiInviteStatuses.used)
       : invite.status;
-    db.prepare(`
-      UPDATE sub2api_invites
-      SET used_by_user_id = COALESCE(?, used_by_user_id),
-          used_by_email = COALESCE(?, used_by_email),
-          used_by_username = COALESCE(?, used_by_username),
-          used_at = COALESCE(?, used_at),
-          status = ?,
-          abnormal_reason = ?,
-          updated_at = ?
-      WHERE id = ?
-    `).run(
-      usedBy || null,
-      remote?.used_by_email || remote?.usedByEmail || null,
-      remote?.used_by_username || remote?.usedByUsername || null,
-      usedAt,
-      status,
-      status === sub2apiInviteStatuses.abnormal ? "self_used" : null,
-      nowIso(),
-      invite.id
+    const abnormalReason = status === sub2apiInviteStatuses.abnormal ? "self_used" : null;
+    const changed = (
+      (usedBy && usedBy !== String(invite.used_by_user_id || "")) ||
+      (usedByEmail && usedByEmail !== String(invite.used_by_email || "")) ||
+      (usedByUsername && usedByUsername !== String(invite.used_by_username || "")) ||
+      (usedAt && usedAt !== String(invite.used_at || "")) ||
+      status !== invite.status ||
+      abnormalReason !== (invite.abnormal_reason || null)
     );
-    updated += 1;
+    if (changed) {
+      db.prepare(`
+        UPDATE sub2api_invites
+        SET used_by_user_id = COALESCE(?, used_by_user_id),
+            used_by_email = COALESCE(?, used_by_email),
+            used_by_username = COALESCE(?, used_by_username),
+            used_at = COALESCE(?, used_at),
+            status = ?,
+            abnormal_reason = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).run(
+        usedBy || null,
+        usedByEmail,
+        usedByUsername,
+        usedAt,
+        status,
+        abnormalReason,
+        nowIso(),
+        invite.id
+      );
+      updated += 1;
+    }
     if (usedBy && usedBy !== String(invite.sub2api_user_id)) {
       ensureSub2ApiKnownUser(connection.id, {
         userId: usedBy,
-        email: remote?.used_by_email || remote?.usedByEmail || "",
-        username: remote?.used_by_username || remote?.usedByUsername || ""
+        email: usedByEmail || "",
+        username: usedByUsername || ""
       });
       const created = await maybeCreateSub2ApiInviteRebate(connection, invite.id);
       if (created) rebatesCreated += 1;

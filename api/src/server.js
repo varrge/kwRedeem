@@ -2019,6 +2019,104 @@ async function fetchRemoteSub2ApiGroups(connection) {
   }
 }
 
+async function loadSub2ApiModelRoutes(connection) {
+  const [groups, channelsResult] = await Promise.all([
+    fetchRemoteSub2ApiGroups(connection),
+    callSub2ApiRemote(connection, "/api/v1/admin/channels?page=1&page_size=1000")
+  ]);
+  const channels = extractRemoteList(unwrapSub2ApiRemoteData(channelsResult.json));
+  const activeGroups = groups.filter((group) => String(group.status || "active") !== "deleted");
+  const candidateEntries = await Promise.all(activeGroups.map(async (group) => {
+    try {
+      const params = new URLSearchParams();
+      if (group.platform) params.set("platform", String(group.platform));
+      const result = await callSub2ApiRemote(connection, `/api/v1/admin/groups/${encodeURIComponent(group.id)}/models-list-candidates${params.size ? `?${params}` : ""}`);
+      const payload = unwrapSub2ApiRemoteData(result.json);
+      return [String(group.id), Array.isArray(payload?.models) ? payload.models : extractRemoteList(payload)];
+    } catch {
+      return [String(group.id), getRemoteModelsListConfig(group).models];
+    }
+  }));
+  const candidateMap = new Map(candidateEntries);
+  const { routes, models } = buildRemoteSub2ApiRoutes(activeGroups, channels, candidateMap);
+  return { groups: activeGroups, channels, candidateMap, routes, models };
+}
+
+function inferPublicModelTags(model, platform) {
+  const text = `${model} ${platform}`.toLowerCase();
+  const tags = [];
+  if (/r1|reason|o[134]|thinking/.test(text)) tags.push("推理");
+  if (/code|coder|coding/.test(text)) tags.push("编程");
+  if (/vision|image|gpt-4o|gemini/.test(text)) tags.push("多模态");
+  if (/mini|flash|haiku|lite|turbo/.test(text)) tags.push("快速");
+  return tags.slice(0, 3);
+}
+
+function buildPublicSub2ApiModelsPayload(connection, modelRoutes) {
+  const groupsById = new Map(modelRoutes.groups.map((group) => [String(group.id), group]));
+  const publicGroups = new Map();
+
+  function ensureGroup(groupId) {
+    const group = groupsById.get(String(groupId)) || {};
+    const key = String(group.id ?? groupId);
+    if (!publicGroups.has(key)) {
+      publicGroups.set(key, {
+        id: key,
+        name: group.name || group.platform || `Group ${groupId}`,
+        platform: group.platform || "",
+        status: group.status || "active",
+        models: new Map()
+      });
+    }
+    return publicGroups.get(key);
+  }
+
+  for (const route of modelRoutes.routes) {
+    const group = ensureGroup(route.groupId);
+    const name = String(route.sourceModel || "").trim();
+    if (!name) continue;
+    const active = String(route.groupStatus || group.status || "active") !== "disabled"
+      && String(route.channelStatus || "active") !== "disabled";
+    if (!group.models.has(name)) {
+      group.models.set(name, {
+        name,
+        status: active ? "available" : "unavailable",
+        tags: inferPublicModelTags(name, route.platform || group.platform)
+      });
+    } else if (active) {
+      group.models.get(name).status = "available";
+    }
+  }
+
+  for (const group of modelRoutes.groups) {
+    const publicGroup = ensureGroup(group.id);
+    for (const model of modelRoutes.candidateMap.get(String(group.id)) || []) {
+      const name = String(model || "").trim();
+      if (!name || publicGroup.models.has(name)) continue;
+      publicGroup.models.set(name, {
+        name,
+        status: String(group.status || "active") === "disabled" ? "unavailable" : "available",
+        tags: inferPublicModelTags(name, group.platform)
+      });
+    }
+  }
+
+  const groups = Array.from(publicGroups.values())
+    .map((group) => ({
+      ...group,
+      models: Array.from(group.models.values()).sort((a, b) => a.name.localeCompare(b.name))
+    }))
+    .filter((group) => group.models.length)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return {
+    connection: { id: connection.id, name: connection.name },
+    totalGroups: groups.length,
+    totalModels: groups.reduce((sum, group) => sum + group.models.length, 0),
+    groups
+  };
+}
+
 function serializeSub2ApiInvite(row) {
   return {
     id: row.id,
@@ -5176,6 +5274,22 @@ app.post("/api/public/sub2api/image/session-from-token", async (request, reply) 
   }
 });
 
+app.get("/api/public/sub2api/connections/:id/models", async (request, reply) => {
+  const connection = findSub2ApiConnectionBySelector(request.params.id);
+  if (!connection) {
+    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  }
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+
+  try {
+    return buildPublicSub2ApiModelsPayload(connection, await loadSub2ApiModelRoutes(connection));
+  } catch (error) {
+    return reply.code(Number(error.status || 502)).send({ message: error.message || "读取模型列表失败" });
+  }
+});
+
 app.post("/api/public/sub2api/worldcup/session", async (request, reply) => {
   const parsed = z.object({
     sso: z.string().min(20),
@@ -6323,30 +6437,11 @@ app.get("/api/admin/sub2api/connections/:id/model-routes", { preHandler: require
   }
 
   try {
-    const [groups, channelsResult] = await Promise.all([
-      fetchRemoteSub2ApiGroups(connection),
-      callSub2ApiRemote(connection, "/api/v1/admin/channels?page=1&page_size=1000")
-    ]);
-    const channels = extractRemoteList(unwrapSub2ApiRemoteData(channelsResult.json));
-    const activeGroups = groups.filter((group) => String(group.status || "active") !== "deleted");
-
-    const candidateEntries = await Promise.all(activeGroups.map(async (group) => {
-      try {
-        const params = new URLSearchParams();
-        if (group.platform) params.set("platform", String(group.platform));
-        const result = await callSub2ApiRemote(connection, `/api/v1/admin/groups/${encodeURIComponent(group.id)}/models-list-candidates${params.size ? `?${params}` : ""}`);
-        const payload = unwrapSub2ApiRemoteData(result.json);
-        return [String(group.id), Array.isArray(payload?.models) ? payload.models : extractRemoteList(payload)];
-      } catch {
-        return [String(group.id), getRemoteModelsListConfig(group).models];
-      }
-    }));
-    const candidateMap = new Map(candidateEntries);
-    const { routes, models } = buildRemoteSub2ApiRoutes(activeGroups, channels, candidateMap);
+    const { groups, channels, candidateMap, routes, models } = await loadSub2ApiModelRoutes(connection);
 
     return {
       connection: serializeSub2ApiConnection(connection),
-      groups: activeGroups.map((group) => ({
+      groups: groups.map((group) => ({
         id: group.id,
         name: group.name || "",
         platform: group.platform || "",

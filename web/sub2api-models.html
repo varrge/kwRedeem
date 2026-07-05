@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>可用模型</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fb;
+        --panel: #ffffff;
+        --line: #d9e0ea;
+        --text: #172033;
+        --muted: #68758b;
+        --accent: #2563eb;
+        --success: #0f9f6e;
+        --warning: #d97706;
+        --error: #dc2626;
+        --shadow: 0 16px 40px rgba(28, 37, 59, 0.09);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #101521;
+          --panel: #151c2b;
+          --line: #2a354a;
+          --text: #eef3ff;
+          --muted: #9aa8bd;
+          --accent: #60a5fa;
+          --shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(rgba(120, 130, 150, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(120, 130, 150, 0.08) 1px, transparent 1px),
+          var(--bg);
+        background-size: 36px 36px;
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      button, input { font: inherit; }
+      button { cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: 0.58; }
+      .shell {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0;
+      }
+      .header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(30px, 7vw, 68px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+      .subtitle, .status-line {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .search {
+        width: min(360px, 48vw);
+        height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 0 12px;
+        background: var(--panel);
+        color: var(--text);
+        outline: none;
+      }
+      .search:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      }
+      .ghost-btn {
+        min-height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 0 14px;
+        background: var(--panel);
+        color: var(--text);
+        font-weight: 700;
+      }
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 10px;
+        background: color-mix(in srgb, var(--panel) 86%, transparent);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--success);
+      }
+      .groups {
+        display: grid;
+        gap: 12px;
+      }
+      details {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--panel) 94%, transparent);
+        box-shadow: var(--shadow);
+      }
+      summary {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 18px 20px;
+        list-style: none;
+        cursor: pointer;
+      }
+      summary::-webkit-details-marker { display: none; }
+      .group-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        min-width: 0;
+      }
+      .group-title strong {
+        font-size: 20px;
+        line-height: 1.25;
+      }
+      .group-meta {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .models {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 10px;
+        padding: 0 20px 20px;
+      }
+      .model {
+        min-height: 94px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 13px;
+        background: color-mix(in srgb, var(--panel) 92%, var(--bg));
+      }
+      .model-name {
+        overflow-wrap: anywhere;
+        font-weight: 800;
+        line-height: 1.35;
+      }
+      .model-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .tag.available {
+        border-color: color-mix(in srgb, var(--success) 42%, var(--line));
+        color: var(--success);
+      }
+      .tag.unavailable {
+        border-color: color-mix(in srgb, var(--error) 42%, var(--line));
+        color: var(--error);
+      }
+      .empty {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 28px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .status-line.error { color: var(--error); }
+      @media (max-width: 720px) {
+        .header, summary {
+          grid-template-columns: 1fr;
+        }
+        .toolbar {
+          display: grid;
+          grid-template-columns: 1fr auto;
+        }
+        .search {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div>
+          <h1>可用模型</h1>
+          <p id="subtitle" class="subtitle">正在读取模型列表...</p>
+        </div>
+        <div class="toolbar">
+          <input id="search" class="search" type="search" placeholder="搜索模型 / 分组" />
+          <button id="refresh-btn" class="ghost-btn" type="button">刷新</button>
+        </div>
+      </header>
+      <div id="summary" class="summary"></div>
+      <section id="groups" class="groups"></section>
+      <div id="status-line" class="status-line"></div>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+      const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
+      const refs = {
+        subtitle: document.querySelector("#subtitle"),
+        search: document.querySelector("#search"),
+        refreshBtn: document.querySelector("#refresh-btn"),
+        summary: document.querySelector("#summary"),
+        groups: document.querySelector("#groups"),
+        statusLine: document.querySelector("#status-line")
+      };
+      const state = { payload: null };
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function setStatus(message, type = "info") {
+        refs.statusLine.textContent = message || "";
+        refs.statusLine.classList.toggle("error", type === "error");
+      }
+
+      function setBusy(busy) {
+        refs.refreshBtn.disabled = busy;
+        refs.refreshBtn.textContent = busy ? "刷新中..." : "刷新";
+      }
+
+      function readConnectionId() {
+        const params = new URLSearchParams(window.location.search);
+        return params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+      }
+
+      async function request(path) {
+        let response;
+        try {
+          response = await fetch(`${API_BASE}${path}`);
+        } catch (error) {
+          const hint = API_BASE
+            ? "请确认该 API 地址可从当前浏览器访问。"
+            : "未读取到 runtime-config.js，请确认 _kwredeem/runtime-config.js 指向 https://api.vsakura.top。";
+          throw new Error(`${hint} 原始错误：${error.message || "Failed to fetch"}`);
+        }
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.message || "请求失败");
+        return payload;
+      }
+
+      function renderSummary(groups) {
+        const totalModels = groups.reduce((sum, group) => sum + group.models.length, 0);
+        refs.summary.innerHTML = [
+          `<span class="pill"><span class="dot"></span>${totalModels} 个模型</span>`,
+          `<span class="pill">${groups.length} 个分组</span>`,
+          state.payload?.connection?.name ? `<span class="pill">${escapeHtml(state.payload.connection.name)}</span>` : ""
+        ].filter(Boolean).join("");
+      }
+
+      function render() {
+        const payload = state.payload;
+        if (!payload) return;
+        const keyword = refs.search.value.trim().toLowerCase();
+        const groups = (payload.groups || []).map((group) => ({
+          ...group,
+          models: (group.models || []).filter((model) => {
+            const haystack = `${group.name} ${group.platform} ${model.name} ${(model.tags || []).join(" ")}`.toLowerCase();
+            return !keyword || haystack.includes(keyword);
+          })
+        })).filter((group) => group.models.length);
+
+        refs.subtitle.textContent = `${payload.connection?.name || "Sub2api"} · ${payload.totalModels || 0} 个模型`;
+        renderSummary(groups);
+        if (!groups.length) {
+          refs.groups.innerHTML = `<div class="empty">${keyword ? "没有匹配的模型" : "暂无可用模型"}</div>`;
+          return;
+        }
+        refs.groups.innerHTML = groups.map((group, index) => `
+          <details ${index < 3 ? "open" : ""}>
+            <summary>
+              <div class="group-title">
+                <strong>${escapeHtml(group.name)}</strong>
+                ${group.platform ? `<span class="pill">${escapeHtml(group.platform)}</span>` : ""}
+              </div>
+              <div class="group-meta">${group.models.length} 个模型</div>
+            </summary>
+            <div class="models">
+              ${group.models.map((model) => `
+                <article class="model">
+                  <div class="model-name">${escapeHtml(model.name)}</div>
+                  <div class="model-meta">
+                    <span class="tag ${escapeHtml(model.status)}">${model.status === "available" ? "可用" : "暂不可用"}</span>
+                    ${(model.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
+                  </div>
+                </article>
+              `).join("")}
+            </div>
+          </details>
+        `).join("");
+      }
+
+      async function refresh() {
+        const connectionId = readConnectionId();
+        if (!connectionId) {
+          refs.subtitle.textContent = "缺少 connectionId";
+          setStatus("请在 URL 后添加 ?connectionId=<连接ID>", "error");
+          return;
+        }
+        try {
+          setBusy(true);
+          setStatus("正在加载...");
+          state.payload = await request(`/api/public/sub2api/connections/${encodeURIComponent(connectionId)}/models`);
+          render();
+          setStatus("");
+        } catch (error) {
+          refs.groups.innerHTML = `<div class="empty">模型列表加载失败</div>`;
+          setStatus(error.message, "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      refs.refreshBtn.addEventListener("click", () => refresh());
+      refs.search.addEventListener("input", () => render());
+      refresh();
+    </script>
+  </body>
+</html>

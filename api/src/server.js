@@ -93,6 +93,9 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
+const checkCxDir = path.join(projectRoot, "check-cx");
+const checkCxDeployLogPath = path.join(logsDir, "check-cx-deploy.log");
+const checkCxDeployStatePath = path.join(logsDir, "check-cx-deploy-state.json");
 const maintenancePath = path.join(projectRoot, "data", "maintenance.json");
 const migrationTmpDir = path.join(projectRoot, "tmp", "migration");
 const migrationUploads = new Map();
@@ -138,6 +141,13 @@ const updateState = {
   remoteCommit: null,
   branch: null,
   hasUpdate: false,
+  error: null
+};
+
+const checkCxDeployState = {
+  status: "idle",
+  startedAt: null,
+  endedAt: null,
   error: null
 };
 
@@ -337,12 +347,76 @@ function readUpdateLog(limit = 12000) {
   }
 }
 
+function writeCheckCxDeployState(patch = {}) {
+  Object.assign(checkCxDeployState, patch);
+  ensureLogsDir();
+  fs.writeFileSync(checkCxDeployStatePath, JSON.stringify(checkCxDeployState, null, 2));
+}
+
+function appendCheckCxDeployLog(message) {
+  ensureLogsDir();
+  fs.appendFileSync(checkCxDeployLogPath, `[${nowIso()}] ${message}\n`);
+}
+
+function readCheckCxDeployLog(limit = 12000) {
+  try {
+    const content = fs.readFileSync(checkCxDeployLogPath, "utf8");
+    return content.length > limit ? content.slice(content.length - limit) : content;
+  } catch {
+    return "";
+  }
+}
+
 async function runGit(args) {
   const { stdout } = await execFileAsync("git", args, {
     cwd: projectRoot,
     timeout: 30000
   });
   return stdout.trim();
+}
+
+async function getCheckCxProjectStatus() {
+  const exists = fs.existsSync(checkCxDir);
+  let branch = null;
+  let commit = null;
+  let pm2 = null;
+
+  if (exists) {
+    branch = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: checkCxDir,
+      timeout: 10000
+    }).then(({ stdout }) => stdout.trim()).catch(() => null);
+    commit = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: checkCxDir,
+      timeout: 10000
+    }).then(({ stdout }) => stdout.trim()).catch(() => null);
+  }
+
+  const pm2List = await execFileAsync("pm2", ["jlist"], {
+    cwd: projectRoot,
+    timeout: 10000
+  }).then(({ stdout }) => JSON.parse(stdout || "[]")).catch(() => []);
+  const processInfo = Array.isArray(pm2List) ? pm2List.find((item) => item?.name === "check-cx") : null;
+  if (processInfo) {
+    pm2 = {
+      name: processInfo.name,
+      status: processInfo.pm2_env?.status || "",
+      pid: processInfo.pid || null,
+      restarts: processInfo.pm2_env?.restart_time ?? null,
+      port: process.env.CHECK_CX_PORT || process.env.PORT || "3001"
+    };
+  }
+
+  return {
+    exists,
+    path: "check-cx",
+    branch,
+    commit,
+    pm2,
+    envFileExists: fs.existsSync(path.join(checkCxDir, ".env.production")),
+    deployState: checkCxDeployState,
+    log: readCheckCxDeployLog()
+  };
 }
 
 async function getGitVersionInfo(fetchRemote = false) {
@@ -447,6 +521,49 @@ function startUpdateTask(actor) {
       branch: versionInfo.branch ?? updateState.branch,
       hasUpdate: versionInfo.hasUpdate ?? updateState.hasUpdate,
       error: code === 0 ? null : `更新脚本退出码：${code}`
+    });
+  });
+}
+
+function startCheckCxDeployTask(actor) {
+  writeCheckCxDeployState({
+    status: "running",
+    startedAt: nowIso(),
+    endedAt: null,
+    error: null
+  });
+
+  appendCheckCxDeployLog(`管理员 ${actor} 触发 check-cx 部署`);
+
+  const child = spawn("bash", ["scripts/check-cx-deploy.sh"], {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  child.stdout.on("data", (chunk) => {
+    appendCheckCxDeployLog(chunk.toString().trimEnd());
+  });
+
+  child.stderr.on("data", (chunk) => {
+    appendCheckCxDeployLog(chunk.toString().trimEnd());
+  });
+
+  child.on("error", (error) => {
+    appendCheckCxDeployLog(`check-cx 部署任务启动失败：${error.message}`);
+    writeCheckCxDeployState({
+      status: "failed",
+      endedAt: nowIso(),
+      error: error.message
+    });
+  });
+
+  child.on("close", (code) => {
+    appendCheckCxDeployLog(`check-cx 部署任务结束，退出码：${code}`);
+    writeCheckCxDeployState({
+      status: code === 0 ? "succeeded" : "failed",
+      endedAt: nowIso(),
+      error: code === 0 ? null : `部署脚本退出码：${code}`
     });
   });
 }
@@ -2081,10 +2198,13 @@ function buildPublicSub2ApiModelsPayload(connection, modelRoutes) {
       group.models.set(name, {
         name,
         status: active ? "available" : "unavailable",
+        routeCount: 1,
         tags: inferPublicModelTags(name, route.platform || group.platform)
       });
     } else if (active) {
-      group.models.get(name).status = "available";
+      const item = group.models.get(name);
+      item.status = "available";
+      item.routeCount += 1;
     }
   }
 
@@ -2096,6 +2216,7 @@ function buildPublicSub2ApiModelsPayload(connection, modelRoutes) {
       publicGroup.models.set(name, {
         name,
         status: String(group.status || "active") === "disabled" ? "unavailable" : "available",
+        routeCount: 0,
         tags: inferPublicModelTags(name, group.platform)
       });
     }
@@ -7685,6 +7806,32 @@ app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async (
   updateState,
   log: readUpdateLog()
 }));
+
+app.get("/api/admin/system/projects/check-cx", { preHandler: requireAdmin }, async () => getCheckCxProjectStatus());
+
+app.post("/api/admin/system/projects/check-cx/deploy", { preHandler: requireAdmin }, async (request, reply) => {
+  if (checkCxDeployState.status === "running") {
+    return reply.code(409).send({
+      message: "check-cx 部署任务正在执行",
+      ...(await getCheckCxProjectStatus())
+    });
+  }
+
+  createAuditLog({
+    action: "system.project.check_cx.deploy",
+    actor: request.admin.username,
+    resourceType: "system_project",
+    resourceId: "check-cx"
+  });
+
+  startCheckCxDeployTask(request.admin.username);
+  return {
+    message: "check-cx 部署任务已启动",
+    ...(await getCheckCxProjectStatus())
+  };
+});
+
+app.get("/api/admin/system/projects/check-cx/deploy-status", { preHandler: requireAdmin }, async () => getCheckCxProjectStatus());
 
 app.get("/api/admin/migration/status", { preHandler: requireAdmin }, async () => ({
   maintenance: readMaintenanceState(),

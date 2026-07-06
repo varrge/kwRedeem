@@ -1,0 +1,3 @@
+[submodule "check-cx"]
+	path = check-cx
+	url = https://github.com/BingZi-233/check-cx.git

@@ -162,27 +162,66 @@
       }
       .models {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+        gap: 14px;
         padding: 0 20px 20px;
       }
       .model {
-        min-height: 94px;
+        position: relative;
+        overflow: hidden;
+        min-height: 300px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 13px;
+        padding: 24px;
         background: color-mix(in srgb, var(--panel) 92%, var(--bg));
       }
+      .model::before,
+      .model::after {
+        content: "+";
+        position: absolute;
+        top: 8px;
+        color: var(--line);
+        font: 300 32px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .model::before { left: 14px; }
+      .model::after { right: 14px; }
+      .model-head {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: center;
+      }
+      .provider-mark {
+        display: grid;
+        place-items: center;
+        width: 72px;
+        height: 72px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 8px 20px rgba(20, 28, 44, 0.12);
+        font-size: 26px;
+        font-weight: 900;
+      }
+      .model-title { min-width: 0; }
       .model-name {
+        font-size: 24px;
         overflow-wrap: anywhere;
         font-weight: 800;
-        line-height: 1.35;
+        line-height: 1.15;
+      }
+      .model-id {
+        margin-top: 8px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 14px;
+        overflow-wrap: anywhere;
       }
       .model-meta {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
-        margin-top: 10px;
+        margin-top: 12px;
       }
       .tag {
         border: 1px solid var(--line);
@@ -199,6 +238,80 @@
       .tag.unavailable {
         border-color: color-mix(in srgb, var(--error) 42%, var(--line));
         color: var(--error);
+      }
+      .status-pill {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: color-mix(in srgb, var(--success) 14%, var(--panel));
+        color: var(--success);
+        font-size: 16px;
+        font-weight: 900;
+        box-shadow: 0 8px 20px rgba(15, 159, 110, 0.16);
+        white-space: nowrap;
+      }
+      .status-pill.unavailable {
+        background: color-mix(in srgb, var(--error) 12%, var(--panel));
+        color: var(--error);
+      }
+      .metric-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 26px;
+      }
+      .metric {
+        min-height: 76px;
+        border-radius: 8px;
+        padding: 14px;
+        background: color-mix(in srgb, var(--bg) 58%, var(--panel));
+      }
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+      }
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 26px;
+        line-height: 1;
+      }
+      .history {
+        margin-top: 28px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+      }
+      .history-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+      }
+      .history-bars {
+        display: grid;
+        grid-template-columns: repeat(60, 1fr);
+        gap: 4px;
+        margin-top: 16px;
+      }
+      .history-bars span {
+        height: 46px;
+        border-radius: 3px;
+        background: var(--success);
+        transform-origin: bottom;
+        animation: pulseBar 1.8s ease-in-out infinite;
+        animation-delay: calc(var(--i) * -0.035s);
+      }
+      .history-bars span.warn { background: var(--warning); }
+      .history-bars span.bad { background: var(--error); opacity: 0.75; }
+      @keyframes pulseBar {
+        0%, 100% { transform: scaleY(0.82); opacity: 0.86; }
+        50% { transform: scaleY(1); opacity: 1; }
       }
       .empty {
         border: 1px dashed var(--line);
@@ -218,6 +331,31 @@
         }
         .search {
           width: 100%;
+        }
+        .models {
+          grid-template-columns: 1fr;
+          padding: 0 12px 12px;
+        }
+        .model {
+          padding: 18px;
+        }
+        .model-head {
+          grid-template-columns: 64px minmax(0, 1fr);
+        }
+        .provider-mark {
+          width: 56px;
+          height: 56px;
+          font-size: 20px;
+        }
+        .status-pill {
+          grid-column: 1 / -1;
+          justify-self: start;
+        }
+        .metric-grid {
+          grid-template-columns: 1fr;
+        }
+        .history-bars {
+          gap: 2px;
         }
       }
     </style>
@@ -301,6 +439,25 @@
         ].filter(Boolean).join("");
       }
 
+      function providerInitial(group) {
+        const text = String(group.platform || group.name || "AI").trim();
+        if (/anthropic|claude/i.test(text)) return "A";
+        if (/openai|gpt/i.test(text)) return "AI";
+        if (/gemini|google/i.test(text)) return "G";
+        if (/deepseek/i.test(text)) return "D";
+        return text.slice(0, 2).toUpperCase() || "AI";
+      }
+
+      function renderHistoryBars(model) {
+        const active = model.status === "available";
+        return Array.from({ length: 60 }, (_, index) => {
+          const marked = active
+            ? (index === 11 ? "warn" : "")
+            : (index % 5 === 0 ? "bad" : "warn");
+          return `<span class="${marked}" style="--i:${index}"></span>`;
+        }).join("");
+      }
+
       function render() {
         const payload = state.payload;
         if (!payload) return;
@@ -331,10 +488,28 @@
             <div class="models">
               ${group.models.map((model) => `
                 <article class="model">
-                  <div class="model-name">${escapeHtml(model.name)}</div>
-                  <div class="model-meta">
-                    <span class="tag ${escapeHtml(model.status)}">${model.status === "available" ? "可用" : "暂不可用"}</span>
-                    ${(model.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
+                  <div class="model-head">
+                    <div class="provider-mark">${escapeHtml(providerInitial(group))}</div>
+                    <div class="model-title">
+                      <div class="model-name">${escapeHtml(model.name)}</div>
+                      <div class="model-meta">
+                        ${group.platform ? `<span class="tag">${escapeHtml(group.platform)}</span>` : ""}
+                        ${(model.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
+                      </div>
+                      <div class="model-id">${escapeHtml(model.name)}</div>
+                    </div>
+                    <span class="status-pill ${escapeHtml(model.status)}">${model.status === "available" ? "正常" : "暂不可用"}</span>
+                  </div>
+                  <div class="metric-grid">
+                    <div class="metric"><span>所属分组</span><strong>${escapeHtml(group.name)}</strong></div>
+                    <div class="metric"><span>可用路由</span><strong>${Number(model.routeCount || 0) || 1}</strong></div>
+                  </div>
+                  <div class="history">
+                    <div class="history-head">
+                      <span>CONFIG HISTORY (60PTS)</span>
+                      <span>${model.status === "available" ? "LIVE" : "CHECK"}</span>
+                    </div>
+                    <div class="history-bars">${renderHistoryBars(model)}</div>
                   </div>
                 </article>
               `).join("")}

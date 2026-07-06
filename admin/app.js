@@ -39,6 +39,11 @@ const refs = {
   startUpdateBtn: document.querySelector("#start-update-btn"),
   systemUpdateHint: document.querySelector("#system-update-hint"),
   systemUpdateLog: document.querySelector("#system-update-log"),
+  checkCxProjectCards: document.querySelector("#check-cx-project-cards"),
+  checkCxRefreshBtn: document.querySelector("#check-cx-refresh-btn"),
+  checkCxDeployBtn: document.querySelector("#check-cx-deploy-btn"),
+  checkCxProjectHint: document.querySelector("#check-cx-project-hint"),
+  checkCxDeployLog: document.querySelector("#check-cx-deploy-log"),
   migrationBackupBtn: document.querySelector("#migration-backup-btn"),
   migrationBackupResult: document.querySelector("#migration-backup-result"),
   migrationRestoreFile: document.querySelector("#migration-restore-file"),
@@ -283,6 +288,7 @@ const refs = {
 
 let autoRefreshTimer = null;
 let updatePollTimer = null;
+let checkCxDeployPollTimer = null;
 let currentTab = "dashboard";
 const tablePaginationState = new Map();
 const DEFAULT_TABLE_PAGE_SIZE = 20;
@@ -483,6 +489,10 @@ function switchTab(tabName) {
     loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`));
     refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `加载返利失败：${error.message}`));
   }
+  if (tabName === "system" && getToken()) {
+    refreshSystemVersion().catch((error) => setHint(refs.systemUpdateHint, error.message));
+    refreshCheckCxProjectStatus().catch((error) => setHint(refs.checkCxProjectHint, error.message));
+  }
 }
 
 function startAutoRefresh() {
@@ -511,6 +521,20 @@ function stopUpdatePolling() {
   if (updatePollTimer) {
     window.clearInterval(updatePollTimer);
     updatePollTimer = null;
+  }
+}
+
+function startCheckCxDeployPolling() {
+  stopCheckCxDeployPolling();
+  checkCxDeployPollTimer = window.setInterval(() => {
+    refreshCheckCxProjectStatus().catch(() => {});
+  }, UPDATE_POLL_INTERVAL_MS);
+}
+
+function stopCheckCxDeployPolling() {
+  if (checkCxDeployPollTimer) {
+    window.clearInterval(checkCxDeployPollTimer);
+    checkCxDeployPollTimer = null;
   }
 }
 
@@ -1281,6 +1305,43 @@ async function refreshSystemUpdateStatus() {
     stopUpdatePolling();
     await refreshSystemVersion();
   }
+}
+
+function renderCheckCxProjectStatus(payload) {
+  if (!refs.checkCxProjectCards) return;
+  const state = payload.deployState || {};
+  const pm2 = payload.pm2 || {};
+  const isBusy = state.status === "running";
+  const cards = [
+    ["子模块", payload.exists ? "已存在" : "未初始化"],
+    ["分支", payload.branch || "-"],
+    ["提交", shortCommit(payload.commit)],
+    ["环境文件", payload.envFileExists ? "已配置" : "缺少"],
+    ["PM2", pm2.status || "未启动"],
+    ["部署状态", state.status || "idle"]
+  ];
+
+  refs.checkCxProjectCards.innerHTML = cards.map(([label, value]) => `
+    <article class="stat">
+      <span>${label}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </article>
+  `).join("");
+  refs.checkCxDeployLog.textContent = payload.log || "暂无日志";
+  setHint(refs.checkCxProjectHint, state.error
+    ? `异常: ${state.error}`
+    : payload.envFileExists
+      ? `服务端口默认 3001；部署前请先在 Supabase 执行 check-cx/supabase/schema.sql。`
+      : `请先创建 check-cx/.env.production 并填写 Supabase 配置。`);
+  refs.checkCxRefreshBtn.disabled = isBusy;
+  refs.checkCxDeployBtn.disabled = isBusy;
+  if (isBusy && !checkCxDeployPollTimer) startCheckCxDeployPolling();
+  if (!isBusy) stopCheckCxDeployPolling();
+}
+
+async function refreshCheckCxProjectStatus() {
+  const payload = await api("/api/admin/system/projects/check-cx");
+  renderCheckCxProjectStatus(payload);
 }
 
 function getDownloadFilename(response, fallback) {
@@ -4086,6 +4147,7 @@ async function refreshAll() {
     refreshJobs(),
     refreshLogs(),
     refreshSystemVersion(),
+    refreshCheckCxProjectStatus(),
     refreshSubscriptions(),
     refreshNotifications(),
     refreshQuotaDashboard(),
@@ -4133,6 +4195,25 @@ refs.startUpdateBtn.addEventListener("click", async () => {
     startUpdatePolling();
   } catch (error) {
     setHint(refs.systemUpdateHint, error.message);
+  }
+});
+
+refs.checkCxRefreshBtn?.addEventListener("click", () => {
+  refreshCheckCxProjectStatus().catch((error) => setHint(refs.checkCxProjectHint, error.message));
+});
+
+refs.checkCxDeployBtn?.addEventListener("click", async () => {
+  if (!window.confirm("确认部署 / 重启 check-cx？")) return;
+  setHint(refs.checkCxProjectHint, "启动中...");
+  try {
+    const payload = await api("/api/admin/system/projects/check-cx/deploy", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    renderCheckCxProjectStatus(payload);
+    startCheckCxDeployPolling();
+  } catch (error) {
+    setHint(refs.checkCxProjectHint, error.message);
   }
 });
 

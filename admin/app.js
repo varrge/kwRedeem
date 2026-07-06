@@ -40,6 +40,12 @@ const refs = {
   systemUpdateHint: document.querySelector("#system-update-hint"),
   systemUpdateLog: document.querySelector("#system-update-log"),
   checkCxProjectCards: document.querySelector("#check-cx-project-cards"),
+  checkCxEnvForm: document.querySelector("#check-cx-env-form"),
+  checkCxSupabaseUrl: document.querySelector("#check-cx-supabase-url"),
+  checkCxPublishableKey: document.querySelector("#check-cx-publishable-key"),
+  checkCxServiceRoleKey: document.querySelector("#check-cx-service-role-key"),
+  checkCxPort: document.querySelector("#check-cx-port"),
+  checkCxSaveEnvBtn: document.querySelector("#check-cx-save-env-btn"),
   checkCxRefreshBtn: document.querySelector("#check-cx-refresh-btn"),
   checkCxDeployBtn: document.querySelector("#check-cx-deploy-btn"),
   checkCxProjectHint: document.querySelector("#check-cx-project-hint"),
@@ -1311,12 +1317,14 @@ function renderCheckCxProjectStatus(payload) {
   if (!refs.checkCxProjectCards) return;
   const state = payload.deployState || {};
   const pm2 = payload.pm2 || {};
+  const env = payload.env || {};
   const isBusy = state.status === "running";
+  const envReady = Boolean(env.supabaseUrl && env.publishableKey && env.serviceRoleKey);
   const cards = [
     ["子模块", payload.exists ? "已存在" : "未初始化"],
     ["分支", payload.branch || "-"],
     ["提交", shortCommit(payload.commit)],
-    ["环境文件", payload.envFileExists ? "已配置" : "缺少"],
+    ["环境文件", envReady ? "已配置" : "缺少"],
     ["PM2", pm2.status || "未启动"],
     ["部署状态", state.status || "idle"]
   ];
@@ -1327,12 +1335,15 @@ function renderCheckCxProjectStatus(payload) {
       <strong>${escapeHtml(value)}</strong>
     </article>
   `).join("");
+  if (refs.checkCxSupabaseUrl && !refs.checkCxSupabaseUrl.value) refs.checkCxSupabaseUrl.placeholder = env.supabaseUrl ? "已配置，留空保留" : "https://xxxx.supabase.co";
+  if (refs.checkCxPort && !refs.checkCxPort.value) refs.checkCxPort.value = env.port || "3001";
   refs.checkCxDeployLog.textContent = payload.log || "暂无日志";
   setHint(refs.checkCxProjectHint, state.error
     ? `异常: ${state.error}`
-    : payload.envFileExists
+    : envReady
       ? `服务端口默认 3001；部署前请先在 Supabase 执行 check-cx/supabase/schema.sql。`
-      : `请先创建 check-cx/.env.production 并填写 Supabase 配置。`);
+      : `请先在这里保存 Supabase 配置，然后再部署。`);
+  refs.checkCxSaveEnvBtn.disabled = isBusy;
   refs.checkCxRefreshBtn.disabled = isBusy;
   refs.checkCxDeployBtn.disabled = isBusy;
   if (isBusy && !checkCxDeployPollTimer) startCheckCxDeployPolling();
@@ -4200,6 +4211,32 @@ refs.startUpdateBtn.addEventListener("click", async () => {
 
 refs.checkCxRefreshBtn?.addEventListener("click", () => {
   refreshCheckCxProjectStatus().catch((error) => setHint(refs.checkCxProjectHint, error.message));
+});
+
+refs.checkCxEnvForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setHint(refs.checkCxProjectHint, "正在保存 check-cx 配置...");
+  setButtonBusy(refs.checkCxSaveEnvBtn, true, "保存中...");
+  try {
+    const payload = await api("/api/admin/system/projects/check-cx/env", {
+      method: "POST",
+      body: JSON.stringify({
+        supabaseUrl: refs.checkCxSupabaseUrl.value.trim(),
+        publishableKey: refs.checkCxPublishableKey.value.trim(),
+        serviceRoleKey: refs.checkCxServiceRoleKey.value.trim(),
+        port: refs.checkCxPort.value.trim()
+      })
+    });
+    refs.checkCxSupabaseUrl.value = "";
+    refs.checkCxPublishableKey.value = "";
+    refs.checkCxServiceRoleKey.value = "";
+    renderCheckCxProjectStatus(payload);
+    setHint(refs.checkCxProjectHint, payload.message || "配置已保存");
+  } catch (error) {
+    setHint(refs.checkCxProjectHint, error.message);
+  } finally {
+    setButtonBusy(refs.checkCxSaveEnvBtn, false);
+  }
 });
 
 refs.checkCxDeployBtn?.addEventListener("click", async () => {

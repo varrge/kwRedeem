@@ -775,6 +775,13 @@ function setupModuleSubtabs() {
         { id: "worldcup-matches", label: "比赛", elements: [closestSection(refs.worldCupMatchForm, ".grid"), closestCard(refs.worldCupMatchList)] },
         { id: "worldcup-bets", label: "竞猜", elements: [closestCard(refs.worldCupBetList)] }
       ]
+    },
+    {
+      panel: "system",
+      tabs: [
+        { id: "update", label: "系统更新", elements: [document.querySelector("#system-update-section")] },
+        { id: "projects", label: "扩展项目", elements: [document.querySelector("#system-projects-section")] }
+      ]
     }
   ];
 

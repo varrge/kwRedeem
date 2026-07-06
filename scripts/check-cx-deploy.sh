@@ -9,6 +9,23 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+run_or_explain() {
+  set +e
+  "$@"
+  local code=$?
+  set -e
+  if [ "$code" -eq 137 ]; then
+    log "命令被系统杀死（137），通常是服务器内存不足。可加 2G swap 后重试，或在更大内存机器上构建。"
+  fi
+  return "$code"
+}
+
+ensure_build_memory() {
+  if command -v free >/dev/null 2>&1; then
+    free -h | sed 's/^/[memory] /'
+  fi
+}
+
 if ! command -v git >/dev/null 2>&1; then
   log "缺少 git，无法初始化 check-cx 子模块。"
   exit 1
@@ -60,17 +77,21 @@ export CHECK_POLL_INTERVAL_SECONDS="${CHECK_POLL_INTERVAL_SECONDS:-60}"
 export CHECK_CONCURRENCY="${CHECK_CONCURRENCY:-5}"
 export HISTORY_RETENTION_DAYS="${HISTORY_RETENTION_DAYS:-30}"
 export OFFICIAL_STATUS_CHECK_INTERVAL_SECONDS="${OFFICIAL_STATUS_CHECK_INTERVAL_SECONDS:-300}"
+export NEXT_TELEMETRY_DISABLED=1
+export NEXT_DISABLE_STANDALONE="${NEXT_DISABLE_STANDALONE:-1}"
+export NODE_OPTIONS="${CHECK_CX_NODE_OPTIONS:-${NODE_OPTIONS:---max-old-space-size=768}}"
 
 cd "$APP_DIR"
+ensure_build_memory
 log "准备 pnpm..."
 corepack enable
 corepack prepare pnpm@10.10.0 --activate
 
 log "安装 check-cx 依赖..."
-pnpm install --frozen-lockfile
+run_or_explain pnpm install --frozen-lockfile --child-concurrency=1
 
-log "构建 check-cx..."
-pnpm build
+log "构建 check-cx... NODE_OPTIONS=$NODE_OPTIONS NEXT_DISABLE_STANDALONE=$NEXT_DISABLE_STANDALONE"
+run_or_explain pnpm build
 
 log "重启 PM2 服务 check-cx，端口：$PORT"
 pm2 delete check-cx >/dev/null 2>&1 || true

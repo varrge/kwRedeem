@@ -52,6 +52,7 @@ import {
   normalizeSub2ApiAmount,
   normalizeSub2ApiInviteRebateRate,
   normalizeSub2ApiPositiveInteger,
+  readSub2ApiUsageSpendAmount,
   recalculatePendingSub2ApiInviteRebates,
   reserveSub2ApiInvite,
   roundSub2ApiInviteRebateAmount,
@@ -2587,7 +2588,21 @@ async function syncSub2ApiSubscriptionSpend(connection, userId) {
       status: "COMPLETED",
       order_type: "subscription"
     });
-    return localSpend + orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0);
+    let usageSpend = 0;
+    try {
+      const usageStats = await callSub2ApiRemote(connection, `/api/v1/admin/usage/stats?${new URLSearchParams({
+        user_id: String(userId),
+        start_date: "1970-01-01",
+        end_date: "2999-12-31",
+        nocache: "true"
+      }).toString()}`);
+      usageSpend = readSub2ApiUsageSpendAmount(usageStats.json);
+    } catch {
+      usageSpend = 0;
+    }
+    return localSpend
+      + orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0)
+      + usageSpend;
   } catch (error) {
     if (localSpend > 0) return localSpend;
     throw error;

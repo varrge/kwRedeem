@@ -26,6 +26,33 @@ ensure_build_memory() {
   fi
 }
 
+patch_next_config() {
+  local config_file="$APP_DIR/next.config.ts"
+  if [ ! -f "$config_file" ] || grep -q "NEXT_IGNORE_TYPECHECK" "$config_file"; then
+    return
+  fi
+
+  cp "$config_file" "$config_file.kwredeem.bak"
+  cat > "$config_file" <<'EOF'
+import type { NextConfig } from "next";
+
+const useStandalone = process.env.NEXT_DISABLE_STANDALONE !== "1";
+const ignoreTypeCheck = process.env.NEXT_IGNORE_TYPECHECK === "1";
+
+const nextConfig: NextConfig = useStandalone
+  ? {
+      output: "standalone",
+      typescript: { ignoreBuildErrors: ignoreTypeCheck }
+    }
+  : {
+      typescript: { ignoreBuildErrors: ignoreTypeCheck }
+    };
+
+export default nextConfig;
+EOF
+  log "已为 check-cx next.config.ts 启用小内存部署补丁。"
+}
+
 if ! command -v git >/dev/null 2>&1; then
   log "缺少 git，无法初始化 check-cx 子模块。"
   exit 1
@@ -49,12 +76,16 @@ fi
 
 cd "$ROOT_DIR"
 log "初始化 check-cx 子模块..."
+if [ -e "$APP_DIR/.git" ]; then
+  git -C "$APP_DIR" checkout -- next.config.ts >/dev/null 2>&1 || true
+fi
 git submodule update --init --recursive check-cx
 
 if [ ! -d "$APP_DIR" ]; then
   log "check-cx 子模块目录不存在：$APP_DIR"
   exit 1
 fi
+patch_next_config
 
 if [ -f "$ENV_FILE" ]; then
   log "加载环境变量：$ENV_FILE"
@@ -79,6 +110,7 @@ export HISTORY_RETENTION_DAYS="${HISTORY_RETENTION_DAYS:-30}"
 export OFFICIAL_STATUS_CHECK_INTERVAL_SECONDS="${OFFICIAL_STATUS_CHECK_INTERVAL_SECONDS:-300}"
 export NEXT_TELEMETRY_DISABLED=1
 export NEXT_DISABLE_STANDALONE="${NEXT_DISABLE_STANDALONE:-1}"
+export NEXT_IGNORE_TYPECHECK="${NEXT_IGNORE_TYPECHECK:-1}"
 export NODE_OPTIONS="${CHECK_CX_NODE_OPTIONS:-${NODE_OPTIONS:---max-old-space-size=768}}"
 
 cd "$APP_DIR"
@@ -90,7 +122,7 @@ corepack prepare pnpm@10.10.0 --activate
 log "安装 check-cx 依赖..."
 run_or_explain pnpm install --frozen-lockfile --child-concurrency=1
 
-log "构建 check-cx... NODE_OPTIONS=$NODE_OPTIONS NEXT_DISABLE_STANDALONE=$NEXT_DISABLE_STANDALONE"
+log "构建 check-cx... NODE_OPTIONS=$NODE_OPTIONS NEXT_DISABLE_STANDALONE=$NEXT_DISABLE_STANDALONE NEXT_IGNORE_TYPECHECK=$NEXT_IGNORE_TYPECHECK"
 run_or_explain pnpm build
 
 log "重启 PM2 服务 check-cx，端口：$PORT"

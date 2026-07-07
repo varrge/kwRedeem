@@ -2942,7 +2942,7 @@ function renderSub2ApiInviterLevels() {
       <thead>
         <tr>
           <th>等级名称</th>
-          <th>累计订阅消费</th>
+          <th>累计充值金额</th>
           <th>终身可申请</th>
           <th>未使用上限</th>
           <th>返利比例</th>

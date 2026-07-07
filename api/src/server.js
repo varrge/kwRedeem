@@ -44,7 +44,6 @@ import {
   getSub2ApiWorldCupResult,
   getSub2ApiInviteQuota,
   getSub2ApiInviteRebateForReview,
-  getSub2ApiLocalSubscriptionSpend,
   getSub2ApiNextInviterLevel,
   getOverdueSub2ApiInviteRebateIds,
   isSub2ApiWorldCupMatchInProgress,
@@ -52,7 +51,7 @@ import {
   normalizeSub2ApiAmount,
   normalizeSub2ApiInviteRebateRate,
   normalizeSub2ApiPositiveInteger,
-  readSub2ApiUsageSpendAmount,
+  readSub2ApiRechargeSpendAmount,
   recalculatePendingSub2ApiInviteRebates,
   reserveSub2ApiInvite,
   roundSub2ApiInviteRebateAmount,
@@ -2580,33 +2579,13 @@ function getSub2ApiRebateSummary(connectionId, userId) {
   return summary;
 }
 
-async function syncSub2ApiSubscriptionSpend(connection, userId) {
-  const localSpend = getSub2ApiLocalSubscriptionSpend(db, connection.id, String(userId));
-  try {
-    const orders = await listSub2ApiRemotePages(connection, "/api/v1/admin/payment/orders", {
-      user_id: String(userId),
-      status: "COMPLETED",
-      order_type: "subscription"
-    });
-    let usageSpend = 0;
-    try {
-      const usageStats = await callSub2ApiRemote(connection, `/api/v1/admin/usage/stats?${new URLSearchParams({
-        user_id: String(userId),
-        start_date: "1970-01-01",
-        end_date: "2999-12-31",
-        nocache: "true"
-      }).toString()}`);
-      usageSpend = readSub2ApiUsageSpendAmount(usageStats.json);
-    } catch {
-      usageSpend = 0;
-    }
-    return localSpend
-      + orders.reduce((sum, order) => sum + readRemoteAmount(order, ["amount", "pay_amount", "payAmount"]), 0)
-      + usageSpend;
-  } catch (error) {
-    if (localSpend > 0) return localSpend;
-    throw error;
-  }
+async function syncSub2ApiRechargeSpend(connection, userId) {
+  const history = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}/balance-history?${new URLSearchParams({
+    page: "1",
+    page_size: "1",
+    type: "balance"
+  }).toString()}`);
+  return readSub2ApiRechargeSpendAmount(history.json);
 }
 
 async function syncSub2ApiInviteUsage(connection, inviterUserId = "") {
@@ -2752,7 +2731,7 @@ async function syncSub2ApiPublicInviteData(connection, identity, { force = false
   const known = getSub2ApiKnownUser(connection.id, identity.userId);
   const lastSyncMs = new Date(known?.spend_synced_at || 0).getTime();
   if (force || !Number.isFinite(lastSyncMs) || Date.now() - lastSyncMs > 60_000) {
-    const spend = await syncSub2ApiSubscriptionSpend(connection, identity.userId);
+    const spend = await syncSub2ApiRechargeSpend(connection, identity.userId);
     ensureSub2ApiKnownUser(connection.id, identity, spend);
   }
   await syncSub2ApiInviteUsage(connection, identity.userId);
@@ -6731,7 +6710,7 @@ async function refreshKnownSub2ApiUserLevels(connectionId = "") {
   for (const row of rows) {
     let spend = Number(row.subscription_spend || 0);
     try {
-      spend = await syncSub2ApiSubscriptionSpend(row, row.sub2api_user_id);
+      spend = await syncSub2ApiRechargeSpend(row, row.sub2api_user_id);
       synced += 1;
     } catch {
       // ponytail: keep rule saves usable if a remote user scan fails; admin can retry sync.

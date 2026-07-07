@@ -401,14 +401,10 @@ export function extractRemoteSub2ApiRefreshResult(result) {
   };
 }
 
-export function readSub2ApiUsageSpendAmount(payload) {
+export function readSub2ApiRechargeSpendAmount(payload) {
   const data = unwrapSub2ApiRemoteData(payload);
-  if (!data || typeof data !== "object" || Array.isArray(data)) return 0;
-  for (const key of ["total_actual_cost", "totalActualCost", "actual_cost", "actualCost", "total_cost", "totalCost", "cost"]) {
-    const amount = Number(data[key]);
-    if (Number.isFinite(amount) && amount > 0) return amount;
-  }
-  return 0;
+  const amount = Number(data?.total_recharged ?? data?.totalRecharged ?? 0);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
 }
 
 export function assertSub2ApiRemoteEnvelopeOk(result, getMessage = null) {

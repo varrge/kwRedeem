@@ -82,6 +82,13 @@ import {
   sendFeishuMarkdown,
   summarizeResponseInfo
 } from "../../shared/src/notifications.js";
+import {
+  US_ADDRESS_DEFAULT_ATTEMPTS,
+  US_ADDRESS_MAX_COUNT,
+  generateUsAddressRecords,
+  getUsStates,
+  normalizeUsState
+} from "../../shared/src/us-address-generator.js";
 
 const app = Fastify({ logger: false });
 const db = getDb();
@@ -93,9 +100,6 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
-const checkCxDir = path.join(projectRoot, "check-cx");
-const checkCxDeployLogPath = path.join(logsDir, "check-cx-deploy.log");
-const checkCxDeployStatePath = path.join(logsDir, "check-cx-deploy-state.json");
 const maintenancePath = path.join(projectRoot, "data", "maintenance.json");
 const migrationTmpDir = path.join(projectRoot, "tmp", "migration");
 const migrationUploads = new Map();
@@ -141,13 +145,6 @@ const updateState = {
   remoteCommit: null,
   branch: null,
   hasUpdate: false,
-  error: null
-};
-
-const checkCxDeployState = {
-  status: "idle",
-  startedAt: null,
-  endedAt: null,
   error: null
 };
 
@@ -347,113 +344,12 @@ function readUpdateLog(limit = 12000) {
   }
 }
 
-function writeCheckCxDeployState(patch = {}) {
-  Object.assign(checkCxDeployState, patch);
-  ensureLogsDir();
-  fs.writeFileSync(checkCxDeployStatePath, JSON.stringify(checkCxDeployState, null, 2));
-}
-
-function appendCheckCxDeployLog(message) {
-  ensureLogsDir();
-  fs.appendFileSync(checkCxDeployLogPath, `[${nowIso()}] ${message}\n`);
-}
-
-function readCheckCxDeployLog(limit = 12000) {
-  try {
-    const content = fs.readFileSync(checkCxDeployLogPath, "utf8");
-    return content.length > limit ? content.slice(content.length - limit) : content;
-  } catch {
-    return "";
-  }
-}
-
-function getCheckCxEnvPath() {
-  return path.join(checkCxDir, ".env.production");
-}
-
-function parseEnvFile(filePath) {
-  try {
-    return Object.fromEntries(fs.readFileSync(filePath, "utf8")
-      .split(/\r?\n/)
-      .map((line) => line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/))
-      .filter(Boolean)
-      .map((match) => {
-        let value = match[2] || "";
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          value = value.slice(1, -1);
-        }
-        return [match[1], value];
-      }));
-  } catch {
-    return {};
-  }
-}
-
-function quoteEnvValue(value) {
-  return `'${String(value).replace(/'/g, "'\\''")}'`;
-}
-
-function getCheckCxEnvState() {
-  const envFile = parseEnvFile(getCheckCxEnvPath());
-  return {
-    supabaseUrl: Boolean(envFile.SUPABASE_URL),
-    publishableKey: Boolean(envFile.SUPABASE_PUBLISHABLE_OR_ANON_KEY),
-    serviceRoleKey: Boolean(envFile.SUPABASE_SERVICE_ROLE_KEY),
-    port: envFile.CHECK_CX_PORT || envFile.PORT || "3001"
-  };
-}
-
 async function runGit(args) {
   const { stdout } = await execFileAsync("git", args, {
     cwd: projectRoot,
     timeout: 30000
   });
   return stdout.trim();
-}
-
-async function getCheckCxProjectStatus() {
-  const exists = fs.existsSync(checkCxDir);
-  let branch = null;
-  let commit = null;
-  let pm2 = null;
-
-  if (exists) {
-    branch = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: checkCxDir,
-      timeout: 10000
-    }).then(({ stdout }) => stdout.trim()).catch(() => null);
-    commit = await execFileAsync("git", ["rev-parse", "HEAD"], {
-      cwd: checkCxDir,
-      timeout: 10000
-    }).then(({ stdout }) => stdout.trim()).catch(() => null);
-  }
-
-  const pm2List = await execFileAsync("pm2", ["jlist"], {
-    cwd: projectRoot,
-    timeout: 10000
-  }).then(({ stdout }) => JSON.parse(stdout || "[]")).catch(() => []);
-  const processInfo = Array.isArray(pm2List) ? pm2List.find((item) => item?.name === "check-cx") : null;
-  if (processInfo) {
-    pm2 = {
-      name: processInfo.name,
-      status: processInfo.pm2_env?.status || "",
-      pid: processInfo.pid || null,
-      restarts: processInfo.pm2_env?.restart_time ?? null,
-      port: process.env.CHECK_CX_PORT || process.env.PORT || "3001"
-    };
-  }
-
-  return {
-    exists,
-    path: "check-cx",
-    branch,
-    commit,
-    pm2,
-    envFileExists: fs.existsSync(getCheckCxEnvPath()),
-    env: getCheckCxEnvState(),
-    deployState: checkCxDeployState,
-    log: readCheckCxDeployLog()
-  };
 }
 
 async function getGitVersionInfo(fetchRemote = false) {
@@ -558,49 +454,6 @@ function startUpdateTask(actor) {
       branch: versionInfo.branch ?? updateState.branch,
       hasUpdate: versionInfo.hasUpdate ?? updateState.hasUpdate,
       error: code === 0 ? null : `更新脚本退出码：${code}`
-    });
-  });
-}
-
-function startCheckCxDeployTask(actor) {
-  writeCheckCxDeployState({
-    status: "running",
-    startedAt: nowIso(),
-    endedAt: null,
-    error: null
-  });
-
-  appendCheckCxDeployLog(`管理员 ${actor} 触发 check-cx 部署`);
-
-  const child = spawn("bash", ["scripts/check-cx-deploy.sh"], {
-    cwd: projectRoot,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-
-  child.stdout.on("data", (chunk) => {
-    appendCheckCxDeployLog(chunk.toString().trimEnd());
-  });
-
-  child.stderr.on("data", (chunk) => {
-    appendCheckCxDeployLog(chunk.toString().trimEnd());
-  });
-
-  child.on("error", (error) => {
-    appendCheckCxDeployLog(`check-cx 部署任务启动失败：${error.message}`);
-    writeCheckCxDeployState({
-      status: "failed",
-      endedAt: nowIso(),
-      error: error.message
-    });
-  });
-
-  child.on("close", (code) => {
-    appendCheckCxDeployLog(`check-cx 部署任务结束，退出码：${code}`);
-    writeCheckCxDeployState({
-      status: code === 0 ? "succeeded" : "failed",
-      endedAt: nowIso(),
-      error: code === 0 ? null : `部署脚本退出码：${code}`
     });
   });
 }
@@ -989,6 +842,15 @@ function getBodyObject(value) {
   if (typeof value === "string") {
     return safeParseJson(value, value);
   }
+  return value;
+}
+
+function parseBooleanLike(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(text)) return true;
+  if (["0", "false", "no", "n", "off"].includes(text)) return false;
   return value;
 }
 
@@ -4916,6 +4778,81 @@ async function cancelSub2ApiWorldCupMatch(match, actor = "system") {
   };
 }
 
+const usAddressGenerateSchema = z.object({
+  state: z.preprocess(
+    (value) => (value === "" || value === null ? undefined : value),
+    z.string().trim().min(1).max(64).optional()
+  ),
+  count: z.coerce.number().int().min(1).max(US_ADDRESS_MAX_COUNT).optional().default(1),
+  includePerson: z.preprocess(parseBooleanLike, z.boolean().optional()).default(true),
+  attempts: z.coerce.number().int().min(1).max(12).optional().default(US_ADDRESS_DEFAULT_ATTEMPTS)
+});
+
+const US_ADDRESS_ONLY_STATE = Object.freeze({ full: "Delaware", abbr: "DE" });
+
+async function handleUsAddressGenerate(request, reply) {
+  const input = request.method === "GET" ? request.query : getBodyObject(request.body);
+  const parsed = usAddressGenerateSchema.safeParse(input || {});
+  if (!parsed.success) {
+    return reply.code(400).send({
+      success: false,
+      message: "参数无效",
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message
+      }))
+    });
+  }
+
+  const requestedState = parsed.data.state ? normalizeUsState(parsed.data.state) : null;
+  if (parsed.data.state && (!requestedState || requestedState.abbr !== US_ADDRESS_ONLY_STATE.abbr)) {
+    return reply.code(400).send({
+      success: false,
+      message: "该接口只支持 Delaware 州地址，请使用 DE 或 Delaware"
+    });
+  }
+
+  try {
+    const result = await generateUsAddressRecords({
+      state: US_ADDRESS_ONLY_STATE.abbr,
+      count: parsed.data.count,
+      includePerson: parsed.data.includePerson,
+      attempts: parsed.data.attempts,
+      userAgent: `KaWang US Address API (${env.apiUrl})`
+    });
+
+    return {
+      success: true,
+      generatedAt: nowIso(),
+      count: result.items.length,
+      requestedState: { ...US_ADDRESS_ONLY_STATE },
+      source: {
+        address: "OpenStreetMap Nominatim reverse geocoding",
+        person: parsed.data.includePerson ? "randomuser.me, with local fallback names" : null
+      },
+      limits: {
+        maxCount: US_ADDRESS_MAX_COUNT,
+        maxAttempts: 12
+      },
+      items: result.items
+    };
+  } catch (error) {
+    if (error.code === "INVALID_STATE") {
+      return reply.code(400).send({
+        success: false,
+        message: "该接口只支持 Delaware 州地址，请使用 DE 或 Delaware"
+      });
+    }
+
+    return reply.code(502).send({
+      success: false,
+      code: error.code || "ADDRESS_GENERATION_FAILED",
+      message: "暂时无法生成美国地址，请稍后重试",
+      error: error.message
+    });
+  }
+}
+
 app.get("/healthz", async () => ({
   ok: true,
   now: nowIso()
@@ -5010,6 +4947,13 @@ app.post("/api/mock/activate", async (request, reply) => {
     message: "mock 激活成功"
   };
 });
+
+app.get("/api/public/us-address/states", async () => ({
+  items: getUsStates().filter((state) => state.abbr === US_ADDRESS_ONLY_STATE.abbr)
+}));
+
+app.get("/api/public/us-address/generate", handleUsAddressGenerate);
+app.post("/api/public/us-address/generate", handleUsAddressGenerate);
 
 app.post("/api/admin/auth/login", async (request, reply) => {
   const schema = z.object({
@@ -7838,81 +7782,14 @@ app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async (
   log: readUpdateLog()
 }));
 
-app.get("/api/admin/system/projects/check-cx", { preHandler: requireAdmin }, async () => getCheckCxProjectStatus());
+function sendCheckCxDisabled(_request, reply) {
+  return reply.code(410).send({ message: "check-cx 已拆到独立服务器，主项目不再管理部署" });
+}
 
-app.post("/api/admin/system/projects/check-cx/env", { preHandler: requireAdmin }, async (request, reply) => {
-  const schema = z.object({
-    supabaseUrl: z.string().trim().optional(),
-    publishableKey: z.string().trim().optional(),
-    serviceRoleKey: z.string().trim().optional(),
-    port: z.string().trim().regex(/^\d{1,5}$/).refine((value) => Number(value) <= 65535, "invalid port").optional()
-  });
-  const parsed = schema.safeParse(getBodyObject(request.body));
-  if (!parsed.success) {
-    return reply.code(400).send({ message: "参数不正确" });
-  }
-
-  const envPath = getCheckCxEnvPath();
-  if (!fs.existsSync(checkCxDir)) {
-    return reply.code(409).send({ message: "请先点击一次部署初始化 check-cx 子模块，再保存环境变量" });
-  }
-  const current = parseEnvFile(envPath);
-  const next = {
-    SUPABASE_URL: parsed.data.supabaseUrl || current.SUPABASE_URL || "",
-    SUPABASE_PUBLISHABLE_OR_ANON_KEY: parsed.data.publishableKey || current.SUPABASE_PUBLISHABLE_OR_ANON_KEY || "",
-    SUPABASE_SERVICE_ROLE_KEY: parsed.data.serviceRoleKey || current.SUPABASE_SERVICE_ROLE_KEY || "",
-    CHECK_CX_PORT: parsed.data.port || current.CHECK_CX_PORT || current.PORT || "3001"
-  };
-
-  if (!next.SUPABASE_URL || !next.SUPABASE_PUBLISHABLE_OR_ANON_KEY || !next.SUPABASE_SERVICE_ROLE_KEY) {
-    return reply.code(400).send({ message: "请填写 Supabase URL、Publishable/Anon Key、Service Role Key" });
-  }
-
-  fs.writeFileSync(envPath, [
-    "# Generated by kwRedeem admin. Do not commit.",
-    `SUPABASE_URL=${quoteEnvValue(next.SUPABASE_URL)}`,
-    `SUPABASE_PUBLISHABLE_OR_ANON_KEY=${quoteEnvValue(next.SUPABASE_PUBLISHABLE_OR_ANON_KEY)}`,
-    `SUPABASE_SERVICE_ROLE_KEY=${quoteEnvValue(next.SUPABASE_SERVICE_ROLE_KEY)}`,
-    `CHECK_CX_PORT=${quoteEnvValue(next.CHECK_CX_PORT)}`,
-    ""
-  ].join("\n"), { mode: 0o600 });
-
-  createAuditLog({
-    action: "system.project.check_cx.env.save",
-    actor: request.admin.username,
-    resourceType: "system_project",
-    resourceId: "check-cx"
-  });
-
-  return {
-    message: "check-cx 环境变量已保存",
-    ...(await getCheckCxProjectStatus())
-  };
-});
-
-app.post("/api/admin/system/projects/check-cx/deploy", { preHandler: requireAdmin }, async (request, reply) => {
-  if (checkCxDeployState.status === "running") {
-    return reply.code(409).send({
-      message: "check-cx 部署任务正在执行",
-      ...(await getCheckCxProjectStatus())
-    });
-  }
-
-  createAuditLog({
-    action: "system.project.check_cx.deploy",
-    actor: request.admin.username,
-    resourceType: "system_project",
-    resourceId: "check-cx"
-  });
-
-  startCheckCxDeployTask(request.admin.username);
-  return {
-    message: "check-cx 部署任务已启动",
-    ...(await getCheckCxProjectStatus())
-  };
-});
-
-app.get("/api/admin/system/projects/check-cx/deploy-status", { preHandler: requireAdmin }, async () => getCheckCxProjectStatus());
+app.get("/api/admin/system/projects/check-cx", { preHandler: requireAdmin }, sendCheckCxDisabled);
+app.post("/api/admin/system/projects/check-cx/env", { preHandler: requireAdmin }, sendCheckCxDisabled);
+app.post("/api/admin/system/projects/check-cx/deploy", { preHandler: requireAdmin }, sendCheckCxDisabled);
+app.get("/api/admin/system/projects/check-cx/deploy-status", { preHandler: requireAdmin }, sendCheckCxDisabled);
 
 app.get("/api/admin/migration/status", { preHandler: requireAdmin }, async () => ({
   maintenance: readMaintenanceState(),

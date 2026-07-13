@@ -1281,40 +1281,7 @@
               <pre id="system-update-log" class="log-viewer">暂无日志</pre>
             </div>
           </div>
-          <div class="grid grid-2 mt-24" id="system-projects-section">
-            <div class="card">
-              <div class="card-header"><h3>扩展项目：check-cx</h3></div>
-              <section class="stats small" id="check-cx-project-cards"></section>
-              <form id="check-cx-env-form" class="stack mt-16">
-                <label class="field">
-                  <span>Supabase URL</span>
-                  <input id="check-cx-supabase-url" type="url" autocomplete="off" placeholder="https://xxxx.supabase.co" />
-                </label>
-                <label class="field">
-                  <span>Publishable / Anon Key</span>
-                  <input id="check-cx-publishable-key" type="password" autocomplete="off" placeholder="留空则保留已有配置" />
-                </label>
-                <label class="field">
-                  <span>Service Role Key</span>
-                  <input id="check-cx-service-role-key" type="password" autocomplete="off" placeholder="留空则保留已有配置" />
-                </label>
-                <label class="field">
-                  <span>服务端口</span>
-                  <input id="check-cx-port" type="number" min="1" max="65535" placeholder="3001" />
-                </label>
-                <button id="check-cx-save-env-btn" class="ghost-btn" type="submit">保存配置</button>
-              </form>
-              <div class="action-row mt-16">
-                <button id="check-cx-refresh-btn" class="ghost-btn" type="button">刷新状态</button>
-                <button id="check-cx-deploy-btn" class="primary-btn" type="button">部署 / 重启</button>
-              </div>
-              <p class="hint mt-12" id="check-cx-project-hint"></p>
-            </div>
-            <div class="card">
-              <div class="card-header"><h3>check-cx 部署日志</h3></div>
-              <pre id="check-cx-deploy-log" class="log-viewer">暂无日志</pre>
-            </div>
-          </div>
+          <!-- check-cx 已拆到独立服务器，主项目不再提供部署控制入口。 -->
         </section>
 
         <!-- Migration -->

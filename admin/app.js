@@ -39,17 +39,6 @@ const refs = {
   startUpdateBtn: document.querySelector("#start-update-btn"),
   systemUpdateHint: document.querySelector("#system-update-hint"),
   systemUpdateLog: document.querySelector("#system-update-log"),
-  checkCxProjectCards: document.querySelector("#check-cx-project-cards"),
-  checkCxEnvForm: document.querySelector("#check-cx-env-form"),
-  checkCxSupabaseUrl: document.querySelector("#check-cx-supabase-url"),
-  checkCxPublishableKey: document.querySelector("#check-cx-publishable-key"),
-  checkCxServiceRoleKey: document.querySelector("#check-cx-service-role-key"),
-  checkCxPort: document.querySelector("#check-cx-port"),
-  checkCxSaveEnvBtn: document.querySelector("#check-cx-save-env-btn"),
-  checkCxRefreshBtn: document.querySelector("#check-cx-refresh-btn"),
-  checkCxDeployBtn: document.querySelector("#check-cx-deploy-btn"),
-  checkCxProjectHint: document.querySelector("#check-cx-project-hint"),
-  checkCxDeployLog: document.querySelector("#check-cx-deploy-log"),
   migrationBackupBtn: document.querySelector("#migration-backup-btn"),
   migrationBackupResult: document.querySelector("#migration-backup-result"),
   migrationRestoreFile: document.querySelector("#migration-restore-file"),
@@ -294,7 +283,6 @@ const refs = {
 
 let autoRefreshTimer = null;
 let updatePollTimer = null;
-let checkCxDeployPollTimer = null;
 let currentTab = "dashboard";
 const tablePaginationState = new Map();
 const DEFAULT_TABLE_PAGE_SIZE = 20;
@@ -497,7 +485,6 @@ function switchTab(tabName) {
   }
   if (tabName === "system" && getToken()) {
     refreshSystemVersion().catch((error) => setHint(refs.systemUpdateHint, error.message));
-    refreshCheckCxProjectStatus().catch((error) => setHint(refs.checkCxProjectHint, error.message));
   }
 }
 
@@ -527,20 +514,6 @@ function stopUpdatePolling() {
   if (updatePollTimer) {
     window.clearInterval(updatePollTimer);
     updatePollTimer = null;
-  }
-}
-
-function startCheckCxDeployPolling() {
-  stopCheckCxDeployPolling();
-  checkCxDeployPollTimer = window.setInterval(() => {
-    refreshCheckCxProjectStatus().catch(() => {});
-  }, UPDATE_POLL_INTERVAL_MS);
-}
-
-function stopCheckCxDeployPolling() {
-  if (checkCxDeployPollTimer) {
-    window.clearInterval(checkCxDeployPollTimer);
-    checkCxDeployPollTimer = null;
   }
 }
 
@@ -1318,48 +1291,6 @@ async function refreshSystemUpdateStatus() {
     stopUpdatePolling();
     await refreshSystemVersion();
   }
-}
-
-function renderCheckCxProjectStatus(payload) {
-  if (!refs.checkCxProjectCards) return;
-  const state = payload.deployState || {};
-  const pm2 = payload.pm2 || {};
-  const env = payload.env || {};
-  const isBusy = state.status === "running";
-  const envReady = Boolean(env.supabaseUrl && env.publishableKey && env.serviceRoleKey);
-  const cards = [
-    ["子模块", payload.exists ? "已存在" : "未初始化"],
-    ["分支", payload.branch || "-"],
-    ["提交", shortCommit(payload.commit)],
-    ["环境文件", envReady ? "已配置" : "缺少"],
-    ["PM2", pm2.status || "未启动"],
-    ["部署状态", state.status || "idle"]
-  ];
-
-  refs.checkCxProjectCards.innerHTML = cards.map(([label, value]) => `
-    <article class="stat">
-      <span>${label}</span>
-      <strong>${escapeHtml(value)}</strong>
-    </article>
-  `).join("");
-  if (refs.checkCxSupabaseUrl && !refs.checkCxSupabaseUrl.value) refs.checkCxSupabaseUrl.placeholder = env.supabaseUrl ? "已配置，留空保留" : "https://xxxx.supabase.co";
-  if (refs.checkCxPort && !refs.checkCxPort.value) refs.checkCxPort.value = env.port || "3001";
-  refs.checkCxDeployLog.textContent = payload.log || "暂无日志";
-  setHint(refs.checkCxProjectHint, state.error
-    ? `异常: ${state.error}`
-    : envReady
-      ? `服务端口默认 3001；部署前请先在 Supabase 执行 check-cx/supabase/schema.sql。`
-      : `请先在这里保存 Supabase 配置，然后再部署。`);
-  refs.checkCxSaveEnvBtn.disabled = isBusy;
-  refs.checkCxRefreshBtn.disabled = isBusy;
-  refs.checkCxDeployBtn.disabled = isBusy;
-  if (isBusy && !checkCxDeployPollTimer) startCheckCxDeployPolling();
-  if (!isBusy) stopCheckCxDeployPolling();
-}
-
-async function refreshCheckCxProjectStatus() {
-  const payload = await api("/api/admin/system/projects/check-cx");
-  renderCheckCxProjectStatus(payload);
 }
 
 function getDownloadFilename(response, fallback) {
@@ -4165,7 +4096,6 @@ async function refreshAll() {
     refreshJobs(),
     refreshLogs(),
     refreshSystemVersion(),
-    refreshCheckCxProjectStatus(),
     refreshSubscriptions(),
     refreshNotifications(),
     refreshQuotaDashboard(),
@@ -4213,51 +4143,6 @@ refs.startUpdateBtn.addEventListener("click", async () => {
     startUpdatePolling();
   } catch (error) {
     setHint(refs.systemUpdateHint, error.message);
-  }
-});
-
-refs.checkCxRefreshBtn?.addEventListener("click", () => {
-  refreshCheckCxProjectStatus().catch((error) => setHint(refs.checkCxProjectHint, error.message));
-});
-
-refs.checkCxEnvForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  setHint(refs.checkCxProjectHint, "正在保存 check-cx 配置...");
-  setButtonBusy(refs.checkCxSaveEnvBtn, true, "保存中...");
-  try {
-    const payload = await api("/api/admin/system/projects/check-cx/env", {
-      method: "POST",
-      body: JSON.stringify({
-        supabaseUrl: refs.checkCxSupabaseUrl.value.trim(),
-        publishableKey: refs.checkCxPublishableKey.value.trim(),
-        serviceRoleKey: refs.checkCxServiceRoleKey.value.trim(),
-        port: refs.checkCxPort.value.trim()
-      })
-    });
-    refs.checkCxSupabaseUrl.value = "";
-    refs.checkCxPublishableKey.value = "";
-    refs.checkCxServiceRoleKey.value = "";
-    renderCheckCxProjectStatus(payload);
-    setHint(refs.checkCxProjectHint, payload.message || "配置已保存");
-  } catch (error) {
-    setHint(refs.checkCxProjectHint, error.message);
-  } finally {
-    setButtonBusy(refs.checkCxSaveEnvBtn, false);
-  }
-});
-
-refs.checkCxDeployBtn?.addEventListener("click", async () => {
-  if (!window.confirm("确认部署 / 重启 check-cx？")) return;
-  setHint(refs.checkCxProjectHint, "启动中...");
-  try {
-    const payload = await api("/api/admin/system/projects/check-cx/deploy", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-    renderCheckCxProjectStatus(payload);
-    startCheckCxDeployPolling();
-  } catch (error) {
-    setHint(refs.checkCxProjectHint, error.message);
   }
 });
 

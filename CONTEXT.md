@@ -93,7 +93,7 @@ A KaWang admin-configured rule that maps recharge thresholds to invite-code quot
 _Avoid_: Hard-coded tiers, frontend-configured rebate rules
 
 **Inviter Level Recalculation**:
-When admins save inviter level rules, KaWang refreshes locally known Sub2api users' remote subscription spend and recalculates stored/effective inviter levels from the updated spend and level overrides.
+When admins save inviter level rules, KaWang refreshes locally known Sub2api users' remote recharge spend and recalculates stored/effective inviter levels from the updated spend and level overrides.
 _Avoid_: Leaving displayed levels stale after rule changes, recalculating from old spend after a rule save
 
 **Known Sub2api User**:
@@ -101,20 +101,20 @@ A remote Sub2api user that KaWang has encountered and stored locally, such as an
 _Avoid_: Pulling every remote Sub2api user by default
 
 **Inviter Level Override**:
-An admin-assigned per-user inviter level that takes precedence over the automatically matched level from accumulated subscription spend. Without an override, KaWang uses the highest configured level whose spend threshold is not greater than the user's cached inviter level spend.
+An admin-assigned per-user inviter level that takes precedence over the automatically matched level from accumulated recharge spend. Without an override, KaWang uses the highest configured level whose spend threshold is not greater than the user's cached inviter level spend.
 _Avoid_: Frontend-selected level, hidden hard-coded special cases
 
 **Inviter Level Progress Display**:
-The frontend displays current inviter benefits from the effective level, while the "amount needed for next level" is always calculated from cached subscription spend against the automatic level thresholds, even when an admin level override is active.
+The frontend displays current inviter benefits from the effective level, while the "amount needed for next level" is always calculated from cached recharge spend against the automatic level thresholds, even when an admin level override is active.
 _Avoid_: Hiding spend progress because of an override
 
 **Inviter Level Spend**:
-The user's accumulated successful subscription purchase amount from remote Sub2api admin payment orders, used to determine their inviter level. KaWang reads completed remote orders with `order_type=subscription` for the user; it is not based on balance top-ups, invite rebates, World Cup balance changes, or current remaining balance.
-_Avoid_: Recharge total, current balance, all balance increases, local-only estimate when remote order history is available
+The user's accumulated successful balance recharge amount from remote Sub2api admin balance history, used to determine their inviter level. It is not based on subscription purchases, API usage spend, invite rebates, World Cup balance changes, or current remaining balance.
+_Avoid_: Subscription spend, API usage spend, current balance, all balance increases, local-only estimate when remote balance history is available
 
 **Inviter Level Spend Sync**:
-KaWang caches each user's remote subscription spend locally. The invite page may trigger a refresh, and admins can manually refresh it; frontend display uses the cached result instead of blocking on a full remote order scan every time.
-_Avoid_: Every page render depends on a full remote order history scan
+KaWang caches each user's remote recharge spend locally. The invite page may trigger a refresh, and admins can manually refresh it; frontend display uses the cached result instead of blocking on a full remote balance history scan every time.
+_Avoid_: Every page render depends on a full remote balance history scan
 
 **Invite Page Sync Refresh**:
 The invite page automatically requests a sync on entry and also lets the player manually refresh invite usage, level spend, and rebate status, with a 60-second cooldown to protect the remote Sub2api admin APIs.

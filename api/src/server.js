@@ -2460,16 +2460,26 @@ async function replaceSub2ApiRemoteSubscription(connection, userId, groupId, req
     group_id: String(groupId)
   });
   const revoked = [];
+  const ignored = [];
   for (const subscription of existingSubscriptions) {
     const subscriptionId = readRemoteSubscriptionId(subscription);
     if (!subscriptionId) continue;
-    const result = await callSub2ApiRemote(connection, `/api/v1/admin/subscriptions/${encodeURIComponent(String(subscriptionId))}`, {
-      method: "DELETE",
-      headers: { "Idempotency-Key": `${requestId}:revoke:${subscriptionId}` }
-    });
-    revoked.push({ id: subscriptionId, subscription, response: result.json ?? result.text ?? null });
+    try {
+      const result = await callSub2ApiRemote(connection, `/api/v1/admin/subscriptions/${encodeURIComponent(String(subscriptionId))}`, {
+        method: "DELETE",
+        headers: { "Idempotency-Key": `${requestId}:revoke:${subscriptionId}` }
+      });
+      revoked.push({ id: subscriptionId, subscription, response: result.json ?? result.text ?? null });
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (error?.status === 404 || /subscription not found/i.test(message)) {
+        ignored.push({ id: subscriptionId, reason: message || "subscription not found" });
+        continue;
+      }
+      throw error;
+    }
   }
-  return { existing: existingSubscriptions, revoked };
+  return { existing: existingSubscriptions, revoked, ignored };
 }
 
 async function restoreSub2ApiRemoteSubscription(connection, userId, groupId, previousSubscriptions, requestId, orderId) {

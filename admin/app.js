@@ -29,6 +29,36 @@ const refs = {
   cdkeyExportPublicBtn: document.querySelector("#cdkey-export-public-btn"),
   cdkeyExportSourceBtn: document.querySelector("#cdkey-export-source-btn"),
   cdkeyExportExcelBtn: document.querySelector("#cdkey-export-excel-btn"),
+  cdkeyFilterKeyword: document.querySelector("#cdkey-filter-keyword"),
+  cdkeySearchBtn: document.querySelector("#cdkey-search-btn"),
+  storeSettingsForm: document.querySelector("#store-settings-form"),
+  storeBaseUrl: document.querySelector("#store-base-url"),
+  storeAdminUsername: document.querySelector("#store-admin-username"),
+  storeAdminPassword: document.querySelector("#store-admin-password"),
+  storePollInterval: document.querySelector("#store-poll-interval"),
+  storeEnabled: document.querySelector("#store-enabled"),
+  storeTestBtn: document.querySelector("#store-test-btn"),
+  storeSettingsStatus: document.querySelector("#store-settings-status"),
+  storeSettingsResult: document.querySelector("#store-settings-result"),
+  storeMappingForm: document.querySelector("#store-mapping-form"),
+  storeMappingFormTitle: document.querySelector("#store-mapping-form-title"),
+  storeMappingId: document.querySelector("#store-mapping-id"),
+  storeProductId: document.querySelector("#store-product-id"),
+  storeSkuId: document.querySelector("#store-sku-id"),
+  storeProductTitle: document.querySelector("#store-product-title"),
+  storeManualType: document.querySelector("#store-manual-type"),
+  storeSiteId: document.querySelector("#store-site-id"),
+  storePrefix: document.querySelector("#store-prefix"),
+  storeMappingEnabled: document.querySelector("#store-mapping-enabled"),
+  storeMappingCancelBtn: document.querySelector("#store-mapping-cancel-btn"),
+  storeMappingResult: document.querySelector("#store-mapping-result"),
+  storeMappingList: document.querySelector("#store-mapping-list"),
+  storeMappingsRefreshBtn: document.querySelector("#store-mappings-refresh-btn"),
+  storeTaskStatusFilter: document.querySelector("#store-task-status-filter"),
+  storeTaskQuery: document.querySelector("#store-task-query"),
+  storeTasksRefreshBtn: document.querySelector("#store-tasks-refresh-btn"),
+  storeTaskList: document.querySelector("#store-task-list"),
+  storeTaskResult: document.querySelector("#store-task-result"),
   orderList: document.querySelector("#order-list"),
   jobList: document.querySelector("#job-list"),
   retryJobsBtn: document.querySelector("#retry-jobs-btn"),
@@ -302,6 +332,8 @@ let sub2apiOrdersCache = [];
 let sub2apiModelRoutesCache = null;
 let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
+let storeMappingsCache = [];
+let storeTasksCache = [];
 let migrationRestoreUploadId = null;
 const SUB2API_LEVEL_TEMPLATES = {
   niu: [
@@ -391,6 +423,10 @@ const STATUS_LABELS = {
   processing: "处理中",
   succeeded: "已成功",
   failed: "失败",
+  retrying: "重试中",
+  blocked: "需人工处理",
+  conflict: "交付冲突",
+  canceled: "已取消",
   approved: "已通过",
   rejected: "已驳回",
   revoked: "已撤销",
@@ -478,6 +514,9 @@ function switchTab(tabName) {
   }
   if (tabName === "sub2api" && getToken()) {
     refreshSub2ApiConsole().catch(() => {});
+  }
+  if (tabName === "store-fulfillment" && getToken()) {
+    refreshStoreFulfillmentConsole().catch((error) => setHint(refs.storeTaskResult, error.message));
   }
   if (tabName === "sub2api-rebates" && getToken()) {
     loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`));
@@ -996,16 +1035,29 @@ async function refreshBatches() {
 }
 
 async function refreshCdkeys() {
-  const payload = await api("/api/admin/cdkeys");
+  const params = new URLSearchParams();
+  const keyword = refs.cdkeyFilterKeyword?.value?.trim();
+  if (keyword) params.set("q", keyword);
+  const payload = await api(`/api/admin/cdkeys${params.toString() ? `?${params.toString()}` : ""}`);
+  const originLabels = {
+    store_order: "商城订单签发",
+    batch_import: "批量导入",
+    admin_create: "后台创建"
+  };
   renderTable(refs.cdkeyList, [
     { label: "", render: (item) => `<input type="checkbox" class="cdkey-check" value="${item.id}" />` },
-    { label: "卡密", render: (item) => `<code>${item.public_key}</code>` },
+    { label: "卡密", render: (item) => `<code>${escapeHtml(item.public_key)}</code>` },
     { label: "类型", render: (item) => item.processing_mode === "manual"
       ? `<span class="table-badge status-processing">人工 ${escapeHtml(item.manual_type || "")}</span>`
       : item.support_only ? `<span class="table-badge status-pending">接码专用</span>` : `<span class="table-badge status-active">普通</span>` },
+    { label: "来源", render: (item) => escapeHtml(originLabels[item.origin] || item.origin || "-") },
+    { label: "商城订单号", render: (item) => item.store_order_no ? `<code>${escapeHtml(item.store_order_no)}</code>` : "-" },
+    { label: "交付子单号", render: (item) => item.store_fulfillment_target_no && item.store_fulfillment_target_no !== item.store_order_no
+      ? `<code>${escapeHtml(item.store_fulfillment_target_no)}</code>` : "-" },
+    { label: "兑换订单号", render: (item) => item.latest_order_no ? `<code>${escapeHtml(item.latest_order_no)}</code>` : "-" },
     { label: "原始卡密", render: (item) => item.source_key ? `<code style="opacity:0.5">${escapeHtml(item.source_key)}</code>` : "-" },
-    { label: "网站", render: (item) => item.site_name || "-" },
-    { label: "前缀", render: (item) => item.prefix },
+    { label: "网站", render: (item) => escapeHtml(item.site_name || "-") },
+    { label: "前缀", render: (item) => escapeHtml(item.prefix || "-") },
     { label: "接码Token", render: (item) => `
       <div style="display:grid;gap:6px;">
         <span style="font-size:12px;color:var(--muted)">${item.has_email_token ? `<code>${escapeHtml(maskToken(item.email_token))}</code>` : "未绑定"}</span>
@@ -1024,6 +1076,158 @@ async function refreshCdkeys() {
     ` }
   ], payload.items);
 }
+
+async function refreshStoreSettings() {
+  const payload = await api("/api/admin/store-fulfillment/settings");
+  const settings = payload.settings || {};
+  refs.storeBaseUrl.value = settings.baseUrl || "";
+  refs.storeAdminUsername.value = settings.adminUsername || "";
+  refs.storeAdminPassword.value = "";
+  refs.storeAdminPassword.placeholder = settings.hasAdminPassword ? "已保存；留空保持原密码" : "首次配置必须填写";
+  refs.storePollInterval.value = String(settings.pollIntervalSeconds || 30);
+  refs.storeEnabled.value = settings.enabled ? "true" : "false";
+  const syncText = settings.lastSyncAt
+    ? `最近同步：${settings.lastSyncAt}（${settings.lastSyncStatus || "unknown"}${settings.lastSyncError ? `：${settings.lastSyncError}` : ""}）`
+    : "尚未同步";
+  const testText = settings.lastTestAt
+    ? `；最近测试：${settings.lastTestAt}（${settings.lastTestStatus || "unknown"}${settings.lastTestError ? `：${settings.lastTestError}` : ""}）`
+    : "";
+  setHint(refs.storeSettingsStatus, syncText + testText);
+}
+
+async function refreshStoreSites() {
+  const payload = await api("/api/admin/sites");
+  const current = refs.storeSiteId.value;
+  refs.storeSiteId.innerHTML = (payload.items || []).map((item) => `
+    <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}${item.status === "active" ? "" : "（已停用）"}</option>
+  `).join("");
+  if (current && (payload.items || []).some((item) => item.id === current)) refs.storeSiteId.value = current;
+}
+
+function resetStoreMappingForm() {
+  refs.storeMappingForm.reset();
+  refs.storeMappingId.value = "";
+  refs.storeMappingFormTitle.textContent = "添加商品映射";
+  refs.storeSkuId.value = "0";
+  refs.storeManualType.value = "PLUS";
+  refs.storePrefix.value = "PLUS";
+  refs.storeMappingEnabled.value = "true";
+  refs.storeMappingCancelBtn.classList.add("hidden");
+}
+
+async function refreshStoreMappings() {
+  const payload = await api("/api/admin/store-fulfillment/mappings");
+  storeMappingsCache = payload.items || [];
+  renderTable(refs.storeMappingList, [
+    { label: "商品 / SKU", render: (item) => `<code>${escapeHtml(item.productId)}</code> / <code>${escapeHtml(item.skuId)}</code><br/><span class="hint">${escapeHtml(item.productTitle || "-")}</span>` },
+    { label: "人工类型", render: (item) => `<span class="table-badge status-processing">${escapeHtml(item.manualType)}</span>` },
+    { label: "KaWang 站点", render: (item) => escapeHtml(item.siteName || item.siteId) },
+    { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
+    { label: "状态", render: (item) => renderStatus(item.enabled ? "active" : "disabled") },
+    { label: "操作", render: (item) => `
+      <div class="actions-row">
+        <button class="ghost-btn small" type="button" onclick='editStoreMapping(${JSON.stringify(item.id)})'>编辑</button>
+        <button class="ghost-btn small" type="button" style="color:var(--error)" onclick='deleteStoreMapping(${JSON.stringify(item.id)})'>删除</button>
+      </div>
+    ` }
+  ], storeMappingsCache, "暂无商品映射");
+}
+
+function editStoreMapping(id) {
+  const item = storeMappingsCache.find((entry) => entry.id === id);
+  if (!item) return;
+  refs.storeMappingId.value = item.id;
+  refs.storeProductId.value = item.productId;
+  refs.storeSkuId.value = item.skuId;
+  refs.storeProductTitle.value = item.productTitle || "";
+  refs.storeManualType.value = item.manualType;
+  refs.storeSiteId.value = item.siteId;
+  refs.storePrefix.value = item.prefix;
+  refs.storeMappingEnabled.value = item.enabled ? "true" : "false";
+  refs.storeMappingFormTitle.textContent = "编辑商品映射";
+  refs.storeMappingCancelBtn.classList.remove("hidden");
+  refs.storeMappingForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function deleteStoreMapping(id) {
+  if (!window.confirm("确认删除该商品映射？已创建任务仍保留映射快照。")) return;
+  try {
+    await api(`/api/admin/store-fulfillment/mappings/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await refreshStoreMappings();
+    setHint(refs.storeMappingResult, "商品映射已删除");
+  } catch (error) {
+    setHint(refs.storeMappingResult, error.message);
+  }
+}
+
+function storeTaskProducts(task) {
+  return (task.items || []).map((item) => `${item.title || "未命名商品"} (${item.productId}/${item.skuId}) × ${item.quantity}`).join("；");
+}
+
+async function refreshStoreTasks() {
+  const params = new URLSearchParams();
+  if (refs.storeTaskStatusFilter.value) params.set("status", refs.storeTaskStatusFilter.value);
+  if (refs.storeTaskQuery.value.trim()) params.set("q", refs.storeTaskQuery.value.trim());
+  const payload = await api(`/api/admin/store-fulfillment/tasks${params.toString() ? `?${params.toString()}` : ""}`);
+  storeTasksCache = payload.items || [];
+  renderTable(refs.storeTaskList, [
+    { label: "商城订单", render: (item) => `<code>${escapeHtml(item.parentOrderNo)}</code>${item.remoteOrderNo !== item.parentOrderNo ? `<br/><span class="hint">子单 <code>${escapeHtml(item.remoteOrderNo)}</code></span>` : ""}` },
+    { label: "商品", render: (item) => `<span title="${escapeHtml(storeTaskProducts(item))}">${escapeHtml(storeTaskProducts(item) || "-")}</span>` },
+    { label: "映射快照", render: (item) => (item.mappingSnapshot || []).length
+      ? (item.mappingSnapshot || []).map((mapping) => `${escapeHtml(mapping.manualType)} / ${escapeHtml(mapping.siteName || mapping.siteId)} / <code>${escapeHtml(mapping.prefix)}</code>`).join("<br/>")
+      : "-" },
+    { label: "CDK", render: (item) => (item.cdkeys || []).length
+      ? (item.cdkeys || []).map((card) => `<code>${escapeHtml(card.publicKey)}</code>`).join("<br/>")
+      : "-" },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">尝试 ${item.attemptCount}</span>` },
+    { label: "最后错误", render: (item) => item.lastError ? `<span style="color:var(--error)" title="${escapeHtml(item.lastError)}">${escapeHtml(item.lastError)}</span>` : "-" },
+    { label: "时间", render: (item) => `<span class="hint">创建 ${escapeHtml(item.createdAt || "-")}<br/>完成 ${escapeHtml(item.completedAt || item.canceledAt || "-")}</span>` },
+    { label: "操作", render: (item) => `
+      <div class="actions-row">
+        ${(item.cdkeys || []).length ? `<button class="ghost-btn small" type="button" onclick='copyStoreTaskCdkeys(${JSON.stringify(item.id)})'>复制 CDK</button>` : ""}
+        ${!["succeeded", "canceled"].includes(item.status) ? `
+          <button class="ghost-btn small" type="button" onclick='runStoreTaskAction(${JSON.stringify(item.id)}, "recheck")'>重新检查</button>
+          <button class="primary-btn small" type="button" onclick='runStoreTaskAction(${JSON.stringify(item.id)}, "retry")'>重试</button>
+        ` : ""}
+      </div>
+    ` }
+  ], storeTasksCache, "暂无商城交付任务");
+}
+
+async function copyStoreTaskCdkeys(id) {
+  const task = storeTasksCache.find((item) => item.id === id);
+  const keys = (task?.cdkeys || []).map((item) => item.publicKey).filter(Boolean);
+  if (!keys.length) return;
+  try {
+    await copyTextToClipboard(keys.join("\n"));
+    setHint(refs.storeTaskResult, `已复制 ${keys.length} 张 CDK`);
+  } catch (error) {
+    setHint(refs.storeTaskResult, error.message || "复制失败");
+  }
+}
+
+async function runStoreTaskAction(id, action) {
+  try {
+    await api(`/api/admin/store-fulfillment/tasks/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.storeTaskResult, action === "recheck" ? "任务已加入重新检查队列" : "任务已加入重试队列");
+    await refreshStoreTasks();
+  } catch (error) {
+    setHint(refs.storeTaskResult, error.message);
+  }
+}
+
+async function refreshStoreFulfillmentConsole() {
+  await Promise.all([refreshStoreSettings(), refreshStoreSites()]);
+  await Promise.all([refreshStoreMappings(), refreshStoreTasks()]);
+}
+
+window.editStoreMapping = editStoreMapping;
+window.deleteStoreMapping = deleteStoreMapping;
+window.copyStoreTaskCdkeys = copyStoreTaskCdkeys;
+window.runStoreTaskAction = runStoreTaskAction;
 
 function renderSmsProviderInfo(item) {
   const source = escapeHtml(item.inventorySource || "-");
@@ -1994,6 +2198,9 @@ async function exportCdkeysExcel() {
     const rows = payload.items.map((item) => ({
       "公开卡密": item.public_key || "",
       "原始卡密": item.source_key || "",
+      "来源": ({ store_order: "商城订单签发", batch_import: "批量导入", admin_create: "后台创建" })[item.origin] || item.origin || "",
+      "商城订单号": item.store_order_no || "",
+      "交付子单号": item.store_fulfillment_target_no || "",
       "前缀": item.prefix || "",
       "状态": item.status || "",
       "网站": item.site_name || "",
@@ -4100,7 +4307,8 @@ async function refreshAll() {
     refreshNotifications(),
     refreshQuotaDashboard(),
     refreshQuotaSubCards(),
-    refreshSub2ApiConsole()
+    refreshSub2ApiConsole(),
+    refreshStoreFulfillmentConsole()
   ]);
 }
 
@@ -4187,6 +4395,82 @@ refs.loginForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setHint(refs.loginResult, error.message);
   }
+});
+
+refs.storeSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/admin/store-fulfillment/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        baseUrl: refs.storeBaseUrl.value.trim(),
+        adminUsername: refs.storeAdminUsername.value.trim(),
+        adminPassword: refs.storeAdminPassword.value,
+        enabled: refs.storeEnabled.value === "true",
+        pollIntervalSeconds: Number(refs.storePollInterval.value || 30)
+      })
+    });
+    setHint(refs.storeSettingsResult, "商城连接配置已保存");
+    await refreshStoreSettings();
+  } catch (error) {
+    setHint(refs.storeSettingsResult, error.message);
+  }
+});
+
+refs.storeTestBtn?.addEventListener("click", async () => {
+  setButtonBusy(refs.storeTestBtn, true, "测试中...");
+  try {
+    await api("/api/admin/store-fulfillment/test", { method: "POST", body: JSON.stringify({}) });
+    setHint(refs.storeSettingsResult, "Dujiao 登录和订单读取测试成功");
+  } catch (error) {
+    setHint(refs.storeSettingsResult, error.message);
+  } finally {
+    setButtonBusy(refs.storeTestBtn, false);
+    await refreshStoreSettings().catch(() => {});
+  }
+});
+
+refs.storeMappingForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const id = refs.storeMappingId.value;
+  try {
+    await api(id
+      ? `/api/admin/store-fulfillment/mappings/${encodeURIComponent(id)}`
+      : "/api/admin/store-fulfillment/mappings", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify({
+        productId: refs.storeProductId.value.trim(),
+        skuId: refs.storeSkuId.value.trim() || "0",
+        productTitle: refs.storeProductTitle.value.trim(),
+        manualType: refs.storeManualType.value,
+        siteId: refs.storeSiteId.value,
+        prefix: refs.storePrefix.value.trim(),
+        enabled: refs.storeMappingEnabled.value === "true"
+      })
+    });
+    setHint(refs.storeMappingResult, id ? "商品映射已更新" : "商品映射已创建");
+    resetStoreMappingForm();
+    await refreshStoreMappings();
+  } catch (error) {
+    setHint(refs.storeMappingResult, error.message);
+  }
+});
+
+refs.storeMappingCancelBtn?.addEventListener("click", resetStoreMappingForm);
+refs.storeMappingsRefreshBtn?.addEventListener("click", () => refreshStoreMappings().catch((error) => setHint(refs.storeMappingResult, error.message)));
+refs.storeTasksRefreshBtn?.addEventListener("click", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
+refs.storeTaskStatusFilter?.addEventListener("change", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
+refs.storeTaskQuery?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message));
+});
+refs.storeManualType?.addEventListener("change", () => {
+  if (!refs.storePrefix.value.trim() || ["PLUS", "x5", "x20"].includes(refs.storePrefix.value.trim())) {
+    refs.storePrefix.value = refs.storeManualType.value;
+  }
+});
+refs.cdkeySearchBtn?.addEventListener("click", () => refreshCdkeys().catch((error) => alert(error.message)));
+refs.cdkeyFilterKeyword?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") refreshCdkeys().catch((error) => alert(error.message));
 });
 
 refs.singleCdkeyForm.addEventListener("submit", async (event) => {

@@ -396,12 +396,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 }
 
 .cdkey-table table {
-  min-width: 1180px;
+  min-width: 1680px;
 }
 
 .cdkey-table th,
 .cdkey-table td {
   white-space: nowrap;
+}
+
+.store-task-table table {
+  min-width: 1500px;
+}
+
+.store-task-table td {
+  max-width: 360px;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .quota-sub-card-table {
@@ -489,8 +500,8 @@ tr:hover td { background: rgba(255,255,255,0.01); }
 }
 
 .status-active, .status-succeeded { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
-.status-pending, .status-processing { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
-.status-disabled, .status-failed, .status-void { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
+.status-pending, .status-processing, .status-retrying { color: #ffd58a; background: rgba(255, 213, 138, 0.1); }
+.status-disabled, .status-failed, .status-void, .status-blocked, .status-conflict, .status-canceled { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
 .status-approved { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }
 .status-rejected { color: #ffc1d2; background: rgba(255, 127, 159, 0.1); }
 .status-operational { color: #9ef3cf; background: rgba(67, 213, 159, 0.1); }

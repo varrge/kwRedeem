@@ -57,6 +57,9 @@
           <button class="nav-item" data-tab="cards">
             <span class="icon">🎫</span> 卡密管理
           </button>
+          <button class="nav-item" data-tab="store-fulfillment">
+            <span class="icon">🛍️</span> 商城交付
+          </button>
           <button class="nav-item" data-tab="sms">
             <span class="icon">📱</span> 接码系统
           </button>
@@ -230,6 +233,8 @@
             <div class="card-header">
               <h3>卡密明细</h3>
               <div class="header-actions">
+                <input id="cdkey-filter-keyword" class="small-input" placeholder="卡密 / 商城订单号" />
+                <button id="cdkey-search-btn" class="ghost-btn small">搜索</button>
                 <button id="cdkey-export-public-btn" class="ghost-btn small">导出公开卡密</button>
                 <button id="cdkey-export-source-btn" class="ghost-btn small">导出原始卡密</button>
                 <button id="cdkey-export-excel-btn" class="ghost-btn small">全部导出 Excel</button>
@@ -243,6 +248,133 @@
               </div>
             </div>
             <div id="cdkey-list" class="table-wrapper cdkey-table"></div>
+          </div>
+        </section>
+
+        <!-- Store Fulfillment -->
+        <section class="tab-panel hidden" data-panel="store-fulfillment">
+          <div class="content-header">
+            <h2>商城交付</h2>
+            <p>从 Dujiao 交付中订单即时签发并回填人工处理 CDK</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>商城连接</h3></div>
+              <form id="store-settings-form" class="stack">
+                <label class="field">
+                  <span>Dujiao 商城地址</span>
+                  <input id="store-base-url" placeholder="https://shop.example.com" />
+                </label>
+                <label class="field">
+                  <span>服务管理员账号</span>
+                  <input id="store-admin-username" autocomplete="username" placeholder="kawang-service" />
+                </label>
+                <label class="field">
+                  <span>服务管理员密码</span>
+                  <input id="store-admin-password" type="password" autocomplete="new-password" placeholder="首次必填；留空保持原密码" />
+                </label>
+                <label class="field">
+                  <span>订单同步间隔（秒）</span>
+                  <input id="store-poll-interval" type="number" min="5" max="300" value="30" />
+                </label>
+                <label class="field">
+                  <span>自动交付</span>
+                  <select id="store-enabled">
+                    <option value="false">停用</option>
+                    <option value="true">启用</option>
+                  </select>
+                </label>
+                <div class="actions-row">
+                  <button type="submit" class="primary-btn">保存连接</button>
+                  <button id="store-test-btn" type="button" class="ghost-btn">测试连接</button>
+                </div>
+              </form>
+              <div id="store-settings-status" class="hint"></div>
+              <div id="store-settings-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3 id="store-mapping-form-title">添加商品映射</h3></div>
+              <form id="store-mapping-form" class="stack">
+                <input id="store-mapping-id" type="hidden" />
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>商品 ID</span>
+                    <input id="store-product-id" placeholder="例如 100" />
+                  </label>
+                  <label class="field">
+                    <span>SKU ID</span>
+                    <input id="store-sku-id" value="0" placeholder="0 表示商品级兜底" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>商品标题备注</span>
+                  <input id="store-product-title" placeholder="方便后台识别，可留空" />
+                </label>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>人工卡密类型</span>
+                    <select id="store-manual-type">
+                      <option value="PLUS">PLUS</option>
+                      <option value="x5">x5</option>
+                      <option value="x20">x20</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>KaWang 站点</span>
+                    <select id="store-site-id"></select>
+                  </label>
+                </div>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>卡密前缀</span>
+                    <input id="store-prefix" value="PLUS" />
+                  </label>
+                  <label class="field">
+                    <span>映射状态</span>
+                    <select id="store-mapping-enabled">
+                      <option value="true">启用</option>
+                      <option value="false">停用</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="actions-row">
+                  <button type="submit" class="primary-btn">保存映射</button>
+                  <button id="store-mapping-cancel-btn" type="button" class="ghost-btn hidden">取消编辑</button>
+                </div>
+              </form>
+              <div id="store-mapping-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>商品映射</h3>
+              <button id="store-mappings-refresh-btn" type="button" class="ghost-btn small">刷新</button>
+            </div>
+            <div id="store-mapping-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>交付任务</h3>
+              <div class="header-actions">
+                <select id="store-task-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="pending">待处理</option>
+                  <option value="retrying">重试中</option>
+                  <option value="succeeded">已交付</option>
+                  <option value="blocked">需人工处理</option>
+                  <option value="conflict">交付冲突</option>
+                  <option value="canceled">已取消</option>
+                </select>
+                <input id="store-task-query" class="small-input" placeholder="订单 / 商品 / 卡密" />
+                <button id="store-tasks-refresh-btn" type="button" class="ghost-btn small">查询</button>
+              </div>
+            </div>
+            <div id="store-task-list" class="table-wrapper store-task-table"></div>
+            <div id="store-task-result" class="hint"></div>
           </div>
         </section>
 

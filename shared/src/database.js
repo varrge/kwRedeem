@@ -226,6 +226,10 @@ function createSchema(db) {
       metadata TEXT,
       processing_mode TEXT NOT NULL DEFAULT 'auto',
       manual_type TEXT,
+      origin TEXT NOT NULL DEFAULT 'admin_create',
+      store_order_no TEXT,
+      store_fulfillment_target_no TEXT,
+      store_fulfillment_task_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -729,12 +733,73 @@ function createSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS store_fulfillment_settings (
+      id TEXT PRIMARY KEY,
+      base_url TEXT,
+      admin_username TEXT,
+      admin_password TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 30,
+      last_sync_at TEXT,
+      last_sync_status TEXT,
+      last_sync_error TEXT,
+      last_test_at TEXT,
+      last_test_status TEXT,
+      last_test_error TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS store_product_mappings (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      sku_id TEXT NOT NULL DEFAULT '0',
+      product_title TEXT,
+      manual_type TEXT NOT NULL,
+      site_id TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      UNIQUE(product_id, sku_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS store_fulfillment_tasks (
+      id TEXT PRIMARY KEY,
+      remote_order_id TEXT NOT NULL UNIQUE,
+      remote_order_no TEXT NOT NULL,
+      parent_order_id TEXT,
+      parent_order_no TEXT,
+      items_json TEXT NOT NULL,
+      mapping_snapshot TEXT,
+      quantity INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      cdkeys_json TEXT,
+      payload TEXT,
+      delivery_data TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_retry_at TEXT,
+      last_error TEXT,
+      remote_fulfillment_id TEXT,
+      locked_at TEXT,
+      locked_by TEXT,
+      completed_at TEXT,
+      canceled_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
   `);
 
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "processing_mode", "TEXT NOT NULL DEFAULT 'auto'");
   ensureColumn(db, "cdkeys", "manual_type", "TEXT");
+  ensureColumn(db, "cdkeys", "origin", "TEXT NOT NULL DEFAULT 'admin_create'");
+  ensureColumn(db, "cdkeys", "store_order_no", "TEXT");
+  ensureColumn(db, "cdkeys", "store_fulfillment_target_no", "TEXT");
+  ensureColumn(db, "cdkeys", "store_fulfillment_task_id", "TEXT");
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");
@@ -823,6 +888,7 @@ function createSchema(db) {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cdkeys_status ON cdkeys(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_cdkeys_site ON cdkeys(site_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_cdkeys_origin_order ON cdkeys(origin, store_order_no, updated_at);
     CREATE INDEX IF NOT EXISTS idx_orders_status ON redeem_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_orders_site ON redeem_orders(site_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON activation_jobs(status, next_retry_at);
@@ -876,6 +942,9 @@ function createSchema(db) {
       ON sub2api_worldcup_bets(connection_id, match_id, sub2api_user_id, phase)
       WHERE status NOT IN ('debit_failed', 'refunded');
     CREATE INDEX IF NOT EXISTS idx_api_football_logs_usage_date ON api_football_request_logs(usage_date, created_at);
+    CREATE INDEX IF NOT EXISTS idx_store_product_mappings_lookup ON store_product_mappings(product_id, sku_id, enabled);
+    CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_status ON store_fulfillment_tasks(status, next_retry_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_parent ON store_fulfillment_tasks(parent_order_no, remote_order_no);
   `);
 }
 
@@ -1307,6 +1376,23 @@ function seedDefaults(db) {
     VALUES ('default', 'zafronix', 0, NULL, 'https://api.zafronix.com/fifa/worldcup/v1', 1, 2026,
             'Asia/Shanghai', 80, 100, 60000, ?, 'system')
   `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO store_fulfillment_settings (
+      id, enabled, poll_interval_seconds, updated_at, updated_by
+    )
+    VALUES ('default', 0, 30, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    UPDATE cdkeys
+    SET origin = CASE
+      WHEN batch_id IS NOT NULL AND batch_id <> '' THEN 'batch_import'
+      ELSE 'admin_create'
+    END
+    WHERE store_fulfillment_task_id IS NULL
+      AND (origin IS NULL OR origin = '' OR origin = 'admin_create')
+  `).run();
 
   db.prepare(`
     UPDATE api_football_settings

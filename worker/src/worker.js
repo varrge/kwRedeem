@@ -42,11 +42,17 @@ import {
   summarizeResponseInfo
 } from "../../shared/src/notifications.js";
 import { getAvailableQuota } from "../../shared/src/quota-calc.js";
+import { createStoreFulfillmentRunner } from "../../shared/src/store-fulfillment-runner.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const maintenancePath = resolveProjectPath("data", "maintenance.json");
+const storeFulfillmentRunner = createStoreFulfillmentRunner({
+  db,
+  redeemUrl: env.appUrl,
+  workerId
+});
 
 function isMaintenanceEnabled() {
   return fs.existsSync(maintenancePath);
@@ -3266,6 +3272,13 @@ setInterval(() => {
   });
 }, 30000);
 
+setInterval(() => {
+  if (isMaintenanceEnabled()) return;
+  storeFulfillmentRunner.tick().catch((error) => {
+    console.error("[KaWang worker] store-fulfillment", error);
+  });
+}, 5000);
+
 if (!isMaintenanceEnabled()) {
   tick().catch((error) => {
     console.error("[KaWang worker]", error);
@@ -3287,5 +3300,9 @@ if (!isMaintenanceEnabled()) {
 
   apiFootballWorldCupTick().catch((error) => {
     console.error("[KaWang worker] worldcup", error);
+  });
+
+  storeFulfillmentRunner.tick().catch((error) => {
+    console.error("[KaWang worker] store-fulfillment", error);
   });
 }

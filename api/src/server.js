@@ -25,6 +25,12 @@ import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCo
 import { getBalance } from "../../shared/src/fivesim-client.js";
 import { isSmsCardStopped } from "../../shared/src/sms-status.js";
 import {
+  DujiaoAdminClient,
+  STORE_CDK_ORIGINS,
+  STORE_FULFILLMENT_STATUSES,
+  normalizeDujiaoBaseUrl
+} from "../../shared/src/store-fulfillment.js";
+import {
   DEFAULT_API_FOOTBALL_SETTINGS,
   getApiFootballQuotaSnapshot,
   getApiFootballSettings,
@@ -1927,6 +1933,62 @@ function serializeSub2ApiConnection(row) {
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function getStoreFulfillmentSettings() {
+  return db.prepare("SELECT * FROM store_fulfillment_settings WHERE id = 'default'").get();
+}
+
+function serializeStoreFulfillmentSettings(row) {
+  return {
+    baseUrl: row?.base_url || "",
+    adminUsername: row?.admin_username || "",
+    hasAdminPassword: Boolean(row?.admin_password),
+    enabled: Boolean(row?.enabled),
+    pollIntervalSeconds: Number(row?.poll_interval_seconds || 30),
+    lastSyncAt: row?.last_sync_at || null,
+    lastSyncStatus: row?.last_sync_status || null,
+    lastSyncError: row?.last_sync_error || null,
+    lastTestAt: row?.last_test_at || null,
+    lastTestStatus: row?.last_test_status || null,
+    lastTestError: row?.last_test_error || null,
+    updatedAt: row?.updated_at || null,
+    updatedBy: row?.updated_by || null
+  };
+}
+
+function createDujiaoClientFromSettings(row) {
+  if (!row?.base_url || !row?.admin_username || !row?.admin_password) {
+    throw new Error("请先完整保存商城地址、服务管理员账号和密码");
+  }
+  return new DujiaoAdminClient({
+    baseUrl: row.base_url,
+    username: row.admin_username,
+    password: decryptText(row.admin_password)
+  });
+}
+
+function serializeStoreFulfillmentTask(row) {
+  return {
+    id: row.id,
+    remoteOrderId: row.remote_order_id,
+    remoteOrderNo: row.remote_order_no,
+    parentOrderId: row.parent_order_id || null,
+    parentOrderNo: row.parent_order_no || row.remote_order_no,
+    items: safeParseJson(row.items_json, []),
+    mappingSnapshot: safeParseJson(row.mapping_snapshot, []),
+    quantity: Number(row.quantity || 0),
+    status: row.status,
+    cdkeys: safeParseJson(row.cdkeys_json, []),
+    attemptCount: Number(row.attempt_count || 0),
+    nextRetryAt: row.next_retry_at || null,
+    lastError: row.last_error || null,
+    remoteFulfillmentId: row.remote_fulfillment_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at || null,
+    canceledAt: row.canceled_at || null
   };
 }
 
@@ -6284,6 +6346,231 @@ app.get("/api/admin/dashboard", { preHandler: requireAdmin }, async () => {
   return { counts, recentLogs };
 });
 
+app.get("/api/admin/store-fulfillment/settings", { preHandler: requireAdmin }, async () => ({
+  settings: serializeStoreFulfillmentSettings(getStoreFulfillmentSettings())
+}));
+
+app.put("/api/admin/store-fulfillment/settings", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    baseUrl: z.string().trim().min(1),
+    adminUsername: z.string().trim().min(1),
+    adminPassword: z.string().optional().default(""),
+    enabled: z.boolean(),
+    pollIntervalSeconds: z.coerce.number().int().min(5).max(300).default(30)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "商城连接参数不正确" });
+  }
+  const existing = getStoreFulfillmentSettings();
+  if (!parsed.data.adminPassword.trim() && !existing?.admin_password) {
+    return reply.code(400).send({ message: "首次配置必须填写服务管理员密码" });
+  }
+  let baseUrl;
+  try {
+    baseUrl = normalizeDujiaoBaseUrl(parsed.data.baseUrl);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+  const now = nowIso();
+  const encryptedPassword = parsed.data.adminPassword.trim()
+    ? encryptText(parsed.data.adminPassword)
+    : existing.admin_password;
+  db.prepare(`
+    UPDATE store_fulfillment_settings
+    SET base_url = ?, admin_username = ?, admin_password = ?, enabled = ?, poll_interval_seconds = ?,
+        last_sync_error = CASE WHEN ? = 1 THEN NULL ELSE last_sync_error END,
+        updated_at = ?, updated_by = ?
+    WHERE id = 'default'
+  `).run(
+    baseUrl,
+    parsed.data.adminUsername,
+    encryptedPassword,
+    parsed.data.enabled ? 1 : 0,
+    parsed.data.pollIntervalSeconds,
+    parsed.data.enabled ? 1 : 0,
+    now,
+    request.admin.username
+  );
+  createAuditLog({
+    action: "store_fulfillment.settings.update",
+    actor: request.admin.username,
+    resourceType: "store_fulfillment_settings",
+    resourceId: "default",
+    detail: { baseUrl, enabled: parsed.data.enabled, pollIntervalSeconds: parsed.data.pollIntervalSeconds, passwordUpdated: Boolean(parsed.data.adminPassword.trim()) }
+  });
+  return { settings: serializeStoreFulfillmentSettings(getStoreFulfillmentSettings()) };
+});
+
+app.post("/api/admin/store-fulfillment/test", { preHandler: requireAdmin }, async (request, reply) => {
+  const current = getStoreFulfillmentSettings();
+  const testedAt = nowIso();
+  try {
+    const client = createDujiaoClientFromSettings(current);
+    await client.login();
+    await client.listOrders({ status: "fulfilling", page: 1, pageSize: 1 });
+    db.prepare(`
+      UPDATE store_fulfillment_settings
+      SET last_test_at = ?, last_test_status = 'success', last_test_error = NULL
+      WHERE id = 'default'
+    `).run(testedAt);
+    return { ok: true, testedAt };
+  } catch (error) {
+    db.prepare(`
+      UPDATE store_fulfillment_settings
+      SET last_test_at = ?, last_test_status = 'failed', last_test_error = ?
+      WHERE id = 'default'
+    `).run(testedAt, error.message || "连接测试失败");
+    return reply.code(400).send({ message: error.message || "连接测试失败" });
+  }
+});
+
+app.get("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, async () => ({
+  items: db.prepare(`
+    SELECT m.*, s.name AS site_name
+    FROM store_product_mappings m
+    LEFT JOIN sites s ON s.id = m.site_id
+    ORDER BY m.product_id, CAST(m.sku_id AS INTEGER), m.updated_at DESC
+  `).all().map((item) => ({
+    id: item.id,
+    productId: item.product_id,
+    skuId: item.sku_id,
+    productTitle: item.product_title || "",
+    manualType: item.manual_type,
+    siteId: item.site_id,
+    siteName: item.site_name || "",
+    prefix: item.prefix,
+    enabled: Boolean(item.enabled),
+    updatedAt: item.updated_at,
+    updatedBy: item.updated_by || null
+  }))
+}));
+
+const storeProductMappingSchema = z.object({
+  productId: z.coerce.string().trim().min(1),
+  skuId: z.coerce.string().trim().min(1).default("0"),
+  productTitle: z.string().trim().optional().default(""),
+  manualType: z.enum(MANUAL_CDKEY_TYPES),
+  siteId: z.string().trim().min(1),
+  prefix: z.string().trim().min(1),
+  enabled: z.boolean().optional().default(true)
+});
+
+app.post("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = storeProductMappingSchema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "商品映射参数不正确" });
+  const site = db.prepare("SELECT id FROM sites WHERE id = ?").get(parsed.data.siteId);
+  if (!site) return reply.code(400).send({ message: "KaWang 站点不存在" });
+  const duplicate = db.prepare("SELECT id FROM store_product_mappings WHERE product_id = ? AND sku_id = ?")
+    .get(parsed.data.productId, parsed.data.skuId);
+  if (duplicate) return reply.code(409).send({ message: "该商品与 SKU 已配置映射" });
+  const id = nanoid(18);
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO store_product_mappings (
+      id, product_id, sku_id, product_title, manual_type, site_id, prefix, enabled, created_at, updated_at, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id, parsed.data.productId, parsed.data.skuId, parsed.data.productTitle || null,
+    parsed.data.manualType, parsed.data.siteId, parsed.data.prefix, parsed.data.enabled ? 1 : 0,
+    now, now, request.admin.username
+  );
+  createAuditLog({
+    action: "store_fulfillment.mapping.create",
+    actor: request.admin.username,
+    resourceType: "store_product_mapping",
+    resourceId: id,
+    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, manualType: parsed.data.manualType, siteId: parsed.data.siteId }
+  });
+  return { id };
+});
+
+app.patch("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const existing = db.prepare("SELECT * FROM store_product_mappings WHERE id = ?").get(request.params.id);
+  if (!existing) return reply.code(404).send({ message: "商品映射不存在" });
+  const parsed = storeProductMappingSchema.safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "商品映射参数不正确" });
+  const site = db.prepare("SELECT id FROM sites WHERE id = ?").get(parsed.data.siteId);
+  if (!site) return reply.code(400).send({ message: "KaWang 站点不存在" });
+  const duplicate = db.prepare(`
+    SELECT id FROM store_product_mappings
+    WHERE product_id = ? AND sku_id = ? AND id <> ?
+  `).get(parsed.data.productId, parsed.data.skuId, existing.id);
+  if (duplicate) return reply.code(409).send({ message: "该商品与 SKU 已配置映射" });
+  db.prepare(`
+    UPDATE store_product_mappings
+    SET product_id = ?, sku_id = ?, product_title = ?, manual_type = ?, site_id = ?, prefix = ?,
+        enabled = ?, updated_at = ?, updated_by = ?
+    WHERE id = ?
+  `).run(
+    parsed.data.productId, parsed.data.skuId, parsed.data.productTitle || null, parsed.data.manualType,
+    parsed.data.siteId, parsed.data.prefix, parsed.data.enabled ? 1 : 0, nowIso(), request.admin.username, existing.id
+  );
+  createAuditLog({
+    action: "store_fulfillment.mapping.update",
+    actor: request.admin.username,
+    resourceType: "store_product_mapping",
+    resourceId: existing.id,
+    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, manualType: parsed.data.manualType, siteId: parsed.data.siteId, enabled: parsed.data.enabled }
+  });
+  return { id: existing.id };
+});
+
+app.delete("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  const existing = db.prepare("SELECT * FROM store_product_mappings WHERE id = ?").get(request.params.id);
+  if (!existing) return reply.code(404).send({ message: "商品映射不存在" });
+  const result = db.prepare("DELETE FROM store_product_mappings WHERE id = ?").run(existing.id);
+  if (!result.changes) return reply.code(404).send({ message: "商品映射不存在" });
+  createAuditLog({
+    action: "store_fulfillment.mapping.delete",
+    actor: request.admin.username,
+    resourceType: "store_product_mapping",
+    resourceId: existing.id,
+    detail: { productId: existing.product_id, skuId: existing.sku_id }
+  });
+  return { deleted: true };
+});
+
+app.get("/api/admin/store-fulfillment/tasks", { preHandler: requireAdmin }, async (request) => {
+  const status = String(request.query.status || "").trim();
+  const q = String(request.query.q || "").trim();
+  let sql = "SELECT * FROM store_fulfillment_tasks WHERE 1 = 1";
+  const params = [];
+  if (status) {
+    sql += " AND status = ?";
+    params.push(status);
+  }
+  if (q) {
+    sql += " AND (remote_order_no LIKE ? OR parent_order_no LIKE ? OR items_json LIKE ? OR cdkeys_json LIKE ?)";
+    const keyword = `%${q}%`;
+    params.push(keyword, keyword, keyword, keyword);
+  }
+  sql += " ORDER BY created_at DESC LIMIT 500";
+  return { items: db.prepare(sql).all(...params).map(serializeStoreFulfillmentTask) };
+});
+
+app.post("/api/admin/store-fulfillment/tasks/:id/:action", { preHandler: requireAdmin }, async (request, reply) => {
+  const action = String(request.params.action || "");
+  if (!["retry", "recheck"].includes(action)) return reply.code(400).send({ message: "任务操作不正确" });
+  const task = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(request.params.id);
+  if (!task) return reply.code(404).send({ message: "商城交付任务不存在" });
+  if ([STORE_FULFILLMENT_STATUSES.succeeded, STORE_FULFILLMENT_STATUSES.canceled].includes(task.status)) {
+    return reply.code(400).send({ message: "已完成或已取消的任务不能重试" });
+  }
+  db.prepare(`
+    UPDATE store_fulfillment_tasks
+    SET status = ?, next_retry_at = NULL, last_error = NULL, locked_at = NULL, locked_by = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(STORE_FULFILLMENT_STATUSES.pending, nowIso(), task.id);
+  createAuditLog({
+    action: `store_fulfillment.task.${action}`,
+    actor: request.admin.username,
+    resourceType: "store_fulfillment_task",
+    resourceId: task.id,
+    detail: { remoteOrderNo: task.remote_order_no }
+  });
+  return { accepted: true };
+});
+
 app.get("/api/admin/sub2api/connections", { preHandler: requireAdmin }, async () => {
   const rows = db.prepare(`
     SELECT *
@@ -8395,9 +8682,9 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
     const insertKey = db.prepare(`
       INSERT INTO cdkeys (
         id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix, status,
-        locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, created_at, updated_at
+        locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, origin, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
     `);
 
     let supportOnlyCount = 0;
@@ -8436,6 +8723,7 @@ app.post("/api/admin/batches/import", { preHandler: requireAdmin }, async (reque
         }),
         manualProcessing ? "manual" : "auto",
         manualProcessing ? entryManualType : null,
+        STORE_CDK_ORIGINS.batch,
         now,
         now
       );
@@ -8523,9 +8811,9 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
   db.prepare(`
     INSERT INTO cdkeys (
       id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix, status,
-      locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, created_at, updated_at
+      locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type, origin, created_at, updated_at
     )
-    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)
+    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     site.product_id || "prod_demo",
@@ -8544,6 +8832,7 @@ app.post("/api/admin/cdkeys/create", { preHandler: requireAdmin }, async (reques
     }),
     manualProcessing ? "manual" : "auto",
     manualProcessing ? manualType : null,
+    STORE_CDK_ORIGINS.admin,
     now,
     now
   );
@@ -8582,6 +8871,7 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
   let sql = `
     SELECT
       c.id, c.public_key, c.source_key, c.prefix, c.status, c.used_at, c.locked_at, c.metadata, c.processing_mode, c.manual_type,
+      c.origin, c.store_order_no, c.store_fulfillment_target_no, c.store_fulfillment_task_id,
       b.name AS batch_name,
       s.name AS site_name,
       (
@@ -8611,8 +8901,8 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
     params.push(siteId);
   }
   if (keyword) {
-    sql += " AND c.public_key LIKE ?";
-    params.push(keyword);
+    sql += " AND (c.public_key LIKE ? OR UPPER(COALESCE(c.store_order_no, '')) LIKE ? OR UPPER(COALESCE(c.store_fulfillment_target_no, '')) LIKE ?)";
+    params.push(keyword, keyword, keyword);
   }
 
   sql += " ORDER BY c.created_at DESC LIMIT 200";
@@ -8624,6 +8914,7 @@ app.get("/api/admin/cdkeys", { preHandler: requireAdmin }, async (request) => {
     email_token: getCdkeyEmailToken(item.metadata),
     has_email_token: Boolean(getCdkeyEmailToken(item.metadata)),
     latest_order_no: item.latest_order_no || null,
+    origin: item.origin || (item.batch_name ? STORE_CDK_ORIGINS.batch : STORE_CDK_ORIGINS.admin),
     support_only: isSupportOnlyCdkey(item.metadata),
     processing_mode: getCdkeyProcessingMode(item),
     manual_type: getCdkeyManualType(item)
@@ -8694,7 +8985,8 @@ app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (r
 
   let sql = `
     SELECT
-      c.public_key, c.source_key, c.prefix, c.status, c.metadata, c.processing_mode, c.manual_type, c.created_at,
+      c.public_key, c.source_key, c.prefix, c.status, c.metadata, c.processing_mode, c.manual_type,
+      c.origin, c.store_order_no, c.store_fulfillment_target_no, c.created_at,
       b.name AS batch_name,
       s.name AS site_name
     FROM cdkeys c
@@ -8717,8 +9009,8 @@ app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (r
     params.push(siteId);
   }
   if (keyword) {
-    sql += " AND c.public_key LIKE ?";
-    params.push(keyword);
+    sql += " AND (c.public_key LIKE ? OR UPPER(COALESCE(c.store_order_no, '')) LIKE ? OR UPPER(COALESCE(c.store_fulfillment_target_no, '')) LIKE ?)";
+    params.push(keyword, keyword, keyword);
   }
 
   sql += " ORDER BY c.created_at DESC LIMIT 50000";
@@ -8738,6 +9030,9 @@ app.get("/api/admin/cdkeys/export-excel", { preHandler: requireAdmin }, async (r
       source_key: sourceKey,
       prefix: row.prefix || "",
       status: row.status,
+      origin: row.origin || (row.batch_name ? STORE_CDK_ORIGINS.batch : STORE_CDK_ORIGINS.admin),
+      store_order_no: row.store_order_no || "",
+      store_fulfillment_target_no: row.store_fulfillment_target_no || "",
       site_name: row.site_name || "",
       batch_name: row.batch_name || "",
       email_token: getCdkeyEmailToken(row.metadata),

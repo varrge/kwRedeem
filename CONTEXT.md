@@ -124,3 +124,59 @@ _Avoid_: Unbounded player-triggered remote admin syncs
 Each inviter level may define both a lifetime invite-code application limit and a current unused-code limit. A configured value of `0` means unlimited for that specific limit.
 Expired invite codes do not count against either limit. A configured value of `0` means unlimited for that specific limit.
 _Avoid_: One global fixed quota, treating zero as no invites allowed, expired codes consuming quota
+
+**Store Fulfillment Order**:
+A paid Dujiao store order awaiting or undergoing delivery, from which KaWang may issue the purchased manual-processing CDK.
+_Avoid_: KaWang redeem order, activation job
+
+**Manual-Processing CDK**:
+A KaWang redeemable card whose eventual redemption creates work for an operator instead of starting automatic activation.
+_Avoid_: Source key, automatically activated CDK, fulfillment record
+
+**Store Product Mapping**:
+An explicit association from a Dujiao product and optional SKU to the kind, KaWang site, and public prefix of the manual-processing CDK the purchase promises.
+_Avoid_: Product-title matching, implicit prefix matching
+
+**Store Connection**:
+The single Dujiao store that KaWang observes and fulfills using a dedicated service administrator.
+_Avoid_: KaWang site, Sub2api connection, buyer account
+
+**Order-Issued CDK**:
+A new manual-processing CDK created specifically for one purchased unit in a store fulfillment order rather than selected from pre-existing card inventory.
+_Avoid_: Stock CDK, shared CDK, reusable CDK
+
+**Store-Delivered CDK**:
+An order-issued CDK whose value has been confirmed in the Dujiao fulfillment but remains redeemable in KaWang until the buyer submits it for manual processing.
+_Avoid_: Used CDK, completed manual-processing order
+
+**Store Order Number**:
+The customer-facing Dujiao parent order number that identifies the purchase for which an order-issued CDK was created.
+_Avoid_: Store fulfillment target number, KaWang redeem order number
+
+**Store Fulfillment Target Number**:
+The Dujiao child order number that identifies the exact order unit receiving an order-issued CDK; it is absent when the parent order itself is the delivery target.
+_Avoid_: Customer-facing parent order number, KaWang activation job number
+
+**CDK Origin**:
+The business source from which a CDK entered KaWang, such as a store-order issuance, an administrator creation, or a batch import.
+_Avoid_: Processing type, manual-processing kind
+
+**Store Fulfillment Task**:
+KaWang's durable record of one Dujiao order delivery attempt and the exact order-issued CDKs assigned to it across retries.
+_Avoid_: Activation job, disposable polling attempt
+
+**Confirmed Store Fulfillment**:
+A Dujiao fulfillment whose structured delivery identity and complete CDK assignment match the corresponding KaWang store fulfillment task.
+_Avoid_: Assuming success from an HTTP timeout, treating any existing fulfillment as success
+
+**Store Fulfillment Conflict**:
+A Dujiao order that already contains fulfillment data different from the CDKs assigned by its KaWang store fulfillment task.
+_Avoid_: Automatic overwrite, blind success
+
+**Retryable Store Fulfillment Failure**:
+A temporary transport, throttling, or remote-service failure for which KaWang can safely retry the same store fulfillment task and assigned CDKs.
+_Avoid_: Issuing replacement CDKs, treating configuration errors as transient
+
+**Blocked Store Fulfillment**:
+A store fulfillment task that requires an operator decision because its product is unmapped, its order changed incompatibly, or its remote fulfillment conflicts with KaWang's assignment.
+_Avoid_: Endless automatic retry, silent skip

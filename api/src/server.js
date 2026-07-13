@@ -2423,6 +2423,70 @@ async function listSub2ApiRemotePages(connection, pathname, params = {}, maxPage
   return items;
 }
 
+function readRemoteSubscriptionId(subscription) {
+  const raw = subscription?.id ?? subscription?.ID ?? subscription?.subscription_id ?? subscription?.subscriptionId ?? "";
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function readRemoteSubscriptionExpiresAt(subscription) {
+  const raw = subscription?.expires_at ?? subscription?.expiresAt ?? "";
+  const expiresAt = raw ? new Date(raw) : null;
+  return expiresAt && Number.isFinite(expiresAt.getTime()) ? expiresAt : null;
+}
+
+function getRemainingSubscriptionDays(subscription) {
+  const expiresAt = readRemoteSubscriptionExpiresAt(subscription);
+  if (!expiresAt) return 0;
+  const remainingMs = expiresAt.getTime() - Date.now();
+  if (remainingMs <= 0) return 0;
+  return Math.max(1, Math.min(36500, Math.ceil(remainingMs / (24 * 60 * 60 * 1000))));
+}
+
+function pickRestorableSub2ApiSubscription(subscriptions) {
+  return subscriptions
+    .map((subscription) => ({ subscription, remainingDays: getRemainingSubscriptionDays(subscription) }))
+    .filter((item) => item.remainingDays > 0)
+    .sort((a, b) => {
+      const aExpires = readRemoteSubscriptionExpiresAt(a.subscription)?.getTime() || 0;
+      const bExpires = readRemoteSubscriptionExpiresAt(b.subscription)?.getTime() || 0;
+      return bExpires - aExpires;
+    })[0] || null;
+}
+
+async function replaceSub2ApiRemoteSubscription(connection, userId, groupId, requestId) {
+  const existingSubscriptions = await listSub2ApiRemotePages(connection, "/api/v1/admin/subscriptions", {
+    user_id: String(userId),
+    group_id: String(groupId)
+  });
+  const revoked = [];
+  for (const subscription of existingSubscriptions) {
+    const subscriptionId = readRemoteSubscriptionId(subscription);
+    if (!subscriptionId) continue;
+    const result = await callSub2ApiRemote(connection, `/api/v1/admin/subscriptions/${encodeURIComponent(String(subscriptionId))}`, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": `${requestId}:revoke:${subscriptionId}` }
+    });
+    revoked.push({ id: subscriptionId, subscription, response: result.json ?? result.text ?? null });
+  }
+  return { existing: existingSubscriptions, revoked };
+}
+
+async function restoreSub2ApiRemoteSubscription(connection, userId, groupId, previousSubscriptions, requestId, orderId) {
+  const restorable = pickRestorableSub2ApiSubscription(previousSubscriptions);
+  if (!restorable) return null;
+  return await callSub2ApiRemote(connection, "/api/v1/admin/subscriptions/assign", {
+    method: "POST",
+    headers: { "Idempotency-Key": `${requestId}:restore-subscription` },
+    body: {
+      user_id: userId,
+      group_id: Number(groupId),
+      validity_days: restorable.remainingDays,
+      notes: `KaWang 订阅套餐购买失败，恢复原订阅剩余时长，订单 ${orderId}`
+    }
+  });
+}
+
 function readRemoteId(value) {
   const raw = value?.id ?? value?.ID ?? value?.redeem_code_id ?? value?.redeemCodeId ?? value?.order_id ?? value?.orderId ?? "";
   return String(raw ?? "").trim();
@@ -5934,6 +5998,7 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
 
   let balanceResult = null;
   let subscriptionResult = null;
+  let replacementResult = null;
   let dedicatedGroupResult = null;
   let dedicatedGroupWarning = "";
   try {
@@ -5946,6 +6011,13 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
         notes: `KaWang 订阅套餐扣款：${plan.name}，订单 ${orderId}`
       }
     });
+
+    replacementResult = await replaceSub2ApiRemoteSubscription(
+      connection,
+      userId,
+      Number(plan.subscription_group_id),
+      requestId
+    );
 
     subscriptionResult = await callSub2ApiRemote(connection, "/api/v1/admin/subscriptions/assign", {
       method: "POST",
@@ -5979,6 +6051,7 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
       sub2apiSubscriptionOrderStatuses.succeeded,
       JSON.stringify(balanceResult.json ?? balanceResult.text ?? null),
       JSON.stringify({
+        replacement: replacementResult,
         subscription: subscriptionResult.json ?? subscriptionResult.text ?? null,
         dedicatedGroup: dedicatedGroupResult?.json ?? dedicatedGroupResult?.text ?? null
       }),
@@ -6019,7 +6092,23 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
     };
   } catch (error) {
     let rollbackError = "";
+    let restoreError = "";
+    let restoreResult = null;
     if (balanceResult && !subscriptionResult) {
+      if (replacementResult?.revoked?.length) {
+        try {
+          restoreResult = await restoreSub2ApiRemoteSubscription(
+            connection,
+            userId,
+            Number(plan.subscription_group_id),
+            replacementResult.existing || [],
+            requestId,
+            orderId
+          );
+        } catch (restore) {
+          restoreError = restore.message || "原订阅恢复失败";
+        }
+      }
       try {
         await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}/balance`, {
           method: "POST",
@@ -6035,7 +6124,11 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
       }
     }
 
-    const message = [error.message || "购买失败", rollbackError ? `退款失败：${rollbackError}` : ""].filter(Boolean).join("；");
+    const message = [
+      error.message || "购买失败",
+      restoreError ? `原订阅恢复失败：${restoreError}` : "",
+      rollbackError ? `退款失败：${rollbackError}` : ""
+    ].filter(Boolean).join("；");
     db.prepare(`
       UPDATE sub2api_subscription_orders
       SET status = ?, remote_balance_response = ?, remote_subscription_response = ?, error_message = ?, updated_at = ?
@@ -6043,7 +6136,11 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
     `).run(
       sub2apiSubscriptionOrderStatuses.failed,
       balanceResult ? JSON.stringify(balanceResult.json ?? balanceResult.text ?? null) : null,
-      subscriptionResult ? JSON.stringify(subscriptionResult.json ?? subscriptionResult.text ?? null) : null,
+      JSON.stringify({
+        replacement: replacementResult,
+        subscription: subscriptionResult ? (subscriptionResult.json ?? subscriptionResult.text ?? null) : null,
+        restored: restoreResult ? (restoreResult.json ?? restoreResult.text ?? null) : null
+      }),
       message,
       nowIso(),
       orderId

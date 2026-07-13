@@ -7782,14 +7782,39 @@ app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async (
   log: readUpdateLog()
 }));
 
+function getCheckCxDisabledStatus() {
+  return {
+    disabled: true,
+    exists: false,
+    path: "check-cx",
+    branch: null,
+    commit: null,
+    pm2: null,
+    envFileExists: false,
+    env: {
+      supabaseUrl: false,
+      publishableKey: false,
+      serviceRoleKey: false,
+      port: null
+    },
+    deployState: {
+      status: "disabled",
+      startedAt: null,
+      endedAt: null,
+      error: null
+    },
+    log: ""
+  };
+}
+
 function sendCheckCxDisabled(_request, reply) {
   return reply.code(410).send({ message: "check-cx 已拆到独立服务器，主项目不再管理部署" });
 }
 
-app.get("/api/admin/system/projects/check-cx", { preHandler: requireAdmin }, sendCheckCxDisabled);
+app.get("/api/admin/system/projects/check-cx", { preHandler: requireAdmin }, async () => getCheckCxDisabledStatus());
 app.post("/api/admin/system/projects/check-cx/env", { preHandler: requireAdmin }, sendCheckCxDisabled);
 app.post("/api/admin/system/projects/check-cx/deploy", { preHandler: requireAdmin }, sendCheckCxDisabled);
-app.get("/api/admin/system/projects/check-cx/deploy-status", { preHandler: requireAdmin }, sendCheckCxDisabled);
+app.get("/api/admin/system/projects/check-cx/deploy-status", { preHandler: requireAdmin }, async () => getCheckCxDisabledStatus());
 
 app.get("/api/admin/migration/status", { preHandler: requireAdmin }, async () => ({
   maintenance: readMaintenanceState(),

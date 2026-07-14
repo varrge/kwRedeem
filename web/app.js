@@ -218,7 +218,35 @@ function parseSessionPayloadInput(rawValue) {
   }
 }
 
+function hasSessionLoginEvidence(sessionData) {
+  const candidates = [
+    sessionData?.accessToken,
+    sessionData?.access_token,
+    sessionData?.authToken,
+    sessionData?.auth_token,
+    sessionData?.idToken,
+    sessionData?.id_token,
+    sessionData?.sessionToken,
+    sessionData?.session_token,
+    sessionData?.token,
+    sessionData?.email,
+    sessionData?.userId,
+    sessionData?.user_id,
+    sessionData?.accountId,
+    sessionData?.account_id,
+    sessionData?.user?.id,
+    sessionData?.user?.email,
+    sessionData?.user?.name,
+    sessionData?.account?.id,
+    sessionData?.account?.email
+  ];
+  return candidates.some((value) => typeof value === "string" && value.trim());
+}
+
 function validateSessionForSiteSlug(siteSlug, sessionData) {
+  if (!hasSessionLoginEvidence(sessionData)) {
+    throw new Error("未检测到登录信息，请先登录 ChatGPT，再复制完整的 Session JSON。");
+  }
   const slug = String(siteSlug || "").toLowerCase();
   const accessToken = typeof sessionData?.accessToken === "string" ? sessionData.accessToken.trim() : "";
   const email = typeof sessionData?.user?.email === "string" ? sessionData.user.email.trim() : "";

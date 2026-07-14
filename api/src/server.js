@@ -696,6 +696,31 @@ function parseSessionPayload(rawValue) {
     throw new Error("session JSON 必须是对象");
   }
 
+  const loginEvidence = [
+    parsed.accessToken,
+    parsed.access_token,
+    parsed.authToken,
+    parsed.auth_token,
+    parsed.idToken,
+    parsed.id_token,
+    parsed.sessionToken,
+    parsed.session_token,
+    parsed.token,
+    parsed.email,
+    parsed.userId,
+    parsed.user_id,
+    parsed.accountId,
+    parsed.account_id,
+    parsed.user?.id,
+    parsed.user?.email,
+    parsed.user?.name,
+    parsed.account?.id,
+    parsed.account?.email
+  ];
+  if (!loginEvidence.some((value) => typeof value === "string" && value.trim())) {
+    throw new Error("未检测到登录信息，请先登录 ChatGPT，再复制完整的 Session JSON");
+  }
+
   const preview = {
     keys: Object.keys(parsed),
     email: parsed.user?.email ?? parsed.email ?? null,

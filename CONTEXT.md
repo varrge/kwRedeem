@@ -166,7 +166,7 @@ KaWang's durable record of one Dujiao order delivery attempt and the exact order
 _Avoid_: Activation job, disposable polling attempt
 
 **Confirmed Store Fulfillment**:
-A Dujiao fulfillment whose structured delivery identity and complete CDK assignment match the corresponding KaWang store fulfillment task.
+A Dujiao fulfillment whose buyer-visible payload matches the complete CDK assignment in the corresponding KaWang store fulfillment task. Historical fulfillments may instead match the legacy structured delivery identity.
 _Avoid_: Assuming success from an HTTP timeout, treating any existing fulfillment as success
 
 **Store Fulfillment Conflict**:

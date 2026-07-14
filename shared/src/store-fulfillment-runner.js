@@ -419,7 +419,7 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
       const cards = taskCards(task);
       const publicKeys = cards.map((item) => item.publicKey);
       if (order.fulfillment || CONFIRMABLE_REMOTE_STATUSES.has(String(order.status || ""))) {
-        if (fulfillmentMatchesTask(order.fulfillment, task.id, publicKeys)) {
+        if (fulfillmentMatchesTask(order.fulfillment, task.id, publicKeys, task.payload)) {
           markSucceeded(task, order.fulfillment);
         } else {
           markBlocked(task, "Dujiao 已存在与 KaWang 分配不一致的交付内容", STORE_FULFILLMENT_STATUSES.conflict);
@@ -440,11 +440,22 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
         task = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(task.id);
         if (task.status === STORE_FULFILLMENT_STATUSES.blocked) return;
       }
-      const deliveryData = safeJson(task.delivery_data, {});
+      const assignedKeys = taskCards(task).map((item) => item.publicKey);
+      const expectedPayload = buildStoreDelivery(
+        task.id,
+        task.parent_order_no || task.remote_order_no,
+        task.remote_order_no,
+        assignedKeys,
+        redeemUrl
+      ).payload;
+      if (task.payload !== expectedPayload) {
+        db.prepare("UPDATE store_fulfillment_tasks SET payload = ?, updated_at = ? WHERE id = ?")
+          .run(expectedPayload, nowIso(), task.id);
+        task = { ...task, payload: expectedPayload };
+      }
       const fulfillment = await remote.createFulfillment({
         orderId: task.remote_order_id,
-        payload: task.payload,
-        deliveryData
+        payload: task.payload
       });
       markSucceeded(task, fulfillment);
     } catch (error) {
@@ -452,7 +463,7 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
         try {
           const order = await remote.getOrder(task.remote_order_id);
           const publicKeys = taskCards(task).map((item) => item.publicKey);
-          if (fulfillmentMatchesTask(order?.fulfillment, task.id, publicKeys)) {
+          if (fulfillmentMatchesTask(order?.fulfillment, task.id, publicKeys, task.payload)) {
             markSucceeded(task, order.fulfillment);
           } else {
             markBlocked(task, "Dujiao 已存在与 KaWang 分配不一致的交付内容", STORE_FULFILLMENT_STATUSES.conflict);

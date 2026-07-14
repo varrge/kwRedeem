@@ -151,10 +151,10 @@ export class DujiaoAdminClient {
     return envelope.data || null;
   }
 
-  async createFulfillment({ orderId, payload, deliveryData }) {
+  async createFulfillment({ orderId, payload }) {
     const envelope = await this.request("/api/v1/admin/fulfillments", {
       method: "POST",
-      body: { order_id: Number(orderId), payload, delivery_data: deliveryData }
+      body: { order_id: Number(orderId), payload }
     });
     return envelope.data || null;
   }
@@ -189,9 +189,9 @@ export function collectDujiaoFulfillmentTargets(parentOrder) {
 
 export function buildStoreDelivery(taskId, parentOrderNo, targetOrderNo, publicKeys, redeemUrl) {
   const keys = publicKeys.map((item) => String(item || "").trim()).filter(Boolean);
-  const lines = ["卡密：", ...keys.map((key, index) => `${index + 1}. ${key}`)];
-  const normalizedRedeemUrl = String(redeemUrl || "").trim();
-  if (normalizedRedeemUrl) lines.push("", `兑换地址：${normalizedRedeemUrl}`);
+  const lines = keys.map((key, index) => `${index + 1}.${key}`);
+  const normalizedRedeemUrl = String(redeemUrl || "").trim().replace(/\/+$/, "");
+  if (normalizedRedeemUrl) lines.push(`提交网址：${normalizedRedeemUrl}`);
   return {
     payload: lines.join("\n"),
     deliveryData: {
@@ -205,8 +205,13 @@ export function buildStoreDelivery(taskId, parentOrderNo, targetOrderNo, publicK
   };
 }
 
-export function fulfillmentMatchesTask(fulfillment, taskId, publicKeys) {
+export function fulfillmentMatchesTask(fulfillment, taskId, publicKeys, expectedPayload = "") {
   if (!fulfillment) return false;
+  const remotePayload = String(fulfillment.payload || "").trim();
+  const localPayload = String(expectedPayload || "").trim();
+  if (localPayload && remotePayload === localPayload) return true;
+
+  // Historical tasks used structured delivery data; keep them reconcilable after switching to payload-only delivery.
   let data = fulfillment.delivery_data || fulfillment.deliveryData || {};
   if (typeof data === "string") data = parseJson(data) || {};
   const expected = publicKeys.map((item) => String(item || "").trim()).filter(Boolean);

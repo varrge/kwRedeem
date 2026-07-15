@@ -60,6 +60,9 @@
           <button class="nav-item" data-tab="store-fulfillment">
             <span class="icon">🛍️</span> 商城交付
           </button>
+          <button class="nav-item" data-tab="extension-delivery">
+            <span class="icon">🧩</span> 扩展交付
+          </button>
           <button class="nav-item" data-tab="sms">
             <span class="icon">📱</span> 接码系统
           </button>
@@ -375,6 +378,82 @@
             </div>
             <div id="store-task-list" class="table-wrapper store-task-table"></div>
             <div id="store-task-result" class="hint"></div>
+          </div>
+        </section>
+
+        <!-- Extension Delivery -->
+        <section class="tab-panel hidden" data-panel="extension-delivery">
+          <div class="content-header">
+            <h2>扩展自动交付</h2>
+            <p>将允许站点的新订单 Session 安全交付给唯一绑定的运营 Chrome 扩展</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>服务配置</h3></div>
+              <form id="extension-delivery-settings-form" class="stack">
+                <label class="field">
+                  <span>功能状态</span>
+                  <select id="extension-delivery-enabled">
+                    <option value="false">停用</option>
+                    <option value="true">启用</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>允许进入交付的新订单站点（可多选）</span>
+                  <select id="extension-delivery-sites" multiple size="7"></select>
+                </label>
+                <label class="field">
+                  <span>Cookie 包装接口（固定、不可编辑）</span>
+                  <input id="extension-delivery-converter-url" readonly value="https://spacexcard.com/api/v1/gpt/session-to-cookie" />
+                </label>
+                <label class="field">
+                  <span>spacexcard API Token</span>
+                  <input id="extension-delivery-spacexcard-token" type="password" autocomplete="new-password" placeholder="首次必填；留空保持原 Token" />
+                </label>
+                <label><input id="extension-delivery-clear-spacexcard-token" type="checkbox" /> 清除已保存的 spacexcard Token（需同时停用）</label>
+                <button type="submit" class="primary-btn">保存服务配置</button>
+              </form>
+              <div id="extension-delivery-settings-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>扩展凭据与连接</h3></div>
+              <div id="extension-delivery-connection" class="hint">正在读取连接状态…</div>
+              <div class="actions-row mt-24">
+                <button id="extension-delivery-generate-token" type="button" class="primary-btn">生成 Token</button>
+                <button id="extension-delivery-reset-token" type="button" class="ghost-btn">重置 Token</button>
+                <button id="extension-delivery-revoke-token" type="button" class="danger-btn">撤销 Token</button>
+              </div>
+              <label class="field">
+                <span>一次性显示的 Extension Token</span>
+                <textarea id="extension-delivery-issued-token" rows="3" readonly placeholder="生成或重置后仅在这里显示一次"></textarea>
+              </label>
+              <button id="extension-delivery-copy-token" type="button" class="ghost-btn small">复制 Token</button>
+              <div class="actions-row mt-24">
+                <button id="extension-delivery-resume" type="button" class="primary-btn">恢复全局队列</button>
+                <button id="extension-delivery-refresh" type="button" class="ghost-btn">刷新状态</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>交付记录</h3>
+              <div class="header-actions">
+                <select id="extension-delivery-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="pending">等待处理</option>
+                  <option value="succeeded">已交付</option>
+                  <option value="failed">永久失败</option>
+                  <option value="expired">已过期</option>
+                </select>
+                <select id="extension-delivery-site-filter" class="small-select"><option value="">全部站点</option></select>
+                <button id="extension-delivery-query" type="button" class="ghost-btn small">查询</button>
+              </div>
+            </div>
+            <div id="extension-delivery-list" class="table-wrapper"></div>
+            <div id="extension-delivery-list-result" class="hint"></div>
           </div>
         </section>
 
@@ -978,7 +1057,7 @@
                 报错指南嵌入页地址：<code>/sub2api-error-guide.html</code>。该页不需要用户登录态，可直接配置为 Sub2api 自定义 iframe 页面；建议同样反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-error-guide.html</code>。
               </p>
               <p class="hint">
-                若 Sub2api 域名与 KaWang 不在同一台服务器，例如 <code>sub.vsakura.top</code> 单独部署，而 <code>key.vsakura.top</code>、<code>adminkey.vsakura.top</code>、<code>api.vsakura.top</code> 在 KaWang 服务器，则 <code>sub.vsakura.top/_kwredeem/runtime-config.js</code> 也必须返回 <code>{"apiUrl":"https://api.vsakura.top"}</code>，否则嵌入页会把 API 请求发到错误域名。
+                若 Sub2api 域名与 KaWang 不在同一台服务器，例如 <code>sub.vsakura.top</code> 单独部署，而 <code>key.vsakura.top</code>、<code>adminkey.vsakura.top</code>、<code>apikey.vsakura.top</code> 在 KaWang 服务器，则 <code>sub.vsakura.top/_kwredeem/runtime-config.js</code> 也必须返回 <code>{"apiUrl":"https://apikey.vsakura.top"}</code>，否则嵌入页会把 API 请求发到错误域名。
               </p>
               <p class="hint">
                 最新 Sub2api 使用 <code>GET /api/v1/admin/redeem-codes</code> 测试连接，使用 <code>POST /api/v1/admin/redeem-codes/generate</code> 创建 type=invitation 的邀请码，Admin Token 通过 <code>x-api-key</code> 发送。

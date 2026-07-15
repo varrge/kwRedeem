@@ -312,6 +312,18 @@ function createSchema(db) {
       updated_by TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS extension_delivery_settings (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      allowed_site_slugs TEXT NOT NULL DEFAULT '[]',
+      spacexcard_api_token_encrypted TEXT,
+      extension_token_sha256 TEXT,
+      bound_installation_id TEXT,
+      resume_revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS notification_monitors (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -802,6 +814,13 @@ function createSchema(db) {
   ensureColumn(db, "cdkeys", "store_fulfillment_task_id", "TEXT");
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "redeem_orders", "extension_delivery_status", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_delivery_attempts", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "redeem_orders", "extension_delivery_error", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_delivered_at", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_delivery_expires_at", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_delivery_retry_revision", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "redeem_orders", "extension_delivery_updated_at", "TEXT");
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");
   ensureColumn(db, "activation_endpoints", "abandon_submit_body_template", "TEXT");
   ensureColumn(db, "sites", "abandon_submit_body_template", "TEXT");
@@ -891,6 +910,8 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_cdkeys_origin_order ON cdkeys(origin, store_order_no, updated_at);
     CREATE INDEX IF NOT EXISTS idx_orders_status ON redeem_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_orders_site ON redeem_orders(site_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_orders_extension_delivery
+      ON redeem_orders(extension_delivery_status, extension_delivery_expires_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON activation_jobs(status, next_retry_at);
     CREATE INDEX IF NOT EXISTS idx_jobs_site ON activation_jobs(site_id, status, next_retry_at);
     CREATE INDEX IF NOT EXISTS idx_logs_action ON admin_audit_logs(action, created_at);
@@ -1382,6 +1403,13 @@ function seedDefaults(db) {
       id, enabled, poll_interval_seconds, updated_at, updated_by
     )
     VALUES ('default', 0, 30, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO extension_delivery_settings (
+      id, enabled, allowed_site_slugs, resume_revision, updated_at, updated_by
+    )
+    VALUES ('default', 0, '[]', 0, ?, 'system')
   `).run(new Date().toISOString());
 
   db.prepare(`

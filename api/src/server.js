@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import { nanoid } from "nanoid";
@@ -15,6 +16,7 @@ import { env } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
+import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
@@ -308,6 +310,10 @@ await app.register(cors, {
   methods: ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"]
 });
 
+await app.register(websocket, {
+  options: { maxPayload: 4096 }
+});
+
 app.addContentTypeParser("application/octet-stream", {
   parseAs: "buffer",
   bodyLimit: MIGRATION_MAX_UPLOAD_BYTES
@@ -500,6 +506,15 @@ function createAuditLog({ action, actor = "system", resourceType, resourceId = n
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(nanoid(16), action, actor, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
 }
+
+const extensionDelivery = createExtensionDeliveryService({
+  app,
+  db,
+  decryptText,
+  encryptText,
+  requireAdmin,
+  createAuditLog
+});
 
 function createAuditLogInDatabase(databasePath, { action, actor = "system", resourceType, resourceId = null, detail = null }) {
   const targetDb = new Database(databasePath);
@@ -2969,7 +2984,7 @@ function assertSub2ApiRemoteJsonResponse(result) {
   const text = String(result?.text || "").trim();
   const contentType = String(result?.contentType || "").toLowerCase();
   if (contentType.includes("text/html") || text.startsWith("<!doctype") || text.startsWith("<html") || text.startsWith("<script")) {
-    const error = new Error("远程 Sub2api 返回了网页防护页面，请将连接 Base URL 改为服务端可访问的 API 源站地址，或在防护/代理中放行 api.vsakura.top");
+    const error = new Error("远程 Sub2api 返回了网页防护页面，请将连接 Base URL 改为服务端可访问的 API 源站地址，或在防护/代理中放行 apikey.vsakura.top");
     error.status = result?.status;
     error.responseInfo = result;
     throw error;
@@ -6293,14 +6308,16 @@ app.post("/api/public/redeem", async (request, reply) => {
       const manualType = getCdkeyManualType(cdkey);
       const jobId = manualProcessing ? null : nanoid(18);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
+      const deliveryEnrollment = extensionDelivery.enrollmentForSite(site.slug, now);
 
       db.prepare(`
         INSERT INTO redeem_orders (
           id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id, site_id,
           session_payload, session_preview, customer_ip, abandon_remaining_time, status, latest_job_id,
-          error_message, completed_at, created_at, updated_at
+          error_message, completed_at, created_at, updated_at,
+          extension_delivery_status, extension_delivery_expires_at, extension_delivery_updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
       `).run(
         orderId,
         orderNo,
@@ -6316,7 +6333,10 @@ app.post("/api/public/redeem", async (request, reply) => {
         manualProcessing ? orderStatuses.pending : orderStatuses.processing,
         jobId,
         now,
-        now
+        now,
+        deliveryEnrollment.status,
+        deliveryEnrollment.expiresAt,
+        deliveryEnrollment.updatedAt
       );
 
       if (!manualProcessing) {
@@ -6373,11 +6393,14 @@ app.post("/api/public/redeem", async (request, reply) => {
         orderNo,
         processingMode: manualProcessing ? "manual" : "auto",
         manualType,
-        pollingDisabled: manualProcessing
+        pollingDisabled: manualProcessing,
+        extensionDeliveryPending: deliveryEnrollment.status === "pending"
       };
     });
 
-    return result;
+    const { extensionDeliveryPending, ...response } = result;
+    if (extensionDeliveryPending) extensionDelivery.publishSessionAvailable(result.orderNo);
+    return response;
   } catch (error) {
     return reply.code(400).send({ message: error.message || "提交失败" });
   }

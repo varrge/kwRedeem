@@ -422,7 +422,7 @@
         } catch (error) {
           const hint = API_BASE
             ? "请确认该 API 地址可从当前浏览器访问。"
-            : "未读取到 runtime-config.js，请确认 _kwredeem/runtime-config.js 指向 https://api.vsakura.top。";
+            : "未读取到 runtime-config.js，请确认 _kwredeem/runtime-config.js 指向 https://apikey.vsakura.top。";
           throw new Error(`${hint} 原始错误：${error.message || "Failed to fetch"}`);
         }
         const payload = await response.json().catch(() => ({}));

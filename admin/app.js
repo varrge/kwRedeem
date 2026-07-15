@@ -59,6 +59,26 @@ const refs = {
   storeTasksRefreshBtn: document.querySelector("#store-tasks-refresh-btn"),
   storeTaskList: document.querySelector("#store-task-list"),
   storeTaskResult: document.querySelector("#store-task-result"),
+  extensionDeliverySettingsForm: document.querySelector("#extension-delivery-settings-form"),
+  extensionDeliveryEnabled: document.querySelector("#extension-delivery-enabled"),
+  extensionDeliverySites: document.querySelector("#extension-delivery-sites"),
+  extensionDeliveryConverterUrl: document.querySelector("#extension-delivery-converter-url"),
+  extensionDeliverySpacexcardToken: document.querySelector("#extension-delivery-spacexcard-token"),
+  extensionDeliveryClearSpacexcardToken: document.querySelector("#extension-delivery-clear-spacexcard-token"),
+  extensionDeliverySettingsResult: document.querySelector("#extension-delivery-settings-result"),
+  extensionDeliveryConnection: document.querySelector("#extension-delivery-connection"),
+  extensionDeliveryGenerateToken: document.querySelector("#extension-delivery-generate-token"),
+  extensionDeliveryResetToken: document.querySelector("#extension-delivery-reset-token"),
+  extensionDeliveryRevokeToken: document.querySelector("#extension-delivery-revoke-token"),
+  extensionDeliveryIssuedToken: document.querySelector("#extension-delivery-issued-token"),
+  extensionDeliveryCopyToken: document.querySelector("#extension-delivery-copy-token"),
+  extensionDeliveryResume: document.querySelector("#extension-delivery-resume"),
+  extensionDeliveryRefresh: document.querySelector("#extension-delivery-refresh"),
+  extensionDeliveryStatusFilter: document.querySelector("#extension-delivery-status-filter"),
+  extensionDeliverySiteFilter: document.querySelector("#extension-delivery-site-filter"),
+  extensionDeliveryQuery: document.querySelector("#extension-delivery-query"),
+  extensionDeliveryList: document.querySelector("#extension-delivery-list"),
+  extensionDeliveryListResult: document.querySelector("#extension-delivery-list-result"),
   orderList: document.querySelector("#order-list"),
   jobList: document.querySelector("#job-list"),
   retryJobsBtn: document.querySelector("#retry-jobs-btn"),
@@ -423,6 +443,7 @@ const STATUS_LABELS = {
   processing: "处理中",
   succeeded: "已成功",
   failed: "失败",
+  expired: "已过期",
   retrying: "重试中",
   blocked: "需人工处理",
   conflict: "交付冲突",
@@ -518,6 +539,9 @@ function switchTab(tabName) {
   if (tabName === "store-fulfillment" && getToken()) {
     refreshStoreFulfillmentConsole().catch((error) => setHint(refs.storeTaskResult, error.message));
   }
+  if (tabName === "extension-delivery" && getToken()) {
+    refreshExtensionDeliveryConsole().catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
+  }
   if (tabName === "sub2api-rebates" && getToken()) {
     loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`));
     refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `加载返利失败：${error.message}`));
@@ -532,6 +556,7 @@ function startAutoRefresh() {
   autoRefreshTimer = window.setInterval(() => {
     refreshDashboard().catch(() => {});
     if (currentTab === "logs") refreshLogs().catch(() => {});
+    if (currentTab === "extension-delivery") refreshExtensionDeliveryConsole().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 }
 
@@ -1228,6 +1253,100 @@ window.editStoreMapping = editStoreMapping;
 window.deleteStoreMapping = deleteStoreMapping;
 window.copyStoreTaskCdkeys = copyStoreTaskCdkeys;
 window.runStoreTaskAction = runStoreTaskAction;
+
+async function refreshExtensionDeliverySettings() {
+  const payload = await api("/api/admin/extension-delivery/settings");
+  const settings = payload.settings || {};
+  const sites = payload.sites || [];
+  const selected = new Set(settings.allowedSiteSlugs || []);
+  refs.extensionDeliveryEnabled.value = settings.enabled ? "true" : "false";
+  refs.extensionDeliveryConverterUrl.value = settings.converterUrl || "https://spacexcard.com/api/v1/gpt/session-to-cookie";
+  refs.extensionDeliverySpacexcardToken.value = "";
+  refs.extensionDeliverySpacexcardToken.placeholder = settings.hasSpacexcardToken
+    ? "Token 已加密保存；留空保持不变"
+    : "首次配置必须填写";
+  refs.extensionDeliveryClearSpacexcardToken.checked = false;
+  refs.extensionDeliverySites.innerHTML = sites.map((site) => `
+    <option value="${escapeHtml(site.slug)}" ${selected.has(site.slug) ? "selected" : ""}>
+      ${escapeHtml(site.name)}（${escapeHtml(site.slug)}）${site.status === "active" ? "" : "－已停用"}
+    </option>
+  `).join("");
+
+  const currentFilter = refs.extensionDeliverySiteFilter.value;
+  refs.extensionDeliverySiteFilter.innerHTML = `<option value="">全部站点</option>${sites.map((site) => `
+    <option value="${escapeHtml(site.slug)}">${escapeHtml(site.name)}（${escapeHtml(site.slug)}）</option>
+  `).join("")}`;
+  if (sites.some((site) => site.slug === currentFilter)) refs.extensionDeliverySiteFilter.value = currentFilter;
+
+  refs.extensionDeliveryConnection.innerHTML = `
+    <div>服务：<strong>${settings.enabled ? "已启用" : "已停用"}</strong></div>
+    <div>spacexcard Token：<strong>${settings.hasSpacexcardToken ? "已配置" : "未配置"}</strong></div>
+    <div>Extension Token：<strong>${settings.hasExtensionToken ? "已生成" : "未生成"}</strong></div>
+    <div>绑定实例：<code>${escapeHtml(settings.boundInstallationId || "未绑定")}</code></div>
+    <div>扩展在线：<strong>${settings.online ? "在线" : "离线"}</strong></div>
+    <div>连接时间：${escapeHtml(settings.connectedAt || "-")}</div>
+    <div>最后心跳：${escapeHtml(settings.lastHeartbeatAt || "-")}</div>
+    <div>恢复版本：${Number(settings.resumeRevision) || 0}</div>
+  `;
+  refs.extensionDeliveryGenerateToken.disabled = settings.hasExtensionToken;
+  refs.extensionDeliveryResetToken.disabled = !settings.hasExtensionToken;
+  refs.extensionDeliveryRevokeToken.disabled = !settings.hasExtensionToken;
+}
+
+async function refreshExtensionDeliveries() {
+  const params = new URLSearchParams({ limit: "100" });
+  if (refs.extensionDeliveryStatusFilter.value) params.set("status", refs.extensionDeliveryStatusFilter.value);
+  if (refs.extensionDeliverySiteFilter.value) params.set("siteSlug", refs.extensionDeliverySiteFilter.value);
+  const payload = await api(`/api/admin/extension-deliveries?${params.toString()}`);
+  renderTable(refs.extensionDeliveryList, [
+    { label: "订单号", render: (item) => `<code>${escapeHtml(item.orderNo)}</code>` },
+    { label: "站点", render: (item) => escapeHtml(item.siteSlug || "-") },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "尝试", render: (item) => String(Number(item.attempts) || 0) },
+    { label: "错误码", render: (item) => item.errorCode ? `<code>${escapeHtml(item.errorCode)}</code>` : "-" },
+    { label: "创建 / 到期", render: (item) => `<span class="hint">${escapeHtml(item.createdAt || "-")}<br/>${escapeHtml(item.expiresAt || "-")}</span>` },
+    { label: "交付 / 更新", render: (item) => `<span class="hint">${escapeHtml(item.deliveredAt || "-")}<br/>${escapeHtml(item.updatedAt || "-")}</span>` },
+    { label: "操作", render: (item) => item.status === "pending"
+      ? `<button class="ghost-btn small" type="button" onclick='retryExtensionDelivery(${JSON.stringify(item.orderNo)})'>立即重试</button>`
+      : "-" }
+  ], payload.items || [], "暂无扩展交付记录");
+  setHint(refs.extensionDeliveryListResult, payload.nextCursor ? "当前仅显示前 100 条，请使用筛选缩小范围" : "");
+}
+
+async function refreshExtensionDeliveryConsole() {
+  await refreshExtensionDeliverySettings();
+  await refreshExtensionDeliveries();
+}
+
+async function runExtensionTokenAction(action) {
+  const labels = { generate: "生成", reset: "重置", revoke: "撤销" };
+  if (action !== "generate" && !window.confirm(`确认${labels[action]} Extension Token？当前扩展连接会立即失效。`)) return;
+  const payload = await api("/api/admin/extension-delivery/token", {
+    method: "POST",
+    body: JSON.stringify({ action })
+  });
+  refs.extensionDeliveryIssuedToken.value = payload.token || "";
+  setHint(
+    refs.extensionDeliverySettingsResult,
+    payload.token ? "Token 只显示这一次，请立即复制到扩展设置页。" : "Extension Token 已撤销，自动交付同时停用。"
+  );
+  await refreshExtensionDeliverySettings();
+}
+
+async function retryExtensionDelivery(orderNo) {
+  try {
+    const payload = await api(`/api/admin/extension-deliveries/${encodeURIComponent(orderNo)}/retry`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.extensionDeliveryListResult, `已请求重试 ${orderNo}，revision=${payload.retryRevision}`);
+    await refreshExtensionDeliveries();
+  } catch (error) {
+    setHint(refs.extensionDeliveryListResult, error.message);
+  }
+}
+
+window.retryExtensionDelivery = retryExtensionDelivery;
 
 function renderSmsProviderInfo(item) {
   const source = escapeHtml(item.inventorySource || "-");
@@ -4308,7 +4427,8 @@ async function refreshAll() {
     refreshQuotaDashboard(),
     refreshQuotaSubCards(),
     refreshSub2ApiConsole(),
-    refreshStoreFulfillmentConsole()
+    refreshStoreFulfillmentConsole(),
+    refreshExtensionDeliveryConsole()
   ]);
 }
 
@@ -4395,6 +4515,76 @@ refs.loginForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setHint(refs.loginResult, error.message);
   }
+});
+
+refs.extensionDeliverySettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const enabled = refs.extensionDeliveryEnabled.value === "true";
+  const clearToken = refs.extensionDeliveryClearSpacexcardToken.checked;
+  if (enabled && clearToken) {
+    setHint(refs.extensionDeliverySettingsResult, "清除 spacexcard Token 前请先将功能状态改为停用");
+    return;
+  }
+  try {
+    const allowedSiteSlugs = Array.from(refs.extensionDeliverySites.selectedOptions, option => option.value);
+    await api("/api/admin/extension-delivery/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled,
+        allowedSiteSlugs,
+        spacexcardApiToken: refs.extensionDeliverySpacexcardToken.value.trim(),
+        clearSpacexcardToken: clearToken
+      })
+    });
+    setHint(refs.extensionDeliverySettingsResult, "扩展交付配置已保存");
+    await refreshExtensionDeliveryConsole();
+  } catch (error) {
+    setHint(refs.extensionDeliverySettingsResult, error.message);
+  }
+});
+
+refs.extensionDeliveryGenerateToken?.addEventListener("click", () => {
+  runExtensionTokenAction("generate").catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
+});
+
+refs.extensionDeliveryResetToken?.addEventListener("click", () => {
+  runExtensionTokenAction("reset").catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
+});
+
+refs.extensionDeliveryRevokeToken?.addEventListener("click", () => {
+  runExtensionTokenAction("revoke").catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
+});
+
+refs.extensionDeliveryCopyToken?.addEventListener("click", async () => {
+  const token = refs.extensionDeliveryIssuedToken.value.trim();
+  if (!token) return setHint(refs.extensionDeliverySettingsResult, "当前没有可复制的一次性 Token");
+  try {
+    await copyTextToClipboard(token);
+    setHint(refs.extensionDeliverySettingsResult, "Extension Token 已复制，请粘贴到扩展设置页");
+  } catch (error) {
+    setHint(refs.extensionDeliverySettingsResult, error.message || "复制失败");
+  }
+});
+
+refs.extensionDeliveryResume?.addEventListener("click", async () => {
+  try {
+    const payload = await api("/api/admin/extension-delivery/resume", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.extensionDeliverySettingsResult, `全局队列已恢复，revision=${payload.resumeRevision}`);
+    await refreshExtensionDeliveryConsole();
+  } catch (error) {
+    setHint(refs.extensionDeliverySettingsResult, error.message);
+  }
+});
+
+refs.extensionDeliveryRefresh?.addEventListener("click", () => {
+  refreshExtensionDeliveryConsole().catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
+});
+
+refs.extensionDeliveryQuery?.addEventListener("click", () => {
+  refreshExtensionDeliveries().catch((error) => setHint(refs.extensionDeliveryListResult, error.message));
 });
 
 refs.storeSettingsForm?.addEventListener("submit", async (event) => {

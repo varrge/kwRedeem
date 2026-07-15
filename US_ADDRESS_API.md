@@ -7,7 +7,7 @@ Backend-only JSON API for generating Delaware, United States address records.
 Use the deployed API host:
 
 ```text
-https://api.vsakura.top
+https://apikey.vsakura.top
 ```
 
 Local development:
@@ -66,13 +66,13 @@ Query/body parameters:
 GET example:
 
 ```bash
-curl "https://api.vsakura.top/api/public/us-address/generate?count=1"
+curl "https://apikey.vsakura.top/api/public/us-address/generate?count=1"
 ```
 
 POST example:
 
 ```bash
-curl -X POST "https://api.vsakura.top/api/public/us-address/generate" \
+curl -X POST "https://apikey.vsakura.top/api/public/us-address/generate" \
   -H "Content-Type: application/json" \
   -d '{"count":1,"includePerson":true}'
 ```
@@ -191,7 +191,7 @@ Upstream generation failed:
 For most callers, use:
 
 ```text
-GET https://api.vsakura.top/api/public/us-address/generate?count=1
+GET https://apikey.vsakura.top/api/public/us-address/generate?count=1
 ```
 
 Read the first result from:

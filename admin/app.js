@@ -57,6 +57,7 @@ const refs = {
   storeTaskStatusFilter: document.querySelector("#store-task-status-filter"),
   storeTaskQuery: document.querySelector("#store-task-query"),
   storeTasksRefreshBtn: document.querySelector("#store-tasks-refresh-btn"),
+  storeTaskListRefreshBtn: document.querySelector("#store-task-list-refresh-btn"),
   storeTaskList: document.querySelector("#store-task-list"),
   storeTaskResult: document.querySelector("#store-task-result"),
   extensionDeliverySettingsForm: document.querySelector("#extension-delivery-settings-form"),
@@ -77,6 +78,7 @@ const refs = {
   extensionDeliveryStatusFilter: document.querySelector("#extension-delivery-status-filter"),
   extensionDeliverySiteFilter: document.querySelector("#extension-delivery-site-filter"),
   extensionDeliveryQuery: document.querySelector("#extension-delivery-query"),
+  extensionDeliveryListRefresh: document.querySelector("#extension-delivery-list-refresh"),
   extensionDeliveryList: document.querySelector("#extension-delivery-list"),
   extensionDeliveryListResult: document.querySelector("#extension-delivery-list-result"),
   orderList: document.querySelector("#order-list"),
@@ -4587,6 +4589,18 @@ refs.extensionDeliveryQuery?.addEventListener("click", () => {
   refreshExtensionDeliveries().catch((error) => setHint(refs.extensionDeliveryListResult, error.message));
 });
 
+refs.extensionDeliveryListRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.extensionDeliveryListRefresh, true, "刷新中...");
+  try {
+    await refreshExtensionDeliveries();
+    setHint(refs.extensionDeliveryListResult, `扩展交付列表已刷新：${new Date().toLocaleTimeString()}`);
+  } catch (error) {
+    setHint(refs.extensionDeliveryListResult, error.message);
+  } finally {
+    setButtonBusy(refs.extensionDeliveryListRefresh, false);
+  }
+});
+
 refs.storeSettingsForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -4649,6 +4663,17 @@ refs.storeMappingForm?.addEventListener("submit", async (event) => {
 refs.storeMappingCancelBtn?.addEventListener("click", resetStoreMappingForm);
 refs.storeMappingsRefreshBtn?.addEventListener("click", () => refreshStoreMappings().catch((error) => setHint(refs.storeMappingResult, error.message)));
 refs.storeTasksRefreshBtn?.addEventListener("click", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
+refs.storeTaskListRefreshBtn?.addEventListener("click", async () => {
+  setButtonBusy(refs.storeTaskListRefreshBtn, true, "刷新中...");
+  try {
+    await refreshStoreTasks();
+    setHint(refs.storeTaskResult, `商城交付列表已刷新：${new Date().toLocaleTimeString()}`);
+  } catch (error) {
+    setHint(refs.storeTaskResult, error.message);
+  } finally {
+    setButtonBusy(refs.storeTaskListRefreshBtn, false);
+  }
+});
 refs.storeTaskStatusFilter?.addEventListener("change", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
 refs.storeTaskQuery?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message));

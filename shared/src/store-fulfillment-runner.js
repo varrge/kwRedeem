@@ -236,10 +236,10 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
     `).run(nowIso(), status, error || null);
   }
 
-  function pauseForAuthentication(error) {
+  function recordAuthenticationFailure(error) {
     db.prepare(`
       UPDATE store_fulfillment_settings
-      SET enabled = 0, last_sync_at = ?, last_sync_status = 'auth_error', last_sync_error = ?
+      SET last_sync_at = ?, last_sync_status = 'auth_error', last_sync_error = ?
       WHERE id = 'default'
     `).run(nowIso(), error.message || "Dujiao 鉴权失败");
   }
@@ -474,13 +474,13 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
         return;
       }
       if (error instanceof DujiaoApiError && ["credentials_missing", "totp_required", "token_missing"].includes(error.code)) {
-        pauseForAuthentication(error);
+        recordAuthenticationFailure(error);
         markBlocked(task, error.message);
         return;
       }
       if (error instanceof DujiaoApiError && error.status === 401) {
-        pauseForAuthentication(error);
-        markBlocked(task, "Dujiao 登录失败，商城自动交付已暂停");
+        recordAuthenticationFailure(error);
+        markBlocked(task, "Dujiao 登录失败，请检查商城连接；订单同步会继续自动重试");
         return;
       }
       if (error instanceof DujiaoApiError && error.retryable) {
@@ -514,7 +514,7 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
           discovered = await discover(current);
         } catch (error) {
           if (error instanceof DujiaoApiError && (error.status === 401 || ["credentials_missing", "totp_required", "token_missing"].includes(error.code))) {
-            pauseForAuthentication(error);
+            recordAuthenticationFailure(error);
           } else {
             updateSyncState("error", error?.message || "Dujiao 订单同步失败");
           }

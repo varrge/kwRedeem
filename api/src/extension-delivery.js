@@ -5,11 +5,16 @@ const DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const RATE_WINDOW_MS = 60_000;
 const COOKIE_GET_LIMIT = 30;
 const RESULT_POST_LIMIT = 60;
+const SUBSCRIPTION_GUARD_LIMIT = 30;
 const WS_AUTH_LIMIT = 10;
 const WS_MAX_MESSAGE_BYTES = 4096;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const AUTH_TIMEOUT_MS = 5_000;
 const CONVERTER_URL = "https://spacexcard.com/api/v1/gpt/session-to-cookie";
+const SUBSCRIPTION_CHECK_URL = "https://spacexcard.com/api/v1/gpt/check";
+const SUBSCRIPTION_CANCEL_URL = "https://spacexcard.com/api/v1/gpt/cancel-renewal";
+const SUBSCRIPTION_REQUEST_TIMEOUT_MS = 15_000;
+const SUBSCRIPTION_RESPONSE_MAX_BYTES = 128 * 1024;
 
 const ERROR_DEFINITIONS = Object.freeze({
   EXTENSION_UNAUTHORIZED: { status: 401, message: "Extension Token 无效", retryable: false },
@@ -20,6 +25,7 @@ const ERROR_DEFINITIONS = Object.freeze({
   DELIVERY_NOT_FOUND: { status: 404, message: "交付订单不存在", retryable: false },
   DELIVERY_ALREADY_FINISHED: { status: 409, message: "交付订单已经结束", retryable: false },
   DELIVERY_RESULT_NOT_EXPECTED: { status: 409, message: "该订单尚未下发 Cookie 载荷", retryable: false },
+  SUBSCRIPTION_GUARD_REQUIRED: { status: 409, message: "本次交付尚未完成订阅状态检查", retryable: false },
   DELIVERY_EXPIRED: { status: 410, message: "交付订单已过期", retryable: false },
   RESULT_IDENTITY_MISMATCH: { status: 422, message: "结果邮箱与订单 Session 不一致", retryable: false },
   REQUEST_INVALID: { status: 400, message: "请求参数无效", retryable: false },
@@ -36,7 +42,10 @@ const ERROR_DEFINITIONS = Object.freeze({
   CONVERTER_CONTRACT_DRIFT: { status: 502, message: "Cookie 包装服务契约发生变化", retryable: true, retryScope: "global" },
   CONVERTER_UNAVAILABLE: { status: 502, message: "Cookie 包装服务暂时不可用", retryable: true, retryScope: "global" },
   CONVERTER_RESPONSE_INVALID: { status: 502, message: "Cookie 包装服务响应无效", retryable: true, retryScope: "global" },
-  CONVERTER_TIMEOUT: { status: 504, message: "Cookie 包装服务请求超时", retryable: true, retryScope: "global" }
+  CONVERTER_TIMEOUT: { status: 504, message: "Cookie 包装服务请求超时", retryable: true, retryScope: "global" },
+  SUBSCRIPTION_CHECK_FAILED: { status: 502, message: "订阅状态查询暂时失败", retryable: true, retryScope: "global" },
+  SUBSCRIPTION_CANCEL_FAILED: { status: 502, message: "欠费账号自动续费取消暂时失败", retryable: true, retryScope: "global" },
+  SUBSCRIPTION_GUARD_UNAVAILABLE: { status: 502, message: "订阅保护接口暂时不可用", retryable: true, retryScope: "global" }
 });
 
 const PERMANENT_RESULT_ERRORS = new Set([
@@ -50,10 +59,138 @@ const RETRYABLE_RESULT_SCOPES = new Map([
   ["CHATGPT_SESSION_VERIFY_RATE_LIMITED", "global"],
   ["CHATGPT_SESSION_VERIFY_UNAVAILABLE", "global"],
   ["CHATGPT_SESSION_VERIFY_TIMEOUT", "global"],
+  ["CHATGPT_PAGE_RELOAD_FAILED", "order"],
   ["COOKIE_SCHEMA_UNSUPPORTED", "global"],
   ["COOKIE_PAYLOAD_REJECTED", "global"],
-  ["COOKIE_ROLLBACK_FAILED", "global"]
+  ["COOKIE_ROLLBACK_FAILED", "global"],
+  ["SUBSCRIPTION_CHECK_FAILED", "global"],
+  ["SUBSCRIPTION_CANCEL_FAILED", "global"],
+  ["SUBSCRIPTION_GUARD_UNAVAILABLE", "global"]
 ]);
+
+function subscriptionProviderError(code, options = {}) {
+  const error = new Error(code);
+  error.code = code;
+  error.statusCode = options.statusCode || 502;
+  error.retryable = true;
+  error.retryScope = "global";
+  if (Number.isInteger(options.retryAfterMs) && options.retryAfterMs >= 0) {
+    error.retryAfterMs = options.retryAfterMs;
+  }
+  return error;
+}
+
+function readRetryAfterMs(response) {
+  const value = response.headers.get("retry-after");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+}
+
+async function readLimitedSubscriptionText(response, errorCode) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > SUBSCRIPTION_RESPONSE_MAX_BYTES) {
+    try { await response.body?.cancel(); } catch {}
+    throw subscriptionProviderError(errorCode);
+  }
+
+  if (!response.body?.getReader) {
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > SUBSCRIPTION_RESPONSE_MAX_BYTES) throw subscriptionProviderError(errorCode);
+    return new TextDecoder().decode(buffer);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > SUBSCRIPTION_RESPONSE_MAX_BYTES) {
+      try { await reader.cancel(); } catch {}
+      throw subscriptionProviderError(errorCode);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+async function requestSubscriptionProvider(url, sessionJson, apiToken, errorCode) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUBSCRIPTION_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await globalThis.fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({ token_input: JSON.stringify(sessionJson) }),
+      signal: controller.signal
+    });
+    if (response.status === 401 || response.status === 403) {
+      throw subscriptionProviderError(errorCode, { statusCode: 503 });
+    }
+    if (response.status === 429) {
+      throw subscriptionProviderError(errorCode, {
+        statusCode: 503,
+        retryAfterMs: readRetryAfterMs(response)
+      });
+    }
+    if (!response.ok) throw subscriptionProviderError(errorCode);
+
+    const text = await readLimitedSubscriptionText(response, errorCode);
+    let envelope;
+    try { envelope = JSON.parse(text); } catch { throw subscriptionProviderError(errorCode); }
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
+      || envelope.code !== 0 || !envelope.data || typeof envelope.data !== "object" || Array.isArray(envelope.data)) {
+      throw subscriptionProviderError(errorCode);
+    }
+    return envelope.data;
+  } catch (error) {
+    if (error?.code) throw error;
+    throw subscriptionProviderError(errorCode, {
+      statusCode: error?.name === "AbortError" || controller.signal.aborted ? 504 : 502
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runSubscriptionGuard(sessionJson, apiToken) {
+  const check = await requestSubscriptionProvider(
+    SUBSCRIPTION_CHECK_URL,
+    sessionJson,
+    apiToken,
+    "SUBSCRIPTION_CHECK_FAILED"
+  );
+  const summary = check.summary;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary) || typeof summary.is_delinquent !== "boolean") {
+    throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED");
+  }
+
+  const isDelinquent = summary.is_delinquent;
+  const queriedWillRenew = typeof summary.will_renew === "boolean" ? summary.will_renew : null;
+  let renewalCancelled = false;
+  let willRenew = queriedWillRenew;
+  if (isDelinquent && queriedWillRenew !== false) {
+    const cancellation = await requestSubscriptionProvider(
+      SUBSCRIPTION_CANCEL_URL,
+      sessionJson,
+      apiToken,
+      "SUBSCRIPTION_CANCEL_FAILED"
+    );
+    if (cancellation.cancelled !== true) throw subscriptionProviderError("SUBSCRIPTION_CANCEL_FAILED");
+    renewalCancelled = true;
+    willRenew = false;
+  }
+  return { isDelinquent, willRenew, renewalCancelled };
+}
 
 function hashToken(token) {
   return createHash("sha256").update(token).digest("hex");
@@ -151,6 +288,8 @@ export function createExtensionDeliveryService({
   const wsRateLimits = new Map();
   const getRateLimits = new Map();
   const resultRateLimits = new Map();
+  const subscriptionGuardRateLimits = new Map();
+  const subscriptionGuardPromises = new Map();
   const activeConverterOrders = new Set();
   let converterBusy = false;
   let currentConnection = null;
@@ -474,6 +613,141 @@ export function createExtensionDeliveryService({
     };
   }
 
+  function hasCurrentSubscriptionGuard(row) {
+    return Boolean(row?.extension_subscription_checked_at)
+      && Number(row.extension_subscription_checked_attempt) === Number(row.extension_delivery_attempts);
+  }
+
+  function subscriptionGuardResponse(row) {
+    const rawWillRenew = row.extension_subscription_will_renew;
+    return {
+      checked: true,
+      checkedAt: row.extension_subscription_checked_at,
+      isDelinquent: row.extension_subscription_delinquent === 1,
+      willRenew: rawWillRenew === null || rawWillRenew === undefined ? null : rawWillRenew === 1,
+      renewalCancelled: Boolean(row.extension_subscription_cancelled_at),
+      cancelledAt: row.extension_subscription_cancelled_at || null
+    };
+  }
+
+  function throwDeliveryCode(code) {
+    throw Object.assign(new Error(code), { code });
+  }
+
+  async function executeSubscriptionGuard(auth, orderNo) {
+    expireOrderIfNeeded(orderNo);
+    const row = loadDelivery(orderNo);
+    if (!row || row.extension_delivery_status === null) throwDeliveryCode("DELIVERY_NOT_FOUND");
+    if (row.extension_delivery_status !== "pending") {
+      throwDeliveryCode(row.extension_delivery_status === "expired" ? "DELIVERY_EXPIRED" : "DELIVERY_ALREADY_FINISHED");
+    }
+    if (!(row.extension_delivery_attempts > 0)) throwDeliveryCode("DELIVERY_RESULT_NOT_EXPECTED");
+    if (hasCurrentSubscriptionGuard(row)) return row;
+
+    const settings = getSettings();
+    if (!constantTimeHashEqual(auth.requestHash, settings.extension_token_sha256)) throwDeliveryCode("EXTENSION_UNAUTHORIZED");
+    if (settings.bound_installation_id !== auth.installationId) throwDeliveryCode("EXTENSION_INSTALLATION_MISMATCH");
+    if (!settings.spacexcard_api_token_encrypted) throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
+
+    let sessionJson;
+    let apiToken;
+    try {
+      sessionJson = JSON.parse(decryptText(row.session_payload));
+      apiToken = decryptText(settings.spacexcard_api_token_encrypted);
+    } catch {
+      throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
+    }
+    if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)
+      || typeof apiToken !== "string" || !apiToken.trim()) {
+      throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
+    }
+    const guard = await runSubscriptionGuard(sessionJson, apiToken.trim());
+    const saved = db.transaction(() => {
+      const currentSettings = getSettings();
+      if (!constantTimeHashEqual(auth.requestHash, currentSettings.extension_token_sha256)) return { error: "EXTENSION_UNAUTHORIZED" };
+      if (currentSettings.bound_installation_id !== auth.installationId) return { error: "EXTENSION_INSTALLATION_MISMATCH" };
+
+      const current = loadDelivery(orderNo);
+      if (!current || current.extension_delivery_status === null) return { error: "DELIVERY_NOT_FOUND" };
+      const at = nowIso();
+      if (current.extension_delivery_status === "pending" && current.extension_delivery_expires_at <= at) {
+        db.prepare(`
+          UPDATE redeem_orders
+          SET extension_delivery_status = 'expired', extension_delivery_error = 'DELIVERY_EXPIRED',
+              extension_delivery_updated_at = ?
+          WHERE order_no = ? AND extension_delivery_status = 'pending'
+        `).run(at, orderNo);
+        return { error: "DELIVERY_EXPIRED" };
+      }
+      if (current.extension_delivery_status !== "pending") {
+        return { error: current.extension_delivery_status === "expired" ? "DELIVERY_EXPIRED" : "DELIVERY_ALREADY_FINISHED" };
+      }
+      if (!(current.extension_delivery_attempts > 0)) return { error: "DELIVERY_RESULT_NOT_EXPECTED" };
+      if (hasCurrentSubscriptionGuard(current)) return { row: current };
+
+      db.prepare(`
+        UPDATE redeem_orders
+        SET extension_subscription_checked_attempt = ?, extension_subscription_checked_at = ?,
+            extension_subscription_delinquent = ?, extension_subscription_will_renew = ?,
+            extension_subscription_cancelled_at = CASE WHEN ? = 1 THEN ? ELSE extension_subscription_cancelled_at END,
+            extension_delivery_updated_at = ?
+        WHERE order_no = ? AND extension_delivery_status = 'pending'
+      `).run(
+        current.extension_delivery_attempts,
+        at,
+        guard.isDelinquent ? 1 : 0,
+        guard.willRenew === null ? null : (guard.willRenew ? 1 : 0),
+        guard.renewalCancelled ? 1 : 0,
+        at,
+        at,
+        orderNo
+      );
+      createAuditLog({
+        action: "extension_delivery.subscription_guard",
+        actor: "extension",
+        resourceType: "redeem_order",
+        resourceId: orderNo,
+        detail: {
+          attempt: current.extension_delivery_attempts,
+          isDelinquent: guard.isDelinquent,
+          willRenew: guard.willRenew,
+          renewalCancelled: guard.renewalCancelled
+        }
+      });
+      return { row: loadDelivery(orderNo) };
+    })();
+    if (saved.error) throwDeliveryCode(saved.error);
+    return saved.row;
+  }
+
+  async function handleSubscriptionGuard(request, reply) {
+    const auth = authenticateRequest(request, reply);
+    if (!auth || !applyRestRateLimit(subscriptionGuardRateLimits, SUBSCRIPTION_GUARD_LIMIT, auth, reply)) return;
+    const orderNo = safeOrderNo(request.params.orderNo);
+    if (!orderNo) return sendError(reply, "DELIVERY_NOT_FOUND");
+
+    let promise = subscriptionGuardPromises.get(orderNo);
+    if (!promise) {
+      promise = executeSubscriptionGuard(auth, orderNo);
+      subscriptionGuardPromises.set(orderNo, promise);
+    }
+    try {
+      const row = await promise;
+      setNoStore(reply);
+      return subscriptionGuardResponse(row);
+    } catch (error) {
+      const code = ERROR_DEFINITIONS[error?.code] ? error.code : "SUBSCRIPTION_CHECK_FAILED";
+      return sendError(reply, code, {
+        status: error?.statusCode,
+        retryable: error?.retryable,
+        retryScope: error?.retryScope,
+        retryAfterMs: error?.retryAfterMs
+      });
+    } finally {
+      if (subscriptionGuardPromises.get(orderNo) === promise) subscriptionGuardPromises.delete(orderNo);
+    }
+  }
+
   function parseStoredSessionEmail(row) {
     try {
       return normalizeEmail(JSON.parse(decryptText(row.session_payload))?.user?.email);
@@ -545,6 +819,7 @@ export function createExtensionDeliveryService({
       }
 
       if (body.status === "succeeded") {
+        if (!hasCurrentSubscriptionGuard(row)) return { error: "SUBSCRIPTION_GUARD_REQUIRED" };
         const expectedEmail = parseStoredSessionEmail(row);
         const reportedEmail = normalizeEmail(body.email);
         if (!expectedEmail || !reportedEmail || expectedEmail !== reportedEmail) return { error: "RESULT_IDENTITY_MISMATCH" };
@@ -812,7 +1087,10 @@ export function createExtensionDeliveryService({
         SELECT o.order_no, s.slug AS site_slug, o.extension_delivery_status,
                o.extension_delivery_attempts, o.extension_delivery_error, o.created_at,
                o.extension_delivery_expires_at, o.extension_delivered_at,
-               o.extension_delivery_updated_at
+               o.extension_delivery_updated_at, o.extension_subscription_checked_attempt,
+               o.extension_subscription_checked_at,
+               o.extension_subscription_delinquent, o.extension_subscription_will_renew,
+               o.extension_subscription_cancelled_at
         FROM redeem_orders o
         LEFT JOIN sites s ON s.id = o.site_id
         WHERE ${clauses.join(" AND ")}
@@ -822,17 +1100,26 @@ export function createExtensionDeliveryService({
       const page = rows.slice(0, limit);
       setNoStore(reply);
       return {
-        items: page.map((row) => ({
-          orderNo: row.order_no,
-          siteSlug: row.site_slug || null,
-          status: row.extension_delivery_status,
-          attempts: row.extension_delivery_attempts || 0,
-          errorCode: row.extension_delivery_error || null,
-          createdAt: row.created_at,
-          expiresAt: row.extension_delivery_expires_at,
-          deliveredAt: row.extension_delivered_at || null,
-          updatedAt: row.extension_delivery_updated_at || null
-        })),
+        items: page.map((row) => {
+          const currentSubscriptionGuard = hasCurrentSubscriptionGuard(row);
+          return {
+            orderNo: row.order_no,
+            siteSlug: row.site_slug || null,
+            status: row.extension_delivery_status,
+            attempts: row.extension_delivery_attempts || 0,
+            errorCode: row.extension_delivery_error || null,
+            createdAt: row.created_at,
+            expiresAt: row.extension_delivery_expires_at,
+            deliveredAt: row.extension_delivered_at || null,
+            updatedAt: row.extension_delivery_updated_at || null,
+            subscriptionCheckedAt: currentSubscriptionGuard ? row.extension_subscription_checked_at : null,
+            subscriptionDelinquent: currentSubscriptionGuard ? row.extension_subscription_delinquent === 1 : null,
+            subscriptionWillRenew: currentSubscriptionGuard && row.extension_subscription_will_renew !== null
+              ? row.extension_subscription_will_renew === 1
+              : null,
+            renewalCancelledAt: row.extension_subscription_cancelled_at || null
+          };
+        }),
         nextCursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null
       };
     });
@@ -895,6 +1182,7 @@ export function createExtensionDeliveryService({
   }
 
   app.get("/api/extension/session-deliveries/:orderNo", handleGetDelivery);
+  app.post("/api/extension/session-deliveries/:orderNo/subscription-guard", handleSubscriptionGuard);
   app.post("/api/extension/session-deliveries/:orderNo/result", {
     bodyLimit: WS_MAX_MESSAGE_BYTES,
     onRequest: async (_request, reply) => setNoStore(reply),

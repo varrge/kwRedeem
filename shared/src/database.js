@@ -821,6 +821,11 @@ function createSchema(db) {
   ensureColumn(db, "redeem_orders", "extension_delivery_expires_at", "TEXT");
   ensureColumn(db, "redeem_orders", "extension_delivery_retry_revision", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "redeem_orders", "extension_delivery_updated_at", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_subscription_checked_attempt", "INTEGER");
+  ensureColumn(db, "redeem_orders", "extension_subscription_checked_at", "TEXT");
+  ensureColumn(db, "redeem_orders", "extension_subscription_delinquent", "INTEGER");
+  ensureColumn(db, "redeem_orders", "extension_subscription_will_renew", "INTEGER");
+  ensureColumn(db, "redeem_orders", "extension_subscription_cancelled_at", "TEXT");
   ensureColumn(db, "activation_jobs", "site_id", "TEXT");
   ensureColumn(db, "activation_endpoints", "abandon_submit_body_template", "TEXT");
   ensureColumn(db, "sites", "abandon_submit_body_template", "TEXT");

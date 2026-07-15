@@ -1306,6 +1306,13 @@ async function refreshExtensionDeliveries() {
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "尝试", render: (item) => String(Number(item.attempts) || 0) },
     { label: "错误码", render: (item) => item.errorCode ? `<code>${escapeHtml(item.errorCode)}</code>` : "-" },
+    { label: "订阅保护", render: (item) => {
+      if (!item.subscriptionCheckedAt) return "待检查";
+      const renewal = item.renewalCancelledAt
+        ? "已取消自动续费"
+        : (item.subscriptionWillRenew === false ? "自动续费已关闭" : (item.subscriptionWillRenew === true ? "自动续费开启" : "无续费状态"));
+      return `${item.subscriptionDelinquent ? "欠费" : "正常"}<br/><span class="hint">${renewal}<br/>${escapeHtml(item.subscriptionCheckedAt)}</span>`;
+    } },
     { label: "创建 / 到期", render: (item) => `<span class="hint">${escapeHtml(item.createdAt || "-")}<br/>${escapeHtml(item.expiresAt || "-")}</span>` },
     { label: "交付 / 更新", render: (item) => `<span class="hint">${escapeHtml(item.deliveredAt || "-")}<br/>${escapeHtml(item.updatedAt || "-")}</span>` },
     { label: "操作", render: (item) => item.status === "pending"

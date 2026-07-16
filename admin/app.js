@@ -689,10 +689,9 @@ function switchTab(tabName) {
 function startAutoRefresh() {
   stopAutoRefresh();
   autoRefreshTimer = window.setInterval(() => {
-    refreshDashboard().catch(() => {});
+    if (document.hidden) return;
+    if (currentTab === "dashboard") refreshDashboard().catch(() => {});
     if (currentTab === "logs") refreshLogs().catch(() => {});
-    if (currentTab === "extension-delivery") refreshExtensionDeliveryConsole().catch(() => {});
-    if (currentTab === "membership-fulfillment") refreshMembershipFulfillmentConsole().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 }
 

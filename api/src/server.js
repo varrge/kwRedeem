@@ -17,6 +17,16 @@ import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEven
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { createExtensionDeliveryService } from "./extension-delivery.js";
+import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
+import { createMembershipPaymentService } from "./membership-payment.js";
+import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
+import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
+import { persistManagedCardTransactions } from "../../shared/src/membership-reconciliation.js";
+import {
+  activateMembershipFulfillmentIdentity,
+  createMembershipFulfillmentForOrder,
+  projectMembershipDelivery
+} from "../../shared/src/membership-orchestration.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
@@ -513,7 +523,110 @@ const extensionDelivery = createExtensionDeliveryService({
   decryptText,
   encryptText,
   requireAdmin,
-  createAuditLog
+  createAuditLog,
+  onDeliverySucceeded({ orderNo, verifiedEmail, at }) {
+    activateMembershipFulfillmentIdentity(db, {
+      orderNo,
+      verifiedEmail,
+      secret: env.jwtSecret,
+      at
+    });
+  }
+});
+
+createMembershipFulfillmentService({
+  app,
+  db,
+  decryptText,
+  encryptText,
+  requireAdmin,
+  createAuditLog,
+  extensionDelivery
+});
+
+function createConfiguredMembershipOpenApiClient() {
+  const settings = db.prepare(`
+    SELECT spacexcard_app_id, spacexcard_app_secret_encrypted
+    FROM membership_fulfillment_settings WHERE id = 'default'
+  `).get();
+  if (!settings?.spacexcard_app_secret_encrypted) {
+    const error = new Error("SpaceX Card OpenAPI 未配置");
+    error.code = "SPACEXCARD_OPENAPI_NOT_CONFIGURED";
+    throw error;
+  }
+  return new SpaceXCardOpenApiClient({
+    appId: settings.spacexcard_app_id,
+    appSecret: decryptText(settings.spacexcard_app_secret_encrypted)
+  });
+}
+
+async function loadMembershipCardTransactions(upstreamCardId) {
+  const client = createConfiguredMembershipOpenApiClient();
+  const all = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const rows = await client.listTransactions(upstreamCardId, { page, pageSize: 50 });
+    all.push(...rows);
+    if (rows.length < 50) return all;
+  }
+  const error = new Error("卡片交易记录分页超过安全上限");
+  error.code = "CARD_TRANSACTION_PAGINATION_EXCEEDED";
+  throw error;
+}
+
+createMembershipPaymentService({
+  app,
+  db,
+  requireAdmin,
+  extensionDelivery,
+  createAuditLog,
+  adminCredentials: () => ({ username: env.adminUsername, password: env.adminPassword }),
+  paymentGate: (fulfillment) => {
+    const settings = db.prepare(`
+      SELECT enabled, rollout_mode FROM membership_fulfillment_settings WHERE id = 'default'
+    `).get();
+    return {
+      enabled: settings?.enabled === 1 && settings.rollout_mode === fulfillment?.run_mode,
+      mode: fulfillment?.run_mode
+    };
+  },
+  async getCardMaterial(context) {
+    const card = db.prepare(`
+      SELECT upstream_card_id FROM managed_cards WHERE id = ?
+    `).get(context.cardId);
+    if (!card) throw new Error("MANAGED_CARD_NOT_FOUND");
+    return createConfiguredMembershipOpenApiClient().getCardMaterial(card.upstream_card_id);
+  },
+  async getCheckoutUrl(context) {
+    if (context.stage === "upgrade") return { checkoutUrl: null };
+    const row = db.prepare(`
+      SELECT o.session_payload, settings.spacexcard_api_token_encrypted
+      FROM membership_fulfillments fulfillment
+      JOIN redeem_orders o ON o.id = fulfillment.order_id
+      JOIN extension_delivery_settings settings ON settings.id = 'default'
+      WHERE fulfillment.id = ?
+    `).get(context.fulfillmentId);
+    if (!row?.session_payload || !row.spacexcard_api_token_encrypted) {
+      throw new Error("CHECKOUT_BROKER_NOT_CONFIGURED");
+    }
+    const session = JSON.parse(decryptText(row.session_payload));
+    return createSpaceXCardCheckout(session, decryptText(row.spacexcard_api_token_encrypted));
+  },
+  generateAddress: (context) => generateUsAddressRecords({
+    count: 1,
+    state: "DE",
+    includePerson: true,
+    userAgent: BROWSER_UA,
+    ...(context || {})
+  }),
+  async getCardAuthorizationIds(context) {
+    const card = db.prepare(`
+      SELECT upstream_card_id FROM managed_cards WHERE id = ?
+    `).get(context.cardId);
+    if (!card) throw new Error("MANAGED_CARD_NOT_FOUND");
+    const transactions = await loadMembershipCardTransactions(card.upstream_card_id);
+    persistManagedCardTransactions(db, context.cardId, transactions);
+    return [...new Set(transactions.map((item) => item.authId))].sort();
+  }
 });
 
 function createAuditLogInDatabase(databasePath, { action, actor = "system", resourceType, resourceId = null, detail = null }) {
@@ -1242,6 +1355,15 @@ function getOrderDetail(orderNo) {
 
   const lastResponse = getJsonBodyOrNull(order.job_response);
   const liveInfo = extractLiveTaskInfo(lastResponse, order.site_polling_enabled);
+  const membershipFulfillment = db.prepare(`
+    SELECT * FROM membership_fulfillments WHERE order_id = ?
+  `).get(order.id);
+  const membershipCompensation = membershipFulfillment
+    ? db.prepare(`
+        SELECT * FROM customer_compensation_resolutions
+        WHERE fulfillment_id = ? ORDER BY revision DESC LIMIT 1
+      `).get(membershipFulfillment.id)
+    : null;
 
   return {
     orderNo: order.order_no,
@@ -1273,6 +1395,7 @@ function getOrderDetail(orderNo) {
     liveStage: liveInfo.liveStage || null,
     liveProgress: liveInfo.liveProgress ?? null,
     liveErrorMessage: liveInfo.liveErrorMessage || null,
+    membershipDelivery: projectMembershipDelivery(membershipFulfillment, membershipCompensation),
     job: {
       status: order.job_status,
       lastError: order.job_error,
@@ -6339,6 +6462,13 @@ app.post("/api/public/redeem", async (request, reply) => {
         deliveryEnrollment.updatedAt
       );
 
+      createMembershipFulfillmentForOrder(db, {
+        orderId,
+        orderNo,
+        productId: site.product_id || cdkey.product_id,
+        createdAt: now
+      });
+
       if (!manualProcessing) {
         db.prepare(`
           INSERT INTO activation_jobs (
@@ -8534,6 +8664,7 @@ app.post("/api/admin/products", { preHandler: requireAdmin }, async (request, re
     code: z.string().min(2),
     title: z.string().min(2),
     description: z.string().optional().default(""),
+    membershipTier: z.enum(["plus", "x5", "x20"]).nullable().optional().default(null),
     status: z.enum(["active", "disabled"]).default("active"),
     defaultActivationEndpointId: z.string().nullable().optional()
   });
@@ -8549,12 +8680,13 @@ app.post("/api/admin/products", { preHandler: requireAdmin }, async (request, re
   if (exists) {
     db.prepare(`
       UPDATE products
-      SET code = ?, title = ?, description = ?, status = ?, default_activation_endpoint_id = ?, updated_at = ?
+      SET code = ?, title = ?, description = ?, membership_tier = ?, status = ?, default_activation_endpoint_id = ?, updated_at = ?
       WHERE id = ?
     `).run(
       parsed.data.code,
       parsed.data.title,
       parsed.data.description,
+      parsed.data.membershipTier,
       parsed.data.status,
       parsed.data.defaultActivationEndpointId ?? null,
       now,
@@ -8562,13 +8694,14 @@ app.post("/api/admin/products", { preHandler: requireAdmin }, async (request, re
     );
   } else {
     db.prepare(`
-      INSERT INTO products (id, code, title, description, status, default_activation_endpoint_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (id, code, title, description, membership_tier, status, default_activation_endpoint_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       parsed.data.code,
       parsed.data.title,
       parsed.data.description,
+      parsed.data.membershipTier,
       parsed.data.status,
       parsed.data.defaultActivationEndpointId ?? null,
       now,

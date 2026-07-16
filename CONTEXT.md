@@ -2,6 +2,8 @@
 
 KaWang manages redeemable cards, external site integrations, and operational data that must survive deployment and server moves.
 
+Implementation status: Phase 4–7 代码实现与模拟验证完成；受控生产验收待执行。 The production payment gate remains default-off, and no live card opening, recharge, checkout payment, or rollout qualification is implied by this status.
+
 ## Language
 
 **Full Server Migration**:
@@ -180,3 +182,287 @@ _Avoid_: Issuing replacement CDKs, treating configuration errors as transient
 **Blocked Store Fulfillment**:
 A store fulfillment task that requires an operator decision because its product is unmapped, its order changed incompatibly, or its remote fulfillment conflicts with KaWang's assignment.
 _Avoid_: Endless automatic retry, silent skip
+
+**Managed Payment Card**:
+A SpaceX Card payment card whose upstream identity and operational metadata are tracked by KaWang for ChatGPT membership fulfillment. Full payment credentials are not part of KaWang's card inventory.
+_Avoid_: Stored card credentials, disposable checkout payload
+
+**Session Activation Delivery**:
+The existing extension process that installs an order's ChatGPT authentication cookies into the incognito store, verifies identity, and completes the starting subscription-protection check. Its success does not mean that a membership was purchased.
+_Avoid_: Membership fulfillment, payment completion
+
+**Membership Fulfillment**:
+The independent, durable order process that establishes purchase eligibility, reserves and funds a card, completes the required payment stages, confirms the target membership, and disables renewal. It alone owns card, payment, upgrade, and renewal-safe completion state.
+_Avoid_: Overloading session activation status, using the redeem order's generic status as payment state
+
+**Fulfillment Attempt**:
+An append-only execution record for one pass through a membership-fulfillment stage. Retrying or operator-resuming creates another attempt without replacing the fulfillment, its prior evidence, reservation, or funding intent.
+_Avoid_: New fulfillment per retry, resetting history, reusing session-delivery attempt counters
+
+**Browser Fulfillment Lease**:
+The exclusive right for one membership fulfillment to use the bound extension's shared incognito context and enter card reservation or money-moving stages. Read-only inventory and price reconciliation do not require this lease.
+_Avoid_: Pre-funding queued orders, treating separate incognito windows as isolation, per-card browser concurrency
+
+**Account Fulfillment Lock**:
+The exclusive claim allowing only one active membership fulfillment for a verified ChatGPT identity. A later order waits without card or money exposure and must re-establish purchase eligibility after the earlier fulfillment terminates.
+_Avoid_: Concurrent purchases for one account, permanent rejection of a harmless duplicate, assuming the earlier outcome left the account eligible
+
+**Card Membership Lane**:
+The single final ChatGPT membership tier assigned to a managed payment card from recognized fulfillment history. A card may serve Plus, x5, or x20, but never more than one final tier; the initial Plus charge of a staged x5/x20 upgrade belongs to that final tier.
+_Avoid_: Mixed-tier card, per-order card type
+
+**Card Reconciliation Hold**:
+A managed payment card excluded from automatic checkout because its historical OpenAI payments contain incompatible final tiers, exceed capacity, or cannot be grouped into recognized fulfillment patterns confidently.
+_Avoid_: Guessing a lane, treating uncertain history as unused capacity
+
+**Target Membership Tier**:
+The final ChatGPT membership outcome purchased by a redeem order: Plus, x5, or x20. It is defined explicitly by the purchased KaWang product and remains fixed for the lifetime of the order.
+_Avoid_: Inferring the tier from a site slug, product title, or CDK prefix
+
+**Staged Membership Upgrade**:
+The fulfillment path for an x5 or x20 order that first purchases Plus and then returns to ChatGPT plan management to change to the target tier. Its Plus charge and upgrade charge are two effective payments for one membership fulfillment.
+_Avoid_: Treating the initial Plus charge as a separate Plus order, direct x5/x20 checkout
+
+**Card Capacity Slot**:
+One completed membership fulfillment in a managed payment card's membership lane, independent of how many payment stages that fulfillment requires. A Plus card has five slots, an x5 card has two, and an x20 card has one.
+_Avoid_: Counting raw payment transactions as capacity, sharing one slot across orders
+
+**Capacity-Full Card**:
+A managed payment card whose membership lane has consumed all five Plus, two x5, or one x20 capacity slots. It remains active upstream with its balance untouched, but is no longer eligible for automatic membership selection.
+_Avoid_: Deleting or freezing a full card, automatically refunding its remainder, selecting it for another membership
+
+**Card Capacity Reservation**:
+An internal scheduling claim linking one redeem order to one capacity slot before funding or checkout begins. Releasing it only ends that order's claim; it never deletes, freezes, or otherwise changes the upstream card, and it is allowed only when KaWang can prove that no payment occurred.
+_Avoid_: Selecting a card without a durable claim, treating release as a card operation, releasing after payment or an uncertain outcome
+
+**Single-Funding Fulfillment**:
+A membership fulfillment whose card is brought to the required available balance once before its first checkout stage, using only the shortfall after a real-time balance check. No recharge occurs when the card is already sufficiently funded, and staged x5/x20 upgrades are not recharged between stages.
+_Avoid_: Per-stage card recharge, relying on an unplanned existing balance for the initial Plus charge
+
+**Funding Intent**:
+The durable, immutable instruction for an order's single card-opening or recharge operation, including its target, amount, request fingerprint, and provider idempotency key. Every recovery attempt replays that exact instruction rather than creating another funding operation.
+_Avoid_: Recalculating a timed-out write, generating a new retry key, inferring success only from a balance delta
+
+**Unknown Funding Outcome**:
+The state after a funding request loses its authoritative response. Checkout remains blocked while KaWang recovers the original result by replaying the same funding intent with the same idempotency key.
+_Avoid_: Funding again, changing the request body, proceeding because the card appears funded
+
+**Stage Funding Budget**:
+The card balance reserved for one OpenAI payment stage, equal to the selected card segment's latest matching OpenAI payment plus the fixed stage safety allowance. A staged upgrade's order budget is the sum of its Plus and final-tier stage budgets.
+_Avoid_: Using a global price from another card segment, adding an administrator floor
+
+**Stage Safety Allowance**:
+The fixed USD 0.20 added independently to every effective OpenAI payment stage. A staged x5/x20 upgrade therefore includes USD 0.20 for its Plus payment and another USD 0.20 for its final-tier payment.
+_Avoid_: A random USD 0.20-0.50 value, one order-level allowance for a two-stage upgrade
+
+**Card Price Unavailable**:
+The pre-funding state in which no eligible card segment has a reported latest OpenAI payment for every stage required by the order. The order cannot fund a card, open a new card, or begin checkout in this state.
+_Avoid_: Guessing a missing price, silently using another card segment's price
+
+**Fresh Card Price Signal**:
+A required card-segment OpenAI payment amount whose `found` value is true and whose reported payment time is no more than 72 hours old when funding is calculated.
+_Avoid_: Using an undated price, treating an arbitrarily old payment as current
+
+**Card Selection Priority**:
+The deterministic order for choosing among eligible managed payment cards: first consolidate the target lane by selecting the same-lane card with the smallest funding shortfall, then consider an unassigned card, and open a new card only when neither exists.
+_Avoid_: Random selection, consuming unassigned cards before reusable same-lane capacity
+
+**Proven Card Product**:
+An administrator-allowed SpaceX Card product code for which an existing card of the same product has a complete fresh card-segment price signal for every stage required by the target membership tier. Only proven card products may be opened automatically.
+_Avoid_: Opening the cheapest untested product, treating an allowed product as proven without price evidence
+
+**Funded Card Opening**:
+An automatic card opening whose initial amount brings the new card to the full order budget in the same money operation. The initial amount is at least the product minimum, and the card is not opened when the required amount exceeds the product maximum or the platform balance cannot cover the opening fee and initial amount.
+_Avoid_: Minimum opening followed by a second recharge, opening before the order budget is known
+
+**Order Funding Wait**:
+An order-level retry state entered before spending when the SpaceX Card platform balance cannot fund the selected existing card or a required new card. It does not fail the order or pause unrelated orders, and any no-payment card reservation is released before waiting.
+_Avoid_: Permanent delivery failure, global queue pause, retaining an unfunded reservation
+
+**Card Inventory Initialization**:
+The administrator-started, resumable reconciliation that imports every owned SpaceX Card and classifies its historical fulfillment capacity before automatic card selection is enabled. A single anomalous card enters reconciliation hold without invalidating the completed cards.
+_Avoid_: Blocking service startup, lazy initialization during the first customer order
+
+**Card Inventory Reconciliation**:
+The ongoing combination of signed transaction notifications and authoritative API pulls that keeps managed card status, transaction history, and capacity aligned after initialization. Notifications provide prompt signals; targeted and periodic pulls repair missing, duplicate, partial, or out-of-order events.
+_Avoid_: Webhook-only accounting, polling-only delayed state
+
+**Fulfillment Operations Console**:
+The administrative view for inventory initialization, masked card scheduling state, price contracts, and evidence-gated membership-fulfillment recovery. It orchestrates safe workflow actions but is not a general SpaceX Card money-management console.
+_Avoid_: Direct open-card button, direct recharge/refund button, freeze/delete controls
+
+**Refunded Fulfillment Review**:
+The reconciliation state for a membership payment that settled and was later refunded. Its card capacity is not restored automatically because the membership entitlement and card-risk effect may outlive the returned funds.
+_Avoid_: Treating a refund as an authorization reversal, automatically reusing the slot
+
+**Historical Upgrade Pair**:
+The initialization-only grouping of one final x5/x20 payment with the nearest preceding unpaired Plus payment on the same card within two hours. Missing, late, or conflicting pairs cannot establish capacity automatically.
+_Avoid_: Using time-based pairing for new KaWang orders, grouping every Plus payment on an upgrade card
+
+**Checkout Region**:
+The pricing and currency context used to create the ChatGPT checkout session. Automatic membership fulfillment fixes this context to the Philippines and PHP independently of the billing address source.
+_Avoid_: Billing address country, card issuing area
+
+**Checkout Price Contract**:
+The versioned, administrator-approved PHP amount range for the currently displayed charge of one target membership tier. It validates checkout UI independently of the card segment's USD funding signal.
+_Avoid_: Accepting any positive PHP amount, live FX conversion, treating the USD card price as the displayed PHP price
+
+**Checkout Address Record**:
+The newly generated name and Delaware address returned by KaWang's existing US-address API for one checkout autofill. It remains a US/DE billing record even though the checkout region is Philippines/PHP, and it is not bound to the reused payment card or a previous checkout.
+_Avoid_: Philippines address, checkout region, persistent per-card identity
+
+**Ephemeral Checkout Material**:
+The stage-bound, short-lived bundle of full card details, fresh billing record, checkout target, and validation contract released to the owning extension installation for one active checkout attempt. It exists only in server and extension memory and is never a WebSocket payload or persistent browser record.
+_Avoid_: Stored card profile, reusable checkout secret, extension-held OpenAPI credential
+
+**Checkout Address Wait**:
+An order-level retry state entered before checkout when KaWang's address API is unavailable or returns an incomplete Delaware record. Automatic fulfillment does not use a third-party address site or submit an incomplete form while waiting.
+_Avoid_: Browser scraping fallback, submitting without required billing fields
+
+**Brokered Checkout Link**:
+A one-time ChatGPT checkout URL created by kwRedeem through the SpaceX Card GPT checkout API from the order's protected session, fixed Plus plan, Philippines region, and PHP currency. The browser extension receives the URL but never receives or submits the ChatGPT access token used to create it.
+_Avoid_: Extension-created checkout session, sending an access token from the extension
+
+**Payment Stage Confirmation**:
+The agreement of two independent facts for one fulfillment stage: ChatGPT reports the expected membership state and SpaceX Card reports the matching non-declined OpenAI payment. Neither browser text nor either provider signal alone completes the stage.
+_Avoid_: Success-page-only confirmation, transaction-only success, plan-only success
+
+**Provisional Payment Confirmation**:
+A payment-stage confirmation whose matching card authorization is still pending while the expected membership state is already active. It consumes capacity immediately and remains under reconciliation until the authorization settles, declines, or reverses.
+_Avoid_: Waiting indefinitely for settlement, treating pending authorization as final card settlement
+
+**Payment Transaction Delta**:
+The exactly one new OpenAI authorization for the expected price tier that appears on the reserved card after a stage submission and was absent from the pre-submission authorization snapshot. Zero or multiple matching transactions cannot confirm the stage automatically.
+_Avoid_: Latest-transaction matching, time-only matching, reusing a pre-existing authorization
+
+**Recognized Checkout Surface**:
+A supported ChatGPT or Stripe checkout page whose origin, target plan, region, displayed amount, required fields, and final-submit control all match the versioned automation contract. Only this surface permits automatic submission.
+_Avoid_: Text-scored button guessing, clicking through an unknown checkout layout
+
+**Checkout Diagnostic Fingerprint**:
+A sanitized description of an unsupported checkout state containing adapter identity, normalized navigation and pricing facts, expected-element presence, and a structural hash. It contains no page content, screenshot, form value, account identity, address, or payment credential.
+_Avoid_: Raw DOM upload, automatic screenshot, form-value telemetry
+
+**Versioned Checkout Adapter**:
+The extension-bundled code contract that recognizes checkout states, fields, progression controls, and the final payment control for a known UI version. It can change only through an extension release, never through remotely supplied selectors or executable code.
+_Avoid_: Server-configured click rules, remote JavaScript, text-only button matching
+
+**Automatic Checkout Rollout Gate**:
+The production control that keeps final payment activation disabled until no-charge validation and explicitly scoped live canaries have passed. Full automation capability may be deployed while this operational gate remains closed.
+_Avoid_: Enabling every order on deployment, confusing dry-run success with payment success, permanently manual checkout
+
+**No-Charge Checkout Validation**:
+A rollout check that verifies account eligibility, checkout creation, target plan, PH/PHP price contract, initial-page structure, and field recognition without selecting or reserving a final card, moving funds, releasing card credentials, or activating any post-card control.
+_Avoid_: Real-card autofill, clicking Next, treating initial-page coverage as multi-step coverage
+
+**Live Canary Authorization**:
+An administrator's freshly authenticated, explicit permission for one identified redeem order and payment stage to activate final payment while broad automatic checkout remains disabled. It is not a percentage rollout or an implicit product-wide permission, and the system executing the payment cannot grant it to itself.
+_Avoid_: Random canary selection, automatic scope expansion, treating deployment as approval, worker self-approval
+
+**Canary Approval Snapshot**:
+The single-use immutable facts authorized for one live-canary payment: order, target tier, selected card, funding budget, checkout price-contract version, and extension adapter version. A changed fact invalidates the approval, and final payment activation consumes it atomically.
+_Avoid_: Permanent approved flag, time-window replay, approval surviving a changed payment plan
+
+**Canary Approval Hold**:
+The maximum 15-minute browser-lease period in which a prepared live-canary stage waits for its matching approval snapshot. Expiry releases the sanitized browser context and invalidates the page snapshot without releasing card capacity, moving funds, or replaying an already completed stage.
+_Avoid_: Indefinite global queue pause, approval surviving a rebuilt page, repeating Plus after an upgrade hold expires
+
+**Tier Rollout Qualification**:
+The independently earned permission prerequisite for broad automation of one versioned Plus, x5, or x20 checkout path and PHP price contract, established by one complete live canary whose card payment settles, target membership confirms, renewal is disabled, and exercised adapter path has no unresolved outcome. Tiers progress in order from Plus to x5 to x20 after that single-canary threshold; qualification never enables a scope by itself or carries into another tier or contract version.
+_Avoid_: Plus qualifying x5/x20, simultaneous tier rollout, pending authorization as rollout proof, requiring an unstated multi-day observation gate, automatic promotion, reusing evidence across versions
+
+**Automatic Checkout Scope**:
+An audited, freshly authenticated permission for one exact site, product, target tier, qualified adapter version, and PHP price-contract version, bounded by a daily order limit and USD risk budget. It applies only to eligible orders created after its activation time; a contract-version change pauses it, while disabling it stops new money movement without abandoning fulfillments that already crossed the funding boundary.
+_Avoid_: Unscoped master enablement, retroactive backlog activation, qualification as automatic enablement, inheriting approval across contract versions, terminating paid reconciliation on disable
+
+**Automatic Checkout Daily Risk Budget**:
+The maximum combined snapshotted payment budget and provider funding fees that one automatic-checkout scope may move into money-bearing execution during a business day. It counts full payment exposure even when an existing card balance avoids a recharge, and each fulfillment consumes it only once.
+_Avoid_: Counting only recharge amounts, recounting x5/x20 upgrade stages, restoring exposure after an uncertain or paid outcome
+
+**Fulfillment Dependency Circuit**:
+The scoped safety gate that blocks new money movement when a shared provider or one versioned checkout path is unhealthy. Order-specific failures stay local, while already funded or paid fulfillments retain read-only reconciliation and renewal-protection access.
+_Avoid_: Continuing new payments through a shared outage, global pause for one bad account, abandoning paid reconciliation
+
+**Checkout Progression Control**:
+An allowlisted non-payment control on a recognized multi-step checkout that advances from card or billing entry to the next expected checkout state. It is distinct from the final payment control and cannot be identified from button text alone.
+_Avoid_: Final payment control, generic Continue-button clicking, assuming every checkout is one page
+
+**Pre-submit Checkout Failure**:
+A checkout failure for which the adapter proves that no final payment control was activated, membership did not change, and no new card transaction appeared. It may reuse the same reserved funded card without another funding operation.
+_Avoid_: Uncertain payment outcome, switching cards, recharging on a form error
+
+**Unexpected Checkout Preauthorization**:
+Any new card transaction, including a zero- or small-value verification authorization, that appears after an intermediate checkout action but before the allowlisted final payment control is activated. It blocks further automatic checkout until its outcome and UI behavior are explicitly reconciled.
+_Avoid_: Ignoring small authorizations, treating every `$0` or `$1` event as harmless, continuing to final payment
+
+**Recognized Plan Management Surface**:
+The versioned ChatGPT account page on which an already-confirmed Plus membership exposes the allowlisted control for changing to x5 or x20. It is the only automatic entry into the final stage of a staged membership upgrade.
+_Avoid_: Direct final-tier checkout link, text-scored upgrade button, arbitrary homepage navigation
+
+**Payment Action Required**:
+A fulfillment state in which a recognized payment flow requires 3DS, CAPTCHA, bank verification, or another human action. The active browser page and card reservation are retained, the shared incognito activation queue pauses globally, and resumption performs confirmation only rather than another payment submission.
+_Avoid_: Bypassing the challenge, switching cards, resubmitting payment after handoff
+
+**Human Challenge Acknowledgement**:
+The local extension action by which an operator confirms that they finished interacting with the retained incognito challenge page. It authorizes confirmation queries only and never authorizes another checkout submission.
+_Avoid_: Remote blind resume, automatic DOM-based acknowledgement, treating acknowledgement as payment success
+
+**Lost Challenge Context**:
+A human-required checkout whose owning incognito tab, window, or browser no longer exists. Its order remains under server-side membership and transaction reconciliation while the sanitized extension queue may continue with another order.
+_Avoid_: Recreating and resubmitting checkout, releasing the card reservation, permanently blocking the browser queue
+
+**Uncertain Payment Outcome**:
+A fulfillment state in which a submitted payment lacks complete payment-stage confirmation. The order and card reservation await reconciliation and must not submit the same payment again automatically.
+_Avoid_: Treating timeout as failure, blind payment retry
+
+**Evidence-Gated Reconciliation**:
+The resolution rule under which an uncertain fulfillment can consume or release capacity only from authoritative membership and card-transaction facts. Operator intent may request another check but cannot override contradictory or incomplete evidence.
+_Avoid_: Force-success button, force-release button, timeout-based assumption
+
+**No-Transaction Observation Window**:
+The 24-hour evidence period after a recorded final payment activation in which repeated authoritative checks must continue to show the pre-stage membership and no new or pending OpenAI transaction. Passing the window only enables an operator-reviewed no-payment resolution; it never releases capacity automatically.
+_Avoid_: Treating the five-minute poll as final proof, automatic timeout release, a single negative query
+
+**Explicit Payment Decline**:
+A submitted payment whose new matching card transaction is `DECLINED` while membership remains at its verified pre-stage state and reconciliation finds no other effective payment. It is a known non-payment outcome, but it never authorizes an automatic card switch or resubmission.
+_Avoid_: Uncertain payment outcome, automatic decline retry, deleting or freezing the card
+
+**Partial Membership Fulfillment**:
+An x5/x20 fulfillment whose Plus stage is confirmed but whose final upgrade has not completed and cannot continue automatically, such as after an explicit final-stage decline. Its paid-stage evidence and card reservation remain intact for external resolution and later evidence recheck; Plus renewal may remain enabled only during the bounded resolution window and is disabled at its safety deadline without changing the fulfillment outcome.
+_Avoid_: Releasing the slot, reporting the target tier complete, repeating Plus, allowing temporary Plus renewal exposure to become an unintended renewal
+
+**Expired Partial Membership Fulfillment**:
+A terminal partial fulfillment in which the confirmed intermediate Plus membership expired before the ordered x5/x20 tier was established. Its paid evidence and card capacity remain accounted for, while the customer outcome requires an explicit compensation resolution outside automatic payment fulfillment.
+_Avoid_: Automatic Plus repurchase, releasing paid capacity, reporting x5/x20 success, leaving the customer outcome unowned
+
+**Customer Compensation Resolution**:
+An append-only audited record of how an operator resolved the customer impact of an expired partial membership fulfillment: an external refund, an external replacement delivery, or the customer's acceptance of the partial result. It records the responsible operator, time, and evidence reference without changing the underlying payment truth or performing a money operation.
+_Avoid_: Reopening the expired fulfillment, automatic refund or replacement payment, overwriting an earlier resolution
+
+**Customer Delivery Result**:
+The safe customer-facing projection of membership-fulfillment truth. Only renewal-safe completion is a successful delivery; partial fulfillment remains in human or after-sales handling until an audited compensation resolution supplies the corresponding non-success outcome.
+_Avoid_: Reporting success from session activation, reporting x5/x20 from intermediate Plus, exposing payment internals to the customer
+
+**Fulfillment Intervention Alert**:
+A deduplicated, sanitized operations-console task and Feishu notification indicating that a membership fulfillment needs human attention. It identifies the normalized problem and required action without serving as payment evidence or changing fulfillment state.
+_Avoid_: Notification per worker retry, secrets in messages, treating acknowledgement as workflow approval
+
+**Membership State Provider**:
+The authorized `gptserve.freespaces.app` service that receives an order's protected ChatGPT Session from kwRedeem and reports the current account type for payment-stage confirmation. The extension never calls it or receives the Session used for the query.
+_Avoid_: Browser-side membership query, persisting the provider's raw response
+
+**Confirmed Account Type**:
+The allowlisted membership type reported by the membership state provider: `free` for no paid membership, `plus` for Plus, `prolite` for x5, and `pro` for x20. Any missing or unknown value is contract drift rather than evidence of a free account.
+_Avoid_: Expecting `x5` or `x20` from the provider, treating null or an unknown enum as free, using UI labels as API enums
+
+**Eligible Starting Membership**:
+A ChatGPT account state that may enter automatic card fulfillment: either free, or delinquent with renewal disabled and a recognized initial Plus checkout surface proving replacement purchase is currently available. A healthy existing paid membership and a delinquent account that cannot yet reach that checkout are not eligible starting states.
+_Avoid_: Treating delinquency alone as purchase eligibility, waiting only on a guessed expiry, replacing a healthy paid plan
+
+**Account Repurchase Wait**:
+The no-funding state for a renewal-protected delinquent account that cannot yet produce a recognized Plus checkout surface with the required plan, region, currency, and amount. It may be rechecked, but it cannot open or fund a card.
+_Avoid_: Assuming `is_delinquent` means purchasable, funding before checkout eligibility is proven
+
+**Renewal-Safe Completion**:
+A confirmed final membership whose newly enabled automatic renewal has been disabled and rechecked before the redeem order completes. An x5/x20 fulfillment does not disable renewal during its intermediate Plus stage.
+_Avoid_: Completing while auto-renew remains enabled, cancelling between staged-upgrade payments

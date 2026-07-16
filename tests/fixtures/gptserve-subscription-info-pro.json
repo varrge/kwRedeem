@@ -1,0 +1,24 @@
+{
+  "code": 200,
+  "data": {
+    "account_type": "pro",
+    "seats_used": 1,
+    "seats_total": 1,
+    "start_time": "2026-07-15 21:24:32",
+    "expire_time": "2026-08-15T21:25:18+08:00",
+    "payment_cycle": "monthly",
+    "auto_renew": true,
+    "currency": "PHP",
+    "is_overdue": false,
+    "overdue_since": null,
+    "grace_period_end": null,
+    "last_credit_update": null,
+    "next_credit_update": null,
+    "nonprofit_discount": null,
+    "from_webview": null,
+    "payChannelType": 1,
+    "is_delinquent": false,
+    "expires_at": null
+  },
+  "message": "获取订阅信息成功"
+}

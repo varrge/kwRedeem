@@ -1,0 +1,18 @@
+{
+  "code": 0,
+  "msg": "ok",
+  "data": [
+    {
+      "product_code": "P5378OX",
+      "issuer": "one",
+      "network": "MasterCard",
+      "issuing_area": "United States",
+      "card_type": "save",
+      "open_fee": 1.5,
+      "recharge_fee": 0.01,
+      "rtf_rate": 0.1,
+      "min_amount": 10,
+      "max_amount": 10000
+    }
+  ]
+}

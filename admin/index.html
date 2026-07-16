@@ -63,6 +63,9 @@
           <button class="nav-item" data-tab="extension-delivery">
             <span class="icon">🧩</span> 扩展交付
           </button>
+          <button class="nav-item" data-tab="membership-fulfillment">
+            <span class="icon">💳</span> 会员履约
+          </button>
           <button class="nav-item" data-tab="sms">
             <span class="icon">📱</span> 接码系统
           </button>
@@ -115,6 +118,44 @@
             <p>系统运行概览与最近活动</p>
           </div>
           <section class="stats" id="stats"></section>
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header"><h3>会员付款 Rollout Gate</h3></div>
+              <form id="membership-rollout-mode-form" class="stack">
+                <label class="field">
+                  <span>运行模式</span>
+                  <select id="membership-rollout-mode">
+                    <option value="disabled">disabled（关闭）</option>
+                    <option value="no_charge">no_charge（仅无扣款验证）</option>
+                    <option value="canary">canary（仅明确选中的单个履约）</option>
+                    <option value="automatic">automatic（仅精确已启用范围）</option>
+                  </select>
+                </label>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-rollout-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-rollout-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-rollout-confirm" type="checkbox" required /> 我确认模式变更只允许对应受控范围；关闭后已有资金暴露仍只做安全对账</label>
+                <button type="submit" class="primary-btn">重新验密并更新 Gate</button>
+              </form>
+              <div id="membership-rollout-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>选择下一单 Live Canary</h3></div>
+              <form id="membership-canary-start-form" class="stack">
+                <label class="field"><span>已完成无扣款预检的履约 ID</span><input id="membership-canary-start-fulfillment" autocomplete="off" required /></label>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-canary-start-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-canary-start-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-canary-start-confirm" type="checkbox" required /> 我确认只将这一笔 FUNDING_READY 履约置为 Canary；后续每个付款阶段仍需再次批准页面快照</label>
+                <button type="submit" class="primary-btn">重新验密并准备该 Canary</button>
+              </form>
+              <div id="membership-canary-start-result" class="hint"></div>
+            </div>
+          </div>
+
           <div class="card mt-24">
             <div class="card-header">
               <h3>最近 5 条日志</h3>
@@ -456,6 +497,301 @@
             </div>
             <div id="extension-delivery-list" class="table-wrapper"></div>
             <div id="extension-delivery-list-result" class="hint"></div>
+          </div>
+        </section>
+
+        <!-- Membership Fulfillment -->
+        <section class="tab-panel hidden" data-panel="membership-fulfillment">
+          <div class="content-header">
+            <h2>ChatGPT 会员履约</h2>
+            <p>配置服务端卡片 OpenAPI 基础凭据；付款能力按阶段实施且当前保持锁定</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>SpaceX Card OpenAPI</h3></div>
+              <form id="membership-fulfillment-settings-form" class="stack">
+                <label class="field">
+                  <span>OpenAPI Base（固定、不可编辑）</span>
+                  <input id="membership-openapi-base" readonly />
+                </label>
+                <label class="field">
+                  <span>app_id（可选）</span>
+                  <input id="membership-app-id" autocomplete="off" placeholder="ak_..." />
+                </label>
+                <label class="field">
+                  <span>app_secret</span>
+                  <input id="membership-app-secret" type="password" autocomplete="new-password" placeholder="sk_...；留空保持不变" />
+                </label>
+                <label><input id="membership-clear-app-secret" type="checkbox" /> 清除已保存的 app_secret</label>
+                <label class="field">
+                  <span>Webhook 签名密钥</span>
+                  <input id="membership-webhook-secret" type="password" autocomplete="new-password" placeholder="whsec_...；留空保持不变" />
+                </label>
+                <label><input id="membership-clear-webhook-secret" type="checkbox" /> 清除已保存的 Webhook 密钥</label>
+                <button type="submit" class="primary-btn">保存加密凭据</button>
+              </form>
+              <div id="membership-fulfillment-settings-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>实施状态</h3></div>
+              <div id="membership-fulfillment-status" class="hint">正在读取状态…</div>
+              <div class="stack mt-24">
+                <label class="field">
+                  <span>会员状态接口（固定）</span>
+                  <input id="membership-state-provider-url" readonly />
+                </label>
+                <label class="field">
+                  <span>Checkout Broker（固定）</span>
+                  <input id="membership-checkout-broker-url" readonly />
+                </label>
+              </div>
+              <div class="actions-row mt-24">
+                <button id="membership-fulfillment-refresh" type="button" class="ghost-btn">刷新状态</button>
+              </div>
+              <p class="hint mt-24">当前页面不提供开卡、充值、退款、冻结或删卡操作；在库存、无扣款验证和真实试单完成前，付款 Gate 不可开启。</p>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>会员履约记录</h3>
+              <button id="membership-fulfillment-list-refresh" type="button" class="ghost-btn small">刷新列表</button>
+            </div>
+            <p class="hint">这里只显示脱敏后的编排状态与尝试记录，不显示账号身份、Session、Checkout 链接或卡片资料。</p>
+            <div id="membership-fulfillment-list" class="table-wrapper mt-24"></div>
+            <div id="membership-fulfillment-list-result" class="hint"></div>
+            <div id="membership-fulfillment-detail" class="hint mt-24">点击记录中的“详情”查看只读履约轨迹。</div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>卡片库存初始化与刷新</h3>
+              <div class="header-actions">
+                <button id="membership-inventory-initialize" type="button" class="primary-btn small">初始化全部卡片</button>
+                <button id="membership-inventory-refresh" type="button" class="ghost-btn small">刷新库存与行情</button>
+                <button id="membership-card-list-refresh" type="button" class="ghost-btn small">刷新列表</button>
+              </div>
+            </div>
+            <div id="membership-inventory-progress" class="hint">尚未读取库存任务。</div>
+            <div id="membership-card-list" class="table-wrapper mt-24"></div>
+            <div id="membership-card-list-result" class="hint"></div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header"><h3>PHP 结账价格契约</h3></div>
+              <form id="membership-price-contract-form" class="stack">
+                <label class="field">
+                  <span>最终会员类型</span>
+                  <select id="membership-price-contract-tier">
+                    <option value="plus">Plus</option>
+                    <option value="x5">x5</option>
+                    <option value="x20">x20</option>
+                  </select>
+                </label>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>允许最低价（PHP）</span>
+                    <input id="membership-price-contract-min" type="number" min="0.01" max="10000000" step="0.01" required />
+                  </label>
+                  <label class="field">
+                    <span>允许最高价（PHP）</span>
+                    <input id="membership-price-contract-max" type="number" min="0.01" max="10000000" step="0.01" required />
+                  </label>
+                </div>
+                <button type="submit" class="primary-btn">新增价格契约草稿</button>
+              </form>
+              <p class="hint">金额仅用于识别 ChatGPT 页面显示价，不参与 SpaceX Card 的 USD 充值预算换算。</p>
+              <div id="membership-price-contract-list" class="table-wrapper mt-24"></div>
+              <div id="membership-price-contract-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>允许的新卡产品</h3>
+                <button id="membership-product-policy-refresh" type="button" class="ghost-btn small">刷新证明</button>
+              </div>
+              <p class="hint">只有库存中已有同产品卡、且所需 OpenAI 行情在 72 小时内，才允许启用。启用不会直接开卡。</p>
+              <div id="membership-product-policy-list" class="table-wrapper mt-24"></div>
+              <div id="membership-product-policy-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header"><h3>无扣款页面验证记录</h3></div>
+              <form id="membership-no-charge-form" class="stack">
+                <div class="grid grid-2">
+                  <label class="field"><span>站点 ID</span><input id="membership-no-charge-site" required /></label>
+                  <label class="field"><span>商品 ID</span><input id="membership-no-charge-product" required /></label>
+                  <label class="field">
+                    <span>最终会员类型</span>
+                    <select id="membership-no-charge-tier">
+                      <option value="plus">Plus</option>
+                      <option value="x5">x5</option>
+                      <option value="x20">x20</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Adapter 版本</span><input id="membership-no-charge-adapter" placeholder="checkout-v1" required /></label>
+                  <label class="field"><span>有效价格契约 ID</span><input id="membership-no-charge-contract" placeholder="cpc_..." required /></label>
+                  <label class="field"><span>页面显示价（PHP）</span><input id="membership-no-charge-amount" type="number" min="0.01" max="10000000" step="0.01" required /></label>
+                </div>
+                <label><input id="membership-no-charge-origin" type="checkbox" /> Origin 已识别</label>
+                <label><input id="membership-no-charge-route" type="checkbox" /> Route 已识别</label>
+                <label><input id="membership-no-charge-plan" type="checkbox" /> 套餐与 PH/PHP 已识别</label>
+                <label><input id="membership-no-charge-fields" type="checkbox" /> 必需字段结构已识别</label>
+                <label><input id="membership-no-charge-control" type="checkbox" /> 允许控件结构已识别（只识别，不点击）</label>
+                <button type="submit" class="primary-btn">记录脱敏验证结果</button>
+              </form>
+              <p class="hint">该记录固定声明：未获取卡资料、未点击“下一步”、未点击最终付款；服务端拒绝任何额外页面或卡片字段。</p>
+              <div id="membership-no-charge-list" class="table-wrapper mt-24"></div>
+              <div id="membership-no-charge-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>依赖熔断</h3>
+                <button id="membership-circuit-refresh" type="button" class="ghost-btn small">刷新熔断</button>
+              </div>
+              <p class="hint">“请求探测”只让 Worker 尝试一次只读半开探测，不会绕过熔断，也不会执行资金操作。</p>
+              <div id="membership-circuit-list" class="table-wrapper mt-24"></div>
+              <div id="membership-circuit-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>Live Canary 页面准备与单阶段批准</h3>
+              <button id="membership-canary-refresh" type="button" class="ghost-btn small">刷新灰度状态</button>
+            </div>
+            <p class="hint">只有已停在批准等待态、且页面最终快照完全一致的单个阶段可以批准。批准有效期为 15 分钟；管理员密码只随本次请求验证，不保存、不回显。</p>
+            <div id="membership-canary-ready-list" class="table-wrapper mt-24"></div>
+            <form id="membership-canary-form" class="stack mt-24">
+              <div class="grid grid-2">
+                <label class="field"><span>履约 ID</span><input id="membership-canary-fulfillment" readonly required /></label>
+                <label class="field">
+                  <span>批准阶段</span>
+                  <select id="membership-canary-stage" disabled><option value="plus">Plus</option><option value="upgrade">Upgrade</option></select>
+                </label>
+                <label class="field"><span>已预留卡片 ID</span><input id="membership-canary-card" readonly required /></label>
+                <label class="field"><span>不可变资金预算（USD）</span><input id="membership-canary-budget" type="number" min="0.01" step="0.01" readonly required /></label>
+                <label class="field"><span>价格契约 ID</span><input id="membership-canary-contract" readonly required /></label>
+                <label class="field"><span>Adapter 版本</span><input id="membership-canary-adapter" readonly required /></label>
+              </div>
+              <label class="field"><span>最终页面指纹（SHA-256）</span><input id="membership-canary-fingerprint" minlength="64" maxlength="64" pattern="[a-fA-F0-9]{64}" readonly required /></label>
+              <div class="grid grid-2">
+                <label class="field"><span>重新输入管理员账号</span><input id="membership-canary-admin-username" autocomplete="off" required /></label>
+                <label class="field"><span>重新输入管理员密码</span><input id="membership-canary-admin-password" type="password" autocomplete="new-password" required /></label>
+              </div>
+              <label><input id="membership-canary-confirm" type="checkbox" required /> 我已核对当前阶段、卡片、预算、Adapter、价格契约与页面指纹完全一致</label>
+              <button id="membership-canary-submit" type="submit" class="primary-btn" disabled>重新验密并批准当前阶段</button>
+            </form>
+            <div id="membership-canary-result" class="hint"></div>
+            <div class="card-header mt-24"><h3>灰度批准记录</h3></div>
+            <div id="membership-canary-authorization-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header">
+                <h3>分层上线资格</h3>
+                <button id="membership-qualification-refresh" type="button" class="ghost-btn small">刷新资格</button>
+              </div>
+              <form id="membership-qualification-form" class="stack">
+                <label class="field"><span>已严格完成的 Canary 履约 ID</span><input id="membership-qualification-fulfillment" autocomplete="off" required /></label>
+                <div class="grid grid-2">
+                  <label class="field"><span>Adapter 版本</span><input id="membership-qualification-adapter" autocomplete="off" required /></label>
+                  <label class="field"><span>Adapter 路径</span><input id="membership-qualification-path" placeholder="checkout-v1" autocomplete="off" required /></label>
+                </div>
+                <label class="field"><span>价格契约 ID</span><input id="membership-qualification-contract" autocomplete="off" required /></label>
+                <button type="submit" class="primary-btn">触发权威资格检查</button>
+              </form>
+              <p class="hint">资格只在交易 COMPLETE、会员类型准确、自动续费已关闭且无未决结果时生成；资格不会自动启用任何范围。</p>
+              <div id="membership-qualification-list" class="table-wrapper mt-24"></div>
+              <div id="membership-qualification-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>外部补偿结果（仅追加记录）</h3></div>
+              <form id="membership-compensation-form" class="stack">
+                <label class="field"><span>部分履约 ID</span><input id="membership-compensation-fulfillment" autocomplete="off" required /></label>
+                <label class="field">
+                  <span>外部处理结果</span>
+                  <select id="membership-compensation-type">
+                    <option value="REFUNDED">外部已退款（仅记录）</option>
+                    <option value="REPLACEMENT_DELIVERED">外部已补发</option>
+                    <option value="CUSTOMER_ACCEPTED_PARTIAL">客户接受部分履约</option>
+                  </select>
+                </label>
+                <label class="field"><span>外部证据引用</span><input id="membership-compensation-evidence" maxlength="200" pattern="[A-Za-z0-9][A-Za-z0-9._:/-]*" autocomplete="off" placeholder="工单号或外部凭证引用；不要粘贴 Session、卡资料或 Checkout URL" required /></label>
+                <label><input id="membership-compensation-confirm" type="checkbox" required /> 我确认这里只记录已在系统外完成的客户处理结果</label>
+                <button type="submit" class="primary-btn">追加外部处理结果</button>
+              </form>
+              <p class="hint">此操作不会调用退款、开卡、充值或付款接口；记录为 append-only，不能覆盖历史。</p>
+              <div id="membership-compensation-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>精确 Automatic Checkout 范围</h3>
+              <button id="membership-automatic-scope-refresh" type="button" class="ghost-btn small">刷新范围</button>
+            </div>
+            <p class="hint">范围精确绑定站点、商品、会员类型、Adapter 和价格契约，只影响启用后创建的新订单。首次范围固定每日 1 单；停用只阻止尚未跨资金边界的新动作。</p>
+            <div class="grid grid-2 mt-24">
+              <form id="membership-automatic-scope-form" class="stack">
+                <h4>创建范围</h4>
+                <div class="grid grid-2">
+                  <label class="field"><span>站点 ID</span><input id="membership-automatic-site" autocomplete="off" required /></label>
+                  <label class="field"><span>商品 ID</span><input id="membership-automatic-product" autocomplete="off" required /></label>
+                  <label class="field">
+                    <span>会员类型</span>
+                    <select id="membership-automatic-tier"><option value="plus">Plus</option><option value="x5">x5</option><option value="x20">x20</option></select>
+                  </label>
+                  <label class="field"><span>Adapter 版本</span><input id="membership-automatic-adapter" autocomplete="off" required /></label>
+                  <label class="field"><span>价格契约 ID</span><input id="membership-automatic-contract" autocomplete="off" required /></label>
+                  <label class="field"><span>每日订单上限</span><input id="membership-automatic-order-limit" type="number" min="1" step="1" value="1" readonly required /></label>
+                  <label class="field"><span>每日风险上限（USD）</span><input id="membership-automatic-risk-limit" type="number" min="0.01" step="0.01" required /></label>
+                </div>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-automatic-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-automatic-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-automatic-confirm" type="checkbox" required /> 我已核对精确范围与完整每日风险预算</label>
+                <button type="submit" class="primary-btn">重新验密并创建范围</button>
+              </form>
+
+              <form id="membership-automatic-revision-form" class="stack">
+                <h4>创建新修订</h4>
+                <label class="field"><span>原范围 ID</span><input id="membership-automatic-revision-id" readonly required /></label>
+                <div class="grid grid-2">
+                  <label class="field"><span>新每日订单上限</span><input id="membership-automatic-revision-order-limit" type="number" min="1" step="1" required /></label>
+                  <label class="field"><span>新每日风险上限（USD）</span><input id="membership-automatic-revision-risk-limit" type="number" min="0.01" step="0.01" required /></label>
+                  <label class="field"><span>新 Adapter 版本（可留空）</span><input id="membership-automatic-revision-adapter" autocomplete="off" /></label>
+                  <label class="field"><span>新价格契约 ID（可留空）</span><input id="membership-automatic-revision-contract" autocomplete="off" /></label>
+                </div>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-automatic-revision-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-automatic-revision-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-automatic-revision-confirm" type="checkbox" required /> 我确认新修订的版本绑定与风险上限</label>
+                <button type="submit" class="primary-btn">重新验密并创建修订</button>
+              </form>
+            </div>
+            <div id="membership-automatic-scope-list" class="table-wrapper mt-24"></div>
+            <div id="membership-automatic-scope-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>履约人工介入提醒</h3>
+              <button id="membership-intervention-refresh" type="button" class="ghost-btn small">刷新提醒</button>
+            </div>
+            <p class="hint">确认收到提醒只写入审计信息，不会改变履约状态，也不会触发付款或重试。</p>
+            <div id="membership-intervention-list" class="table-wrapper"></div>
+            <div id="membership-intervention-result" class="hint"></div>
           </div>
         </section>
 

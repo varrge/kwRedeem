@@ -1,0 +1,1078 @@
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kawang-membership-"));
+process.env.DATABASE_PATH = path.join(tmpDir, "test.db");
+process.env.JWT_SECRET = "membership-fulfillment-test-secret";
+process.env.ADMIN_USERNAME = "admin";
+process.env.ADMIN_PASSWORD = "test-password";
+process.env.KAWANG_SKIP_LISTEN = "1";
+
+const {
+  MembershipContractError,
+  calculateMembershipBudget,
+  classifyHistoricalCardFulfillments,
+  classifyStartingMembership,
+  isStrictMembershipStageConfirmed,
+  matchPaymentTransactionDelta,
+  normalizeMembershipEnvelope,
+  rankMembershipCardCandidates
+} = await import("../shared/src/membership-fulfillment.js");
+const {
+  fetchMembershipObservation,
+  membershipStateProviderUrl
+} = await import("../shared/src/membership-state-provider.js");
+const {
+  SpaceXCardOpenApiClient,
+  spaceXCardOpenApiBaseUrl
+} = await import("../shared/src/spacexcard-openapi.js");
+const {
+  createMembershipInventoryRunner,
+  startMembershipInventoryRun
+} = await import("../shared/src/membership-inventory.js");
+const {
+  acquireDependencyCircuit,
+  recordDependencyFailure,
+  recordDependencySuccess,
+  requestDependencyProbe
+} = await import("../shared/src/membership-circuits.js");
+const { getDb } = await import("../shared/src/database.js");
+const { encryptText } = await import("../shared/src/secure.js");
+
+const db = getDb();
+let app;
+
+after(async () => {
+  if (app) await app.close();
+  db.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function fixture(name) {
+  return JSON.parse(fs.readFileSync(path.resolve("tests", "fixtures", name), "utf8"));
+}
+
+function jsonResponse(body, options = {}) {
+  return new Response(JSON.stringify(body), {
+    status: options.status || 200,
+    headers: { "content-type": "application/json", ...(options.headers || {}) }
+  });
+}
+
+function signWebhookBody(secret, body) {
+  return createHmac("sha256", secret).update(body).digest("hex");
+}
+
+test("membership provider contract is strict and separates starting-free from paid confirmation", () => {
+  const envelope = fixture("gptserve-subscription-info-pro.json");
+  const nowMs = Date.parse("2026-07-16T00:00:00Z");
+  const observation = normalizeMembershipEnvelope(envelope, { nowMs });
+  assert.equal(observation.accountType, "x20");
+  assert.equal(classifyStartingMembership(observation), "subscribed");
+  assert.equal(isStrictMembershipStageConfirmed(observation, "x20"), true);
+  assert.equal(isStrictMembershipStageConfirmed(observation, "x20", { requireAutoRenewFalse: true }), false);
+
+  const renewalSafe = normalizeMembershipEnvelope({
+    ...envelope,
+    data: { ...envelope.data, auto_renew: false }
+  }, { nowMs });
+  assert.equal(isStrictMembershipStageConfirmed(renewalSafe, "x20", { requireAutoRenewFalse: true }), true);
+
+  const free = normalizeMembershipEnvelope({
+    code: 200,
+    data: {
+      account_type: "free",
+      currency: null,
+      auto_renew: null,
+      is_overdue: false,
+      is_delinquent: false,
+      expire_time: null
+    }
+  }, { nowMs });
+  assert.equal(classifyStartingMembership(free), "free");
+  assert.equal(isStrictMembershipStageConfirmed(free, "plus"), false);
+
+  assert.throws(() => normalizeMembershipEnvelope({
+    code: 200,
+    data: { ...envelope.data, account_type: "future_plan" }
+  }, { nowMs }), MembershipContractError);
+});
+
+test("membership state adapter uses the fixed URL and object token contract", async () => {
+  const envelope = fixture("gptserve-subscription-info-pro.json");
+  let request;
+  const session = { user: { email: "user@example.com" }, accessToken: "redacted" };
+  const observation = await fetchMembershipObservation(session, {
+    nowMs: Date.parse("2026-07-16T00:00:00Z"),
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse(envelope);
+    }
+  });
+  assert.equal(request.url, membershipStateProviderUrl);
+  assert.deepEqual(JSON.parse(request.options.body), { token: session });
+  assert.equal(observation.accountType, "x20");
+});
+
+test("card price budget applies USD 0.20 to every stage and rejects stale data", () => {
+  const signals = fixture("spacexcard-openapi-openai-payments.json").data.map((item) => ({
+    tier: item.tier,
+    found: item.found,
+    amount: item.amount,
+    time: item.time
+  }));
+  const nowMs = Date.parse("2026-07-16T12:00:00+08:00");
+  assert.equal(calculateMembershipBudget(signals, "plus", { nowMs }).totalUsd, 16.44);
+  const x5 = calculateMembershipBudget(signals, "x5", { nowMs });
+  assert.deepEqual(x5.stages.map((stage) => stage.budgetUsd), [16.44, 99.2]);
+  assert.equal(x5.totalUsd, 115.64);
+
+  assert.throws(() => calculateMembershipBudget(signals, "x5", {
+    nowMs: Date.parse("2026-07-20T12:00:00+08:00")
+  }), (error) => error.code === "CARD_PRICE_UNAVAILABLE");
+});
+
+test("payment delta requires exactly one new matching OpenAI authorization", () => {
+  const base = {
+    authAmount: 16.24,
+    settleAmount: 0,
+    merchantNormalized: "OPENAI",
+    type: "Authorization"
+  };
+  const matched = matchPaymentTransactionDelta({
+    beforeAuthIds: ["old"],
+    minUsd: 15,
+    maxUsd: 20,
+    transactions: [
+      { ...base, authId: "old", status: "COMPLETE" },
+      { ...base, authId: "new", status: "PENDING" },
+      { ...base, authId: "new", status: "COMPLETE", settleAmount: 16.24, type: "Settlement" }
+    ]
+  });
+  assert.equal(matched.outcome, "matched");
+  assert.equal(matched.transaction.authId, "new");
+  assert.equal(matched.transaction.status, "COMPLETE");
+
+  const multiple = matchPaymentTransactionDelta({
+    beforeAuthIds: [],
+    minUsd: 15,
+    maxUsd: 20,
+    transactions: [
+      { ...base, authId: "new-1", status: "PENDING" },
+      { ...base, authId: "new-2", status: "PENDING" }
+    ]
+  });
+  assert.deepEqual(multiple, { outcome: "uncertain", reason: "MULTIPLE_MATCHES", matches: 2 });
+
+  const declined = matchPaymentTransactionDelta({
+    beforeAuthIds: [],
+    minUsd: 15,
+    maxUsd: 20,
+    transactions: [{ ...base, authId: "declined", status: "DECLINED" }]
+  });
+  assert.equal(declined.outcome, "declined");
+});
+
+test("card ranking consolidates the target lane before unassigned cards", () => {
+  const ranked = rankMembershipCardCandidates([
+    { id: "unassigned", eligible: true, lane: null, budgetUsd: 20, availableAmount: 20 },
+    { id: "same-expensive", eligible: true, lane: "plus", budgetUsd: 20, availableAmount: 5 },
+    { id: "same-cheap", eligible: true, lane: "plus", budgetUsd: 20, availableAmount: 10 },
+    { id: "wrong", eligible: true, lane: "x5", budgetUsd: 20, availableAmount: 20 }
+  ], "plus");
+  assert.deepEqual(ranked.map((item) => item.id), ["same-cheap", "same-expensive", "unassigned"]);
+});
+
+test("historical reconciliation pairs staged upgrades and holds ambiguous cards", () => {
+  const settled = (authId, authTime, amount, type = "Settlement", status = "COMPLETE") => ({
+    authId,
+    authTime,
+    authAmount: amount,
+    settleAmount: amount,
+    merchantNormalized: "OPENAI",
+    type,
+    status
+  });
+  const x5 = classifyHistoricalCardFulfillments([
+    settled("plus-1", "2026-07-10T00:00:00Z", 16.24),
+    settled("x5-1", "2026-07-10T01:00:00Z", 99),
+    settled("plus-2", "2026-07-11T00:00:00Z", 16.24),
+    settled("x5-2", "2026-07-11T01:30:00Z", 99)
+  ]);
+  assert.deepEqual(x5, { lane: "x5", consumed: 2, state: "CAPACITY_FULL", reason: null });
+
+  const missingPair = classifyHistoricalCardFulfillments([
+    settled("x20", "2026-07-10T01:00:00Z", 150)
+  ]);
+  assert.equal(missingPair.reason, "UPGRADE_PAIR_MISSING");
+
+  const mixed = classifyHistoricalCardFulfillments([
+    settled("plus-1", "2026-07-10T00:00:00Z", 16.24),
+    settled("x5-1", "2026-07-10T01:00:00Z", 99),
+    settled("plus-extra", "2026-07-11T00:00:00Z", 16.24)
+  ]);
+  assert.equal(mixed.reason, "MIXED_MEMBERSHIP_LANES");
+
+  const refunded = classifyHistoricalCardFulfillments([
+    settled("paid", "2026-07-10T00:00:00Z", 16.24),
+    settled("paid", "2026-07-10T00:00:00Z", 16.24, "Refund", "COMPLETE")
+  ]);
+  assert.equal(refunded.reason, "REFUNDED_FULFILLMENT");
+
+  const reversedPending = classifyHistoricalCardFulfillments([
+    settled("reversed", "2026-07-10T00:00:00Z", 16.24, "Authorization", "PENDING"),
+    settled("reversed", "2026-07-10T00:00:00Z", 16.24, "Reversal", "COMPLETE")
+  ]);
+  assert.deepEqual(reversedPending, { lane: null, consumed: 0, state: "AVAILABLE", reason: null });
+});
+
+test("SpaceX Card OpenAPI adapter strips list PAN and requires idempotency for writes", async () => {
+  const products = fixture("spacexcard-openapi-products.json");
+  const cards = fixture("spacexcard-openapi-cards.json");
+  const prices = fixture("spacexcard-openapi-openai-payments.json");
+  const requests = [];
+  const client = new SpaceXCardOpenApiClient({
+    appSecret: "sk_test_redacted",
+    appId: "ak_test_redacted",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/products")) return jsonResponse(products);
+      if (pathname.endsWith("/cards/123/openai-payments")) return jsonResponse(prices);
+      if (pathname.endsWith("/cards/open")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          data: {
+            id: 124,
+            vm_card_id: "card-redacted-124",
+            card_number: "5378720000009999",
+            cvv: "000",
+            expire: "08/29",
+            product_code: "P5378OX",
+            available_amount: 20,
+            status: "ACTIVE",
+            open_fee: 1.5
+          }
+        });
+      }
+      if (pathname.endsWith("/cards")) return jsonResponse(cards);
+      throw new Error(`unexpected OpenAPI request: ${url}`);
+    }
+  });
+
+  assert.equal((await client.listProducts())[0].productCode, "P5378OX");
+  const listed = await client.listCards({ sync: true });
+  assert.equal(listed.cards[0].bin, "537872");
+  assert.equal(listed.cards[0].last4, "8264");
+  assert.equal("cardNumber" in listed.cards[0], false);
+  assert.deepEqual((await client.getOpenAiPayments(123)).map((item) => item.tier), ["plus", "x5", "x20"]);
+  await assert.rejects(() => client.openCard({
+    productCode: "P5378OX",
+    firstName: "John",
+    lastName: "Smith",
+    initAmount: 20
+  }), /Idempotency-Key/);
+  const opened = await client.openCard({
+    productCode: "P5378OX",
+    firstName: "John",
+    lastName: "Smith",
+    initAmount: 20
+  }, "kwr:order-1:open:v1");
+  assert.equal(opened.upstreamCardId, 124);
+  assert.equal("number" in opened, false);
+  const openRequest = requests.find((item) => item.url.endsWith("/cards/open"));
+  assert.equal(openRequest.options.headers["Idempotency-Key"], "kwr:order-1:open:v1");
+  assert.ok(requests.every((item) => item.url.startsWith(spaceXCardOpenApiBaseUrl)));
+});
+
+test("database initializes membership tables and safe defaults", () => {
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
+  for (const name of [
+    "membership_fulfillments",
+    "managed_cards",
+    "managed_card_transactions",
+    "card_capacity_reservations",
+    "funding_intents",
+    "browser_fulfillment_lease",
+    "live_canary_authorizations",
+    "automatic_checkout_scopes"
+  ]) assert.equal(tables.has(name), true, `missing table ${name}`);
+
+  const productColumns = new Set(db.prepare("PRAGMA table_info(products)").all().map((column) => column.name));
+  assert.equal(productColumns.has("membership_tier"), true);
+  const settings = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
+  assert.equal(settings.enabled, 0);
+  assert.equal(settings.inventory_status, "not_started");
+  assert.equal(settings.business_timezone, "Asia/Shanghai");
+  assert.equal(db.prepare("SELECT state FROM browser_fulfillment_lease WHERE id = 'default'").get().state, "available");
+});
+
+test("dependency circuit opens after bounded failures and recovers through one half-open probe", () => {
+  const dependency = "circuit-test";
+  const scopeKey = "default";
+  const failure = { code: "SPACEXCARD_TIMEOUT" };
+  const start = Date.parse("2026-07-16T00:00:00.000Z");
+  const first = recordDependencyFailure(db, { dependency, scopeKey, error: failure, at: start });
+  const second = recordDependencyFailure(db, { dependency, scopeKey, error: failure, at: start + 60_000 });
+  const third = recordDependencyFailure(db, { dependency, scopeKey, error: failure, at: start + 120_000 });
+  assert.equal(first.circuit.state, "closed");
+  assert.equal(second.circuit.failureCount, 2);
+  assert.equal(third.openedNow, true);
+  assert.equal(third.circuit.state, "open");
+  assert.equal(Date.parse(third.circuit.retryAt) - (start + 120_000), 15 * 60 * 1000);
+
+  const blocked = acquireDependencyCircuit(db, { dependency, scopeKey, at: start + 10 * 60_000 });
+  assert.equal(blocked.allowed, false);
+  const requested = requestDependencyProbe(db, third.circuit.id, { at: start + 11 * 60_000 });
+  assert.equal(requested.outcome, "scheduled");
+  const probe = acquireDependencyCircuit(db, { dependency, scopeKey, at: start + 11 * 60_000 });
+  assert.deepEqual({ allowed: probe.allowed, probe: probe.probe }, { allowed: true, probe: true });
+
+  const reopened = recordDependencyFailure(db, {
+    dependency,
+    scopeKey,
+    error: failure,
+    at: start + 12 * 60_000
+  });
+  assert.equal(reopened.circuit.state, "open");
+  assert.equal(reopened.circuit.recoveryRevision, 1);
+  assert.equal(Date.parse(reopened.circuit.retryAt) - (start + 12 * 60_000), 30 * 60 * 1000);
+  const secondProbe = acquireDependencyCircuit(db, {
+    dependency,
+    scopeKey,
+    at: Date.parse(reopened.circuit.retryAt) + 1
+  });
+  assert.equal(secondProbe.allowed, true);
+  const recovered = recordDependencySuccess(db, {
+    dependency,
+    scopeKey,
+    at: Date.parse(reopened.circuit.retryAt) + 2
+  });
+  assert.equal(recovered.state, "closed");
+  assert.equal(recovered.failureCount, 0);
+  assert.equal(recovered.recoveryRevision, 0);
+
+  const immediate = recordDependencyFailure(db, {
+    dependency: "contract-test",
+    scopeKey,
+    error: { code: "SPACEXCARD_CONTRACT_DRIFT" },
+    at: start
+  });
+  assert.equal(immediate.openedNow, true);
+  assert.equal(immediate.circuit.state, "open");
+});
+
+test("inventory initialization is resumable, read-only, and stores only masked card metadata", async () => {
+  const at = new Date().toISOString();
+  db.prepare(`
+    UPDATE membership_fulfillment_settings
+    SET spacexcard_app_secret_encrypted = ?, inventory_status = 'not_started', updated_at = ?
+    WHERE id = 'default'
+  `).run(encryptText("sk_inventory_test"), at);
+  const run = startMembershipInventoryRun(db, { id: "mir_test", actor: "admin", at });
+  assert.equal(run.status, "discovering");
+  assert.throws(() => startMembershipInventoryRun(db, { id: "mir_duplicate", actor: "admin", at }), (error) => (
+    error.code === "INVENTORY_ALREADY_RUNNING"
+  ));
+
+  const prices = fixture("spacexcard-openapi-openai-payments.json").data.map((item) => ({
+    tier: item.tier,
+    label: item.label,
+    minUsd: item.min_usd,
+    maxUsd: item.max_usd,
+    amount: item.amount,
+    time: item.time,
+    found: item.found
+  }));
+  const client = {
+    async listCards() {
+      return {
+        total: 1,
+        cards: [{
+          upstreamCardId: 123,
+          vmCardId: "card-redacted-123",
+          productCode: "P5378OX",
+          network: "MasterCard",
+          issuingArea: "United States",
+          availableAmount: 18.8,
+          status: "ACTIVE",
+          bin: "537872",
+          last4: "8264",
+          createdAt: "2026-06-04T00:31:56Z"
+        }]
+      };
+    },
+    async listTransactions() {
+      return [{
+        authId: "auth-plus-1",
+        authTime: "2026-07-15T01:00:00Z",
+        authAmount: 16.24,
+        authCurrency: "USD",
+        settleAmount: 16.24,
+        settleCurrency: "USD",
+        status: "COMPLETE",
+        type: "Settlement",
+        merchantNormalized: "OPENAI",
+        createdAt: "2026-07-15T01:01:00Z"
+      }];
+    },
+    async getOpenAiPayments() { return prices; }
+  };
+  const runner = createMembershipInventoryRunner({
+    db,
+    decryptText() { throw new Error("clientFactory should avoid real credentials"); },
+    workerId: "inventory-test-worker",
+    clientFactory: () => client,
+    logger: { warn() {} }
+  });
+  assert.equal((await runner.tick()).action, "discovered");
+  const reconciliation = await runner.tick();
+  assert.equal(reconciliation.action, "reconciled", JSON.stringify(reconciliation));
+
+  const completed = db.prepare("SELECT * FROM card_inventory_runs WHERE id = 'mir_test'").get();
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.processed_cards, 1);
+  const card = db.prepare("SELECT * FROM managed_cards WHERE upstream_card_id = 123").get();
+  assert.equal(card.bin, "537872");
+  assert.equal(card.last4, "8264");
+  assert.equal(card.lane, "plus");
+  assert.equal(card.consumed_slots, 1);
+  assert.equal(card.reconciliation_state, "READY");
+  assert.equal(db.prepare("PRAGMA table_info(managed_cards)").all().some((column) => /number|cvv|expire/i.test(column.name)), false);
+  assert.equal(db.prepare("SELECT inventory_status FROM membership_fulfillment_settings WHERE id = 'default'").get().inventory_status, "completed");
+});
+
+test("inventory retries shared failures without holding cards and holds cards missing from a completed refresh", async () => {
+  db.prepare(`
+    UPDATE membership_fulfillment_settings
+    SET spacexcard_app_secret_encrypted = ?, inventory_status = 'completed', updated_at = ?
+    WHERE id = 'default'
+  `).run(encryptText("sk_inventory_failure_test"), new Date().toISOString());
+  const prices = fixture("spacexcard-openapi-openai-payments.json").data.map((item) => ({
+    tier: item.tier,
+    label: item.label,
+    minUsd: item.min_usd,
+    maxUsd: item.max_usd,
+    amount: item.amount,
+    time: item.time,
+    found: item.found
+  }));
+  let transactionCalls = 0;
+  const sharedFailure = Object.assign(new Error("temporary upstream outage"), { code: "SPACEXCARD_TIMEOUT" });
+  const client = {
+    async listCards() {
+      return {
+        total: 1,
+        cards: [{
+          upstreamCardId: 456,
+          vmCardId: "card-redacted-456",
+          productCode: "P5378OX",
+          availableAmount: 20,
+          status: "ACTIVE",
+          bin: "537872",
+          last4: "0456"
+        }]
+      };
+    },
+    async listTransactions() {
+      transactionCalls += 1;
+      if (transactionCalls === 1) throw sharedFailure;
+      return [];
+    },
+    async getOpenAiPayments() { return prices; }
+  };
+  const runner = createMembershipInventoryRunner({
+    db,
+    decryptText() { throw new Error("clientFactory should avoid real credentials"); },
+    workerId: "inventory-shared-failure-worker",
+    clientFactory: () => client,
+    logger: { warn() {} }
+  });
+  startMembershipInventoryRun(db, { id: "mir_shared_failure", actor: "admin", mode: "refresh" });
+  assert.equal((await runner.tick()).action, "discovered");
+  const failed = await runner.tick();
+  assert.equal(failed.code, "SPACEXCARD_TIMEOUT");
+  const retryingCard = db.prepare("SELECT * FROM managed_cards WHERE upstream_card_id = 456").get();
+  assert.notEqual(retryingCard.reconciliation_state, "HOLD");
+  assert.notEqual(retryingCard.capacity_state, "HOLD");
+
+  db.prepare(`
+    UPDATE card_inventory_run_items SET next_retry_at = '1970-01-01T00:00:00.000Z'
+    WHERE run_id = 'mir_shared_failure' AND upstream_card_id = 456
+  `).run();
+  assert.equal((await runner.tick()).action, "reconciled");
+  assert.equal(db.prepare("SELECT status FROM card_inventory_runs WHERE id = 'mir_shared_failure'").get().status, "completed");
+
+  const missingRun = startMembershipInventoryRun(db, {
+    id: "mir_missing_card",
+    actor: "admin",
+    mode: "refresh"
+  });
+  assert.equal(missingRun.status, "discovering");
+  const emptyRunner = createMembershipInventoryRunner({
+    db,
+    decryptText() { throw new Error("clientFactory should avoid real credentials"); },
+    workerId: "inventory-missing-card-worker",
+    clientFactory: () => ({ async listCards() { return { total: 0, cards: [] }; } }),
+    logger: { warn() {} }
+  });
+  assert.equal((await emptyRunner.tick()).action, "discovered");
+  assert.equal((await emptyRunner.tick()).action, "completed");
+  const missingCard = db.prepare("SELECT * FROM managed_cards WHERE upstream_card_id = 456").get();
+  assert.equal(missingCard.upstream_status, "MISSING");
+  assert.equal(missingCard.reconciliation_state, "HOLD");
+  assert.equal(missingCard.capacity_state, "HOLD");
+  assert.equal(missingCard.reconciliation_reason, "UPSTREAM_CARD_MISSING");
+
+  const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+  db.prepare(`
+    UPDATE card_inventory_runs SET completed_at = ?
+    WHERE mode IN ('full', 'refresh') AND status = 'completed'
+  `).run(sevenHoursAgo);
+  const scheduled = await emptyRunner.tick();
+  assert.equal(scheduled.action, "scheduled_refresh");
+  assert.equal(db.prepare("SELECT mode FROM card_inventory_runs WHERE id = ?").get(scheduled.runId).mode, "refresh");
+  assert.equal((await emptyRunner.tick()).action, "discovered");
+  assert.equal((await emptyRunner.tick()).action, "completed");
+});
+
+test("membership admin settings encrypt credentials and keep payment locked", async () => {
+  ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  assert.equal(login.statusCode, 200);
+  const token = login.json().token;
+  const headers = { authorization: `Bearer ${token}` };
+
+  const locked = await app.inject({
+    method: "PATCH",
+    url: "/api/admin/membership-fulfillment/settings",
+    headers,
+    payload: { enabled: true }
+  });
+  assert.equal(locked.statusCode, 409);
+  assert.equal(locked.json().code, "MEMBERSHIP_PAYMENT_GATE_LOCKED");
+
+  const saved = await app.inject({
+    method: "PATCH",
+    url: "/api/admin/membership-fulfillment/settings",
+    headers,
+    payload: {
+      appId: "ak_test_redacted",
+      appSecret: "sk_test_redacted",
+      webhookSecret: "whsec_test_redacted"
+    }
+  });
+  assert.equal(saved.statusCode, 200);
+  const settings = saved.json().settings;
+  assert.equal(settings.paymentGateLocked, true);
+  assert.equal(settings.hasAppSecret, true);
+  assert.equal(settings.hasWebhookSecret, true);
+  assert.equal("appSecret" in settings, false);
+  assert.equal("webhookSecret" in settings, false);
+
+  const row = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
+  assert.notEqual(row.spacexcard_app_secret_encrypted, "sk_test_redacted");
+  assert.notEqual(row.spacexcard_webhook_secret_encrypted, "whsec_test_redacted");
+  const audit = db.prepare(`
+    SELECT detail FROM admin_audit_logs
+    WHERE action = 'membership_fulfillment.settings.update'
+    ORDER BY created_at DESC LIMIT 1
+  `).get();
+  assert.doesNotMatch(audit.detail, /sk_test_redacted|whsec_test_redacted/);
+});
+
+test("SpaceX Card webhook verifies raw signatures, deduplicates, redacts PAN, and keeps terminal state", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const secret = "whsec_webhook_test";
+  const pan = "5378721234567890";
+  const upstreamCardId = 987654;
+  const managedCardId = "mc_webhook_test";
+  const vmCardId = "card-webhook-test";
+  const at = new Date().toISOString();
+  db.prepare(`
+    UPDATE membership_fulfillment_settings
+    SET spacexcard_webhook_secret_encrypted = ?, inventory_status = 'completed', updated_at = ?
+    WHERE id = 'default'
+  `).run(encryptText(secret), at);
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, upstream_card_id, vm_card_id, product_code, bin, last4, upstream_status,
+      cached_available_amount, capacity_state, reconciliation_state, created_at, updated_at
+    ) VALUES (?, ?, ?, 'P5378OX', '537872', '7890', 'ACTIVE', 20, 'AVAILABLE', 'READY', ?, ?)
+  `).run(managedCardId, upstreamCardId, vmCardId, at, at);
+
+  const baseEvent = {
+    event: "card_transaction",
+    auth_id: "webhook-auth-main",
+    vm_card_id: vmCardId,
+    card_id: upstreamCardId,
+    card_number: pan,
+    settle_amount: 0,
+    status: "PENDING",
+    type: "Authorization",
+    merchant: "OPENAI"
+  };
+  const raw = JSON.stringify(baseEvent);
+  const invalid = await app.inject({
+    method: "POST",
+    url: "/api/webhooks/spacexcard/card-transactions",
+    headers: { "content-type": "application/json", "x-signature": "0".repeat(64) },
+    payload: raw
+  });
+  assert.equal(invalid.statusCode, 401);
+
+  const accepted = await app.inject({
+    method: "POST",
+    url: "/api/webhooks/spacexcard/card-transactions",
+    headers: { "content-type": "application/json", "x-signature": signWebhookBody(secret, raw) },
+    payload: raw
+  });
+  assert.equal(accepted.statusCode, 202);
+  assert.deepEqual(accepted.json(), { accepted: true, duplicate: false });
+
+  const duplicate = await app.inject({
+    method: "POST",
+    url: "/api/webhooks/spacexcard/card-transactions",
+    headers: { "content-type": "application/json", "x-signature": signWebhookBody(secret, raw) },
+    payload: raw
+  });
+  assert.equal(duplicate.statusCode, 202);
+  assert.deepEqual(duplicate.json(), { accepted: true, duplicate: true });
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM spacexcard_webhook_events WHERE auth_id = 'webhook-auth-main'
+  `).get().count, 1);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM membership_outbox
+    WHERE event_type = 'card.transaction.changed' AND payload LIKE '%webhook-auth-main%'
+  `).get().count, 1);
+
+  const completeBody = JSON.stringify({
+    ...baseEvent,
+    auth_id: "webhook-auth-order",
+    settle_amount: 16.24,
+    status: "COMPLETE",
+    type: "Settlement"
+  });
+  const pendingBody = JSON.stringify({
+    ...baseEvent,
+    auth_id: "webhook-auth-order"
+  });
+  for (const body of [completeBody, pendingBody]) {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/spacexcard/card-transactions",
+      headers: { "content-type": "application/json", "x-signature": signWebhookBody(secret, body) },
+      payload: body
+    });
+    assert.equal(response.statusCode, 202);
+  }
+  const transaction = db.prepare(`
+    SELECT * FROM managed_card_transactions
+    WHERE card_id = ? AND auth_id = 'webhook-auth-order'
+  `).get(managedCardId);
+  assert.equal(transaction.type, "Settlement");
+  assert.equal(transaction.status, "COMPLETE");
+  assert.equal(transaction.authorization_seen, 1);
+  assert.equal(transaction.settlement_seen, 1);
+  assert.equal(transaction.settle_amount, 16.24);
+  assert.equal(db.prepare("SELECT reconciliation_state FROM managed_cards WHERE id = ?").get(managedCardId).reconciliation_state, "PENDING");
+
+  const persisted = JSON.stringify({
+    events: db.prepare("SELECT * FROM spacexcard_webhook_events WHERE managed_card_id = ?").all(managedCardId),
+    transactions: db.prepare("SELECT * FROM managed_card_transactions WHERE card_id = ?").all(managedCardId),
+    outbox: db.prepare("SELECT payload FROM membership_outbox WHERE payload LIKE '%webhook-auth-%'").all(),
+    audits: db.prepare("SELECT detail FROM admin_audit_logs").all()
+  });
+  assert.doesNotMatch(persisted, new RegExp(pan));
+  assert.doesNotMatch(JSON.stringify(db.prepare(`
+    SELECT payload FROM membership_outbox WHERE payload LIKE '%webhook-auth-%'
+  `).all()), /card_number/i);
+
+  const oversizedBody = JSON.stringify({ ...baseEvent, merchant: "x".repeat(40 * 1024) });
+  const oversized = await app.inject({
+    method: "POST",
+    url: "/api/webhooks/spacexcard/card-transactions",
+    headers: {
+      "content-type": "application/json",
+      "x-signature": signWebhookBody(secret, oversizedBody)
+    },
+    payload: oversizedBody
+  });
+  assert.equal(oversized.statusCode, 413, oversized.body);
+
+  const prices = fixture("spacexcard-openapi-openai-payments.json").data.map((item) => ({
+    tier: item.tier,
+    label: item.label,
+    minUsd: item.min_usd,
+    maxUsd: item.max_usd,
+    amount: item.amount,
+    time: item.time,
+    found: item.found
+  }));
+  const authoritativeTransactions = [
+    {
+      authId: "webhook-auth-order",
+      authTime: at,
+      authAmount: 16.24,
+      authCurrency: "USD",
+      settleAmount: 0,
+      settleCurrency: "USD",
+      status: "PENDING",
+      type: "Authorization",
+      merchantNormalized: "OPENAI",
+      createdAt: at
+    },
+    {
+      authId: "webhook-auth-order",
+      authTime: at,
+      authAmount: 16.24,
+      authCurrency: "USD",
+      settleAmount: 16.24,
+      settleCurrency: "USD",
+      status: "COMPLETE",
+      type: "Settlement",
+      merchantNormalized: "OPENAI",
+      createdAt: at
+    }
+  ];
+  const targetedRunner = createMembershipInventoryRunner({
+    db,
+    decryptText() { throw new Error("clientFactory should avoid real credentials"); },
+    workerId: "inventory-webhook-target-worker",
+    clientFactory: () => ({
+      async listTransactions() { return authoritativeTransactions; },
+      async getOpenAiPayments() { return prices; }
+    }),
+    logger: { warn() {} }
+  });
+  const targeted = await targetedRunner.tick();
+  assert.equal(targeted.action, "scheduled_targeted");
+  assert.equal(targeted.upstreamCardId, upstreamCardId);
+  assert.equal((await targetedRunner.tick()).action, "reconciled");
+  const reconciledCard = db.prepare("SELECT * FROM managed_cards WHERE id = ?").get(managedCardId);
+  assert.equal(reconciledCard.reconciliation_state, "READY");
+  assert.equal(reconciledCard.lane, "plus");
+});
+
+test("PHP price contracts are versioned and card products require fresh proof before enabling", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const at = new Date().toISOString();
+  const productCode = "P-POLICY-TEST";
+  const cardId = "mc_policy_test";
+  db.prepare(`
+    INSERT OR IGNORE INTO managed_cards (
+      id, upstream_card_id, vm_card_id, product_code, bin, last4, upstream_status,
+      cached_available_amount, capacity_state, reconciliation_state, created_at, updated_at
+    ) VALUES (?, 765432, 'card-policy-test', ?, '537872', '5432', 'ACTIVE',
+      20, 'AVAILABLE', 'READY', ?, ?)
+  `).run(cardId, productCode, at, at);
+  const insertPrice = db.prepare(`
+    INSERT INTO card_price_signals (
+      card_id, tier, found, amount, min_usd, max_usd, provider_time, fetched_at
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+    ON CONFLICT(card_id, tier) DO UPDATE SET
+      found = 1, amount = excluded.amount, min_usd = excluded.min_usd,
+      max_usd = excluded.max_usd, provider_time = excluded.provider_time,
+      fetched_at = excluded.fetched_at
+  `);
+  insertPrice.run(cardId, "plus", 16.24, 15, 20, at, at);
+  insertPrice.run(cardId, "x5", 99, 90, 110, at, at);
+  insertPrice.run(cardId, "x20", 199, 180, 220, at, at);
+
+  const invalidContract = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-price-contracts",
+    headers,
+    payload: { tier: "plus", minAmount: 1100, maxAmount: 1000 }
+  });
+  assert.equal(invalidContract.statusCode, 400);
+
+  const first = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-price-contracts",
+    headers,
+    payload: { tier: "plus", minAmount: 999, maxAmount: 1099 }
+  });
+  assert.equal(first.statusCode, 201);
+  assert.equal(first.json().item.version, 1);
+  assert.equal(first.json().item.status, "draft");
+  const firstId = first.json().item.id;
+  const activateFirst = await app.inject({
+    method: "POST",
+    url: `/api/admin/checkout-price-contracts/${encodeURIComponent(firstId)}/activate`,
+    headers,
+    payload: {}
+  });
+  assert.equal(activateFirst.statusCode, 200);
+  assert.equal(activateFirst.json().item.status, "active");
+
+  const second = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-price-contracts",
+    headers,
+    payload: { tier: "plus", minAmount: 1000, maxAmount: 1100 }
+  });
+  assert.equal(second.statusCode, 201);
+  assert.equal(second.json().item.version, 2);
+  const secondId = second.json().item.id;
+  assert.equal((await app.inject({
+    method: "POST",
+    url: `/api/admin/checkout-price-contracts/${encodeURIComponent(secondId)}/activate`,
+    headers,
+    payload: {}
+  })).statusCode, 200);
+  const contracts = await app.inject({
+    method: "GET",
+    url: "/api/admin/checkout-price-contracts?tier=plus",
+    headers
+  });
+  assert.deepEqual(contracts.json().items.map((item) => [item.version, item.status]), [
+    [2, "active"],
+    [1, "retired"]
+  ]);
+
+  const policies = await app.inject({
+    method: "GET",
+    url: "/api/admin/card-product-policies",
+    headers
+  });
+  const product = policies.json().items.find((item) => item.productCode === productCode);
+  assert.deepEqual(product.provenTiers, { plus: true, x5: true, x20: true });
+  assert.equal(product.canEnable, true);
+
+  const enabled = await app.inject({
+    method: "PUT",
+    url: "/api/admin/card-product-policies",
+    headers,
+    payload: { items: [{ productCode, enabled: true }] }
+  });
+  assert.equal(enabled.statusCode, 200);
+  assert.equal(enabled.json().items.find((item) => item.productCode === productCode).revision, 1);
+  const disabled = await app.inject({
+    method: "PUT",
+    url: "/api/admin/card-product-policies",
+    headers,
+    payload: { items: [{ productCode, enabled: false }] }
+  });
+  assert.equal(disabled.statusCode, 200);
+  assert.equal(disabled.json().items.find((item) => item.productCode === productCode).revision, 2);
+
+  const staleAt = new Date(Date.now() - 80 * 60 * 60 * 1000).toISOString();
+  db.prepare("UPDATE card_price_signals SET provider_time = ? WHERE card_id = ?").run(staleAt, cardId);
+  const staleEnable = await app.inject({
+    method: "PUT",
+    url: "/api/admin/card-product-policies",
+    headers,
+    payload: { items: [{ productCode, enabled: true }] }
+  });
+  assert.equal(staleEnable.statusCode, 409);
+  assert.equal(staleEnable.json().code, "CARD_PRODUCT_NOT_PROVEN");
+
+  const unknown = await app.inject({
+    method: "PUT",
+    url: "/api/admin/card-product-policies",
+    headers,
+    payload: { items: [{ productCode: "UNKNOWN-PRODUCT", enabled: true }] }
+  });
+  assert.equal(unknown.statusCode, 404);
+});
+
+test("no-charge validation stores only allowlisted facts and never permits card or click data", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const at = new Date().toISOString();
+  const productId = "product_no_charge_test";
+  const siteId = "site_no_charge_test";
+  const contractId = "cpc_no_charge_test";
+  db.prepare(`
+    INSERT OR IGNORE INTO products (
+      id, code, title, membership_tier, status, created_at, updated_at
+    ) VALUES (?, 'NO_CHARGE_X5', 'No Charge x5', 'x5', 'active', ?, ?)
+  `).run(productId, at, at);
+  db.prepare(`
+    INSERT OR IGNORE INTO sites (
+      id, name, slug, product_id, status, created_at, updated_at
+    ) VALUES (?, 'No Charge Site', 'no-charge-site', ?, 'active', ?, ?)
+  `).run(siteId, productId, at, at);
+  db.prepare(`
+    INSERT OR IGNORE INTO checkout_price_contracts (
+      id, tier, version, currency, min_amount, max_amount, status,
+      created_at, created_by, activated_at
+    ) VALUES (?, 'x5', 1, 'PHP', 4999, 5099, 'active', ?, 'admin', ?)
+  `).run(contractId, at, at);
+  const facts = {
+    originRecognized: true,
+    routeRecognized: true,
+    planRecognized: true,
+    currency: "PHP",
+    displayedAmount: 5049,
+    requiredFieldsRecognized: true,
+    allowedControlRecognized: true,
+    cardMaterialRequested: false,
+    progressionActivated: false,
+    finalSubmitActivated: false
+  };
+  const pan = "5378729999991111";
+  const rejected = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-validation-runs",
+    headers,
+    payload: {
+      siteId,
+      productId,
+      tier: "x5",
+      adapterVersion: "checkout-v1-test",
+      priceContractId: contractId,
+      facts: { ...facts, cardNumber: pan }
+    }
+  });
+  assert.equal(rejected.statusCode, 400);
+  const clickRejected = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-validation-runs",
+    headers,
+    payload: {
+      siteId,
+      productId,
+      tier: "x5",
+      adapterVersion: "checkout-v1-test",
+      priceContractId: contractId,
+      facts: { ...facts, progressionActivated: true }
+    }
+  });
+  assert.equal(clickRejected.statusCode, 400);
+
+  const passed = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-validation-runs",
+    headers,
+    payload: {
+      siteId,
+      productId,
+      tier: "x5",
+      adapterVersion: "checkout-v1-test",
+      priceContractId: contractId,
+      facts
+    }
+  });
+  assert.equal(passed.statusCode, 201);
+  assert.equal(passed.json().item.status, "passed");
+  assert.deepEqual(passed.json().item.result.failedChecks, []);
+
+  const failed = await app.inject({
+    method: "POST",
+    url: "/api/admin/checkout-validation-runs",
+    headers,
+    payload: {
+      siteId,
+      productId,
+      tier: "x5",
+      adapterVersion: "checkout-v1-test",
+      priceContractId: contractId,
+      facts: { ...facts, displayedAmount: 6000 }
+    }
+  });
+  assert.equal(failed.statusCode, 201);
+  assert.equal(failed.json().item.status, "failed");
+  assert.deepEqual(failed.json().item.result.failedChecks, ["PRICE_OUT_OF_RANGE"]);
+
+  const listed = await app.inject({
+    method: "GET",
+    url: "/api/admin/checkout-validation-runs?tier=x5",
+    headers
+  });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(listed.json().items.length, 2);
+  const persisted = JSON.stringify({
+    runs: db.prepare("SELECT sanitized_result FROM checkout_validation_runs WHERE site_id = ?").all(siteId),
+    audits: db.prepare("SELECT detail FROM admin_audit_logs WHERE action = 'checkout_validation_run.record'").all()
+  });
+  assert.doesNotMatch(persisted, new RegExp(pan));
+  assert.doesNotMatch(persisted, /cardNumber|rawHtml|screenshot/i);
+  assert.equal(db.prepare("SELECT enabled FROM membership_fulfillment_settings WHERE id = 'default'").get().enabled, 0);
+});
+
+test("membership inventory admin APIs expose only masked cards and serialize refresh runs", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const cards = await app.inject({
+    method: "GET",
+    url: "/api/admin/membership-cards",
+    headers
+  });
+  assert.equal(cards.statusCode, 200);
+  assert.match(cards.body, /537872••••8264/);
+  assert.doesNotMatch(cards.body, /5378720000008264|card_number|cvv/i);
+
+  const refresh = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-inventory/refresh",
+    headers,
+    payload: {}
+  });
+  assert.equal(refresh.statusCode, 200);
+  assert.equal(refresh.json().run.mode, "refresh");
+  const duplicate = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-inventory/initialize",
+    headers,
+    payload: {}
+  });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.json().code, "INVENTORY_ALREADY_RUNNING");
+});
+
+test("admin UI exposes locked membership credentials without money-operation controls", async () => {
+  const { JSDOM } = await import("jsdom");
+  const html = fs.readFileSync(path.resolve("admin", "index.html"), "utf8");
+  const script = fs.readFileSync(path.resolve("admin", "app.js"), "utf8");
+  const dom = new JSDOM(html);
+  const panel = dom.window.document.querySelector('[data-panel="membership-fulfillment"]');
+  assert.ok(dom.window.document.querySelector('[data-tab="membership-fulfillment"]'));
+  assert.ok(panel);
+  assert.ok(panel.querySelector("#membership-app-secret"));
+  assert.ok(panel.querySelector("#membership-webhook-secret"));
+  assert.ok(panel.querySelector("#membership-inventory-initialize"));
+  assert.ok(panel.querySelector("#membership-inventory-refresh"));
+  assert.ok(panel.querySelector("#membership-card-list-refresh"));
+  assert.ok(panel.querySelector("#membership-fulfillment-list-refresh"));
+  assert.ok(panel.querySelector("#membership-fulfillment-list"));
+  assert.ok(panel.querySelector("#membership-fulfillment-detail"));
+  assert.ok(panel.querySelector("#membership-price-contract-form"));
+  assert.ok(panel.querySelector("#membership-product-policy-refresh"));
+  assert.ok(panel.querySelector("#membership-no-charge-form"));
+  assert.ok(panel.querySelector("#membership-circuit-refresh"));
+  assert.equal(panel.querySelector('[data-action="open-card"], [data-action="recharge-card"], [data-action="delete-card"]'), null);
+  assert.match(script, /\/api\/admin\/membership-fulfillment\/settings/);
+  assert.match(script, /\/api\/admin\/membership-fulfillments/);
+  assert.match(script, /\/api\/admin\/checkout-price-contracts/);
+  assert.match(script, /\/api\/admin\/card-product-policies/);
+  assert.match(script, /\/api\/admin\/checkout-validation-runs/);
+  assert.match(script, /\/api\/admin\/fulfillment-circuits/);
+  dom.window.close();
+});

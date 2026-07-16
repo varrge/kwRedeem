@@ -137,6 +137,7 @@ function createSchema(db) {
       code TEXT NOT NULL UNIQUE,
       title TEXT NOT NULL,
       description TEXT,
+      membership_tier TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       default_activation_endpoint_id TEXT,
       created_at TEXT NOT NULL,
@@ -802,8 +803,483 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS membership_fulfillment_settings (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      spacexcard_app_id TEXT,
+      spacexcard_app_secret_encrypted TEXT,
+      spacexcard_webhook_secret_encrypted TEXT,
+      inventory_status TEXT NOT NULL DEFAULT 'not_started',
+      inventory_initialized_at TEXT,
+      last_inventory_error TEXT,
+      business_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      resume_revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_fulfillments (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL UNIQUE,
+      order_no TEXT NOT NULL UNIQUE,
+      target_tier TEXT NOT NULL,
+      state TEXT NOT NULL,
+      current_stage TEXT,
+      run_mode TEXT,
+      account_lock_key TEXT,
+      resume_revision INTEGER NOT NULL DEFAULT 0,
+      state_revision INTEGER NOT NULL DEFAULT 0,
+      retry_at TEXT,
+      money_boundary_at TEXT,
+      browser_lease_epoch INTEGER,
+      card_reservation_id TEXT,
+      failure_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_fulfillment_attempts (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      resume_revision INTEGER NOT NULL DEFAULT 0,
+      adapter_version TEXT,
+      price_contract_version INTEGER,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      outcome_code TEXT,
+      sanitized_diagnostic TEXT,
+      UNIQUE(fulfillment_id, stage, attempt_no)
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_payment_stages (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      expected_tier TEXT NOT NULL,
+      state TEXT NOT NULL,
+      card_id TEXT,
+      price_signal_amount REAL,
+      price_signal_min REAL,
+      price_signal_max REAL,
+      price_signal_time TEXT,
+      auth_snapshot_at TEXT,
+      attempt_no INTEGER,
+      adapter_version TEXT,
+      adapter_path TEXT,
+      price_contract_id TEXT,
+      page_fingerprint TEXT,
+      page_permit_kind TEXT,
+      page_control_id TEXT,
+      page_ready_at TEXT,
+      page_facts_json TEXT,
+      progression_permitted_at TEXT,
+      progression_reported_at TEXT,
+      submit_permitted_at TEXT,
+      submit_reported_at TEXT,
+      matched_auth_id TEXT,
+      settlement_state TEXT,
+      membership_observation_id TEXT,
+      confirmed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(fulfillment_id, stage_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_observations (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT,
+      purpose TEXT NOT NULL,
+      provider_code INTEGER NOT NULL,
+      account_type TEXT NOT NULL,
+      currency TEXT,
+      auto_renew INTEGER,
+      is_overdue INTEGER NOT NULL,
+      is_delinquent INTEGER NOT NULL,
+      expire_time TEXT,
+      observed_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_cards (
+      id TEXT PRIMARY KEY,
+      upstream_card_id INTEGER NOT NULL UNIQUE,
+      vm_card_id TEXT NOT NULL UNIQUE,
+      product_code TEXT NOT NULL,
+      bin TEXT,
+      last4 TEXT,
+      upstream_status TEXT NOT NULL,
+      cached_available_amount REAL NOT NULL DEFAULT 0,
+      lane TEXT,
+      consumed_slots INTEGER NOT NULL DEFAULT 0,
+      capacity_state TEXT NOT NULL DEFAULT 'AVAILABLE',
+      reconciliation_state TEXT NOT NULL DEFAULT 'PENDING',
+      reconciliation_reason TEXT,
+      last_balance_sync_at TEXT,
+      last_transaction_sync_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS managed_card_transactions (
+      card_id TEXT NOT NULL,
+      auth_id TEXT NOT NULL,
+      auth_time TEXT,
+      auth_amount REAL NOT NULL DEFAULT 0,
+      auth_currency TEXT,
+      settle_amount REAL NOT NULL DEFAULT 0,
+      settle_currency TEXT,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      merchant_normalized TEXT NOT NULL,
+      authorization_seen INTEGER NOT NULL DEFAULT 0,
+      settlement_seen INTEGER NOT NULL DEFAULT 0,
+      refund_seen INTEGER NOT NULL DEFAULT 0,
+      reversal_seen INTEGER NOT NULL DEFAULT 0,
+      decline_reason_code TEXT,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY(card_id, auth_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS card_price_signals (
+      card_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      found INTEGER NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      min_usd REAL NOT NULL,
+      max_usd REAL NOT NULL,
+      provider_time TEXT,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY(card_id, tier)
+    );
+
+    CREATE TABLE IF NOT EXISTS card_inventory_runs (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL DEFAULT 'full',
+      status TEXT NOT NULL,
+      next_page INTEGER NOT NULL DEFAULT 1,
+      total_cards INTEGER,
+      discovered_cards INTEGER NOT NULL DEFAULT 0,
+      processed_cards INTEGER NOT NULL DEFAULT 0,
+      held_cards INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      last_error_code TEXT,
+      locked_at TEXT,
+      locked_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS card_inventory_run_items (
+      run_id TEXT NOT NULL,
+      upstream_card_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_retry_at TEXT,
+      error_code TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(run_id, upstream_card_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS card_product_policies (
+      product_code TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS card_capacity_reservations (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL UNIQUE,
+      card_id TEXT,
+      planned_product_code TEXT,
+      target_lane TEXT NOT NULL,
+      slot_index INTEGER,
+      state TEXT NOT NULL,
+      reserved_at TEXT NOT NULL,
+      consumed_at TEXT,
+      released_at TEXT,
+      release_evidence_revision INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS funding_intents (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL UNIQUE,
+      operation TEXT NOT NULL,
+      target_card_id TEXT,
+      product_code TEXT,
+      amount REAL NOT NULL,
+      fee REAL NOT NULL DEFAULT 0,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      request_body_encrypted TEXT NOT NULL,
+      state TEXT NOT NULL,
+      provider_resource_id TEXT,
+      created_at TEXT NOT NULL,
+      submitted_at TEXT,
+      resolved_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS browser_fulfillment_lease (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT,
+      installation_id TEXT,
+      epoch INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'available',
+      heartbeat_at TEXT,
+      expires_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_material_grants (
+      id TEXT PRIMARY KEY,
+      nonce_sha256 TEXT NOT NULL UNIQUE,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      installation_id TEXT NOT NULL,
+      browser_lease_epoch INTEGER NOT NULL,
+      adapter_version TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      claimed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_action_permits (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      sequence_no INTEGER NOT NULL DEFAULT 1,
+      installation_id TEXT NOT NULL,
+      browser_lease_epoch INTEGER NOT NULL,
+      adapter_version TEXT NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      control_id TEXT NOT NULL,
+      page_fingerprint TEXT NOT NULL,
+      state TEXT NOT NULL,
+      issued_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      activated_at TEXT,
+      reported_at TEXT,
+      outcome_code TEXT,
+      authorization_mode TEXT,
+      authorization_id TEXT,
+      UNIQUE(fulfillment_id, stage_key, attempt_no, action_type, sequence_no)
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_action_auth_snapshots (
+      permit_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      auth_id TEXT NOT NULL,
+      snapshotted_at TEXT NOT NULL,
+      PRIMARY KEY(permit_id, auth_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_no_payment_checks (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      checkpoint TEXT NOT NULL,
+      membership_unchanged INTEGER NOT NULL,
+      no_effective_transaction INTEGER NOT NULL,
+      no_pending_authorization INTEGER NOT NULL,
+      observed_at TEXT NOT NULL,
+      UNIQUE(fulfillment_id, stage_key, checkpoint)
+    );
+
+    CREATE TABLE IF NOT EXISTS automatic_checkout_quota_reservations (
+      id TEXT PRIMARY KEY,
+      scope_id TEXT NOT NULL,
+      fulfillment_id TEXT NOT NULL UNIQUE,
+      business_date TEXT NOT NULL,
+      order_units INTEGER NOT NULL,
+      risk_reserved_usd REAL NOT NULL,
+      state TEXT NOT NULL,
+      reserved_at TEXT NOT NULL,
+      released_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS checkout_price_contracts (
+      id TEXT PRIMARY KEY,
+      tier TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'PHP',
+      min_amount REAL NOT NULL,
+      max_amount REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      activated_at TEXT,
+      UNIQUE(tier, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS checkout_validation_runs (
+      id TEXT PRIMARY KEY,
+      order_id TEXT,
+      site_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      sanitized_result TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      created_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS live_canary_authorizations (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      target_tier TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      funding_budget REAL NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      snapshot_fingerprint TEXT NOT NULL,
+      state TEXT NOT NULL,
+      approved_by TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      consumed_at TEXT,
+      invalidated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS tier_rollout_qualifications (
+      id TEXT PRIMARY KEY,
+      tier TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      adapter_path TEXT NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      fulfillment_id TEXT NOT NULL,
+      qualified_at TEXT NOT NULL,
+      UNIQUE(tier, adapter_version, adapter_path, price_contract_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS automatic_checkout_scopes (
+      id TEXT PRIMARY KEY,
+      scope_key TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      site_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      daily_order_limit INTEGER NOT NULL,
+      daily_risk_limit_usd REAL NOT NULL,
+      status TEXT NOT NULL,
+      activated_at TEXT,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      UNIQUE(scope_key, revision)
+    );
+
+    CREATE TABLE IF NOT EXISTS automatic_checkout_daily_usage (
+      scope_id TEXT NOT NULL,
+      business_date TEXT NOT NULL,
+      order_units INTEGER NOT NULL DEFAULT 0,
+      risk_reserved_usd REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(scope_id, business_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS fulfillment_dependency_circuits (
+      id TEXT PRIMARY KEY,
+      dependency TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      state TEXT NOT NULL,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      opened_at TEXT,
+      retry_at TEXT,
+      recovery_revision INTEGER NOT NULL DEFAULT 0,
+      reason_code TEXT,
+      updated_at TEXT NOT NULL,
+      UNIQUE(dependency, scope_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS fulfillment_interventions (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      state_revision INTEGER NOT NULL,
+      reason_code TEXT NOT NULL,
+      acknowledged_at TEXT,
+      acknowledged_by TEXT,
+      feishu_status TEXT,
+      feishu_sent_at TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(fulfillment_id, state, state_revision)
+    );
+
+    CREATE TABLE IF NOT EXISTS customer_compensation_resolutions (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      resolution_type TEXT NOT NULL,
+      evidence_reference TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      UNIQUE(fulfillment_id, revision)
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_outbox (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      fulfillment_id TEXT,
+      state_revision INTEGER,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      dispatched_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS spacexcard_webhook_events (
+      auth_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      upstream_card_id INTEGER NOT NULL,
+      vm_card_id TEXT NOT NULL,
+      managed_card_id TEXT,
+      settle_amount REAL NOT NULL DEFAULT 0,
+      received_at TEXT NOT NULL,
+      PRIMARY KEY(auth_id, type, status)
+    );
+
   `);
 
+  ensureColumn(db, "products", "membership_tier", "TEXT");
+  ensureColumn(db, "membership_fulfillment_settings", "last_inventory_error", "TEXT");
+  ensureColumn(db, "membership_fulfillment_settings", "rollout_mode", "TEXT NOT NULL DEFAULT 'disabled'");
+  ensureColumn(db, "membership_payment_stages", "attempt_no", "INTEGER");
+  ensureColumn(db, "membership_payment_stages", "adapter_version", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "adapter_path", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "price_contract_id", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "page_fingerprint", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "page_permit_kind", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "page_control_id", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "page_ready_at", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "page_facts_json", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "progression_permitted_at", "TEXT");
+  ensureColumn(db, "membership_payment_stages", "progression_reported_at", "TEXT");
+  ensureColumn(db, "membership_material_grants", "invalidated_at", "TEXT");
+  ensureColumn(db, "membership_action_permits", "authorization_mode", "TEXT");
+  ensureColumn(db, "membership_action_permits", "authorization_id", "TEXT");
+  ensureColumn(db, "live_canary_authorizations", "expires_at", "TEXT");
+  ensureColumn(db, "automatic_checkout_scopes", "updated_at", "TEXT");
+  ensureColumn(db, "automatic_checkout_scopes", "disabled_at", "TEXT");
+  ensureColumn(db, "managed_cards", "reconciliation_reason", "TEXT");
+  ensureColumn(db, "managed_cards", "consumed_slots", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "card_inventory_runs", "mode", "TEXT NOT NULL DEFAULT 'full'");
+  ensureColumn(db, "card_inventory_runs", "discovered_cards", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "card_inventory_runs", "locked_at", "TEXT");
+  ensureColumn(db, "card_inventory_runs", "locked_by", "TEXT");
+  ensureColumn(db, "card_inventory_run_items", "attempt_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "card_inventory_run_items", "next_retry_at", "TEXT");
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "processing_mode", "TEXT NOT NULL DEFAULT 'auto'");
@@ -971,6 +1447,46 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_store_product_mappings_lookup ON store_product_mappings(product_id, sku_id, enabled);
     CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_status ON store_fulfillment_tasks(status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_parent ON store_fulfillment_tasks(parent_order_no, remote_order_no);
+    CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_due ON membership_fulfillments(state, retry_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_order ON membership_fulfillments(order_no);
+    DROP INDEX IF EXISTS idx_membership_active_account_lock;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_active_account_lock
+      ON membership_fulfillments(account_lock_key)
+      WHERE account_lock_key IS NOT NULL
+        AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
+        AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED', 'PARTIAL_FULFILLMENT_EXPIRED', 'COMPLETED');
+    CREATE INDEX IF NOT EXISTS idx_membership_attempts_fulfillment ON membership_fulfillment_attempts(fulfillment_id, stage, attempt_no);
+    CREATE INDEX IF NOT EXISTS idx_membership_observations_fulfillment ON membership_observations(fulfillment_id, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_managed_cards_selection ON managed_cards(lane, capacity_state, reconciliation_state, upstream_status);
+    CREATE INDEX IF NOT EXISTS idx_managed_transactions_auth ON managed_card_transactions(auth_id, last_seen_at);
+    CREATE INDEX IF NOT EXISTS idx_inventory_runs_status ON card_inventory_runs(status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_one_active
+      ON card_inventory_runs((1))
+      WHERE status IN ('discovering', 'reconciling');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_card_capacity_active_slot
+      ON card_capacity_reservations(card_id, target_lane, slot_index)
+      WHERE card_id IS NOT NULL AND state IN ('reserved', 'consumed', 'retained_partial');
+    CREATE INDEX IF NOT EXISTS idx_material_grants_expiry ON membership_material_grants(expires_at, claimed_at);
+    CREATE INDEX IF NOT EXISTS idx_membership_action_permits_lookup
+      ON membership_action_permits(fulfillment_id, stage_key, attempt_no, action_type, state);
+    CREATE INDEX IF NOT EXISTS idx_membership_action_permits_expiry
+      ON membership_action_permits(state, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_membership_no_payment_checks
+      ON membership_no_payment_checks(fulfillment_id, stage_key, checkpoint);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_automatic_quota_reservation_scope_order
+      ON automatic_checkout_quota_reservations(scope_id, fulfillment_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_checkout_price_contract_active
+      ON checkout_price_contracts(tier)
+      WHERE status = 'active';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_canary_active_stage
+      ON live_canary_authorizations(fulfillment_id, stage_key)
+      WHERE state = 'approved';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_automatic_checkout_scope_active
+      ON automatic_checkout_scopes(site_id, product_id, tier)
+      WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_fulfillment_interventions_open ON fulfillment_interventions(acknowledged_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_membership_outbox_pending ON membership_outbox(dispatched_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_spacexcard_webhook_card ON spacexcard_webhook_events(upstream_card_id, received_at);
   `);
 }
 
@@ -1415,6 +1931,18 @@ function seedDefaults(db) {
       id, enabled, allowed_site_slugs, resume_revision, updated_at, updated_by
     )
     VALUES ('default', 0, '[]', 0, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO membership_fulfillment_settings (
+      id, enabled, inventory_status, business_timezone, resume_revision, updated_at, updated_by
+    )
+    VALUES ('default', 0, 'not_started', 'Asia/Shanghai', 0, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO browser_fulfillment_lease (id, epoch, state, updated_at)
+    VALUES ('default', 0, 'available', ?)
   `).run(new Date().toISOString());
 
   db.prepare(`

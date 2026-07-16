@@ -81,6 +81,122 @@ const refs = {
   extensionDeliveryListRefresh: document.querySelector("#extension-delivery-list-refresh"),
   extensionDeliveryList: document.querySelector("#extension-delivery-list"),
   extensionDeliveryListResult: document.querySelector("#extension-delivery-list-result"),
+  membershipFulfillmentSettingsForm: document.querySelector("#membership-fulfillment-settings-form"),
+  membershipOpenApiBase: document.querySelector("#membership-openapi-base"),
+  membershipAppId: document.querySelector("#membership-app-id"),
+  membershipAppSecret: document.querySelector("#membership-app-secret"),
+  membershipClearAppSecret: document.querySelector("#membership-clear-app-secret"),
+  membershipWebhookSecret: document.querySelector("#membership-webhook-secret"),
+  membershipClearWebhookSecret: document.querySelector("#membership-clear-webhook-secret"),
+  membershipStateProviderUrl: document.querySelector("#membership-state-provider-url"),
+  membershipCheckoutBrokerUrl: document.querySelector("#membership-checkout-broker-url"),
+  membershipFulfillmentStatus: document.querySelector("#membership-fulfillment-status"),
+  membershipFulfillmentSettingsResult: document.querySelector("#membership-fulfillment-settings-result"),
+  membershipFulfillmentRefresh: document.querySelector("#membership-fulfillment-refresh"),
+  membershipFulfillmentListRefresh: document.querySelector("#membership-fulfillment-list-refresh"),
+  membershipFulfillmentList: document.querySelector("#membership-fulfillment-list"),
+  membershipFulfillmentListResult: document.querySelector("#membership-fulfillment-list-result"),
+  membershipFulfillmentDetail: document.querySelector("#membership-fulfillment-detail"),
+  membershipInventoryInitialize: document.querySelector("#membership-inventory-initialize"),
+  membershipInventoryRefresh: document.querySelector("#membership-inventory-refresh"),
+  membershipInventoryProgress: document.querySelector("#membership-inventory-progress"),
+  membershipCardListRefresh: document.querySelector("#membership-card-list-refresh"),
+  membershipCardList: document.querySelector("#membership-card-list"),
+  membershipCardListResult: document.querySelector("#membership-card-list-result"),
+  membershipPriceContractForm: document.querySelector("#membership-price-contract-form"),
+  membershipPriceContractTier: document.querySelector("#membership-price-contract-tier"),
+  membershipPriceContractMin: document.querySelector("#membership-price-contract-min"),
+  membershipPriceContractMax: document.querySelector("#membership-price-contract-max"),
+  membershipPriceContractList: document.querySelector("#membership-price-contract-list"),
+  membershipPriceContractResult: document.querySelector("#membership-price-contract-result"),
+  membershipProductPolicyRefresh: document.querySelector("#membership-product-policy-refresh"),
+  membershipProductPolicyList: document.querySelector("#membership-product-policy-list"),
+  membershipProductPolicyResult: document.querySelector("#membership-product-policy-result"),
+  membershipNoChargeForm: document.querySelector("#membership-no-charge-form"),
+  membershipNoChargeSite: document.querySelector("#membership-no-charge-site"),
+  membershipNoChargeProduct: document.querySelector("#membership-no-charge-product"),
+  membershipNoChargeTier: document.querySelector("#membership-no-charge-tier"),
+  membershipNoChargeAdapter: document.querySelector("#membership-no-charge-adapter"),
+  membershipNoChargeContract: document.querySelector("#membership-no-charge-contract"),
+  membershipNoChargeAmount: document.querySelector("#membership-no-charge-amount"),
+  membershipNoChargeOrigin: document.querySelector("#membership-no-charge-origin"),
+  membershipNoChargeRoute: document.querySelector("#membership-no-charge-route"),
+  membershipNoChargePlan: document.querySelector("#membership-no-charge-plan"),
+  membershipNoChargeFields: document.querySelector("#membership-no-charge-fields"),
+  membershipNoChargeControl: document.querySelector("#membership-no-charge-control"),
+  membershipNoChargeList: document.querySelector("#membership-no-charge-list"),
+  membershipNoChargeResult: document.querySelector("#membership-no-charge-result"),
+  membershipCircuitRefresh: document.querySelector("#membership-circuit-refresh"),
+  membershipCircuitList: document.querySelector("#membership-circuit-list"),
+  membershipCircuitResult: document.querySelector("#membership-circuit-result"),
+  membershipRolloutModeForm: document.querySelector("#membership-rollout-mode-form"),
+  membershipRolloutMode: document.querySelector("#membership-rollout-mode"),
+  membershipRolloutAdminUsername: document.querySelector("#membership-rollout-admin-username"),
+  membershipRolloutAdminPassword: document.querySelector("#membership-rollout-admin-password"),
+  membershipRolloutConfirm: document.querySelector("#membership-rollout-confirm"),
+  membershipRolloutResult: document.querySelector("#membership-rollout-result"),
+  membershipCanaryStartForm: document.querySelector("#membership-canary-start-form"),
+  membershipCanaryStartFulfillment: document.querySelector("#membership-canary-start-fulfillment"),
+  membershipCanaryStartAdminUsername: document.querySelector("#membership-canary-start-admin-username"),
+  membershipCanaryStartAdminPassword: document.querySelector("#membership-canary-start-admin-password"),
+  membershipCanaryStartConfirm: document.querySelector("#membership-canary-start-confirm"),
+  membershipCanaryStartResult: document.querySelector("#membership-canary-start-result"),
+  membershipCanaryRefresh: document.querySelector("#membership-canary-refresh"),
+  membershipCanaryReadyList: document.querySelector("#membership-canary-ready-list"),
+  membershipCanaryAuthorizationList: document.querySelector("#membership-canary-authorization-list"),
+  membershipCanaryForm: document.querySelector("#membership-canary-form"),
+  membershipCanaryFulfillment: document.querySelector("#membership-canary-fulfillment"),
+  membershipCanaryStage: document.querySelector("#membership-canary-stage"),
+  membershipCanaryCard: document.querySelector("#membership-canary-card"),
+  membershipCanaryBudget: document.querySelector("#membership-canary-budget"),
+  membershipCanaryContract: document.querySelector("#membership-canary-contract"),
+  membershipCanaryAdapter: document.querySelector("#membership-canary-adapter"),
+  membershipCanaryFingerprint: document.querySelector("#membership-canary-fingerprint"),
+  membershipCanaryAdminUsername: document.querySelector("#membership-canary-admin-username"),
+  membershipCanaryAdminPassword: document.querySelector("#membership-canary-admin-password"),
+  membershipCanaryConfirm: document.querySelector("#membership-canary-confirm"),
+  membershipCanarySubmit: document.querySelector("#membership-canary-submit"),
+  membershipCanaryResult: document.querySelector("#membership-canary-result"),
+  membershipQualificationRefresh: document.querySelector("#membership-qualification-refresh"),
+  membershipQualificationForm: document.querySelector("#membership-qualification-form"),
+  membershipQualificationFulfillment: document.querySelector("#membership-qualification-fulfillment"),
+  membershipQualificationAdapter: document.querySelector("#membership-qualification-adapter"),
+  membershipQualificationPath: document.querySelector("#membership-qualification-path"),
+  membershipQualificationContract: document.querySelector("#membership-qualification-contract"),
+  membershipQualificationList: document.querySelector("#membership-qualification-list"),
+  membershipQualificationResult: document.querySelector("#membership-qualification-result"),
+  membershipCompensationForm: document.querySelector("#membership-compensation-form"),
+  membershipCompensationFulfillment: document.querySelector("#membership-compensation-fulfillment"),
+  membershipCompensationType: document.querySelector("#membership-compensation-type"),
+  membershipCompensationEvidence: document.querySelector("#membership-compensation-evidence"),
+  membershipCompensationConfirm: document.querySelector("#membership-compensation-confirm"),
+  membershipCompensationResult: document.querySelector("#membership-compensation-result"),
+  membershipAutomaticScopeRefresh: document.querySelector("#membership-automatic-scope-refresh"),
+  membershipAutomaticScopeForm: document.querySelector("#membership-automatic-scope-form"),
+  membershipAutomaticSite: document.querySelector("#membership-automatic-site"),
+  membershipAutomaticProduct: document.querySelector("#membership-automatic-product"),
+  membershipAutomaticTier: document.querySelector("#membership-automatic-tier"),
+  membershipAutomaticAdapter: document.querySelector("#membership-automatic-adapter"),
+  membershipAutomaticContract: document.querySelector("#membership-automatic-contract"),
+  membershipAutomaticOrderLimit: document.querySelector("#membership-automatic-order-limit"),
+  membershipAutomaticRiskLimit: document.querySelector("#membership-automatic-risk-limit"),
+  membershipAutomaticAdminUsername: document.querySelector("#membership-automatic-admin-username"),
+  membershipAutomaticAdminPassword: document.querySelector("#membership-automatic-admin-password"),
+  membershipAutomaticConfirm: document.querySelector("#membership-automatic-confirm"),
+  membershipAutomaticRevisionForm: document.querySelector("#membership-automatic-revision-form"),
+  membershipAutomaticRevisionId: document.querySelector("#membership-automatic-revision-id"),
+  membershipAutomaticRevisionOrderLimit: document.querySelector("#membership-automatic-revision-order-limit"),
+  membershipAutomaticRevisionRiskLimit: document.querySelector("#membership-automatic-revision-risk-limit"),
+  membershipAutomaticRevisionAdapter: document.querySelector("#membership-automatic-revision-adapter"),
+  membershipAutomaticRevisionContract: document.querySelector("#membership-automatic-revision-contract"),
+  membershipAutomaticRevisionAdminUsername: document.querySelector("#membership-automatic-revision-admin-username"),
+  membershipAutomaticRevisionAdminPassword: document.querySelector("#membership-automatic-revision-admin-password"),
+  membershipAutomaticRevisionConfirm: document.querySelector("#membership-automatic-revision-confirm"),
+  membershipAutomaticScopeList: document.querySelector("#membership-automatic-scope-list"),
+  membershipAutomaticScopeResult: document.querySelector("#membership-automatic-scope-result"),
+  membershipInterventionRefresh: document.querySelector("#membership-intervention-refresh"),
+  membershipInterventionList: document.querySelector("#membership-intervention-list"),
+  membershipInterventionResult: document.querySelector("#membership-intervention-result"),
   orderList: document.querySelector("#order-list"),
   jobList: document.querySelector("#job-list"),
   retryJobsBtn: document.querySelector("#retry-jobs-btn"),
@@ -356,6 +472,8 @@ let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
 let storeMappingsCache = [];
 let storeTasksCache = [];
+let membershipPreparedCanaries = new Map();
+let membershipAutomaticScopes = new Map();
 let migrationRestoreUploadId = null;
 const SUB2API_LEVEL_TEMPLATES = {
   niu: [
@@ -434,6 +552,18 @@ function maskToken(value) {
   if (!normalized) return "-";
   if (normalized.length <= 12) return normalized;
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+}
+
+function maskMembershipIdentifier(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "-";
+  if (normalized.length <= 16) return normalized;
+  return `${normalized.slice(0, 10)}…${normalized.slice(-4)}`;
+}
+
+function membershipAdminError(error) {
+  const message = error?.message || "请求失败";
+  return error?.code && !message.includes(error.code) ? `${message}（${error.code}）` : message;
 }
 
 const STATUS_LABELS = {
@@ -544,6 +674,9 @@ function switchTab(tabName) {
   if (tabName === "extension-delivery" && getToken()) {
     refreshExtensionDeliveryConsole().catch((error) => setHint(refs.extensionDeliverySettingsResult, error.message));
   }
+  if (tabName === "membership-fulfillment" && getToken()) {
+    refreshMembershipFulfillmentConsole().catch((error) => setHint(refs.membershipFulfillmentSettingsResult, error.message));
+  }
   if (tabName === "sub2api-rebates" && getToken()) {
     loadSub2ApiInviterLevels().catch((error) => setHint(refs.sub2apiLevelResult, `加载等级失败：${error.message}`));
     refreshSub2ApiRebates().catch((error) => setHint(refs.sub2apiRebateResult, `加载返利失败：${error.message}`));
@@ -559,6 +692,7 @@ function startAutoRefresh() {
     refreshDashboard().catch(() => {});
     if (currentTab === "logs") refreshLogs().catch(() => {});
     if (currentTab === "extension-delivery") refreshExtensionDeliveryConsole().catch(() => {});
+    if (currentTab === "membership-fulfillment") refreshMembershipFulfillmentConsole().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 }
 
@@ -612,7 +746,9 @@ async function api(path, options = {}) {
       stopAutoRefresh();
       setAuthState(false);
     }
-    throw new Error(payload.message || "请求失败");
+    const requestError = new Error(payload.message || payload.code || "请求失败");
+    requestError.code = payload.code || null;
+    throw requestError;
   }
   return payload;
 }
@@ -1326,6 +1462,455 @@ async function refreshExtensionDeliveryConsole() {
   await refreshExtensionDeliverySettings();
   await refreshExtensionDeliveries();
 }
+
+async function refreshMembershipFulfillmentConsole() {
+  const payload = await api("/api/admin/membership-fulfillment/settings");
+  const settings = payload.settings || {};
+  const dependencies = settings.dependencies || {};
+  refs.membershipOpenApiBase.value = dependencies.openApiBaseUrl || "";
+  refs.membershipAppId.value = settings.appId || "";
+  refs.membershipAppSecret.value = "";
+  refs.membershipAppSecret.placeholder = settings.hasAppSecret
+    ? "app_secret 已加密保存；留空保持不变"
+    : "sk_...；首次配置必填";
+  refs.membershipClearAppSecret.checked = false;
+  refs.membershipWebhookSecret.value = "";
+  refs.membershipWebhookSecret.placeholder = settings.hasWebhookSecret
+    ? "Webhook 密钥已加密保存；留空保持不变"
+    : "whsec_...；配置回调后填写";
+  refs.membershipClearWebhookSecret.checked = false;
+  refs.membershipStateProviderUrl.value = dependencies.membershipStateProviderUrl || "";
+  refs.membershipCheckoutBrokerUrl.value = dependencies.checkoutBrokerUrl || "";
+  if (refs.membershipRolloutMode) refs.membershipRolloutMode.value = settings.rolloutMode || "disabled";
+  refs.membershipFulfillmentStatus.innerHTML = `
+    <div>付款 Gate：<strong>${settings.paymentGateLocked ? "锁定（安全默认）" : (settings.enabled ? "已启用" : "已停用")}</strong></div>
+    <div>Rollout 模式：<code>${escapeHtml(settings.rolloutMode || "disabled")}</code></div>
+    <div>OpenAPI app_secret：<strong>${settings.hasAppSecret ? "已配置" : "未配置"}</strong></div>
+    <div>Webhook 密钥：<strong>${settings.hasWebhookSecret ? "已配置" : "未配置"}</strong></div>
+    <div>GPT Token：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
+    <div>Extension Token：<strong>${dependencies.hasExtensionToken ? "已配置" : "未配置"}</strong></div>
+    <div>绑定扩展：<code>${escapeHtml(dependencies.boundInstallationId || "未绑定")}</code></div>
+    <div>库存初始化：<strong>${escapeHtml(settings.inventoryStatus || "not_started")}</strong></div>
+    <div>业务时区：${escapeHtml(settings.businessTimezone || "Asia/Shanghai")}</div>
+    <div>更新时间：${escapeHtml(settings.updatedAt || "-")}</div>
+  `;
+  await Promise.all([
+    refreshMembershipFulfillments(),
+    refreshMembershipInventoryConsole(settings),
+    refreshMembershipPriceContracts(),
+    refreshMembershipProductPolicies(),
+    refreshMembershipNoChargeRuns(),
+    refreshMembershipCircuits(),
+    refreshMembershipCanaryAuthorizations(),
+    refreshMembershipQualifications(),
+    refreshMembershipAutomaticScopes(),
+    refreshMembershipInterventions()
+  ]);
+}
+
+async function refreshMembershipFulfillments() {
+  const payload = await api("/api/admin/membership-fulfillments?limit=200");
+  renderTable(refs.membershipFulfillmentList, [
+    {
+      label: "订单 / 履约",
+      render: (item) => `<strong>${escapeHtml(item.orderNo)}</strong><br/><code>${escapeHtml(item.id)}</code>`
+    },
+    {
+      label: "目标 / 状态",
+      render: (item) => `<strong>${escapeHtml(item.targetTier)}</strong><br/><code>${escapeHtml(item.state)}</code>`
+    },
+    {
+      label: "阶段 / 模式",
+      render: (item) => `<code>${escapeHtml(item.currentStage || "-")}</code><br/><span class="hint">${escapeHtml(item.runMode || "-")}</span>`
+    },
+    {
+      label: "版本",
+      render: (item) => `状态 ${Number(item.stateRevision) || 0}<br/><span class="hint">恢复 ${Number(item.resumeRevision) || 0} / 租约 ${item.browserLeaseEpoch ?? "-"}</span>`
+    },
+    {
+      label: "阻塞信息",
+      render: (item) => `<code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span>`
+    },
+    {
+      label: "更新时间",
+      render: (item) => `<span class="hint">${escapeHtml(item.updatedAt || "-")}</span>`
+    },
+    {
+      label: "操作",
+      render: (item) => {
+        const actions = [
+          `<button class="ghost-btn small" type="button" onclick='viewMembershipFulfillment(${JSON.stringify(item.id)})'>详情</button>`
+        ];
+        if (["PLUS_APPROVAL_WAIT", "UPGRADE_APPROVAL_WAIT"].includes(item.state)) {
+          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCanaryPreparation(${JSON.stringify(item.id)})'>载入批准</button>`);
+        }
+        if (item.state === "FUNDING_READY" && !item.runMode) {
+          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCanaryStart(${JSON.stringify(item.id)})'>准备 Canary</button>`);
+        }
+        if (item.state === "COMPLETED" && item.runMode === "canary") {
+          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipQualification(${JSON.stringify(item.id)})'>资格检查</button>`);
+        }
+        if (item.state === "PARTIAL_FULFILLMENT_EXPIRED") {
+          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCompensation(${JSON.stringify(item.id)})'>记录补偿</button>`);
+        }
+        return actions.join(" ");
+      }
+    }
+  ], payload.items || [], "暂无会员履约记录");
+  renderMembershipCanaryPreparations(payload.items || []);
+  setHint(refs.membershipFulfillmentListResult, `已读取 ${payload.items?.length || 0} 条脱敏履约记录`);
+}
+
+function membershipCanaryPreparation(item = {}) {
+  const source = item.canaryPreparation || item.pagePreparation || item.paymentStage || {};
+  const stage = source.stage || source.stageKey
+    || (item.state === "UPGRADE_APPROVAL_WAIT" ? "upgrade" : "plus");
+  return {
+    fulfillmentId: item.id || source.fulfillmentId || "",
+    orderNo: item.orderNo || source.orderNo || "",
+    targetTier: item.targetTier || source.targetTier || "",
+    state: item.state || source.state || "",
+    stage,
+    cardId: source.cardId || source.selectedCardId || "",
+    fundingBudgetUsd: source.fundingBudgetUsd ?? "",
+    priceContractId: source.priceContractId || "",
+    adapterVersion: source.adapterVersion || "",
+    pageFingerprint: source.pageFingerprint || "",
+    preparedAt: source.preparedAt || source.updatedAt || item.updatedAt || "",
+    ready: source.ready === true
+  };
+}
+
+function renderMembershipCanaryPreparations(items = []) {
+  const readyItems = items
+    .filter((item) => ["PLUS_APPROVAL_WAIT", "UPGRADE_APPROVAL_WAIT"].includes(item.state))
+    .map(membershipCanaryPreparation);
+  membershipPreparedCanaries = new Map(readyItems.map((item) => [item.fulfillmentId, item]));
+  renderTable(refs.membershipCanaryReadyList, [
+    { label: "订单 / 履约", render: (item) => `<strong>${escapeHtml(item.orderNo || "-")}</strong><br/><code>${escapeHtml(maskMembershipIdentifier(item.fulfillmentId))}</code>` },
+    { label: "目标 / 阶段", render: (item) => `<strong>${escapeHtml(item.targetTier || "-")}</strong><br/><code>${escapeHtml(item.stage)}</code>` },
+    { label: "页面准备", render: (item) => item.pageFingerprint
+      ? `最终快照已就绪<br/><code>${escapeHtml(maskMembershipIdentifier(item.pageFingerprint))}</code>`
+      : `审批等待态<br/><span class="hint">载入后补齐服务端脱敏快照</span>` },
+    { label: "版本 / 预算", render: (item) => `<code>${escapeHtml(item.adapterVersion || "-")}</code><br/><span class="hint">契约 ${escapeHtml(maskMembershipIdentifier(item.priceContractId))} / $${item.fundingBudgetUsd === "" ? "-" : Number(item.fundingBudgetUsd).toFixed(2)}</span>` },
+    { label: "准备时间", render: (item) => `<span class="hint">${escapeHtml(item.preparedAt || "-")}</span>` },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='loadMembershipCanaryPreparation(${JSON.stringify(item.fulfillmentId)})'>载入并核对</button>` }
+  ], readyItems, "当前没有等待管理员批准的 Canary 页面", { paginate: false });
+}
+
+function fillMembershipCanaryForm(preparation = {}) {
+  refs.membershipCanaryFulfillment.value = preparation.fulfillmentId || "";
+  refs.membershipCanaryStage.value = preparation.stage === "upgrade" ? "upgrade" : "plus";
+  refs.membershipCanaryCard.value = preparation.cardId || "";
+  refs.membershipCanaryBudget.value = preparation.fundingBudgetUsd ?? "";
+  refs.membershipCanaryContract.value = preparation.priceContractId || "";
+  refs.membershipCanaryAdapter.value = preparation.adapterVersion || "";
+  refs.membershipCanaryFingerprint.value = preparation.pageFingerprint || "";
+  refs.membershipCanaryConfirm.checked = false;
+  refs.membershipCanarySubmit.disabled = preparation.ready !== true;
+  refs.membershipCanaryFulfillment.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function loadMembershipCanaryPreparation(id) {
+  let preparation = membershipPreparedCanaries.get(id);
+  try {
+    const payload = await api(`/api/admin/live-canary-authorizations?fulfillmentId=${encodeURIComponent(id)}`);
+    const serverPreparation = payload.canaryPreparation || {};
+    preparation = membershipCanaryPreparation({
+      ...(preparation || {}),
+      id,
+      canaryPreparation: serverPreparation
+    });
+    membershipPreparedCanaries.set(id, preparation);
+    setHint(
+      refs.membershipCanaryResult,
+      serverPreparation.ready === true
+        ? "已载入服务端脱敏最终快照，请逐项核对后重新验密批准"
+        : `页面快照尚未就绪${serverPreparation.reasonCode ? `（${serverPreparation.reasonCode}）` : ""}`
+    );
+  } catch (error) {
+    setHint(refs.membershipCanaryResult, membershipAdminError(error));
+  }
+  if (preparation) fillMembershipCanaryForm(preparation);
+}
+
+function loadMembershipCanaryStart(id) {
+  refs.membershipCanaryStartFulfillment.value = String(id || "");
+  refs.membershipCanaryStartConfirm.checked = false;
+  refs.membershipCanaryStartFulfillment.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function loadMembershipQualification(id) {
+  refs.membershipQualificationFulfillment.value = id || "";
+  refs.membershipQualificationFulfillment.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function loadMembershipCompensation(id) {
+  refs.membershipCompensationFulfillment.value = id || "";
+  refs.membershipCompensationConfirm.checked = false;
+  refs.membershipCompensationFulfillment.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function viewMembershipFulfillment(id) {
+  if (!refs.membershipFulfillmentDetail) return;
+  refs.membershipFulfillmentDetail.textContent = "正在读取履约详情…";
+  try {
+    const payload = await api(`/api/admin/membership-fulfillments/${encodeURIComponent(id)}`);
+    const item = payload.item || {};
+    const projection = payload.customerProjection || {};
+    refs.membershipFulfillmentDetail.innerHTML = `
+      <div class="grid grid-2">
+        <div><strong>订单：</strong>${escapeHtml(item.orderNo || "-")}<br/><span class="hint">履约 ${escapeHtml(item.id || "-")}</span></div>
+        <div><strong>目标：</strong>${escapeHtml(item.targetTier || "-")}<br/><span class="hint">客户状态 ${escapeHtml(projection.label || "-")}</span></div>
+        <div><strong>状态：</strong><code>${escapeHtml(item.state || "-")}</code><br/><span class="hint">阶段 ${escapeHtml(item.currentStage || "-")} / 模式 ${escapeHtml(item.runMode || "-")}</span></div>
+        <div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">浏览器租约 ${item.browserLeaseEpoch ?? "-"}</span></div>
+        <div><strong>失败码：</strong><code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span></div>
+        <div><strong>时间：</strong>${escapeHtml(item.updatedAt || "-")}<br/><span class="hint">完成 ${escapeHtml(item.completedAt || "-")}</span></div>
+      </div>
+      <div data-membership-fulfillment-attempts class="table-wrapper mt-24"></div>
+    `;
+    renderTable(refs.membershipFulfillmentDetail.querySelector("[data-membership-fulfillment-attempts]"), [
+      { label: "阶段 / 次数", render: (attempt) => `<strong>${escapeHtml(attempt.stage)}</strong> / ${Number(attempt.attemptNo) || 0}` },
+      { label: "版本", render: (attempt) => `<code>${escapeHtml(attempt.adapterVersion || "-")}</code><br/><span class="hint">价格 ${attempt.priceContractVersion ?? "-"} / 恢复 ${Number(attempt.resumeRevision) || 0}</span>` },
+      { label: "结果", render: (attempt) => `<code>${escapeHtml(attempt.outcomeCode || "进行中")}</code>` },
+      { label: "时间", render: (attempt) => `<span class="hint">${escapeHtml(attempt.startedAt || "-")}<br/>${escapeHtml(attempt.endedAt || "-")}</span>` }
+    ], payload.attempts || [], "暂无阶段尝试", { paginate: false });
+    refs.membershipFulfillmentDetail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    refs.membershipFulfillmentDetail.textContent = `履约详情加载失败：${error.message}`;
+  }
+}
+
+async function refreshMembershipInventoryConsole(settings = {}) {
+  const [runPayload, cardsPayload] = await Promise.all([
+    api("/api/admin/membership-inventory/runs/current"),
+    api("/api/admin/membership-cards?limit=200")
+  ]);
+  const run = runPayload.run;
+  const running = run && ["discovering", "reconciling"].includes(run.status);
+  refs.membershipInventoryInitialize.disabled = running || !settings.hasAppSecret;
+  refs.membershipInventoryRefresh.disabled = running || settings.inventoryStatus !== "completed";
+  refs.membershipInventoryProgress.innerHTML = run ? `
+    <div>任务：<code>${escapeHtml(run.id)}</code> / ${escapeHtml(run.mode || "full")}</div>
+    <div>状态：<strong>${escapeHtml(run.status)}</strong></div>
+    <div>发现：${Number(run.discoveredCards) || 0} / ${run.totalCards == null ? "?" : Number(run.totalCards)}</div>
+    <div>处理：${Number(run.processedCards) || 0}，HOLD：${Number(run.heldCards) || 0}</div>
+    <div>最后错误：${escapeHtml(run.lastErrorCode || settings.lastInventoryError || "-")}</div>
+    <div>更新时间：${escapeHtml(run.updatedAt || "-")}</div>
+  ` : "暂无库存初始化记录。";
+
+  renderTable(refs.membershipCardList, [
+    { label: "卡片", render: (item) => `<code>${escapeHtml(item.display || "-")}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamCardId)}</span>` },
+    { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode || "-")}</code>` },
+    { label: "上游状态", render: (item) => renderStatus(item.upstreamStatus || "-") },
+    { label: "余额", render: (item) => `$${Number(item.availableAmount || 0).toFixed(2)}` },
+    { label: "Lane / 容量", render: (item) => `${escapeHtml(item.lane || "未分配")} / ${Number(item.consumedSlots) || 0}<br/><span class="hint">${escapeHtml(item.capacityState || "-")}</span>` },
+    { label: "对账", render: (item) => `${escapeHtml(item.reconciliationState || "-")}<br/><span class="hint">${escapeHtml(item.reconciliationReason || "-")}</span>` },
+    { label: "三档行情", render: (item) => (item.prices || []).map((price) => `
+      <div>${escapeHtml(price.tier)}：${price.found ? `$${Number(price.amount).toFixed(2)}` : "无"}<br/><span class="hint">${escapeHtml(price.providerTime || "-")}</span></div>
+    `).join("") || "-" },
+    { label: "同步时间", render: (item) => `<span class="hint">余额 ${escapeHtml(item.lastBalanceSyncAt || "-")}<br/>交易 ${escapeHtml(item.lastTransactionSyncAt || "-")}</span>` }
+  ], cardsPayload.items || [], "暂无已初始化卡片");
+  setHint(refs.membershipCardListResult, `已读取 ${cardsPayload.items?.length || 0} 张脱敏卡片`);
+}
+
+async function refreshMembershipPriceContracts() {
+  const payload = await api("/api/admin/checkout-price-contracts");
+  renderTable(refs.membershipPriceContractList, [
+    { label: "套餐", render: (item) => `<strong>${escapeHtml(item.tier)}</strong><br/><span class="hint">v${Number(item.version) || 0}</span><br/><code>${escapeHtml(item.id)}</code>` },
+    { label: "PHP 范围", render: (item) => `${Number(item.minAmount).toFixed(2)} - ${Number(item.maxAmount).toFixed(2)}` },
+    { label: "状态", render: (item) => renderStatus(item.status) },
+    { label: "创建", render: (item) => `${escapeHtml(item.createdBy || "-")}<br/><span class="hint">${escapeHtml(item.createdAt || "-")}</span>` },
+    { label: "操作", render: (item) => item.status === "draft"
+      ? `<button class="ghost-btn small" type="button" onclick='activateMembershipPriceContract(${JSON.stringify(item.id)})'>激活</button>`
+      : "-" }
+  ], payload.items || [], "暂无 PHP 价格契约");
+}
+
+async function refreshMembershipProductPolicies() {
+  const payload = await api("/api/admin/card-product-policies");
+  renderTable(refs.membershipProductPolicyList, [
+    { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode)}</code><br/><span class="hint">现有 ${Number(item.existingCardCount) || 0} / READY ${Number(item.readyCardCount) || 0}</span>` },
+    { label: "新鲜行情证明", render: (item) => ["plus", "x5", "x20"].map((tier) => `${tier}: ${item.provenTiers?.[tier] ? "✓" : "—"}`).join("<br/>") },
+    { label: "策略", render: (item) => `${item.enabled ? "已允许" : "未允许"}<br/><span class="hint">revision ${Number(item.revision) || 0}</span>` },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" ${!item.enabled && !item.canEnable ? "disabled" : ""} onclick='setMembershipProductPolicy(${JSON.stringify(item.productCode)}, ${item.enabled ? "false" : "true"})'>${item.enabled ? "停用" : "允许"}</button>` }
+  ], payload.items || [], "库存中尚未发现卡产品");
+  setHint(refs.membershipProductPolicyResult, `已读取 ${payload.items?.length || 0} 个产品策略；该操作不会开卡或充值`);
+}
+
+async function refreshMembershipNoChargeRuns() {
+  const payload = await api("/api/admin/checkout-validation-runs?limit=100");
+  renderTable(refs.membershipNoChargeList, [
+    { label: "范围", render: (item) => `<strong>${escapeHtml(item.tier)}</strong><br/><code>${escapeHtml(item.siteId)}</code><br/><code>${escapeHtml(item.productId)}</code>` },
+    { label: "版本", render: (item) => `<code>${escapeHtml(item.adapterVersion)}</code><br/><span class="hint">${escapeHtml(item.priceContractId)}</span>` },
+    { label: "显示价", render: (item) => `${escapeHtml(item.result?.currency || "-")} ${Number(item.result?.displayedAmount || 0).toFixed(2)}` },
+    { label: "结果", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">${escapeHtml((item.result?.failedChecks || []).join(", ") || "全部白名单检查通过")}</span>` },
+    { label: "记录", render: (item) => `${escapeHtml(item.createdBy || "-")}<br/><span class="hint">${escapeHtml(item.completedAt || item.startedAt || "-")}</span>` }
+  ], payload.items || [], "暂无无扣款验证记录");
+}
+
+async function refreshMembershipCircuits() {
+  const payload = await api("/api/admin/fulfillment-circuits");
+  renderTable(refs.membershipCircuitList, [
+    { label: "依赖 / 范围", render: (item) => `<strong>${escapeHtml(item.dependency)}</strong><br/><code>${escapeHtml(item.scopeKey)}</code>` },
+    { label: "状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">失败 ${Number(item.failureCount) || 0} / 恢复 ${Number(item.recoveryRevision) || 0}</span>` },
+    { label: "原因", render: (item) => `${escapeHtml(item.reasonCode || "-")}<br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span>` },
+    { label: "操作", render: (item) => item.state === "open"
+      ? `<button class="ghost-btn small" type="button" onclick='requestMembershipCircuitProbe(${JSON.stringify(item.id)})'>请求探测</button>`
+      : "-" }
+  ], payload.items || [], "当前没有依赖熔断记录");
+}
+
+async function refreshMembershipCanaryAuthorizations() {
+  const payload = await api("/api/admin/live-canary-authorizations");
+  renderTable(refs.membershipCanaryAuthorizationList, [
+    { label: "批准 / 履约", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.id))}</code><br/><span class="hint">${escapeHtml(maskMembershipIdentifier(item.fulfillmentId))}</span>` },
+    { label: "目标 / 阶段", render: (item) => `<strong>${escapeHtml(item.targetTier || "-")}</strong><br/><code>${escapeHtml(item.stage || item.stageKey || "-")}</code>` },
+    { label: "快照绑定", render: (item) => `卡片 <code>${escapeHtml(maskMembershipIdentifier(item.selectedCardId || item.cardId))}</code><br/><span class="hint">预算 $${Number(item.fundingBudgetUsd || 0).toFixed(2)}</span>` },
+    { label: "精确版本", render: (item) => `<code>${escapeHtml(item.adapterVersion || "-")}</code><br/><span class="hint">契约 ${escapeHtml(maskMembershipIdentifier(item.priceContractId))} / v${item.priceContractVersion ?? "-"}</span>` },
+    { label: "状态", render: (item) => `${renderStatus(item.state || "-")}<br/><span class="hint">到期 ${escapeHtml(item.expiresAt || "-")}</span>` },
+    { label: "审批", render: (item) => `${escapeHtml(item.approvedBy || "-")}<br/><span class="hint">${escapeHtml(item.approvedAt || "-")}</span>` }
+  ], payload.items || [], "暂无 Canary 批准记录");
+}
+
+async function refreshMembershipQualifications() {
+  const payload = await api("/api/admin/tier-rollout-qualifications");
+  renderTable(refs.membershipQualificationList, [
+    { label: "会员类型", render: (item) => `<strong>${escapeHtml(item.tier || "-")}</strong>` },
+    { label: "Adapter", render: (item) => `<code>${escapeHtml(item.adapterVersion || "-")}</code><br/><span class="hint">${escapeHtml(item.adapterPath || "-")}</span>` },
+    { label: "价格契约", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.priceContractId))}</code><br/><span class="hint">v${item.priceContractVersion ?? "-"}</span>` },
+    { label: "证据履约", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.fulfillmentId))}</code><br/><span class="hint">${escapeHtml(item.settlement || "COMPLETE")} / 续费已关闭</span>` },
+    { label: "取得时间", render: (item) => `<span class="hint">${escapeHtml(item.qualifiedAt || "-")}</span>` }
+  ], payload.items || [], "尚未取得分层上线资格");
+}
+
+async function refreshMembershipAutomaticScopes() {
+  const payload = await api("/api/admin/automatic-checkout-scopes");
+  const items = payload.items || [];
+  membershipAutomaticScopes = new Map(items.map((item) => [item.id, item]));
+  renderTable(refs.membershipAutomaticScopeList, [
+    { label: "范围 / 修订", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.id))}</code><br/><span class="hint">revision ${Number(item.revision) || 0}</span>` },
+    { label: "精确业务范围", render: (item) => `<code>${escapeHtml(item.siteId || "-")}</code><br/><code>${escapeHtml(item.productId || "-")}</code><br/><strong>${escapeHtml(item.tier || "-")}</strong>` },
+    { label: "版本绑定", render: (item) => `<code>${escapeHtml(item.adapterVersion || "-")}</code><br/><span class="hint">契约 ${escapeHtml(maskMembershipIdentifier(item.priceContractId))} / v${item.priceContractVersion ?? "-"}</span>` },
+    { label: "每日上限", render: (item) => `${Number(item.dailyOrderLimit) || 0} 单<br/><span class="hint">风险 $${Number(item.dailyRiskLimitUsd || 0).toFixed(2)}</span>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status || "-")}<br/><span class="hint">启用 ${escapeHtml(item.activatedAt || "-")}</span>` },
+    {
+      label: "操作",
+      render: (item) => [
+        `<button class="ghost-btn small" type="button" onclick='loadMembershipAutomaticScopeRevision(${JSON.stringify(item.id)})'>载入修订</button>`,
+        item.status !== "disabled"
+          ? `<button class="ghost-btn small" type="button" onclick='disableMembershipAutomaticScope(${JSON.stringify(item.id)})'>停用范围</button>`
+          : ""
+      ].filter(Boolean).join(" ")
+    }
+  ], items, "尚未创建 Automatic Checkout 范围");
+}
+
+function loadMembershipAutomaticScopeRevision(id) {
+  const item = membershipAutomaticScopes.get(id);
+  if (!item) return setHint(refs.membershipAutomaticScopeResult, "请先刷新范围列表");
+  refs.membershipAutomaticRevisionId.value = item.id || "";
+  refs.membershipAutomaticRevisionOrderLimit.value = Number(item.dailyOrderLimit) || 1;
+  refs.membershipAutomaticRevisionOrderLimit.min = String(Number(item.dailyOrderLimit) || 1);
+  refs.membershipAutomaticRevisionRiskLimit.value = Number(item.dailyRiskLimitUsd) || "";
+  refs.membershipAutomaticRevisionRiskLimit.min = String(Number(item.dailyRiskLimitUsd) || 0.01);
+  refs.membershipAutomaticRevisionAdapter.value = "";
+  refs.membershipAutomaticRevisionContract.value = "";
+  refs.membershipAutomaticRevisionConfirm.checked = false;
+  refs.membershipAutomaticRevisionId.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function disableMembershipAutomaticScope(id) {
+  if (!window.confirm("确认停用该精确自动范围？尚未跨资金边界的新动作将停止；已跨边界的履约只继续安全对账和续费保护。")) return;
+  try {
+    await api(`/api/admin/automatic-checkout-scopes/${encodeURIComponent(id)}/disable`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.membershipAutomaticScopeResult, "自动范围已停用；没有执行资金或卡片动作");
+    await refreshMembershipAutomaticScopes();
+  } catch (error) {
+    setHint(refs.membershipAutomaticScopeResult, membershipAdminError(error));
+  }
+}
+
+async function refreshMembershipInterventions() {
+  const payload = await api("/api/admin/fulfillment-interventions?limit=200");
+  renderTable(refs.membershipInterventionList, [
+    { label: "履约 / 提醒", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.fulfillmentId))}</code><br/><span class="hint">${escapeHtml(maskMembershipIdentifier(item.id))}</span>` },
+    { label: "状态版本", render: (item) => `<code>${escapeHtml(item.state || "-")}</code><br/><span class="hint">revision ${Number(item.stateRevision) || 0}</span>` },
+    { label: "原因", render: (item) => `<code>${escapeHtml(item.reasonCode || "-")}</code>` },
+    { label: "通知", render: (item) => `${escapeHtml(item.feishuStatus || "-")}<br/><span class="hint">${escapeHtml(item.feishuSentAt || item.createdAt || "-")}</span>` },
+    { label: "确认", render: (item) => item.acknowledgedAt
+      ? `${escapeHtml(item.acknowledgedBy || "-")}<br/><span class="hint">${escapeHtml(item.acknowledgedAt)}</span>`
+      : `<button class="ghost-btn small" type="button" onclick='acknowledgeMembershipIntervention(${JSON.stringify(item.id)})'>确认收到</button>` }
+  ], payload.items || [], "当前没有履约人工介入提醒");
+}
+
+async function acknowledgeMembershipIntervention(id) {
+  try {
+    await api(`/api/admin/fulfillment-interventions/${encodeURIComponent(id)}/ack`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.membershipInterventionResult, "已记录确认收到；履约工作流状态未改变");
+    await refreshMembershipInterventions();
+  } catch (error) {
+    setHint(refs.membershipInterventionResult, membershipAdminError(error));
+  }
+}
+
+async function activateMembershipPriceContract(id) {
+  if (!window.confirm("确认激活该 PHP 价格契约？同套餐旧契约会退役，未来自动范围会保持暂停。")) return;
+  try {
+    await api(`/api/admin/checkout-price-contracts/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.membershipPriceContractResult, "价格契约已激活");
+    await refreshMembershipPriceContracts();
+  } catch (error) {
+    setHint(refs.membershipPriceContractResult, error.message);
+  }
+}
+
+async function setMembershipProductPolicy(productCode, enabled) {
+  try {
+    await api("/api/admin/card-product-policies", {
+      method: "PUT",
+      body: JSON.stringify({ items: [{ productCode, enabled }] })
+    });
+    setHint(refs.membershipProductPolicyResult, enabled ? "产品已加入允许列表；仍不会自动开卡" : "产品已从允许列表停用");
+    await refreshMembershipProductPolicies();
+  } catch (error) {
+    setHint(refs.membershipProductPolicyResult, error.message);
+  }
+}
+
+async function requestMembershipCircuitProbe(id) {
+  try {
+    await api(`/api/admin/fulfillment-circuits/${encodeURIComponent(id)}/probe`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.membershipCircuitResult, "只读半开探测已排队，等待 Worker 执行");
+    await refreshMembershipCircuits();
+  } catch (error) {
+    setHint(refs.membershipCircuitResult, error.message);
+  }
+}
+
+window.activateMembershipPriceContract = activateMembershipPriceContract;
+window.setMembershipProductPolicy = setMembershipProductPolicy;
+window.requestMembershipCircuitProbe = requestMembershipCircuitProbe;
+window.viewMembershipFulfillment = viewMembershipFulfillment;
+window.loadMembershipCanaryPreparation = loadMembershipCanaryPreparation;
+window.loadMembershipCanaryStart = loadMembershipCanaryStart;
+window.loadMembershipQualification = loadMembershipQualification;
+window.loadMembershipCompensation = loadMembershipCompensation;
+window.loadMembershipAutomaticScopeRevision = loadMembershipAutomaticScopeRevision;
+window.disableMembershipAutomaticScope = disableMembershipAutomaticScope;
+window.acknowledgeMembershipIntervention = acknowledgeMembershipIntervention;
 
 async function runExtensionTokenAction(action) {
   const labels = { generate: "生成", reset: "重置", revoke: "撤销" };
@@ -4437,7 +5022,8 @@ async function refreshAll() {
     refreshQuotaSubCards(),
     refreshSub2ApiConsole(),
     refreshStoreFulfillmentConsole(),
-    refreshExtensionDeliveryConsole()
+    refreshExtensionDeliveryConsole(),
+    refreshMembershipFulfillmentConsole()
   ]);
 }
 
@@ -4605,6 +5191,402 @@ refs.extensionDeliveryListRefresh?.addEventListener("click", async () => {
     setHint(refs.extensionDeliveryListResult, error.message);
   } finally {
     setButtonBusy(refs.extensionDeliveryListRefresh, false);
+  }
+});
+
+refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/admin/membership-fulfillment/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        appId: refs.membershipAppId.value.trim() || null,
+        appSecret: refs.membershipAppSecret.value.trim(),
+        clearAppSecret: refs.membershipClearAppSecret.checked,
+        webhookSecret: refs.membershipWebhookSecret.value.trim(),
+        clearWebhookSecret: refs.membershipClearWebhookSecret.checked
+      })
+    });
+    setHint(refs.membershipFulfillmentSettingsResult, "会员履约基础凭据已加密保存；付款 Gate 仍保持锁定");
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipFulfillmentSettingsResult, error.message);
+  }
+});
+
+refs.membershipFulfillmentRefresh?.addEventListener("click", () => {
+  refreshMembershipFulfillmentConsole().catch((error) => setHint(refs.membershipFulfillmentSettingsResult, error.message));
+});
+
+refs.membershipFulfillmentListRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipFulfillmentListRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipFulfillments();
+    setHint(refs.membershipFulfillmentListResult, `会员履约列表已刷新：${new Date().toLocaleTimeString()}`);
+  } catch (error) {
+    setHint(refs.membershipFulfillmentListResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipFulfillmentListRefresh, false);
+  }
+});
+
+refs.membershipInventoryInitialize?.addEventListener("click", async () => {
+  if (!window.confirm("确认开始完整卡片库存初始化？完成前不会启用自动选卡。")) return;
+  setButtonBusy(refs.membershipInventoryInitialize, true, "启动中...");
+  try {
+    await api("/api/admin/membership-inventory/initialize", { method: "POST", body: JSON.stringify({}) });
+    setHint(refs.membershipCardListResult, "库存初始化已启动，Worker 将断点处理全部卡片");
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipCardListResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipInventoryInitialize, false);
+  }
+});
+
+refs.membershipInventoryRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipInventoryRefresh, true, "启动中...");
+  try {
+    await api("/api/admin/membership-inventory/refresh", { method: "POST", body: JSON.stringify({}) });
+    setHint(refs.membershipCardListResult, "库存、余额、交易和行情刷新已启动");
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipCardListResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipInventoryRefresh, false);
+  }
+});
+
+refs.membershipCardListRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipCardListRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipCardListResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipCardListRefresh, false);
+  }
+});
+
+refs.membershipPriceContractForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const minAmount = Number(refs.membershipPriceContractMin.value);
+  const maxAmount = Number(refs.membershipPriceContractMax.value);
+  try {
+    await api("/api/admin/checkout-price-contracts", {
+      method: "POST",
+      body: JSON.stringify({
+        tier: refs.membershipPriceContractTier.value,
+        minAmount,
+        maxAmount
+      })
+    });
+    refs.membershipPriceContractMin.value = "";
+    refs.membershipPriceContractMax.value = "";
+    setHint(refs.membershipPriceContractResult, "价格契约草稿已新增，请核对后手动激活");
+    await refreshMembershipPriceContracts();
+  } catch (error) {
+    setHint(refs.membershipPriceContractResult, error.message);
+  }
+});
+
+refs.membershipProductPolicyRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipProductPolicyRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipProductPolicies();
+  } catch (error) {
+    setHint(refs.membershipProductPolicyResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipProductPolicyRefresh, false);
+  }
+});
+
+refs.membershipNoChargeForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await api("/api/admin/checkout-validation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        siteId: refs.membershipNoChargeSite.value.trim(),
+        productId: refs.membershipNoChargeProduct.value.trim(),
+        tier: refs.membershipNoChargeTier.value,
+        adapterVersion: refs.membershipNoChargeAdapter.value.trim(),
+        priceContractId: refs.membershipNoChargeContract.value.trim(),
+        facts: {
+          originRecognized: refs.membershipNoChargeOrigin.checked,
+          routeRecognized: refs.membershipNoChargeRoute.checked,
+          planRecognized: refs.membershipNoChargePlan.checked,
+          currency: "PHP",
+          displayedAmount: Number(refs.membershipNoChargeAmount.value),
+          requiredFieldsRecognized: refs.membershipNoChargeFields.checked,
+          allowedControlRecognized: refs.membershipNoChargeControl.checked,
+          cardMaterialRequested: false,
+          progressionActivated: false,
+          finalSubmitActivated: false
+        }
+      })
+    });
+    setHint(refs.membershipNoChargeResult, payload.item?.status === "passed" ? "无扣款白名单检查已记录为通过" : "验证记录已保存，但存在未通过检查");
+    await refreshMembershipNoChargeRuns();
+  } catch (error) {
+    setHint(refs.membershipNoChargeResult, error.message);
+  }
+});
+
+refs.membershipCircuitRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipCircuitRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipCircuits();
+  } catch (error) {
+    setHint(refs.membershipCircuitResult, error.message);
+  } finally {
+    setButtonBusy(refs.membershipCircuitRefresh, false);
+  }
+});
+
+refs.membershipRolloutModeForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "验密更新中...");
+  try {
+    const payload = await api("/api/admin/membership-fulfillment/rollout-mode", {
+      method: "POST",
+      body: JSON.stringify({
+        mode: refs.membershipRolloutMode.value,
+        credentials: {
+          username: refs.membershipRolloutAdminUsername.value.trim(),
+          password: refs.membershipRolloutAdminPassword.value
+        }
+      })
+    });
+    refs.membershipRolloutConfirm.checked = false;
+    setHint(refs.membershipRolloutResult, `Rollout Gate 已更新为 ${payload.item?.mode || refs.membershipRolloutMode.value}`);
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipRolloutResult, membershipAdminError(error));
+  } finally {
+    refs.membershipRolloutAdminPassword.value = "";
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.membershipCanaryStartForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  const fulfillmentId = refs.membershipCanaryStartFulfillment.value.trim();
+  setButtonBusy(submitButton, true, "验密准备中...");
+  try {
+    const payload = await api(`/api/admin/membership-fulfillments/${encodeURIComponent(fulfillmentId)}/start-canary`, {
+      method: "POST",
+      body: JSON.stringify({
+        credentials: {
+          username: refs.membershipCanaryStartAdminUsername.value.trim(),
+          password: refs.membershipCanaryStartAdminPassword.value
+        }
+      })
+    });
+    refs.membershipCanaryStartForm.reset();
+    setHint(refs.membershipCanaryStartResult, `${payload.item?.targetTier || "该订单"} Canary 已准备，等待资金编排与页面阶段批准`);
+    await refreshMembershipFulfillments();
+  } catch (error) {
+    setHint(refs.membershipCanaryStartResult, membershipAdminError(error));
+  } finally {
+    refs.membershipCanaryStartAdminPassword.value = "";
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.membershipCanaryRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipCanaryRefresh, true, "刷新中...");
+  try {
+    await Promise.all([refreshMembershipFulfillments(), refreshMembershipCanaryAuthorizations()]);
+    setHint(refs.membershipCanaryResult, "Canary 页面准备态与批准记录已刷新");
+  } catch (error) {
+    setHint(refs.membershipCanaryResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(refs.membershipCanaryRefresh, false);
+  }
+});
+
+refs.membershipCanaryForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "验密批准中...");
+  try {
+    const payload = await api("/api/admin/live-canary-authorizations", {
+      method: "POST",
+      body: JSON.stringify({
+        fulfillmentId: refs.membershipCanaryFulfillment.value.trim(),
+        stage: refs.membershipCanaryStage.value,
+        cardId: refs.membershipCanaryCard.value.trim(),
+        fundingBudgetUsd: Number(refs.membershipCanaryBudget.value),
+        priceContractId: refs.membershipCanaryContract.value.trim(),
+        adapterVersion: refs.membershipCanaryAdapter.value.trim(),
+        pageFingerprint: refs.membershipCanaryFingerprint.value.trim().toLowerCase(),
+        credentials: {
+          username: refs.membershipCanaryAdminUsername.value.trim(),
+          password: refs.membershipCanaryAdminPassword.value
+        }
+      })
+    });
+    refs.membershipCanaryForm.reset();
+    refs.membershipCanarySubmit.disabled = true;
+    setHint(refs.membershipCanaryResult, `当前阶段已单次批准，有效至 ${payload.item?.expiresAt || "15 分钟后"}`);
+    await Promise.all([refreshMembershipFulfillments(), refreshMembershipCanaryAuthorizations()]);
+  } catch (error) {
+    setHint(refs.membershipCanaryResult, membershipAdminError(error));
+  } finally {
+    refs.membershipCanaryAdminPassword.value = "";
+    setButtonBusy(submitButton, false);
+    refs.membershipCanarySubmit.disabled = !refs.membershipCanaryFingerprint.value;
+  }
+});
+
+refs.membershipQualificationRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipQualificationRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipQualifications();
+    setHint(refs.membershipQualificationResult, "分层上线资格已刷新");
+  } catch (error) {
+    setHint(refs.membershipQualificationResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(refs.membershipQualificationRefresh, false);
+  }
+});
+
+refs.membershipQualificationForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "权威检查中...");
+  try {
+    const payload = await api("/api/admin/tier-rollout-qualifications", {
+      method: "POST",
+      body: JSON.stringify({
+        fulfillmentId: refs.membershipQualificationFulfillment.value.trim(),
+        adapterVersion: refs.membershipQualificationAdapter.value.trim(),
+        adapterPath: refs.membershipQualificationPath.value.trim(),
+        priceContractId: refs.membershipQualificationContract.value.trim()
+      })
+    });
+    refs.membershipQualificationForm.reset();
+    setHint(refs.membershipQualificationResult, `${payload.item?.tier || "该层级"} 精确版本已取得上线资格；尚未启用自动范围`);
+    await refreshMembershipQualifications();
+  } catch (error) {
+    setHint(refs.membershipQualificationResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.membershipAutomaticScopeRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipAutomaticScopeRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipAutomaticScopes();
+    setHint(refs.membershipAutomaticScopeResult, "Automatic Checkout 精确范围已刷新");
+  } catch (error) {
+    setHint(refs.membershipAutomaticScopeResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(refs.membershipAutomaticScopeRefresh, false);
+  }
+});
+
+refs.membershipAutomaticScopeForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "验密创建中...");
+  try {
+    await api("/api/admin/automatic-checkout-scopes", {
+      method: "POST",
+      body: JSON.stringify({
+        siteId: refs.membershipAutomaticSite.value.trim(),
+        productId: refs.membershipAutomaticProduct.value.trim(),
+        tier: refs.membershipAutomaticTier.value,
+        adapterVersion: refs.membershipAutomaticAdapter.value.trim(),
+        priceContractId: refs.membershipAutomaticContract.value.trim(),
+        dailyOrderLimit: Number(refs.membershipAutomaticOrderLimit.value),
+        dailyRiskLimitUsd: Number(refs.membershipAutomaticRiskLimit.value),
+        credentials: {
+          username: refs.membershipAutomaticAdminUsername.value.trim(),
+          password: refs.membershipAutomaticAdminPassword.value
+        }
+      })
+    });
+    refs.membershipAutomaticScopeForm.reset();
+    setHint(refs.membershipAutomaticScopeResult, "精确自动范围已创建，初始额度固定为每日 1 单");
+    await refreshMembershipAutomaticScopes();
+  } catch (error) {
+    setHint(refs.membershipAutomaticScopeResult, membershipAdminError(error));
+  } finally {
+    refs.membershipAutomaticAdminPassword.value = "";
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.membershipAutomaticRevisionForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  const id = refs.membershipAutomaticRevisionId.value.trim();
+  if (!id) return setHint(refs.membershipAutomaticScopeResult, "请先从范围列表载入一个修订基线");
+  setButtonBusy(submitButton, true, "验密修订中...");
+  try {
+    const adapterVersion = refs.membershipAutomaticRevisionAdapter.value.trim();
+    const priceContractId = refs.membershipAutomaticRevisionContract.value.trim();
+    await api(`/api/admin/automatic-checkout-scopes/${encodeURIComponent(id)}/increase-limits`, {
+      method: "POST",
+      body: JSON.stringify({
+        dailyOrderLimit: Number(refs.membershipAutomaticRevisionOrderLimit.value),
+        dailyRiskLimitUsd: Number(refs.membershipAutomaticRevisionRiskLimit.value),
+        ...(adapterVersion ? { adapterVersion } : {}),
+        ...(priceContractId ? { priceContractId } : {}),
+        credentials: {
+          username: refs.membershipAutomaticRevisionAdminUsername.value.trim(),
+          password: refs.membershipAutomaticRevisionAdminPassword.value
+        }
+      })
+    });
+    refs.membershipAutomaticRevisionForm.reset();
+    setHint(refs.membershipAutomaticScopeResult, "新修订已创建；原活动修订不再接收新订单");
+    await refreshMembershipAutomaticScopes();
+  } catch (error) {
+    setHint(refs.membershipAutomaticScopeResult, membershipAdminError(error));
+  } finally {
+    refs.membershipAutomaticRevisionAdminPassword.value = "";
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.membershipInterventionRefresh?.addEventListener("click", async () => {
+  setButtonBusy(refs.membershipInterventionRefresh, true, "刷新中...");
+  try {
+    await refreshMembershipInterventions();
+    setHint(refs.membershipInterventionResult, "人工介入提醒已刷新");
+  } catch (error) {
+    setHint(refs.membershipInterventionResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(refs.membershipInterventionRefresh, false);
+  }
+});
+
+refs.membershipCompensationForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  const fulfillmentId = refs.membershipCompensationFulfillment.value.trim();
+  setButtonBusy(submitButton, true, "追加中...");
+  try {
+    await api(`/api/admin/membership-fulfillments/${encodeURIComponent(fulfillmentId)}/compensations`, {
+      method: "POST",
+      body: JSON.stringify({
+        resolutionType: refs.membershipCompensationType.value,
+        evidenceReference: refs.membershipCompensationEvidence.value.trim()
+      })
+    });
+    refs.membershipCompensationForm.reset();
+    setHint(refs.membershipCompensationResult, "外部补偿结果已追加；没有调用任何资金或卡片接口");
+    await refreshMembershipFulfillments();
+  } catch (error) {
+    setHint(refs.membershipCompensationResult, membershipAdminError(error));
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 

@@ -283,7 +283,8 @@ export function createExtensionDeliveryService({
   requireAdmin,
   createAuditLog,
   converter = convertSessionToCookiePayload,
-  now = () => new Date()
+  now = () => new Date(),
+  onDeliverySucceeded = null
 }) {
   const wsRateLimits = new Map();
   const getRateLimits = new Map();
@@ -859,8 +860,42 @@ export function createExtensionDeliveryService({
 
     const outcome = handleResultTransaction(auth, orderNo, body);
     if (outcome.error) return sendError(reply, outcome.error);
+    if (body.status === "succeeded" && outcome.row?.extension_delivery_status === "succeeded") {
+      try {
+        onDeliverySucceeded?.({
+          orderNo,
+          verifiedEmail: normalizeEmail(body.email),
+          at: outcome.row.extension_delivery_updated_at || nowIso()
+        });
+      } catch {
+        // The worker also reconciles succeeded Session Deliveries, so this hint is safely retryable.
+      }
+    }
     setNoStore(reply);
     return finalResultResponse(outcome.row);
+  }
+
+  function publishMembershipNotification(message) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) return false;
+    if (message.type === "membership.available") {
+      const fulfillmentId = String(message.fulfillmentId || "");
+      const revision = Number(message.revision);
+      const createdAt = String(message.createdAt || "");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(fulfillmentId) || !Number.isInteger(revision)
+        || revision < 0 || !isIsoDate(createdAt)) return false;
+      return sendSocket(currentConnection?.socket, {
+        type: "membership.available",
+        fulfillmentId,
+        revision,
+        createdAt: new Date(createdAt).toISOString()
+      });
+    }
+    if (message.type === "membership.resume") {
+      const resumeRevision = Number(message.resumeRevision);
+      if (!Number.isInteger(resumeRevision) || resumeRevision < 0) return false;
+      return sendSocket(currentConnection?.socket, { type: "membership.resume", resumeRevision });
+    }
+    return false;
   }
 
   function websocketAuthFailure(socket, code) {
@@ -1209,9 +1244,11 @@ export function createExtensionDeliveryService({
   });
 
   return {
+    authenticateRequest,
     enrollmentForSite,
     expirePendingDeliveries,
     isSiteEligibleForNewOrder,
+    publishMembershipNotification,
     publishSessionAvailable,
     publishAllEligible,
     serializeSettings

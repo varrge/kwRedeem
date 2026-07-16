@@ -12,7 +12,10 @@
   --accent: #0071e3;
   --success: #248a3d;
   --error: #d70015;
-  --shadow: 0 18px 55px rgba(0, 0, 0, 0.08), 0 2px 10px rgba(0, 0, 0, 0.04);
+  --cyber-cyan: #00b8d9;
+  --cyber-magenta: #d929d7;
+  --cyber-violet: #7c5cff;
+  --shadow: 0 20px 62px rgba(46, 36, 140, 0.1), 0 4px 20px rgba(0, 184, 217, 0.07);
   --sidebar-width: 272px;
 }
 
@@ -29,7 +32,10 @@
     --accent: #2997ff;
     --success: #30d158;
     --error: #ff453a;
-    --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
+    --cyber-cyan: #00e5ff;
+    --cyber-magenta: #ff3bd4;
+    --cyber-violet: #9b7bff;
+    --shadow: 0 24px 76px rgba(0, 0, 0, 0.42), 0 0 34px rgba(0, 229, 255, 0.08), 0 0 48px rgba(255, 59, 212, 0.06);
   }
 }
 
@@ -41,7 +47,9 @@ html {
 
 body {
   background:
-    radial-gradient(circle at 8% -12%, rgba(0, 113, 227, 0.13), transparent 32rem),
+    repeating-linear-gradient(180deg, rgba(0, 184, 217, 0.025) 0 1px, transparent 1px 6px),
+    radial-gradient(circle at 8% -12%, color-mix(in srgb, var(--cyber-cyan) 18%, transparent), transparent 34rem),
+    radial-gradient(circle at 94% 4%, color-mix(in srgb, var(--cyber-magenta) 13%, transparent), transparent 32rem),
     var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -49,14 +57,20 @@ body {
 }
 
 .bg-grid {
-  opacity: 0.12;
-  background-size: 64px 64px;
+  opacity: 0.2;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--cyber-cyan) 14%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--cyber-magenta) 11%, transparent) 1px, transparent 1px);
+  background-size: 72px 72px;
 }
 
 .bg-orb {
   filter: blur(120px);
-  opacity: 0.1;
+  opacity: 0.17;
 }
+
+.orb-a { background: var(--cyber-cyan); }
+.orb-b { background: var(--cyber-magenta); }
 
 .login-wrapper {
   background:
@@ -66,8 +80,11 @@ body {
 
 .login-card {
   border: 1px solid var(--line);
-  border-radius: 28px;
-  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 36px;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(135deg, color-mix(in srgb, var(--cyber-cyan) 52%, transparent), color-mix(in srgb, var(--cyber-magenta) 44%, transparent)) border-box;
   box-shadow: var(--shadow);
   backdrop-filter: blur(26px) saturate(170%);
   -webkit-backdrop-filter: blur(26px) saturate(170%);
@@ -88,8 +105,8 @@ body {
 .brand-mark {
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(145deg, #0a84ff, #0066cc);
+  border-radius: 15px;
+  background: linear-gradient(135deg, var(--cyber-cyan), var(--cyber-violet) 52%, var(--cyber-magenta));
   color: #fff;
   box-shadow: 0 7px 18px rgba(0, 113, 227, 0.22), inset 0 1px rgba(255, 255, 255, 0.32);
 }
@@ -187,9 +204,11 @@ button:active:not(:disabled) {
 .card,
 .notify-rules-block,
 .quota-sub-card-table {
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 30px;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(135deg, color-mix(in srgb, var(--cyber-cyan) 40%, var(--line)), color-mix(in srgb, var(--cyber-violet) 14%, var(--line)) 48%, color-mix(in srgb, var(--cyber-magenta) 34%, var(--line))) border-box;
   box-shadow: var(--shadow);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
@@ -197,9 +216,9 @@ button:active:not(:disabled) {
 
 .stat,
 .notify-rule-row {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cyber-violet) 18%, var(--line));
+  border-radius: 21px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--cyber-cyan) 5%, var(--panel-strong)), color-mix(in srgb, var(--cyber-magenta) 4%, var(--panel-strong)));
 }
 
 .stat strong {
@@ -211,7 +230,7 @@ select,
 textarea {
   min-height: 42px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--control);
   color: var(--text);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.14);
@@ -240,15 +259,15 @@ input[type="radio"] {
 
 .primary-btn {
   border: 1px solid transparent;
-  border-radius: 12px;
-  background: var(--primary);
+  border-radius: 16px;
+  background: linear-gradient(120deg, #0077ed, var(--cyber-violet) 58%, var(--cyber-magenta));
   color: #fff;
-  box-shadow: 0 7px 18px rgba(0, 113, 227, 0.18);
+  box-shadow: 0 8px 22px rgba(65, 74, 225, 0.22), 0 0 20px color-mix(in srgb, var(--cyber-magenta) 10%, transparent);
 }
 
 .primary-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--primary) 88%, white);
-  box-shadow: 0 9px 22px rgba(0, 113, 227, 0.22);
+  background: linear-gradient(120deg, var(--cyber-cyan), var(--cyber-violet) 54%, var(--cyber-magenta));
+  box-shadow: 0 10px 26px rgba(65, 74, 225, 0.25), 0 0 24px color-mix(in srgb, var(--cyber-cyan) 14%, transparent);
   opacity: 1;
   transform: none;
 }
@@ -256,8 +275,8 @@ input[type="radio"] {
 .ghost-btn,
 .icon-btn {
   border-color: var(--line);
-  border-radius: 12px;
-  background: var(--control);
+  border-radius: 16px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--cyber-cyan) 4%, var(--control)), color-mix(in srgb, var(--cyber-magenta) 3%, var(--control)));
   color: var(--text);
 }
 
@@ -320,6 +339,14 @@ code {
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .card:hover,
+  .stat:hover {
+    border-color: color-mix(in srgb, var(--cyber-cyan) 42%, var(--line));
+    box-shadow: var(--shadow), 0 0 24px color-mix(in srgb, var(--cyber-magenta) 8%, transparent);
+  }
+}
+
 @media (max-width: 720px) {
   .main-content {
     padding: 24px 16px 48px;
@@ -327,7 +354,7 @@ code {
 
   .card {
     padding: 18px;
-    border-radius: 18px;
+    border-radius: 25px;
   }
 
   .module-tabs {
@@ -358,6 +385,7 @@ code {
   .notify-rules-block,
   .quota-sub-card-table {
     background: var(--panel-strong);
+    border-color: var(--line);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -372,6 +400,7 @@ code {
   .sidebar,
   .card {
     background: var(--panel-strong);
+    border-color: currentColor;
     border-width: 2px;
   }
 }

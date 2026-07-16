@@ -64,7 +64,7 @@
             <span class="icon">🧩</span> 扩展交付
           </button>
           <button class="nav-item" data-tab="membership-fulfillment">
-            <span class="icon">💳</span> 会员履约
+            <span class="icon">💳</span> 会员自动化
           </button>
           <button class="nav-item" data-tab="sms">
             <span class="icon">📱</span> 接码系统
@@ -118,44 +118,6 @@
             <p>系统运行概览与最近活动</p>
           </div>
           <section class="stats" id="stats"></section>
-          <div class="grid grid-2 mt-24">
-            <div class="card">
-              <div class="card-header"><h3>会员付款 Rollout Gate</h3></div>
-              <form id="membership-rollout-mode-form" class="stack">
-                <label class="field">
-                  <span>运行模式</span>
-                  <select id="membership-rollout-mode">
-                    <option value="disabled">disabled（关闭）</option>
-                    <option value="no_charge">no_charge（仅无扣款验证）</option>
-                    <option value="canary">canary（仅明确选中的单个履约）</option>
-                    <option value="automatic">automatic（仅精确已启用范围）</option>
-                  </select>
-                </label>
-                <div class="grid grid-2">
-                  <label class="field"><span>重新输入管理员账号</span><input id="membership-rollout-admin-username" autocomplete="off" required /></label>
-                  <label class="field"><span>重新输入管理员密码</span><input id="membership-rollout-admin-password" type="password" autocomplete="new-password" required /></label>
-                </div>
-                <label><input id="membership-rollout-confirm" type="checkbox" required /> 我确认模式变更只允许对应受控范围；关闭后已有资金暴露仍只做安全对账</label>
-                <button type="submit" class="primary-btn">重新验密并更新 Gate</button>
-              </form>
-              <div id="membership-rollout-result" class="hint"></div>
-            </div>
-
-            <div class="card">
-              <div class="card-header"><h3>选择下一单 Live Canary</h3></div>
-              <form id="membership-canary-start-form" class="stack">
-                <label class="field"><span>已完成无扣款预检的履约 ID</span><input id="membership-canary-start-fulfillment" autocomplete="off" required /></label>
-                <div class="grid grid-2">
-                  <label class="field"><span>重新输入管理员账号</span><input id="membership-canary-start-admin-username" autocomplete="off" required /></label>
-                  <label class="field"><span>重新输入管理员密码</span><input id="membership-canary-start-admin-password" type="password" autocomplete="new-password" required /></label>
-                </div>
-                <label><input id="membership-canary-start-confirm" type="checkbox" required /> 我确认只将这一笔 FUNDING_READY 履约置为 Canary；后续每个付款阶段仍需再次批准页面快照</label>
-                <button type="submit" class="primary-btn">重新验密并准备该 Canary</button>
-              </form>
-              <div id="membership-canary-start-result" class="hint"></div>
-            </div>
-          </div>
-
           <div class="card mt-24">
             <div class="card-header">
               <h3>最近 5 条日志</h3>
@@ -503,11 +465,49 @@
         <!-- Membership Fulfillment -->
         <section class="tab-panel hidden" data-panel="membership-fulfillment">
           <div class="content-header">
-            <h2>ChatGPT 会员履约</h2>
+            <h2>ChatGPT 会员自动化</h2>
             <p>配置服务端卡片 OpenAPI 基础凭据；付款能力按阶段实施且当前保持锁定</p>
           </div>
 
           <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>会员付款 Rollout Gate</h3></div>
+              <form id="membership-rollout-mode-form" class="stack">
+                <label class="field">
+                  <span>运行模式</span>
+                  <select id="membership-rollout-mode">
+                    <option value="disabled">disabled（关闭）</option>
+                    <option value="no_charge">no_charge（仅无扣款验证）</option>
+                    <option value="canary">canary（仅明确选中的单个履约）</option>
+                    <option value="automatic">automatic（仅精确已启用范围）</option>
+                  </select>
+                </label>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-rollout-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-rollout-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-rollout-confirm" type="checkbox" required /> 我确认模式变更只允许对应受控范围；关闭后已有资金暴露仍只做安全对账</label>
+                <button type="submit" class="primary-btn">重新验密并更新 Gate</button>
+              </form>
+              <div id="membership-rollout-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>选择下一单 Live Canary</h3></div>
+              <form id="membership-canary-start-form" class="stack">
+                <label class="field"><span>已完成无扣款预检的履约 ID</span><input id="membership-canary-start-fulfillment" autocomplete="off" required /></label>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="membership-canary-start-admin-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="membership-canary-start-admin-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="membership-canary-start-confirm" type="checkbox" required /> 我确认只将这一笔 FUNDING_READY 履约置为 Canary；后续每个付款阶段仍需再次批准页面快照</label>
+                <button type="submit" class="primary-btn">重新验密并准备该 Canary</button>
+              </form>
+              <div id="membership-canary-start-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
             <div class="card">
               <div class="card-header"><h3>SpaceX Card OpenAPI</h3></div>
               <form id="membership-fulfillment-settings-form" class="stack">

@@ -254,6 +254,11 @@
         display: grid;
       }
 
+      .reference-zone.dragging .upload-btn {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
       .upload-btn {
         display: flex;
         align-items: center;
@@ -680,7 +685,7 @@
                 <span class="field-label">参考图</span>
                 <span id="reference-count" class="hint">0 / 4</span>
               </div>
-              <label class="upload-btn" for="reference-input">添加参考图</label>
+              <label class="upload-btn" for="reference-input">添加、拖入或粘贴参考图</label>
               <input id="reference-input" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple />
               <p class="hint">支持 PNG / JPG / WebP，单张最大 20MB，最多 4 张。</p>
               <div id="reference-list" class="ref-list"></div>
@@ -736,6 +741,7 @@
       const MAX_REFERENCE_IMAGES = 4;
       const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
       const HISTORY_KEY = "kw_sub2api_image_history_v1";
+      const PENDING_JOB_KEY = "kw_sub2api_image_pending_job_v1";
 
       const refs = {
         accountLine: document.querySelector("#account-line"),
@@ -772,7 +778,8 @@
         lastImages: [],
         account: null,
         connection: null,
-        busy: false
+        busy: false,
+        pendingJobId: ""
       };
 
       function escapeHtml(value) {
@@ -924,6 +931,7 @@
           setStatus("账号识别成功，正在加载图片 Key...", "success");
           await refreshKeys();
           setStatus("");
+          await restorePendingJob();
         } catch (error) {
           refs.accountLine.textContent = "账号识别失败";
           setStatus(error.message, "error");
@@ -1032,7 +1040,73 @@
             showLoading(`任务 ${jobId} 正在生成，当前状态：${job.status || "running"}。`);
           }
         }
-        throw new Error("图片任务等待超时，请稍后刷新结果或重新生成。");
+        const error = new Error("图片仍在生成，可以继续等待，刷新页面也不会丢失这个任务。");
+        error.code = "IMAGE_JOB_WAIT_TIMEOUT";
+        throw error;
+      }
+
+      function rememberPendingJob(jobId, prompt = "") {
+        state.pendingJobId = jobId;
+        localStorage.setItem(PENDING_JOB_KEY, JSON.stringify({ jobId, prompt, savedAt: Date.now() }));
+      }
+
+      function forgetPendingJob() {
+        state.pendingJobId = "";
+        localStorage.removeItem(PENDING_JOB_KEY);
+      }
+
+      function getPendingJob() {
+        try {
+          const pending = JSON.parse(localStorage.getItem(PENDING_JOB_KEY) || "null");
+          return pending?.jobId ? pending : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function renderContinueWaiting(jobId) {
+        refs.stageBody.innerHTML = `
+          <div class="error-box">
+            <div>
+              <h3>图片仍在生成</h3>
+              <p>任务 ${escapeHtml(jobId)} 已保留，可以继续等待或稍后刷新页面。</p>
+              <button class="ghost-btn" type="button" data-action="continue-waiting" data-job-id="${escapeHtml(jobId)}">继续等待</button>
+            </div>
+          </div>
+        `;
+      }
+
+      async function resumeImageJob(jobId) {
+        if (!jobId || state.busy) return;
+        setBusy(true);
+        showLoading(`正在恢复任务 ${jobId}。`);
+        try {
+          const payload = await waitForImageJob(jobId);
+          forgetPendingJob();
+          renderResults(payload);
+          setStatus("生成完成", "success");
+        } catch (error) {
+          if (error.code === "IMAGE_JOB_WAIT_TIMEOUT") {
+            renderContinueWaiting(jobId);
+          } else {
+            forgetPendingJob();
+            renderError(error);
+          }
+          setStatus(error.message, "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function restorePendingJob() {
+        const pending = getPendingJob();
+        if (!pending) return;
+        if (pending.prompt && !refs.promptInput.value) {
+          refs.promptInput.value = pending.prompt;
+          refs.promptCount.textContent = `${pending.prompt.length} / 4000`;
+        }
+        rememberPendingJob(pending.jobId, pending.prompt || "");
+        await resumeImageJob(pending.jobId);
       }
 
       function getImageSrc(image) {
@@ -1220,12 +1294,19 @@
               referenceImages: state.mode === "image" ? state.references.map((item) => item.dataUrl) : []
             })
           });
+          rememberPendingJob(job.jobId, prompt);
           showLoading(`任务 ${job.jobId} 已提交，正在等待 Sub2api 返回结果。`);
           const payload = await waitForImageJob(job.jobId);
+          forgetPendingJob();
           renderResults(payload);
           setStatus("生成完成", "success");
         } catch (error) {
-          renderError(error);
+          if (error.code === "IMAGE_JOB_WAIT_TIMEOUT" && state.pendingJobId) {
+            renderContinueWaiting(state.pendingJobId);
+          } else {
+            forgetPendingJob();
+            renderError(error);
+          }
           setStatus(error.message, "error");
         } finally {
           setBusy(false);
@@ -1236,11 +1317,11 @@
         button.addEventListener("click", () => setMode(button.dataset.mode));
       });
 
-      document.querySelectorAll(".quality-btn").forEach((button) => {
+      document.querySelectorAll("#quality-grid .quality-btn").forEach((button) => {
         button.addEventListener("click", () => {
-          document.querySelectorAll(".quality-btn").forEach((item) => item.classList.remove("active"));
+          document.querySelectorAll("#quality-grid .quality-btn").forEach((item) => item.classList.remove("active"));
           button.classList.add("active");
-          state.quality = getSelectedButtonValue(".quality-btn", "auto");
+          state.quality = getSelectedButtonValue("#quality-grid .quality-btn", "auto");
         });
       });
 
@@ -1289,6 +1370,35 @@
         refs.referenceInput.value = "";
       });
 
+      async function addReferenceFiles(files) {
+        for (const file of Array.from(files || [])) {
+          try {
+            const dataUrl = await readFileAsDataUrl(file);
+            addReference(dataUrl, file.name);
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        }
+      }
+
+      refs.referenceZone.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        refs.referenceZone.classList.add("dragging");
+      });
+      refs.referenceZone.addEventListener("dragleave", () => refs.referenceZone.classList.remove("dragging"));
+      refs.referenceZone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        refs.referenceZone.classList.remove("dragging");
+        void addReferenceFiles(event.dataTransfer?.files);
+      });
+      refs.promptInput.addEventListener("paste", (event) => {
+        const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith("image/"));
+        if (!files.length) return;
+        event.preventDefault();
+        setMode("image");
+        void addReferenceFiles(files);
+      });
+
       refs.referenceList.addEventListener("click", (event) => {
         const button = event.target.closest("[data-id]");
         if (!button) return;
@@ -1304,6 +1414,10 @@
             const item = getHistory()[Number(historyCard.dataset.historyIndex)];
             if (item) showLightbox({ dataUrl: item.image });
           }
+          return;
+        }
+        if (button.dataset.action === "continue-waiting") {
+          void resumeImageJob(button.dataset.jobId || state.pendingJobId);
           return;
         }
         const image = state.lastImages[Number(button.dataset.index)];

@@ -24,6 +24,7 @@ docs/*
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 tests/*
 !tests/store-fulfillment.test.js
+!tests/sub2api-image-page.test.js
 !tests/membership-fulfillment.test.js
 !tests/membership-orchestration.test.js
 !tests/membership-funding.test.js

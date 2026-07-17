@@ -233,6 +233,7 @@ export function reconcileMembershipPaymentStage(db, input = {}) {
     const matched = matchPaymentTransactionDelta({
       beforeAuthIds: snapshot.authIds,
       transactions,
+      tier: stage.expected_tier,
       minUsd: Number(stage.price_signal_min),
       maxUsd: Number(stage.price_signal_max)
     });

@@ -10,6 +10,12 @@ export const membershipCapacityByTier = Object.freeze({ plus: 5, x5: 2, x20: 1 }
 export const membershipStageAllowanceUsd = 0.2;
 export const cardPriceFreshnessMs = 72 * 60 * 60 * 1000;
 export const historicalUpgradePairWindowMs = 2 * 60 * 60 * 1000;
+export const membershipPaymentRecognitionRanges = Object.freeze({
+  plus: Object.freeze({ minUsd: 15, maxUsd: 20 }),
+  x5: Object.freeze({ minUsd: 90, maxUsd: 100 }),
+  // Historical PH x20 settlements can be below the card-segment quote API's current $140 floor.
+  x20: Object.freeze({ minUsd: 120, maxUsd: 160 })
+});
 
 const cardTransactionTypePriority = Object.freeze({
   Authorization: 1,
@@ -267,12 +273,15 @@ export function matchPaymentTransactionDelta(options = {}) {
   if (!Number.isFinite(minUsd) || !Number.isFinite(maxUsd) || minUsd < 0 || maxUsd < minUsd) {
     throw new TypeError("交易金额范围无效");
   }
+  const recognitionRange = membershipPaymentRecognitionRanges[options.tier];
+  const recognizedMinUsd = recognitionRange ? Math.min(minUsd, recognitionRange.minUsd) : minUsd;
+  const recognizedMaxUsd = recognitionRange ? Math.max(maxUsd, recognitionRange.maxUsd) : maxUsd;
   const candidates = latestTransactionByAuthId(options.transactions)
     .filter((item) => !before.has(item.authId))
     .filter(isOpenAiTransaction)
     .filter((item) => {
       const amount = transactionAmount(item);
-      return Number.isFinite(amount) && amount >= minUsd && amount <= maxUsd;
+      return Number.isFinite(amount) && amount >= recognizedMinUsd && amount <= recognizedMaxUsd;
     });
   const effective = candidates.filter((item) => ["PENDING", "COMPLETE"].includes(item.status)
     && !["Refund", "Reversal"].includes(item.type));
@@ -309,10 +318,10 @@ export function rankMembershipCardCandidates(candidates, targetTier) {
 }
 
 function classifyOpenAiTier(amount) {
-  if (amount >= 15 && amount <= 20) return "plus";
-  if (amount >= 90 && amount <= 100) return "x5";
-  if (amount >= 140 && amount <= 160) return "x20";
-  return null;
+  return membershipTiers.find((tier) => {
+    const range = membershipPaymentRecognitionRanges[tier];
+    return amount >= range.minUsd && amount <= range.maxUsd;
+  }) || null;
 }
 
 function foldHistoricalAuthorizations(transactions) {

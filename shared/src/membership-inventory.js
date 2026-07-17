@@ -319,7 +319,12 @@ export function createMembershipInventoryRunner(options) {
     if (!card) throw inventoryError("MANAGED_CARD_NOT_FOUND", "库存卡片记录不存在", 500);
     const transactions = await loadAllTransactions(client, item.upstream_card_id);
     const prices = await client.getOpenAiPayments(item.upstream_card_id);
-    const classification = classifyHistoricalCardFulfillments(transactions);
+    const reservationLanes = db.prepare(`
+      SELECT DISTINCT target_lane FROM card_capacity_reservations
+      WHERE card_id = ? AND state IN ('reserved', 'consumed', 'retained_partial')
+    `).all(card.id);
+    const knownLane = card.lane || (reservationLanes.length === 1 ? reservationLanes[0].target_lane : null);
+    const classification = classifyHistoricalCardFulfillments(transactions, { knownLane });
     const collapsed = collapseTransactions(transactions);
     const held = classification.state === "RECONCILIATION_HOLD";
 

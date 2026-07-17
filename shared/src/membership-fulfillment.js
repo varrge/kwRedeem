@@ -353,12 +353,14 @@ function foldHistoricalAuthorizations(transactions) {
   return [...authorizations.values()];
 }
 
-export function classifyHistoricalCardFulfillments(transactions) {
+export function classifyHistoricalCardFulfillments(transactions, options = {}) {
   const authorizations = foldHistoricalAuthorizations(transactions);
+  const knownLane = membershipTiers.includes(options.knownLane) ? options.knownLane : null;
   if (authorizations.some((item) => item.refundSeen && item.settlementComplete)) {
     return Object.freeze({ lane: null, consumed: 0, state: "RECONCILIATION_HOLD", reason: "REFUNDED_FULFILLMENT" });
   }
-  if (authorizations.some((item) => item.authorizationPending && !item.settlementComplete && !item.reversalSeen)) {
+  if (knownLane !== "plus"
+    && authorizations.some((item) => item.authorizationPending && !item.settlementComplete && !item.reversalSeen)) {
     return Object.freeze({ lane: null, consumed: 0, state: "RECONCILIATION_HOLD", reason: "PENDING_SETTLEMENT" });
   }
 
@@ -366,7 +368,7 @@ export function classifyHistoricalCardFulfillments(transactions) {
     .filter((item) => item.settlementComplete || (item.authorizationPending && !item.reversalSeen))
     .map((item) => ({ ...item, tier: classifyOpenAiTier(item.amount) }));
   if (effective.length === 0) {
-    return Object.freeze({ lane: null, consumed: 0, state: "AVAILABLE", reason: null });
+    return Object.freeze({ lane: knownLane, consumed: 0, state: "AVAILABLE", reason: null });
   }
   if (effective.some((item) => !item.tier || !Number.isFinite(item.authTimeMs))) {
     return Object.freeze({ lane: null, consumed: 0, state: "RECONCILIATION_HOLD", reason: "UNCLASSIFIABLE_OPENAI_PAYMENT" });
@@ -403,6 +405,9 @@ export function classifyHistoricalCardFulfillments(transactions) {
   }
 
   const lane = pairs.length > 0 ? pairs[0].tier : "plus";
+  if (knownLane && lane !== knownLane) {
+    return Object.freeze({ lane: null, consumed: 0, state: "RECONCILIATION_HOLD", reason: "MIXED_MEMBERSHIP_LANES" });
+  }
   const consumed = pairs.length > 0 ? pairs.length : unpairedPlus.length;
   const capacity = membershipCapacityByTier[lane];
   if (consumed > capacity) {

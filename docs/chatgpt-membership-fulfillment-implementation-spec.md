@@ -260,6 +260,7 @@ For each card:
 - Never persist PAN, CVV, expiry, full address, or full upstream response.
 - Pull all transaction pages and deduplicate by `(card_id, auth_id)`, updating the same normalized record as `PENDING` becomes `COMPLETE`.
 - For historical initialization only, pair each final x5/x20 transaction with the nearest preceding unpaired Plus transaction on the same card within two hours.
+- Preserve the lane fixed by an active fulfillment reservation. On a known Plus lane, each recognized pending OpenAI authorization provisionally consumes one of the five slots: one through four remain `AVAILABLE`, five becomes `CAPACITY_FULL`, and only more than five is over-capacity. A pending authorization on an unknown lane remains on reconciliation hold because it may be the first stage of x5/x20.
 - Missing, late, conflicting, mixed-tier, or over-capacity history places only that card in `RECONCILIATION_HOLD`.
 
 After initialization, verify signed Webhooks as a prompt signal, perform targeted authoritative pulls for changed/uncertain cards, and run a full inventory reconciliation every six hours. Discard the Webhook's `card_number` before persistence or logging. Webhooks never replace authoritative pulls.

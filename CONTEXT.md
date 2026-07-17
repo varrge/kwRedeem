@@ -331,6 +331,10 @@ _Avoid_: Success-page-only confirmation, transaction-only success, plan-only suc
 A payment-stage confirmation whose matching card authorization is still pending while the expected membership state is already active. It consumes capacity immediately and remains under reconciliation until the authorization settles, declines, or reverses.
 _Avoid_: Waiting indefinitely for settlement, treating pending authorization as final card settlement
 
+**Lane-Bound Pending Plus Capacity**:
+An OpenAI Plus authorization that is still pending on a card already bound to the Plus lane by an active fulfillment reservation. It provisionally consumes one of the card's five Plus slots without placing the card on hold; five pending/completed Plus slots make it capacity-full, while more than five or a pending authorization without a known lane still requires reconciliation hold.
+_Avoid_: Treating every pending authorization as an unusable card, guessing Plus from an unbound pending charge
+
 **Payment Transaction Delta**:
 The exactly one new OpenAI authorization for the expected price tier that appears on the reserved card after a stage submission and was absent from the pre-submission authorization snapshot. Zero or multiple matching transactions cannot confirm the stage automatically.
 _Avoid_: Latest-transaction matching, time-only matching, reusing a pre-existing authorization

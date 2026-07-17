@@ -598,6 +598,51 @@ const STATUS_LABELS = {
   payout_succeeded: "派奖成功"
 };
 
+const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
+  waiting_session_activation: "等待登录会话激活",
+  queued: "已排队",
+  account_fulfillment_wait: "等待同账号前序订单",
+  account_checking: "正在检查订阅状态",
+  account_repurchase_not_ready: "账号暂不可续购",
+  account_already_subscribed: "账号已订阅",
+  inventory_not_ready: "卡片库存未就绪",
+  inventory_checking: "正在检查卡片库存",
+  card_price_unavailable: "卡片价格不可用",
+  browser_lease_wait: "等待扩展接管",
+  card_reserved: "卡片已预留",
+  initial_checkout_preflight: "正在预检初始结账页",
+  checkout_address_unavailable: "账单地址不可用",
+  checkout_price_unrecognized: "无法识别结账价格",
+  checkout_ui_unsupported: "不支持当前结账页面",
+  funding_ready: "资金准备就绪",
+  platform_balance_insufficient: "平台余额不足",
+  funding: "正在为卡片充值",
+  funding_outcome_unknown: "卡片充值结果待确认",
+  plus_approval_wait: "Plus 付款等待批准",
+  plus_checkout_ready: "Plus 结账页已就绪",
+  plus_submit_permitted: "Plus 付款已获准",
+  plus_reconciling: "正在确认 Plus 付款",
+  plus_confirmed: "Plus 已确认",
+  upgrade_checkout_preflight: "正在预检升级结账页",
+  upgrade_checkout_unavailable: "升级结账页不可用",
+  upgrade_approval_wait: "升级付款等待批准",
+  upgrade_checkout_ready: "升级结账页已就绪",
+  upgrade_submit_permitted: "升级付款已获准",
+  upgrade_reconciling: "正在确认升级付款",
+  final_tier_confirmed: "目标套餐已确认",
+  renewal_cancelling: "正在取消自动续费",
+  checkout_pre_submit_failed: "结账页创建失败",
+  unexpected_preauth: "出现意外预授权",
+  payment_action_required: "付款需要额外操作",
+  action_required_context_lost: "额外操作页面已丢失",
+  payment_outcome_uncertain: "付款结果待确认",
+  payment_declined: "付款被拒绝",
+  partially_fulfilled: "部分履约完成",
+  partial_fulfillment_expired: "部分履约已超时",
+  membership_contract_unknown: "无法确认会员套餐",
+  completed: "履约完成"
+};
+
 const SUB2API_REBATE_STATUS_LABELS = {
   pending: "待审核",
   approved: "已到账",
@@ -640,6 +685,14 @@ function renderStatus(value, labels = STATUS_LABELS) {
 
 function renderStatusText(value) {
   return getStatusLabel(value);
+}
+
+function getMembershipFulfillmentStatusLabel(value) {
+  return getStatusLabel(value, MEMBERSHIP_FULFILLMENT_STATUS_LABELS);
+}
+
+function renderMembershipFulfillmentStatus(value) {
+  return renderStatus(value, MEMBERSHIP_FULFILLMENT_STATUS_LABELS);
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -1516,7 +1569,7 @@ async function refreshMembershipFulfillments() {
     },
     {
       label: "目标 / 状态",
-      render: (item) => `<strong>${escapeHtml(item.targetTier)}</strong><br/><code>${escapeHtml(item.state)}</code>`
+      render: (item) => `<strong>${escapeHtml(item.targetTier)}</strong><br/>${renderMembershipFulfillmentStatus(item.state)}`
     },
     {
       label: "阶段 / 模式",
@@ -1661,7 +1714,7 @@ async function viewMembershipFulfillment(id) {
       <div class="grid grid-2">
         <div><strong>订单：</strong>${escapeHtml(item.orderNo || "-")}<br/><span class="hint">履约 ${escapeHtml(item.id || "-")}</span></div>
         <div><strong>目标：</strong>${escapeHtml(item.targetTier || "-")}<br/><span class="hint">客户状态 ${escapeHtml(projection.label || "-")}</span></div>
-        <div><strong>状态：</strong><code>${escapeHtml(item.state || "-")}</code><br/><span class="hint">阶段 ${escapeHtml(item.currentStage || "-")} / 模式 ${escapeHtml(item.runMode || "-")}</span></div>
+        <div><strong>状态：</strong>${renderMembershipFulfillmentStatus(item.state)}<br/><span class="hint">阶段 ${escapeHtml(item.currentStage || "-")} / 模式 ${escapeHtml(item.runMode || "-")}</span></div>
         <div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">浏览器租约 ${item.browserLeaseEpoch ?? "-"}</span></div>
         <div><strong>失败码：</strong><code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span></div>
         <div><strong>时间：</strong>${escapeHtml(item.updatedAt || "-")}<br/><span class="hint">完成 ${escapeHtml(item.completedAt || "-")}</span></div>

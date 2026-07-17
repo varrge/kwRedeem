@@ -209,6 +209,54 @@ test("customer projection claims success only for COMPLETED or an explicit compe
   }).label, "已退款");
 });
 
+test("a cancelled membership fulfillment cannot be revived by a stale worker transition", () => {
+  insertProduct("product-cancelled", null);
+  insertOrder("order-cancelled", "KWCANCELLED", "product-cancelled", "cancelled@example.com", "succeeded");
+  createMembershipFulfillmentForOrder(db, {
+    id: "mf-cancelled",
+    orderId: "order-cancelled",
+    orderNo: "KWCANCELLED",
+    productId: "product-cancelled",
+    manualType: "plus",
+    createdAt: at
+  });
+  assert.equal(activateMembershipFulfillmentIdentity(db, {
+    orderNo: "KWCANCELLED",
+    verifiedEmail: "cancelled@example.com",
+    secret: process.env.JWT_SECRET,
+    at
+  }).state, "QUEUED");
+
+  const cancelled = transitionMembershipFulfillment(db, "mf-cancelled", "CANCELLED", {
+    failureCode: "CDKEY_VOIDED",
+    at
+  });
+  assert.equal(cancelled.state, "CANCELLED");
+  assert.equal(projectMembershipDelivery(cancelled).label, "卡密已作废");
+
+  const staleTransition = transitionMembershipFulfillment(db, "mf-cancelled", "QUEUED", {
+    at: "2026-07-16T00:01:00.000Z"
+  });
+  assert.equal(staleTransition.state, "CANCELLED");
+  assert.equal(staleTransition.failure_code, "CDKEY_VOIDED");
+
+  insertOrder("order-after-cancel", "KWAFTERCANCEL", "product-cancelled", "cancelled@example.com", "succeeded");
+  createMembershipFulfillmentForOrder(db, {
+    id: "mf-after-cancel",
+    orderId: "order-after-cancel",
+    orderNo: "KWAFTERCANCEL",
+    productId: "product-cancelled",
+    manualType: "plus",
+    createdAt: "2026-07-16T00:02:00.000Z"
+  });
+  assert.equal(activateMembershipFulfillmentIdentity(db, {
+    orderNo: "KWAFTERCANCEL",
+    verifiedEmail: "cancelled@example.com",
+    secret: process.env.JWT_SECRET,
+    at: "2026-07-16T00:02:00.000Z"
+  }).state, "QUEUED");
+});
+
 test("browser fulfillment lease is exclusive, epoch-bound, heartbeating, and released without card operations", () => {
   transitionMembershipFulfillment(db, "mf-b", "BROWSER_LEASE_WAIT", { at });
   const acquired = acquireBrowserFulfillmentLease(db, {

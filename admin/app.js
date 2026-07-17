@@ -600,6 +600,50 @@ const STATUS_LABELS = {
   payout_succeeded: "派奖成功"
 };
 
+const EXTENSION_DELIVERY_ERROR_LABELS = {
+  EXTENSION_UNAUTHORIZED: "扩展 Token 无效",
+  EXTENSION_INSTALLATION_MISMATCH: "扩展安装实例与绑定不一致",
+  EXTENSION_DELIVERY_DISABLED: "扩展自动交付未启用",
+  EXTENSION_RATE_LIMITED: "扩展请求过于频繁",
+  EXTENSION_DELIVERY_BUSY: "Cookie 转换请求正在处理中",
+  DELIVERY_NOT_FOUND: "交付订单不存在",
+  DELIVERY_ALREADY_FINISHED: "交付订单已经结束",
+  DELIVERY_RESULT_NOT_EXPECTED: "该订单尚未下发 Cookie 数据",
+  SUBSCRIPTION_GUARD_REQUIRED: "尚未完成订阅状态检查",
+  DELIVERY_EXPIRED: "交付订单已过期",
+  RESULT_IDENTITY_MISMATCH: "结果邮箱与订单 Session 不一致",
+  REQUEST_INVALID: "请求参数无效",
+  REQUEST_TOO_LARGE: "请求正文超过大小限制",
+  UNSUPPORTED_MEDIA_TYPE: "请求格式不受支持",
+  SESSION_INVALID: "Session 解密或解析失败",
+  EXPECTED_IDENTITY_MISSING: "Session 或 Cookie 响应缺少有效邮箱",
+  CONVERTER_IDENTITY_MISMATCH: "Session 与 Cookie 响应邮箱不一致",
+  COOKIE_PAYLOAD_INVALID: "Cookie 数据无效",
+  CONVERTER_NOT_CONFIGURED: "Cookie 转换服务尚未配置",
+  CONVERTER_AUTH_FAILED: "Cookie 转换服务鉴权失败",
+  CONVERTER_RATE_LIMITED: "Cookie 转换服务请求过于频繁",
+  CONVERTER_RESPONSE_TOO_LARGE: "Cookie 转换服务响应过大",
+  CONVERTER_CONTRACT_DRIFT: "Cookie 转换服务接口格式已变化",
+  CONVERTER_UNAVAILABLE: "Cookie 转换服务暂时不可用",
+  CONVERTER_RESPONSE_INVALID: "Cookie 转换服务响应无效",
+  CONVERTER_TIMEOUT: "Cookie 转换服务请求超时",
+  COOKIE_OPERATION_FAILED: "Cookie 写入失败",
+  CHATGPT_SESSION_VERIFY_RATE_LIMITED: "ChatGPT 登录状态验证请求过于频繁",
+  CHATGPT_SESSION_VERIFY_UNAVAILABLE: "ChatGPT 登录状态验证服务暂时不可用",
+  CHATGPT_SESSION_VERIFY_TIMEOUT: "ChatGPT 登录状态验证超时",
+  CHATGPT_PAGE_RELOAD_FAILED: "ChatGPT 页面刷新失败",
+  COOKIE_SCHEMA_UNSUPPORTED: "Cookie 格式不受支持",
+  COOKIE_PAYLOAD_REJECTED: "Cookie 数据被浏览器拒绝",
+  COOKIE_ROLLBACK_FAILED: "Cookie 回滚失败",
+  SUBSCRIPTION_CHECK_FAILED: "订阅状态查询暂时失败",
+  SUBSCRIPTION_CANCEL_FAILED: "欠费账号自动续费取消失败",
+  SUBSCRIPTION_GUARD_UNAVAILABLE: "订阅保护接口暂时不可用",
+  CDKEY_VOIDED: "关联卡密已由后台作废",
+  CHATGPT_SESSION_UNAUTHORIZED: "ChatGPT Session 已失效",
+  CHATGPT_IDENTITY_MISSING: "无法获取 ChatGPT 账号邮箱",
+  CHATGPT_IDENTITY_MISMATCH: "ChatGPT 账号邮箱与订单不一致"
+};
+
 const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   waiting_session_activation: "等待登录会话激活",
   queued: "已排队",
@@ -642,6 +686,7 @@ const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   partially_fulfilled: "部分履约完成",
   partial_fulfillment_expired: "部分履约已超时",
   membership_contract_unknown: "无法确认会员套餐",
+  cancelled: "卡密已作废",
   completed: "履约完成"
 };
 
@@ -734,6 +779,16 @@ function renderMembershipFulfillmentStatus(value) {
 
 function getMembershipInventoryLabel(value) {
   return getStatusLabel(value, MEMBERSHIP_INVENTORY_LABELS);
+}
+
+function getExtensionDeliveryErrorLabel(value) {
+  const normalized = String(value || "").toUpperCase();
+  return EXTENSION_DELIVERY_ERROR_LABELS[normalized] || value || "-";
+}
+
+function renderExtensionDeliveryError(value) {
+  if (!value) return "-";
+  return `<span title="${escapeHtml(`错误码：${value}`)}">${escapeHtml(getExtensionDeliveryErrorLabel(value))}</span>`;
 }
 
 function renderMembershipInventoryStatus(value) {
@@ -1538,7 +1593,7 @@ async function refreshExtensionDeliveries() {
     { label: "站点", render: (item) => escapeHtml(item.siteSlug || "-") },
     { label: "状态", render: (item) => renderStatus(item.status) },
     { label: "尝试", render: (item) => String(Number(item.attempts) || 0) },
-    { label: "错误码", render: (item) => item.errorCode ? `<code>${escapeHtml(item.errorCode)}</code>` : "-" },
+    { label: "错误原因", render: (item) => renderExtensionDeliveryError(item.errorCode) },
     { label: "订阅保护", render: (item) => {
       if (!item.subscriptionCheckedAt) return "待检查";
       const renewal = item.renewalCancelledAt

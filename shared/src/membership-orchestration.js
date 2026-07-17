@@ -8,6 +8,7 @@ const ACTIVE_LOCK_TERMINAL_STATES = Object.freeze([
   "ACCOUNT_ALREADY_SUBSCRIBED",
   "PAYMENT_DECLINED",
   "PARTIAL_FULFILLMENT_EXPIRED",
+  "CANCELLED",
   "COMPLETED"
 ]);
 
@@ -168,6 +169,7 @@ export function transitionMembershipFulfillment(db, fulfillmentId, nextState, op
   return db.transaction(() => {
     const current = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(id);
     if (!current) return null;
+    if (current.state === "CANCELLED" && nextState !== "CANCELLED") return current;
     if (Number.isInteger(options.expectedRevision) && current.state_revision !== options.expectedRevision) {
       const error = new Error("会员履约版本已变化");
       error.code = "MEMBERSHIP_REVISION_CONFLICT";
@@ -203,6 +205,7 @@ export function projectMembershipDelivery(fulfillment, compensation = null) {
   const compensated = compensation && CUSTOMER_COMPENSATION_LABELS[compensation.resolution_type];
   let projection = { status: "processing", label: "处理中" };
   if (compensated) projection = compensated;
+  else if (fulfillment.state === "CANCELLED") projection = { status: "cancelled", label: "卡密已作废" };
   else if (fulfillment.state === "COMPLETED") projection = { status: "succeeded", label: "交付成功" };
   else if (fulfillment.state === "PARTIAL_FULFILLMENT_EXPIRED") {
     projection = { status: "after_sales", label: "售后处理中" };

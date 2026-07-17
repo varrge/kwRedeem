@@ -135,6 +135,10 @@ _Avoid_: KaWang redeem order, activation job
 A KaWang redeemable card whose eventual redemption creates work for an operator instead of starting automatic activation.
 _Avoid_: Source key, automatically activated CDK, fulfillment record
 
+**Voided CDK Queue Cancellation**:
+When an administrator voids a redeemed CDK, KaWang atomically cancels its still-pending activation job, Session Activation Delivery, redeem order, and pre-exposure Membership Fulfillment. A task already processing an external activation, holding a browser lease or card reservation, or entering the funding/payment boundary blocks the void action instead of pretending that in-flight work was cancelled. Completed delivery truth remains unchanged.
+_Avoid_: Voiding only the CDK row, reviving a cancelled queue item, discarding payment or reservation evidence
+
 **Store Product Mapping**:
 An explicit association from a Dujiao product and optional SKU to the kind, KaWang site, and public prefix of the manual-processing CDK the purchase promises.
 _Avoid_: Product-title matching, implicit prefix matching

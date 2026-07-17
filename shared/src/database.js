@@ -1454,7 +1454,7 @@ function createSchema(db) {
       ON membership_fulfillments(account_lock_key)
       WHERE account_lock_key IS NOT NULL
         AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
-        AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED', 'PARTIAL_FULFILLMENT_EXPIRED', 'COMPLETED');
+        AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED', 'PARTIAL_FULFILLMENT_EXPIRED', 'CANCELLED', 'COMPLETED');
     CREATE INDEX IF NOT EXISTS idx_membership_attempts_fulfillment ON membership_fulfillment_attempts(fulfillment_id, stage, attempt_no);
     CREATE INDEX IF NOT EXISTS idx_membership_observations_fulfillment ON membership_observations(fulfillment_id, observed_at);
     CREATE INDEX IF NOT EXISTS idx_managed_cards_selection ON managed_cards(lane, capacity_state, reconciliation_state, upstream_status);

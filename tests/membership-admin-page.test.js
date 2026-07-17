@@ -122,6 +122,61 @@ test("membership fulfillment states are displayed in Chinese", () => {
   dom.window.close();
 });
 
+test("extension delivery errors are displayed in Chinese", async () => {
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:4174/",
+    runScripts: "outside-only"
+  });
+  dom.window.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      items: [{
+        orderNo: "KW-EXTENSION-ERROR",
+        siteSlug: "demo",
+        status: "pending",
+        attempts: 1,
+        errorCode: "CHATGPT_SESSION_VERIFY_UNAVAILABLE"
+      }],
+      nextCursor: null
+    })
+  });
+  dom.window.eval(app);
+
+  await dom.window.refreshExtensionDeliveries();
+  const tableText = dom.window.document.querySelector("#extension-delivery-list")?.textContent || "";
+  assert.match(tableText, /ChatGPT 登录状态验证服务暂时不可用/);
+  assert.doesNotMatch(tableText, /CHATGPT_SESSION_VERIFY_UNAVAILABLE/);
+
+  for (const code of [
+    "DELIVERY_EXPIRED",
+    "SESSION_INVALID",
+    "EXPECTED_IDENTITY_MISSING",
+    "CONVERTER_IDENTITY_MISMATCH",
+    "COOKIE_PAYLOAD_INVALID",
+    "COOKIE_OPERATION_FAILED",
+    "CHATGPT_SESSION_VERIFY_RATE_LIMITED",
+    "CHATGPT_SESSION_VERIFY_UNAVAILABLE",
+    "CHATGPT_SESSION_VERIFY_TIMEOUT",
+    "CHATGPT_PAGE_RELOAD_FAILED",
+    "COOKIE_SCHEMA_UNSUPPORTED",
+    "COOKIE_PAYLOAD_REJECTED",
+    "COOKIE_ROLLBACK_FAILED",
+    "SUBSCRIPTION_CHECK_FAILED",
+    "SUBSCRIPTION_CANCEL_FAILED",
+    "SUBSCRIPTION_GUARD_UNAVAILABLE",
+    "CDKEY_VOIDED",
+    "CHATGPT_SESSION_UNAUTHORIZED",
+    "CHATGPT_IDENTITY_MISSING",
+    "CHATGPT_IDENTITY_MISMATCH"
+  ]) {
+    assert.notEqual(dom.window.getExtensionDeliveryErrorLabel(code), code, `${code} 缺少中文显示名称`);
+  }
+  assert.equal(dom.window.getExtensionDeliveryErrorLabel("UNKNOWN_EXTENSION_ERROR"), "UNKNOWN_EXTENSION_ERROR");
+
+  dom.window.close();
+});
+
 test("membership card inventory states and reconciliation reasons are displayed in Chinese", async () => {
   const dom = new JSDOM(html, {
     url: "http://127.0.0.1:4174/",

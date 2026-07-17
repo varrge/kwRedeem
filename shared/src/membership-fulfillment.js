@@ -71,6 +71,7 @@ export const membershipFulfillmentStates = Object.freeze([
   "PARTIALLY_FULFILLED",
   "PARTIAL_FULFILLMENT_EXPIRED",
   "MEMBERSHIP_CONTRACT_UNKNOWN",
+  "CANCELLED",
   "COMPLETED"
 ]);
 

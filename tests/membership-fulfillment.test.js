@@ -1326,6 +1326,184 @@ test("manual membership CDKs create the target fulfillment and support one-order
   `).get(repaired.json().item.id).count, 1);
 });
 
+test("voiding a redeemed CDK cancels its queued delivery and membership fulfillment", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/create",
+    headers,
+    payload: {
+      sourceKey: "",
+      siteId: "site_demo",
+      prefix: "VOID-QUEUED",
+      processingMode: "manual",
+      manualType: "PLUS"
+    }
+  });
+  assert.equal(created.statusCode, 200);
+
+  const redeemed = await app.inject({
+    method: "POST",
+    url: "/api/public/redeem",
+    payload: {
+      publicKey: created.json().publicKey,
+      sessionPayload: JSON.stringify({ user: { email: "void-queued@example.com" } }),
+      abandonRemainingTime: false
+    }
+  });
+  assert.equal(redeemed.statusCode, 200);
+  const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
+  db.prepare(`
+    UPDATE redeem_orders
+    SET extension_delivery_status = 'pending', extension_delivery_error = NULL
+    WHERE id = ?
+  `).run(order.id);
+
+  const voided = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/bulk-action",
+    headers,
+    payload: { ids: [created.json().id], action: "void" }
+  });
+  assert.equal(voided.statusCode, 200);
+  assert.deepEqual(voided.json(), {
+    updated: 1,
+    cancelledOrders: 1,
+    cancelledJobs: 0,
+    cancelledExtensionDeliveries: 1,
+    cancelledMembershipFulfillments: 1
+  });
+
+  const cdkey = db.prepare("SELECT * FROM cdkeys WHERE id = ?").get(created.json().id);
+  assert.equal(cdkey.status, "void");
+  assert.equal(cdkey.locked_by_order_id, null);
+  const cancelledOrder = db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(order.id);
+  assert.equal(cancelledOrder.status, "failed");
+  assert.equal(cancelledOrder.error_message, "关联卡密已由后台作废");
+  assert.equal(cancelledOrder.extension_delivery_status, "failed");
+  assert.equal(cancelledOrder.extension_delivery_error, "CDKEY_VOIDED");
+  const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
+  assert.equal(fulfillment.state, "CANCELLED");
+  assert.equal(fulfillment.failure_code, "CDKEY_VOIDED");
+  assert.ok(fulfillment.completed_at);
+});
+
+test("voiding a redeemed CDK cancels its pending activation job", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/create",
+    headers,
+    payload: {
+      sourceKey: "source-key-for-void-test",
+      siteId: "site_demo",
+      prefix: "VOID-JOB",
+      processingMode: "auto"
+    }
+  });
+  assert.equal(created.statusCode, 200);
+  const redeemed = await app.inject({
+    method: "POST",
+    url: "/api/public/redeem",
+    payload: {
+      publicKey: created.json().publicKey,
+      sessionPayload: JSON.stringify({ user: { email: "void-job@example.com" } }),
+      abandonRemainingTime: false
+    }
+  });
+  assert.equal(redeemed.statusCode, 200);
+  const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
+  db.prepare(`
+    UPDATE redeem_orders
+    SET extension_delivery_status = NULL, extension_delivery_error = NULL
+    WHERE id = ?
+  `).run(order.id);
+  assert.equal(db.prepare("SELECT status FROM activation_jobs WHERE order_id = ?").get(order.id).status, "pending");
+
+  const voided = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/bulk-action",
+    headers,
+    payload: { ids: [created.json().id], action: "void" }
+  });
+  assert.equal(voided.statusCode, 200);
+  assert.deepEqual(voided.json(), {
+    updated: 1,
+    cancelledOrders: 1,
+    cancelledJobs: 1,
+    cancelledExtensionDeliveries: 0,
+    cancelledMembershipFulfillments: 0
+  });
+  const job = db.prepare("SELECT * FROM activation_jobs WHERE order_id = ?").get(order.id);
+  assert.equal(job.status, "cancelled");
+  assert.equal(job.last_error, "关联卡密已由后台作废");
+  assert.equal(job.locked_at, null);
+  assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(order.id).status, "failed");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = ?").get(created.json().id).status, "void");
+});
+
+test("voiding a CDK is rejected after its membership fulfillment crosses the money boundary", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/create",
+    headers,
+    payload: {
+      sourceKey: "",
+      siteId: "site_demo",
+      prefix: "VOID-MONEY",
+      processingMode: "manual",
+      manualType: "PLUS"
+    }
+  });
+  const redeemed = await app.inject({
+    method: "POST",
+    url: "/api/public/redeem",
+    payload: {
+      publicKey: created.json().publicKey,
+      sessionPayload: JSON.stringify({ user: { email: "void-money@example.com" } }),
+      abandonRemainingTime: false
+    }
+  });
+  assert.equal(redeemed.statusCode, 200);
+  const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
+  db.prepare(`
+    UPDATE membership_fulfillments
+    SET state = 'FUNDING', money_boundary_at = ?, updated_at = ?
+    WHERE order_id = ?
+  `).run("2026-07-17T12:00:00.000Z", "2026-07-17T12:00:00.000Z", order.id);
+
+  const voided = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/bulk-action",
+    headers,
+    payload: { ids: [created.json().id], action: "void" }
+  });
+  assert.equal(voided.statusCode, 409);
+  assert.equal(voided.json().code, "CDKEY_VOID_BLOCKED_BY_MONEY_BOUNDARY");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = ?").get(created.json().id).status, "locked");
+  assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(order.id).status, "pending");
+  assert.equal(db.prepare("SELECT state FROM membership_fulfillments WHERE order_id = ?").get(order.id).state, "FUNDING");
+});
+
 test("admin UI exposes locked membership credentials without money-operation controls", async () => {
   const { JSDOM } = await import("jsdom");
   const html = fs.readFileSync(path.resolve("admin", "index.html"), "utf8");

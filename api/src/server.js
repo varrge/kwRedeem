@@ -25,7 +25,8 @@ import { persistManagedCardTransactions } from "../../shared/src/membership-reco
 import {
   activateMembershipFulfillmentIdentity,
   createMembershipFulfillmentForOrder,
-  projectMembershipDelivery
+  projectMembershipDelivery,
+  transitionMembershipFulfillment
 } from "../../shared/src/membership-orchestration.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
@@ -9383,7 +9384,8 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
   }
 
   const now = nowIso();
-  const placeholders = parsed.data.ids.map(() => "?").join(",");
+  const ids = [...new Set(parsed.data.ids)];
+  const placeholders = ids.map(() => "?").join(",");
   let nextStatus = cdkeyStatuses.active;
   let reason = null;
 
@@ -9397,22 +9399,161 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
     nextStatus = cdkeyStatuses.active;
   }
 
+  if (parsed.data.action === "void") {
+    const outcome = db.transaction(() => {
+      const selected = db.prepare(`
+        SELECT id FROM cdkeys WHERE id IN (${placeholders})
+      `).all(...ids);
+      const selectedIds = selected.map((item) => item.id);
+      if (!selectedIds.length) {
+        return {
+          updated: 0,
+          cancelledOrders: 0,
+          cancelledJobs: 0,
+          cancelledExtensionDeliveries: 0,
+          cancelledMembershipFulfillments: 0
+        };
+      }
+      const selectedPlaceholders = selectedIds.map(() => "?").join(",");
+      const activeJob = db.prepare(`
+        SELECT j.id
+        FROM activation_jobs j
+        WHERE j.cdkey_id IN (${selectedPlaceholders}) AND j.status = 'processing'
+        LIMIT 1
+      `).get(...selectedIds);
+      if (activeJob) return { error: "CDKEY_VOID_BLOCKED_BY_ACTIVE_JOB" };
+
+      const exposedFulfillment = db.prepare(`
+        SELECT f.id
+        FROM membership_fulfillments f
+        JOIN redeem_orders o ON o.id = f.order_id
+        WHERE o.cdkey_id IN (${selectedPlaceholders})
+          AND f.state NOT IN ('CANCELLED', 'COMPLETED')
+          AND (
+            f.state IN ('FUNDING_READY', 'FUNDING', 'PLATFORM_BALANCE_INSUFFICIENT')
+            OR f.money_boundary_at IS NOT NULL
+            OR f.card_reservation_id IS NOT NULL
+            OR f.browser_lease_epoch IS NOT NULL
+          )
+        LIMIT 1
+      `).get(...selectedIds);
+      if (exposedFulfillment) return { error: "CDKEY_VOID_BLOCKED_BY_MONEY_BOUNDARY" };
+
+      const cancelledJobs = db.prepare(`
+        UPDATE activation_jobs
+        SET status = 'cancelled', next_retry_at = NULL, last_error = ?,
+            locked_at = NULL, locked_by = NULL, updated_at = ?
+        WHERE cdkey_id IN (${selectedPlaceholders}) AND status = 'pending'
+      `).run("关联卡密已由后台作废", now, ...selectedIds).changes;
+
+      const queuedFulfillments = db.prepare(`
+        SELECT f.id
+        FROM membership_fulfillments f
+        JOIN redeem_orders o ON o.id = f.order_id
+        WHERE o.cdkey_id IN (${selectedPlaceholders})
+          AND f.state IN (
+            'WAITING_SESSION_ACTIVATION', 'QUEUED', 'ACCOUNT_FULFILLMENT_WAIT',
+            'ACCOUNT_CHECKING', 'ACCOUNT_REPURCHASE_NOT_READY',
+            'INVENTORY_NOT_READY', 'INVENTORY_CHECKING', 'CARD_PRICE_UNAVAILABLE',
+            'BROWSER_LEASE_WAIT', 'CHECKOUT_ADDRESS_UNAVAILABLE',
+            'CHECKOUT_PRICE_UNRECOGNIZED', 'CHECKOUT_UI_UNSUPPORTED',
+            'CHECKOUT_PRE_SUBMIT_FAILED', 'MEMBERSHIP_CONTRACT_UNKNOWN'
+          )
+          AND f.money_boundary_at IS NULL
+          AND f.card_reservation_id IS NULL
+          AND f.browser_lease_epoch IS NULL
+      `).all(...selectedIds);
+      for (const fulfillment of queuedFulfillments) {
+        transitionMembershipFulfillment(db, fulfillment.id, "CANCELLED", {
+          failureCode: "CDKEY_VOIDED",
+          at: now
+        });
+      }
+      if (queuedFulfillments.length) {
+        const fulfillmentPlaceholders = queuedFulfillments.map(() => "?").join(",");
+        db.prepare(`
+          UPDATE membership_outbox
+          SET dispatched_at = COALESCE(dispatched_at, ?)
+          WHERE fulfillment_id IN (${fulfillmentPlaceholders})
+        `).run(now, ...queuedFulfillments.map((item) => item.id));
+      }
+
+      const cancelledExtensionDeliveries = db.prepare(`
+        UPDATE redeem_orders
+        SET extension_delivery_status = 'failed', extension_delivery_error = 'CDKEY_VOIDED',
+            extension_delivered_at = NULL, extension_delivery_updated_at = ?, updated_at = ?
+        WHERE cdkey_id IN (${selectedPlaceholders}) AND extension_delivery_status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM membership_fulfillments f
+            WHERE f.order_id = redeem_orders.id AND f.state <> 'CANCELLED'
+          )
+      `).run(now, now, ...selectedIds).changes;
+
+      const cancelledOrders = db.prepare(`
+        UPDATE redeem_orders
+        SET status = 'failed', error_message = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+        WHERE cdkey_id IN (${selectedPlaceholders})
+          AND status IN ('pending', 'processing')
+          AND NOT EXISTS (
+            SELECT 1 FROM membership_fulfillments f
+            WHERE f.order_id = redeem_orders.id AND f.state <> 'CANCELLED'
+          )
+      `).run("关联卡密已由后台作废", now, now, ...selectedIds).changes;
+
+      db.prepare(`
+        UPDATE cdkeys
+        SET status = 'void', disabled_reason = ?, locked_at = NULL, locked_by_order_id = NULL,
+            updated_at = ?
+        WHERE id IN (${selectedPlaceholders})
+      `).run(reason, now, ...selectedIds);
+
+      return {
+        updated: selectedIds.length,
+        cancelledOrders,
+        cancelledJobs,
+        cancelledExtensionDeliveries,
+        cancelledMembershipFulfillments: queuedFulfillments.length
+      };
+    }).immediate();
+
+    if (outcome.error === "CDKEY_VOID_BLOCKED_BY_ACTIVE_JOB") {
+      return reply.code(409).send({
+        code: outcome.error,
+        message: "所选卡密包含正在处理的激活任务，任务结束前不能直接作废"
+      });
+    }
+    if (outcome.error === "CDKEY_VOID_BLOCKED_BY_MONEY_BOUNDARY") {
+      return reply.code(409).send({
+        code: outcome.error,
+        message: "所选卡密的会员履约已预留卡片、占用浏览器或进入资金阶段，不能直接作废"
+      });
+    }
+
+    createAuditLog({
+      action: logActions.cdkeyBulk,
+      actor: request.admin.username,
+      resourceType: "cdkey",
+      detail: { ids, action: parsed.data.action, ...outcome }
+    });
+    return outcome;
+  }
+
   db.prepare(`
     UPDATE cdkeys
     SET status = ?, disabled_reason = ?, locked_at = NULL, locked_by_order_id = NULL,
         used_at = CASE WHEN ? = 'active' THEN NULL ELSE used_at END,
         updated_at = ?
     WHERE id IN (${placeholders})
-  `).run(nextStatus, reason, nextStatus, now, ...parsed.data.ids);
+  `).run(nextStatus, reason, nextStatus, now, ...ids);
 
   createAuditLog({
     action: logActions.cdkeyBulk,
     actor: request.admin.username,
     resourceType: "cdkey",
-    detail: parsed.data
+    detail: { ids, action: parsed.data.action }
   });
 
-  return { updated: parsed.data.ids.length };
+  return { updated: ids.length };
 });
 
 app.post("/api/admin/cdkeys/export-source-keys", { preHandler: requireAdmin }, async (request, reply) => {

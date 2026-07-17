@@ -957,7 +957,7 @@ export function createMembershipPaymentService(options = {}) {
           WHERE id <> ? AND run_mode = 'canary'
             AND state NOT IN (
               'ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED',
-              'PARTIAL_FULFILLMENT_EXPIRED', 'COMPLETED'
+              'PARTIAL_FULFILLMENT_EXPIRED', 'CANCELLED', 'COMPLETED'
             )
           LIMIT 1
         `).get(fulfillmentId);

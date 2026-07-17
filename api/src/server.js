@@ -2284,85 +2284,6 @@ async function loadSub2ApiModelRoutes(connection) {
   return { groups: activeGroups, channels, candidateMap, routes, models };
 }
 
-function inferPublicModelTags(model, platform) {
-  const text = `${model} ${platform}`.toLowerCase();
-  const tags = [];
-  if (/r1|reason|o[134]|thinking/.test(text)) tags.push("推理");
-  if (/code|coder|coding/.test(text)) tags.push("编程");
-  if (/vision|image|gpt-4o|gemini/.test(text)) tags.push("多模态");
-  if (/mini|flash|haiku|lite|turbo/.test(text)) tags.push("快速");
-  return tags.slice(0, 3);
-}
-
-function buildPublicSub2ApiModelsPayload(connection, modelRoutes) {
-  const groupsById = new Map(modelRoutes.groups.map((group) => [String(group.id), group]));
-  const publicGroups = new Map();
-
-  function ensureGroup(groupId) {
-    const group = groupsById.get(String(groupId)) || {};
-    const key = String(group.id ?? groupId);
-    if (!publicGroups.has(key)) {
-      publicGroups.set(key, {
-        id: key,
-        name: group.name || group.platform || `Group ${groupId}`,
-        platform: group.platform || "",
-        status: group.status || "active",
-        models: new Map()
-      });
-    }
-    return publicGroups.get(key);
-  }
-
-  for (const route of modelRoutes.routes) {
-    const group = ensureGroup(route.groupId);
-    const name = String(route.sourceModel || "").trim();
-    if (!name) continue;
-    const active = String(route.groupStatus || group.status || "active") !== "disabled"
-      && String(route.channelStatus || "active") !== "disabled";
-    if (!group.models.has(name)) {
-      group.models.set(name, {
-        name,
-        status: active ? "available" : "unavailable",
-        routeCount: 1,
-        tags: inferPublicModelTags(name, route.platform || group.platform)
-      });
-    } else if (active) {
-      const item = group.models.get(name);
-      item.status = "available";
-      item.routeCount += 1;
-    }
-  }
-
-  for (const group of modelRoutes.groups) {
-    const publicGroup = ensureGroup(group.id);
-    for (const model of modelRoutes.candidateMap.get(String(group.id)) || []) {
-      const name = String(model || "").trim();
-      if (!name || publicGroup.models.has(name)) continue;
-      publicGroup.models.set(name, {
-        name,
-        status: String(group.status || "active") === "disabled" ? "unavailable" : "available",
-        routeCount: 0,
-        tags: inferPublicModelTags(name, group.platform)
-      });
-    }
-  }
-
-  const groups = Array.from(publicGroups.values())
-    .map((group) => ({
-      ...group,
-      models: Array.from(group.models.values()).sort((a, b) => a.name.localeCompare(b.name))
-    }))
-    .filter((group) => group.models.length)
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  return {
-    connection: { id: connection.id, name: connection.name },
-    totalGroups: groups.length,
-    totalModels: groups.reduce((sum, group) => sum + group.models.length, 0),
-    groups
-  };
-}
-
 function serializeSub2ApiInvite(row) {
   return {
     id: row.id,
@@ -5667,22 +5588,6 @@ app.post("/api/public/sub2api/image/session-from-token", async (request, reply) 
     );
   } catch (error) {
     return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
-  }
-});
-
-app.get("/api/public/sub2api/connections/:id/models", async (request, reply) => {
-  const connection = findSub2ApiConnectionBySelector(request.params.id);
-  if (!connection) {
-    return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
-  }
-  if (connection.status !== sub2apiConnectionStatuses.active) {
-    return reply.code(403).send({ message: "Sub2api 连接已停用" });
-  }
-
-  try {
-    return buildPublicSub2ApiModelsPayload(connection, await loadSub2ApiModelRoutes(connection));
-  } catch (error) {
-    return reply.code(Number(error.status || 502)).send({ message: error.message || "读取模型列表失败" });
   }
 });
 

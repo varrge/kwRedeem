@@ -175,6 +175,24 @@ test("payment delta requires exactly one new matching OpenAI authorization", () 
     transactions: [{ ...base, authId: "declined", status: "DECLINED" }]
   });
   assert.equal(declined.outcome, "declined");
+
+  const philippinesX20 = matchPaymentTransactionDelta({
+    beforeAuthIds: [],
+    tier: "x20",
+    minUsd: 140,
+    maxUsd: 160,
+    transactions: [{
+      ...base,
+      authId: "x20-ph",
+      authAmount: 7937.55,
+      authCurrency: "PHP",
+      settleAmount: 130.06,
+      settleCurrency: "USD",
+      status: "COMPLETE",
+      type: "Settlement"
+    }]
+  });
+  assert.equal(philippinesX20.outcome, "matched");
 });
 
 test("card ranking consolidates the target lane before unassigned cards", () => {
@@ -205,6 +223,23 @@ test("historical reconciliation pairs staged upgrades and holds ambiguous cards"
   ]);
   assert.deepEqual(x5, { lane: "x5", consumed: 2, state: "CAPACITY_FULL", reason: null });
 
+  const historicalPhilippinesX20 = classifyHistoricalCardFulfillments([
+    settled("plus-ph", "2026-07-10T03:36:14+08:00", 16.09),
+    settled("x20-ph", "2026-07-10T03:38:39+08:00", 130.06)
+  ]);
+  assert.deepEqual(historicalPhilippinesX20, {
+    lane: "x20",
+    consumed: 1,
+    state: "CAPACITY_FULL",
+    reason: null
+  });
+
+  const unknownUpgradeAmount = classifyHistoricalCardFulfillments([
+    settled("plus-unknown", "2026-07-10T03:36:14+08:00", 16.09),
+    settled("unknown-final", "2026-07-10T03:38:39+08:00", 110)
+  ]);
+  assert.equal(unknownUpgradeAmount.reason, "UNCLASSIFIABLE_OPENAI_PAYMENT");
+
   const missingPair = classifyHistoricalCardFulfillments([
     settled("x20", "2026-07-10T01:00:00Z", 150)
   ]);
@@ -228,6 +263,47 @@ test("historical reconciliation pairs staged upgrades and holds ambiguous cards"
     settled("reversed", "2026-07-10T00:00:00Z", 16.24, "Reversal", "COMPLETE")
   ]);
   assert.deepEqual(reversedPending, { lane: null, consumed: 0, state: "AVAILABLE", reason: null });
+
+  const pendingPlus = classifyHistoricalCardFulfillments([
+    settled("plus-pending", "2026-07-12T00:00:00Z", 16.24, "Authorization", "PENDING")
+  ], { knownLane: "plus" });
+  assert.deepEqual(pendingPlus, { lane: "plus", consumed: 1, state: "AVAILABLE", reason: null });
+
+  const pendingPhilippinesPlus = classifyHistoricalCardFulfillments([{
+    ...settled("plus-pending-php", "2026-07-12T00:00:00Z", 982.14, "Authorization", "PENDING"),
+    authCurrency: "PHP",
+    settleAmount: 0,
+    settleCurrency: "USD"
+  }], { knownLane: "plus" });
+  assert.deepEqual(pendingPhilippinesPlus, { lane: "plus", consumed: 1, state: "AVAILABLE", reason: null });
+
+  const reverseOrderedSettlement = classifyHistoricalCardFulfillments([{
+    ...settled("plus-reverse-order", "2026-07-12T00:00:00Z", 982.14),
+    authCurrency: "PHP",
+    settleAmount: 16.09,
+    settleCurrency: "USD"
+  }, {
+    ...settled("plus-reverse-order", "2026-07-12T00:00:00Z", 982.14, "Authorization", "PENDING"),
+    authCurrency: "PHP",
+    settleAmount: 0,
+    settleCurrency: "USD"
+  }]);
+  assert.deepEqual(reverseOrderedSettlement, { lane: "plus", consumed: 1, state: "AVAILABLE", reason: null });
+
+  const fivePendingPlus = classifyHistoricalCardFulfillments(Array.from({ length: 5 }, (_, index) => (
+    settled(`plus-pending-${index}`, `2026-07-1${index + 1}T00:00:00Z`, 16.24, "Authorization", "PENDING")
+  )), { knownLane: "plus" });
+  assert.deepEqual(fivePendingPlus, { lane: "plus", consumed: 5, state: "CAPACITY_FULL", reason: null });
+
+  const sixPendingPlus = classifyHistoricalCardFulfillments(Array.from({ length: 6 }, (_, index) => (
+    settled(`plus-over-capacity-${index}`, `2026-07-1${index + 1}T00:00:00Z`, 16.24, "Authorization", "PENDING")
+  )), { knownLane: "plus" });
+  assert.equal(sixPendingPlus.reason, "CAPACITY_EXCEEDED");
+
+  const unknownPending = classifyHistoricalCardFulfillments([
+    settled("unknown-lane-pending", "2026-07-12T00:00:00Z", 16.24, "Authorization", "PENDING")
+  ]);
+  assert.equal(unknownPending.reason, "PENDING_SETTLEMENT");
 });
 
 test("SpaceX Card OpenAPI adapter strips list PAN and requires idempotency for writes", async () => {
@@ -389,6 +465,18 @@ test("inventory initialization is resumable, read-only, and stores only masked c
     time: item.time,
     found: item.found
   }));
+  const transactions = [{
+    authId: "auth-plus-1",
+    authTime: "2026-07-15T01:00:00Z",
+    authAmount: 16.24,
+    authCurrency: "USD",
+    settleAmount: 16.24,
+    settleCurrency: "USD",
+    status: "COMPLETE",
+    type: "Settlement",
+    merchantNormalized: "OPENAI",
+    createdAt: "2026-07-15T01:01:00Z"
+  }];
   const client = {
     async listCards() {
       return {
@@ -408,18 +496,7 @@ test("inventory initialization is resumable, read-only, and stores only masked c
       };
     },
     async listTransactions() {
-      return [{
-        authId: "auth-plus-1",
-        authTime: "2026-07-15T01:00:00Z",
-        authAmount: 16.24,
-        authCurrency: "USD",
-        settleAmount: 16.24,
-        settleCurrency: "USD",
-        status: "COMPLETE",
-        type: "Settlement",
-        merchantNormalized: "OPENAI",
-        createdAt: "2026-07-15T01:01:00Z"
-      }];
+      return transactions;
     },
     async getOpenAiPayments() { return prices; }
   };
@@ -445,6 +522,34 @@ test("inventory initialization is resumable, read-only, and stores only masked c
   assert.equal(card.reconciliation_state, "READY");
   assert.equal(db.prepare("PRAGMA table_info(managed_cards)").all().some((column) => /number|cvv|expire/i.test(column.name)), false);
   assert.equal(db.prepare("SELECT inventory_status FROM membership_fulfillment_settings WHERE id = 'default'").get().inventory_status, "completed");
+
+  db.prepare("UPDATE managed_cards SET lane = NULL, consumed_slots = 0 WHERE id = ?").run(card.id);
+  db.prepare(`
+    INSERT INTO card_capacity_reservations (
+      id, fulfillment_id, card_id, target_lane, slot_index, state, reserved_at
+    ) VALUES ('mcr_pending_plus', 'mf_pending_plus', ?, 'plus', 1, 'consumed', ?)
+  `).run(card.id, at);
+  transactions.splice(0, transactions.length, {
+    authId: "auth-plus-pending",
+    authTime: "2026-07-16T01:00:00Z",
+    authAmount: 16.24,
+    authCurrency: "USD",
+    settleAmount: 0,
+    settleCurrency: "USD",
+    status: "PENDING",
+    type: "Authorization",
+    merchantNormalized: "OPENAI",
+    createdAt: "2026-07-16T01:00:00Z"
+  });
+  startMembershipInventoryRun(db, { id: "mir_pending_plus", actor: "admin", mode: "refresh", at });
+  assert.equal((await runner.tick()).action, "discovered");
+  assert.equal((await runner.tick()).action, "reconciled");
+  const pendingCard = db.prepare("SELECT * FROM managed_cards WHERE upstream_card_id = 123").get();
+  assert.equal(pendingCard.lane, "plus");
+  assert.equal(pendingCard.consumed_slots, 1);
+  assert.equal(pendingCard.capacity_state, "AVAILABLE");
+  assert.equal(pendingCard.reconciliation_state, "READY");
+  assert.equal(pendingCard.reconciliation_reason, null);
 });
 
 test("inventory retries shared failures without holding cards and holds cards missing from a completed refresh", async () => {
@@ -1010,6 +1115,111 @@ test("no-charge validation stores only allowlisted facts and never permits card 
   assert.doesNotMatch(persisted, new RegExp(pan));
   assert.doesNotMatch(persisted, /cardNumber|rawHtml|screenshot/i);
   assert.equal(db.prepare("SELECT enabled FROM membership_fulfillment_settings WHERE id = 'default'").get().enabled, 0);
+});
+
+test("admin can confirm an unassigned legacy pending card as Plus without touching the upstream card", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const at = "2026-07-17T08:00:00.000Z";
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, upstream_card_id, vm_card_id, product_code, bin, last4, upstream_status,
+      cached_available_amount, lane, consumed_slots, capacity_state,
+      reconciliation_state, reconciliation_reason, created_at, updated_at
+    ) VALUES (
+      'card-legacy-plus', 37226, 'vm-legacy-plus', 'USMAB01', '525962', '7995', 'ACTIVE',
+      3.94, NULL, 0, 'HOLD', 'HOLD', 'PENDING_SETTLEMENT', ?, ?
+    )
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO managed_card_transactions (
+      card_id, auth_id, auth_time, auth_amount, auth_currency, settle_amount,
+      settle_currency, type, status, merchant_normalized, authorization_seen,
+      settlement_seen, refund_seen, reversal_seen, first_seen_at, last_seen_at
+    ) VALUES (
+      'card-legacy-plus', 'auth-legacy-plus', ?, 982.14, 'PHP', 0,
+      'USD', 'Authorization', 'PENDING', 'OPENAI', 1, 0, 0, 0, ?, ?
+    )
+  `).run(at, at, at);
+
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const confirmed = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-cards/card-legacy-plus/confirm-plus-lane",
+    headers,
+    payload: { confirmation: "legacy_plus_cdk" }
+  });
+  assert.equal(confirmed.statusCode, 200, confirmed.body);
+
+  const card = db.prepare("SELECT * FROM managed_cards WHERE id = 'card-legacy-plus'").get();
+  assert.equal(card.upstream_status, "ACTIVE");
+  assert.equal(card.lane, "plus");
+  assert.equal(card.consumed_slots, 1);
+  assert.equal(card.capacity_state, "AVAILABLE");
+  assert.equal(card.reconciliation_state, "READY");
+  assert.equal(card.reconciliation_reason, null);
+  const audit = db.prepare(`
+    SELECT detail FROM admin_audit_logs
+    WHERE action = 'membership_card.legacy_plus_lane.confirm'
+      AND resource_id = 'card-legacy-plus'
+    ORDER BY created_at DESC LIMIT 1
+  `).get();
+  assert.ok(audit);
+  assert.deepEqual(JSON.parse(audit.detail), {
+    upstreamCardId: 37226,
+    previousReason: "PENDING_SETTLEMENT",
+    lane: "plus",
+    consumedSlots: 1,
+    capacityState: "AVAILABLE",
+    confirmation: "legacy_plus_cdk"
+  });
+
+  const retry = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-cards/card-legacy-plus/confirm-plus-lane",
+    headers,
+    payload: { confirmation: "legacy_plus_cdk" }
+  });
+  assert.equal(retry.statusCode, 200);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM admin_audit_logs
+    WHERE action = 'membership_card.legacy_plus_lane.confirm'
+      AND resource_id = 'card-legacy-plus'
+  `).get().count, 1);
+
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, upstream_card_id, vm_card_id, product_code, upstream_status,
+      cached_available_amount, capacity_state, reconciliation_state,
+      reconciliation_reason, created_at, updated_at
+    ) VALUES (
+      'card-legacy-conflict', 37227, 'vm-legacy-conflict', 'USMAB01', 'ACTIVE',
+      0, 'HOLD', 'HOLD', 'PENDING_SETTLEMENT', ?, ?
+    )
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO managed_card_transactions (
+      card_id, auth_id, auth_time, auth_amount, auth_currency, settle_amount,
+      settle_currency, type, status, merchant_normalized, authorization_seen,
+      settlement_seen, refund_seen, reversal_seen, first_seen_at, last_seen_at
+    ) VALUES (
+      'card-legacy-conflict', 'auth-legacy-conflict', ?, 130.06, 'USD', 0,
+      'USD', 'Authorization', 'PENDING', 'OPENAI', 1, 0, 0, 0, ?, ?
+    )
+  `).run(at, at, at);
+  const conflict = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-cards/card-legacy-conflict/confirm-plus-lane",
+    headers,
+    payload: { confirmation: "legacy_plus_cdk" }
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().code, "CARD_PLUS_LANE_EVIDENCE_CONFLICT");
+  assert.equal(db.prepare("SELECT lane FROM managed_cards WHERE id = 'card-legacy-conflict'").get().lane, null);
 });
 
 test("membership inventory admin APIs expose only masked cards and serialize refresh runs", async () => {

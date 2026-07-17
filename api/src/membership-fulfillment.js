@@ -5,6 +5,7 @@ import { membershipStateProviderUrl } from "../../shared/src/membership-state-pr
 import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
 import {
   calculateMembershipBudget,
+  classifyHistoricalCardFulfillments,
   membershipFulfillmentStates,
   membershipTiers,
   selectCanonicalCardTransactionState
@@ -1661,6 +1662,113 @@ export function createMembershipFulfillmentService(options) {
           fetchedAt: price.fetched_at
         }))
       }))
+    };
+  });
+
+  app.post("/api/admin/membership-cards/:id/confirm-plus-lane", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = safeFulfillmentId(request.params?.id);
+    const parsed = z.object({
+      confirmation: z.literal("legacy_plus_cdk")
+    }).safeParse(request.body);
+    if (!id || !parsed.success) return reply.code(400).send({ message: "历史 Plus 卡确认参数无效" });
+
+    const card = db.prepare("SELECT * FROM managed_cards WHERE id = ?").get(id);
+    if (!card) return reply.code(404).send({ message: "托管卡片不存在" });
+    if (card.lane === "plus" && card.reconciliation_state === "READY" && !card.reconciliation_reason) {
+      setNoStore(reply);
+      return {
+        item: {
+          id: card.id,
+          upstreamCardId: card.upstream_card_id,
+          lane: card.lane,
+          consumedSlots: card.consumed_slots,
+          capacityState: card.capacity_state,
+          reconciliationState: card.reconciliation_state
+        }
+      };
+    }
+    if (card.upstream_status !== "ACTIVE" || card.lane
+      || card.reconciliation_state !== "HOLD" || card.reconciliation_reason !== "PENDING_SETTLEMENT") {
+      return reply.code(409).send({
+        code: "CARD_PLUS_LANE_CONFIRMATION_NOT_ALLOWED",
+        message: "只有正常、未分配且因等待交易结算暂挂的历史卡可以确认为 Plus"
+      });
+    }
+    const activeInventory = db.prepare(`
+      SELECT id FROM card_inventory_runs
+      WHERE status IN ('discovering', 'reconciling') LIMIT 1
+    `).get();
+    if (activeInventory) {
+      return reply.code(409).send({ code: "INVENTORY_ALREADY_RUNNING", message: "请等待库存刷新完成后再确认 Plus" });
+    }
+
+    const transactions = db.prepare(`
+      SELECT * FROM managed_card_transactions
+      WHERE card_id = ? ORDER BY auth_time ASC, auth_id ASC
+    `).all(card.id).map((row) => ({
+      authId: row.auth_id,
+      authTime: row.auth_time,
+      authAmount: row.auth_amount,
+      authCurrency: row.auth_currency,
+      settleAmount: row.settle_amount,
+      settleCurrency: row.settle_currency,
+      type: row.type,
+      status: row.status,
+      merchantNormalized: row.merchant_normalized
+    }));
+    const hasPendingOpenAiAuthorization = transactions.some((transaction) => (
+      transaction.merchantNormalized === "OPENAI"
+        && transaction.type === "Authorization"
+        && transaction.status === "PENDING"
+    ));
+    const classification = classifyHistoricalCardFulfillments(transactions, { knownLane: "plus" });
+    if (!hasPendingOpenAiAuthorization || classification.lane !== "plus"
+      || classification.state === "RECONCILIATION_HOLD" || classification.consumed < 1) {
+      return reply.code(409).send({
+        code: "CARD_PLUS_LANE_EVIDENCE_CONFLICT",
+        message: "已同步的交易不能安全归类为 Plus，请先刷新库存或人工核对交易"
+      });
+    }
+
+    const at = new Date().toISOString();
+    const updated = db.transaction(() => {
+      const result = db.prepare(`
+        UPDATE managed_cards
+        SET lane = 'plus', consumed_slots = ?, capacity_state = ?,
+            reconciliation_state = 'READY', reconciliation_reason = NULL, updated_at = ?
+        WHERE id = ? AND lane IS NULL AND reconciliation_state = 'HOLD'
+          AND reconciliation_reason = 'PENDING_SETTLEMENT'
+      `).run(classification.consumed, classification.state, at, card.id);
+      if (result.changes !== 1) return null;
+      createAuditLog({
+        action: "membership_card.legacy_plus_lane.confirm",
+        actor: request.admin.username,
+        resourceType: "managed_card",
+        resourceId: card.id,
+        detail: {
+          upstreamCardId: card.upstream_card_id,
+          previousReason: card.reconciliation_reason,
+          lane: "plus",
+          consumedSlots: classification.consumed,
+          capacityState: classification.state,
+          confirmation: parsed.data.confirmation
+        }
+      });
+      return db.prepare("SELECT * FROM managed_cards WHERE id = ?").get(card.id);
+    })();
+    if (!updated) {
+      return reply.code(409).send({ code: "CARD_STATE_CHANGED", message: "卡片状态已经变化，请刷新列表后重试" });
+    }
+    setNoStore(reply);
+    return {
+      item: {
+        id: updated.id,
+        upstreamCardId: updated.upstream_card_id,
+        lane: updated.lane,
+        consumedSlots: updated.consumed_slots,
+        capacityState: updated.capacity_state,
+        reconciliationState: updated.reconciliation_state
+      }
     };
   });
 

@@ -1804,9 +1804,27 @@ async function refreshMembershipInventoryConsole(settings = {}) {
     { label: "三档行情", render: (item) => (item.prices || []).map((price) => `
       <div>${escapeHtml(price.tier)}：${price.found ? `$${Number(price.amount).toFixed(2)}` : "无"}<br/><span class="hint">${escapeHtml(price.providerTime || "-")}</span></div>
     `).join("") || "-" },
-    { label: "同步时间", render: (item) => `<span class="hint">余额 ${escapeHtml(item.lastBalanceSyncAt || "-")}<br/>交易 ${escapeHtml(item.lastTransactionSyncAt || "-")}</span>` }
+    { label: "同步时间", render: (item) => `<span class="hint">余额 ${escapeHtml(item.lastBalanceSyncAt || "-")}<br/>交易 ${escapeHtml(item.lastTransactionSyncAt || "-")}</span>` },
+    { label: "操作", render: (item) => item.upstreamStatus === "ACTIVE" && !item.lane
+        && item.reconciliationState === "HOLD" && item.reconciliationReason === "PENDING_SETTLEMENT"
+      ? `<button class="ghost-btn small" type="button" data-confirm-plus-lane="${escapeHtml(item.id)}" onclick='confirmMembershipCardPlusLane(${JSON.stringify(item.id)})'>确认为 Plus</button>`
+      : "-" }
   ], cardsPayload.items || [], "暂无已初始化卡片");
   setHint(refs.membershipCardListResult, `已读取 ${cardsPayload.items?.length || 0} 张脱敏卡片`);
+}
+
+async function confirmMembershipCardPlusLane(id) {
+  if (!window.confirm("仅当这张历史卡明确用于 Plus CDK 时才确认。确认后，已同步的待清算交易会占用 Plus 的 1/5 容量；该操作不会调用 SpaceX Card、删卡或冻结卡。是否继续？")) return;
+  try {
+    await api(`/api/admin/membership-cards/${encodeURIComponent(id)}/confirm-plus-lane`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "legacy_plus_cdk" })
+    });
+    setHint(refs.membershipCardListResult, "历史卡已确认为 Plus；已按同步交易重新计算容量，没有执行上游卡片操作");
+    await refreshMembershipInventoryConsole();
+  } catch (error) {
+    setHint(refs.membershipCardListResult, error.message);
+  }
 }
 
 async function refreshMembershipPriceContracts() {
@@ -1996,6 +2014,7 @@ async function requestMembershipCircuitProbe(id) {
 }
 
 window.activateMembershipPriceContract = activateMembershipPriceContract;
+window.confirmMembershipCardPlusLane = confirmMembershipCardPlusLane;
 window.setMembershipProductPolicy = setMembershipProductPolicy;
 window.requestMembershipCircuitProbe = requestMembershipCircuitProbe;
 window.viewMembershipFulfillment = viewMembershipFulfillment;

@@ -335,6 +335,10 @@ _Avoid_: Waiting indefinitely for settlement, treating pending authorization as 
 An OpenAI Plus authorization that is still pending on a card already bound to the Plus lane by an active fulfillment reservation. It provisionally consumes one of the card's five Plus slots without placing the card on hold; five pending/completed Plus slots make it capacity-full, while more than five or a pending authorization without a known lane still requires reconciliation hold.
 _Avoid_: Treating every pending authorization as an unusable card, guessing Plus from an unbound pending charge
 
+**Admin-Confirmed Legacy Plus Lane**:
+A one-time audited classification for an active historical card that was manually used for a Plus CDK before card reservations existed. It is available only when the card is unassigned and held solely for a pending settlement; the server reclassifies the already-synced OpenAI history as Plus and enforces the five-slot capacity before making the card ready. It never calls an upstream card write operation.
+_Avoid_: Inferring Plus from a last-four value, confirming x5/x20 history as Plus, bypassing transaction or capacity checks
+
 **Payment Transaction Delta**:
 The exactly one new OpenAI authorization for the expected price tier that appears on the reserved card after a stage submission and was absent from the pre-submission authorization snapshot. Zero or multiple matching transactions cannot confirm the stage automatically.
 _Avoid_: Latest-transaction matching, time-only matching, reusing a pre-existing authorization

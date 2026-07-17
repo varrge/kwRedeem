@@ -248,6 +248,19 @@ function transactionAmount(transaction) {
   return Number.isFinite(authorized) ? authorized : NaN;
 }
 
+function transactionCurrency(transaction) {
+  const settled = Number(transaction?.settleAmount);
+  const currency = Number.isFinite(settled) && settled > 0
+    ? transaction?.settleCurrency
+    : transaction?.authCurrency;
+  return typeof currency === "string" && currency.trim() ? currency.trim().toUpperCase() : null;
+}
+
+function transactionAmountPriority(transaction) {
+  const settled = Number(transaction?.settleAmount);
+  return Number.isFinite(settled) && settled > 0 ? 2 : 1;
+}
+
 function isOpenAiTransaction(transaction) {
   return String(transaction?.merchantNormalized || "").trim().toUpperCase() === "OPENAI";
 }
@@ -333,6 +346,8 @@ function foldHistoricalAuthorizations(transactions) {
       authId,
       authTimeMs: NaN,
       amount: NaN,
+      amountPriority: 0,
+      currency: null,
       authorizationPending: false,
       settlementComplete: false,
       refundSeen: false,
@@ -343,7 +358,12 @@ function foldHistoricalAuthorizations(transactions) {
       record.authTimeMs = timeMs;
     }
     const amount = transactionAmount(event);
-    if (Number.isFinite(amount) && amount > 0) record.amount = amount;
+    const amountPriority = transactionAmountPriority(event);
+    if (Number.isFinite(amount) && amount > 0 && amountPriority >= record.amountPriority) {
+      record.amount = amount;
+      record.amountPriority = amountPriority;
+      record.currency = transactionCurrency(event);
+    }
     if (event.type === "Authorization" && event.status === "PENDING") record.authorizationPending = true;
     if (event.type === "Settlement" && event.status === "COMPLETE") record.settlementComplete = true;
     if (event.type === "Refund" && ["PENDING", "COMPLETE"].includes(event.status)) record.refundSeen = true;
@@ -366,7 +386,12 @@ export function classifyHistoricalCardFulfillments(transactions, options = {}) {
 
   const effective = authorizations
     .filter((item) => item.settlementComplete || (item.authorizationPending && !item.reversalSeen))
-    .map((item) => ({ ...item, tier: classifyOpenAiTier(item.amount) }));
+    .map((item) => ({
+      ...item,
+      tier: classifyOpenAiTier(item.amount)
+        || (knownLane === "plus" && item.authorizationPending && !item.settlementComplete
+          && item.currency && item.currency !== "USD" ? "plus" : null)
+    }));
   if (effective.length === 0) {
     return Object.freeze({ lane: knownLane, consumed: 0, state: "AVAILABLE", reason: null });
   }

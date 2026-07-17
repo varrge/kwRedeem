@@ -643,6 +643,41 @@ const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   completed: "履约完成"
 };
 
+const MEMBERSHIP_INVENTORY_LABELS = {
+  not_started: "尚未初始化",
+  running: "进行中",
+  discovering: "正在发现卡片",
+  reconciling: "正在对账",
+  completed: "已完成",
+  full: "全量初始化",
+  refresh: "全量刷新",
+  targeted: "定向对账",
+  active: "正常",
+  frozen: "已冻结",
+  cancelled: "已注销",
+  deleted: "已删除",
+  missing: "上游卡片不存在",
+  pending: "等待处理",
+  ready: "对账完成",
+  hold: "暂挂",
+  available: "可用",
+  capacity_full: "容量已满",
+  refunded_fulfillment: "存在已退款的会员履约",
+  pending_settlement: "等待交易结算",
+  unclassifiable_openai_payment: "无法分类的 OpenAI 支付",
+  upgrade_pair_missing: "缺少对应的 Plus 升级付款",
+  mixed_membership_lanes: "存在混用的会员类型",
+  mixed_final_tiers: "存在多个最终会员类型",
+  capacity_exceeded: "已超过卡片容量",
+  upstream_card_missing: "上游卡片不存在",
+  card_sync_rejected: "卡片同步连续失败",
+  webhook_recheck_pending: "等待重新对账",
+  card_transaction_pagination_exceeded: "卡片交易记录超过安全分页上限",
+  managed_card_not_found: "本地卡片记录不存在",
+  spacexcard_operation_rejected: "SpaceX Card 拒绝同步",
+  inventory_card_sync_failed: "卡片同步失败"
+};
+
 const SUB2API_REBATE_STATUS_LABELS = {
   pending: "待审核",
   approved: "已到账",
@@ -693,6 +728,14 @@ function getMembershipFulfillmentStatusLabel(value) {
 
 function renderMembershipFulfillmentStatus(value) {
   return renderStatus(value, MEMBERSHIP_FULFILLMENT_STATUS_LABELS);
+}
+
+function getMembershipInventoryLabel(value) {
+  return getStatusLabel(value, MEMBERSHIP_INVENTORY_LABELS);
+}
+
+function renderMembershipInventoryStatus(value) {
+  return renderStatus(value, MEMBERSHIP_INVENTORY_LABELS);
 }
 
 function setAuthState(isLoggedIn, username = "") {
@@ -1542,7 +1585,7 @@ async function refreshMembershipFulfillmentConsole() {
     <div>GPT Token：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
     <div>Extension Token：<strong>${dependencies.hasExtensionToken ? "已配置" : "未配置"}</strong></div>
     <div>绑定扩展：<code>${escapeHtml(dependencies.boundInstallationId || "未绑定")}</code></div>
-    <div>库存初始化：<strong>${escapeHtml(settings.inventoryStatus || "not_started")}</strong></div>
+    <div>库存初始化：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
     <div>业务时区：${escapeHtml(settings.businessTimezone || "Asia/Shanghai")}</div>
     <div>更新时间：${escapeHtml(settings.updatedAt || "-")}</div>
   `;
@@ -1743,21 +1786,21 @@ async function refreshMembershipInventoryConsole(settings = {}) {
   refs.membershipInventoryInitialize.disabled = running || !settings.hasAppSecret;
   refs.membershipInventoryRefresh.disabled = running || settings.inventoryStatus !== "completed";
   refs.membershipInventoryProgress.innerHTML = run ? `
-    <div>任务：<code>${escapeHtml(run.id)}</code> / ${escapeHtml(run.mode || "full")}</div>
-    <div>状态：<strong>${escapeHtml(run.status)}</strong></div>
+    <div>任务：<code>${escapeHtml(run.id)}</code> / ${escapeHtml(getMembershipInventoryLabel(run.mode || "full"))}</div>
+    <div>状态：<strong>${escapeHtml(getMembershipInventoryLabel(run.status))}</strong></div>
     <div>发现：${Number(run.discoveredCards) || 0} / ${run.totalCards == null ? "?" : Number(run.totalCards)}</div>
     <div>处理：${Number(run.processedCards) || 0}，HOLD：${Number(run.heldCards) || 0}</div>
-    <div>最后错误：${escapeHtml(run.lastErrorCode || settings.lastInventoryError || "-")}</div>
+    <div>最后错误：${escapeHtml(getMembershipInventoryLabel(run.lastErrorCode || settings.lastInventoryError || "-"))}</div>
     <div>更新时间：${escapeHtml(run.updatedAt || "-")}</div>
   ` : "暂无库存初始化记录。";
 
   renderTable(refs.membershipCardList, [
     { label: "卡片", render: (item) => `<code>${escapeHtml(item.display || "-")}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamCardId)}</span>` },
     { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode || "-")}</code>` },
-    { label: "上游状态", render: (item) => renderStatus(item.upstreamStatus || "-") },
+    { label: "上游状态", render: (item) => renderMembershipInventoryStatus(item.upstreamStatus || "-") },
     { label: "余额", render: (item) => `$${Number(item.availableAmount || 0).toFixed(2)}` },
-    { label: "Lane / 容量", render: (item) => `${escapeHtml(item.lane || "未分配")} / ${Number(item.consumedSlots) || 0}<br/><span class="hint">${escapeHtml(item.capacityState || "-")}</span>` },
-    { label: "对账", render: (item) => `${escapeHtml(item.reconciliationState || "-")}<br/><span class="hint">${escapeHtml(item.reconciliationReason || "-")}</span>` },
+    { label: "Lane / 容量", render: (item) => `${escapeHtml(item.lane || "未分配")} / ${Number(item.consumedSlots) || 0}<br/><span class="hint">${escapeHtml(getMembershipInventoryLabel(item.capacityState || "-"))}</span>` },
+    { label: "对账", render: (item) => `${renderMembershipInventoryStatus(item.reconciliationState || "-")}<br/><span class="hint">${escapeHtml(getMembershipInventoryLabel(item.reconciliationReason || "-"))}</span>` },
     { label: "三档行情", render: (item) => (item.prices || []).map((price) => `
       <div>${escapeHtml(price.tier)}：${price.found ? `$${Number(price.amount).toFixed(2)}` : "无"}<br/><span class="hint">${escapeHtml(price.providerTime || "-")}</span></div>
     `).join("") || "-" },

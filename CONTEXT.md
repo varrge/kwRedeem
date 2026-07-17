@@ -217,7 +217,8 @@ _Avoid_: Guessing a lane, treating uncertain history as unused capacity
 
 **Target Membership Tier**:
 The final ChatGPT membership outcome purchased by a redeem order: Plus, x5, or x20. It is defined explicitly by the purchased KaWang product and remains fixed for the lifetime of the order.
-_Avoid_: Inferring the tier from a site slug, product title, or CDK prefix
+For manual-processing membership CDKs, the stored `manual_type` is the immutable purchased-tier snapshot used at redemption; product `membership_tier` remains the source for non-manual product orders.
+_Avoid_: Inferring the tier from a site slug, product title, or CDK prefix; ignoring the explicit manual-CDK type
 
 **Staged Membership Upgrade**:
 The fulfillment path for an x5 or x20 order that first purchases Plus and then returns to ChatGPT plan management to change to the target tier. Its Plus charge and upgrade charge are two effective payments for one membership fulfillment.

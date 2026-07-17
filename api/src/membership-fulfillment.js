@@ -36,6 +36,7 @@ import {
 import {
   acquireBrowserFulfillmentLease,
   acquirePaymentBrowserFulfillmentLease,
+  createMembershipFulfillmentForOrder,
   expireBrowserFulfillmentLease,
   heartbeatBrowserFulfillmentLease,
   membershipCheckoutAdapterVersion,
@@ -1458,6 +1459,61 @@ export function createMembershipFulfillmentService(options) {
       : db.prepare("SELECT * FROM membership_fulfillments ORDER BY created_at DESC LIMIT ?").all(parsed.data.limit);
     setNoStore(reply);
     return { items: rows.map(serializeFulfillment) };
+  });
+
+  app.post("/api/admin/membership-fulfillments/backfill", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({
+      orderNo: z.string().trim().min(1).max(128)
+    }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "订单号无效" });
+
+    try {
+      const result = db.transaction(() => {
+        const order = db.prepare(`
+          SELECT o.*, c.manual_type AS cdkey_manual_type, c.metadata AS cdkey_metadata
+          FROM redeem_orders o
+          LEFT JOIN cdkeys c ON c.id = o.cdkey_id
+          WHERE o.order_no = ?
+        `).get(parsed.data.orderNo);
+        if (!order) return { error: "not_found" };
+
+        const existing = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
+        if (existing) return { item: existing, created: false };
+        if (order.extension_delivery_status !== "succeeded") return { error: "delivery" };
+
+        let metadata = {};
+        try {
+          metadata = JSON.parse(order.cdkey_metadata || "{}");
+        } catch {}
+        const manualType = String(order.cdkey_manual_type || metadata.manualType || "").trim();
+        const item = createMembershipFulfillmentForOrder(db, {
+          orderId: order.id,
+          orderNo: order.order_no,
+          productId: order.product_id,
+          manualType,
+          createdAt: order.created_at
+        });
+        if (!item) return { error: "tier" };
+        createAuditLog({
+          action: "membership.fulfillment.backfill",
+          actor: request.admin.username,
+          resourceType: "membership_fulfillment",
+          resourceId: item.id,
+          detail: { orderNo: parsed.data.orderNo, targetTier: item.target_tier }
+        });
+        return { item, created: true };
+      }).immediate();
+
+      if (result.error === "not_found") return reply.code(404).send({ message: "订单不存在" });
+      if (result.error === "delivery") {
+        return reply.code(409).send({ message: "该订单的 Cookie 交付尚未成功，不能补建会员履约" });
+      }
+      if (result.error === "tier") return reply.code(409).send({ message: "该订单没有可识别的会员类型" });
+      setNoStore(reply);
+      return { item: serializeFulfillment(result.item), created: result.created };
+    } catch {
+      return reply.code(409).send({ message: "该订单的会员类型无效，未补建履约" });
+    }
   });
 
   app.get("/api/admin/membership-fulfillments/:id", { preHandler: requireAdmin }, async (request, reply) => {

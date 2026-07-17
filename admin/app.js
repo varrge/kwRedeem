@@ -94,6 +94,8 @@ const refs = {
   membershipFulfillmentSettingsResult: document.querySelector("#membership-fulfillment-settings-result"),
   membershipFulfillmentRefresh: document.querySelector("#membership-fulfillment-refresh"),
   membershipFulfillmentListRefresh: document.querySelector("#membership-fulfillment-list-refresh"),
+  membershipFulfillmentBackfillForm: document.querySelector("#membership-fulfillment-backfill-form"),
+  membershipFulfillmentBackfillOrder: document.querySelector("#membership-fulfillment-backfill-order"),
   membershipFulfillmentList: document.querySelector("#membership-fulfillment-list"),
   membershipFulfillmentListResult: document.querySelector("#membership-fulfillment-list-result"),
   membershipFulfillmentDetail: document.querySelector("#membership-fulfillment-detail"),
@@ -5341,6 +5343,30 @@ refs.membershipFulfillmentListRefresh?.addEventListener("click", async () => {
     setHint(refs.membershipFulfillmentListResult, error.message);
   } finally {
     setButtonBusy(refs.membershipFulfillmentListRefresh, false);
+  }
+});
+
+refs.membershipFulfillmentBackfillForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  const orderNo = refs.membershipFulfillmentBackfillOrder.value.trim();
+  if (!window.confirm(`确认只为订单 ${orderNo} 补建会员履约？此操作不会开卡、充值或付款。`)) return;
+  setButtonBusy(submitButton, true, "补建中...");
+  try {
+    const payload = await api("/api/admin/membership-fulfillments/backfill", {
+      method: "POST",
+      body: JSON.stringify({ orderNo })
+    });
+    refs.membershipFulfillmentBackfillForm.reset();
+    await refreshMembershipFulfillments();
+    setHint(
+      refs.membershipFulfillmentListResult,
+      payload.created ? "会员履约已补建，Worker 将继续检查订阅状态" : "该订单已经存在会员履约"
+    );
+  } catch (error) {
+    setHint(refs.membershipFulfillmentListResult, error.message);
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 

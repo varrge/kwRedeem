@@ -20,6 +20,7 @@ test("membership rollout console exposes only controlled phase 4-7 operations", 
 
   const requiredIds = [
     "membership-rollout-mode-form",
+    "membership-fulfillment-backfill-form",
     "membership-canary-start-form",
     "membership-canary-form",
     "membership-canary-ready-list",
@@ -69,6 +70,7 @@ test("membership rollout console exposes only controlled phase 4-7 operations", 
 test("membership rollout console uses the spec routes and clears fresh passwords", () => {
   for (const route of [
     "/api/admin/live-canary-authorizations",
+    "/api/admin/membership-fulfillments/backfill",
     "/api/admin/tier-rollout-qualifications",
     "/api/admin/automatic-checkout-scopes",
     "/disable",

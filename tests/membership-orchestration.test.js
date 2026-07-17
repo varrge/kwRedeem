@@ -82,6 +82,9 @@ test("aggregate snapshots the product tier and queues duplicate ChatGPT identiti
   insertOrder("order-a", "KWMFA", "product-x5", "User@Example.com");
   insertOrder("order-b", "KWMFB", "product-x5", "user@example.com");
   insertOrder("order-plain", "KWMFPLAIN", "product-plain", "plain@example.com");
+  insertOrder("order-manual-x5", "KWMFMANUALX5", "product-plain", "manual-x5@example.com", "pending");
+  insertOrder("order-manual-x20", "KWMFMANUALX20", "product-plain", "manual-x20@example.com", "pending");
+  insertOrder("order-manual-plus", "KWMFMANUALPLUS", "product-plain", "manual-plus@example.com", "pending");
 
   const first = createMembershipFulfillmentForOrder(db, {
     id: "mf-a",
@@ -105,6 +108,27 @@ test("aggregate snapshots the product tier and queues duplicate ChatGPT identiti
     productId: "product-plain",
     createdAt: at
   }), null);
+  assert.equal(createMembershipFulfillmentForOrder(db, {
+    orderId: "order-manual-x5",
+    orderNo: "KWMFMANUALX5",
+    productId: "product-plain",
+    manualType: "x5",
+    createdAt: at
+  }).target_tier, "x5");
+  assert.equal(createMembershipFulfillmentForOrder(db, {
+    orderId: "order-manual-x20",
+    orderNo: "KWMFMANUALX20",
+    productId: "product-plain",
+    manualType: "x20",
+    createdAt: at
+  }).target_tier, "x20");
+  assert.equal(createMembershipFulfillmentForOrder(db, {
+    orderId: "order-manual-plus",
+    orderNo: "KWMFMANUALPLUS",
+    productId: "product-plain",
+    manualType: "PLUS",
+    createdAt: at
+  }).target_tier, "plus");
 
   const activatedFirst = activateMembershipFulfillmentIdentity(db, {
     orderNo: "KWMFA",

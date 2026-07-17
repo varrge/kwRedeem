@@ -561,6 +561,10 @@
               <button id="membership-fulfillment-list-refresh" type="button" class="ghost-btn small">刷新列表</button>
             </div>
             <p class="hint">这里只显示脱敏后的编排状态与尝试记录，不显示账号身份、Session、Checkout 链接或卡片资料。</p>
+            <form id="membership-fulfillment-backfill-form" class="actions-row mt-24">
+              <input id="membership-fulfillment-backfill-order" class="small-input" placeholder="输入已完成 Cookie 交付的订单号" autocomplete="off" required />
+              <button type="submit" class="ghost-btn small">补建单笔履约</button>
+            </form>
             <div id="membership-fulfillment-list" class="table-wrapper mt-24"></div>
             <div id="membership-fulfillment-list-result" class="hint"></div>
             <div id="membership-fulfillment-detail" class="hint mt-24">点击记录中的“详情”查看只读履约轨迹。</div>

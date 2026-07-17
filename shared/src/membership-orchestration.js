@@ -69,9 +69,10 @@ export function deriveMembershipAccountLockKey(secret, identity = {}) {
 
 export function createMembershipFulfillmentForOrder(db, input = {}) {
   const product = db.prepare("SELECT membership_tier FROM products WHERE id = ?").get(input.productId);
-  const targetTier = product?.membership_tier || null;
+  const manualType = String(input.manualType || "").trim().toLowerCase();
+  const targetTier = manualType || product?.membership_tier || null;
   if (targetTier === null) return null;
-  if (!membershipTiers.includes(targetTier)) throw new TypeError("商品会员类型无效");
+  if (!membershipTiers.includes(targetTier)) throw new TypeError("订单会员类型无效");
 
   const existing = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(input.orderId);
   if (existing) {

@@ -6466,6 +6466,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         orderId,
         orderNo,
         productId: site.product_id || cdkey.product_id,
+        manualType: manualProcessing ? manualType : null,
         createdAt: now
       });
 

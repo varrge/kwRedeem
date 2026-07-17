@@ -1257,6 +1257,75 @@ test("membership inventory admin APIs expose only masked cards and serialize ref
   assert.equal(duplicate.json().code, "INVENTORY_ALREADY_RUNNING");
 });
 
+test("manual membership CDKs create the target fulfillment and support one-order historical backfill", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/admin/cdkeys/create",
+    headers,
+    payload: {
+      sourceKey: "",
+      emailToken: "",
+      siteId: "site_demo",
+      prefix: "X20-FULFILLMENT",
+      processingMode: "manual",
+      manualType: "x20"
+    }
+  });
+  assert.equal(created.statusCode, 200);
+
+  const redeemed = await app.inject({
+    method: "POST",
+    url: "/api/public/redeem",
+    payload: {
+      publicKey: created.json().publicKey,
+      sessionPayload: JSON.stringify({ user: { email: "manual-x20@example.com" } }),
+      abandonRemainingTime: false
+    }
+  });
+  assert.equal(redeemed.statusCode, 200);
+  const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
+  const original = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
+  assert.equal(original.target_tier, "x20");
+  assert.equal(original.state, "WAITING_SESSION_ACTIVATION");
+
+  db.prepare("DELETE FROM membership_fulfillments WHERE id = ?").run(original.id);
+  db.prepare(`
+    UPDATE redeem_orders
+    SET extension_delivery_status = 'succeeded', extension_delivery_updated_at = ?
+    WHERE id = ?
+  `).run(new Date().toISOString(), order.id);
+  const repaired = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-fulfillments/backfill",
+    headers,
+    payload: { orderNo: order.order_no }
+  });
+  assert.equal(repaired.statusCode, 200);
+  assert.equal(repaired.json().created, true);
+  assert.equal(repaired.json().item.targetTier, "x20");
+  assert.equal(repaired.json().item.state, "WAITING_SESSION_ACTIVATION");
+
+  const repeated = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-fulfillments/backfill",
+    headers,
+    payload: { orderNo: order.order_no }
+  });
+  assert.equal(repeated.statusCode, 200);
+  assert.equal(repeated.json().created, false);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM admin_audit_logs
+    WHERE action = 'membership.fulfillment.backfill' AND resource_id = ?
+  `).get(repaired.json().item.id).count, 1);
+});
+
 test("admin UI exposes locked membership credentials without money-operation controls", async () => {
   const { JSDOM } = await import("jsdom");
   const html = fs.readFileSync(path.resolve("admin", "index.html"), "utf8");

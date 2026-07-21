@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>配置 kwMembership Go 自动化</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+<main>
+  <div class="eyebrow">Lesson 01 · Production setup</div>
+  <h1>配置 kwMembership Go 自动化</h1>
+  <p class="lede">目标不是“学会 Go 语法”，而是让你能独立确认 Worker 指向正确数据库、配置后台凭据、观察订单状态，并始终把真实付款留在受控发布流程里。</p>
+  <div class="meta"><span class="pill">约 20 分钟</span><span class="pill">当前服务器版</span><span class="pill">默认不扣款</span></div>
+
+  <div class="architecture" aria-label="系统结构">
+    <div>kwRedeem 后台<span>保存凭据与展示状态</span></div>
+    <div>SQLite / WAL<span>唯一共享数据源</span></div>
+    <div>Go Worker<span>完整自动化流程</span></div>
+    <div>Headless Chrome<span>不可见的结账引擎</span></div>
+  </div>
+  <p class="muted">关键理解：Go 不需要第二套数据库，也不需要扩展。它直接读写 kwRedeem 的数据库；“不用打开浏览器”指不用人工打开可见窗口，Go 仍通过无界面 Chrome 处理真实网页。Chrome 官方也将 Headless 定义为无可见 UI 的自动化运行方式。</p>
+
+  <section class="step">
+    <div class="step-number">Step 1</div>
+    <h2>确认服务器上的三个位置</h2>
+    <table>
+      <tr><th>内容</th><th>当前服务器路径</th></tr>
+      <tr><td>Go Worker</td><td><code>/opt/kwmembership</code></td></tr>
+      <tr><td>Go 运行参数</td><td><code>/etc/kwmembership.env</code></td></tr>
+      <tr><td>kwRedeem</td><td><code>/var/local/1panel/apps/openresty/openresty/www/sites/key/index</code></td></tr>
+    </table>
+    <p>登录服务器：</p>
+    <pre><code>ssh root@64.90.1.22</code></pre>
+    <label><input type="checkbox" data-lesson-check /> 我能找到这三个位置</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 2</div>
+    <h2>配置 Go 的运行参数</h2>
+    <p>编辑文件：</p>
+    <pre><code>sudoedit /etc/kwmembership.env</code></pre>
+    <p>当前服务器应使用：</p>
+    <pre><code>KAWANG_PROJECT_ROOT=/var/local/1panel/apps/openresty/openresty/www/sites/key/index
+KWMEMBERSHIP_CHROME_PATH=/usr/bin/google-chrome-stable
+KWMEMBERSHIP_BROWSER_TIMEOUT_MS=90000</code></pre>
+    <ul>
+      <li><code>KAWANG_PROJECT_ROOT</code>：告诉 Go 去哪里读取 kwRedeem 的 <code>.env</code>、数据库路径和 JWT 密钥。</li>
+      <li><code>KWMEMBERSHIP_CHROME_PATH</code>：无界面 Chrome 的可执行文件。</li>
+      <li><code>KWMEMBERSHIP_BROWSER_TIMEOUT_MS</code>：一次结账浏览器会话的总超时，默认 90 秒。</li>
+    </ul>
+    <div class="callout safe">这个文件不需要复制 <code>DATABASE_PATH</code> 或 <code>JWT_SECRET</code>。Go 会从 kwRedeem 的 <code>.env</code> 读取，确保两边使用同一数据库和同一加密密钥。</div>
+    <label><input type="checkbox" data-lesson-check /> 三项路径和超时均已确认</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 3</div>
+    <h2>运行不会领取订单的自检</h2>
+    <pre><code>sudo bash -lc '
+  set -a
+  source /etc/kwmembership.env
+  set +a
+  cd /opt/kwmembership
+  ./bin/kwmembership-worker --check
+'</code></pre>
+    <p><strong>成功标志：</strong><code>shared kwRedeem database configuration is valid</code></p>
+    <p>它会检查共享数据库表结构，并实际启动一次 <code>about:blank</code> Headless Chrome；不会获取订单、调用 Provider 或付款。</p>
+    <label><input type="checkbox" data-lesson-check /> 自检成功且没有配置错误</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 4</div>
+    <h2>在 kwRedeem 后台保存业务凭据</h2>
+    <p>打开项目后台，进入 <strong>ChatGPT 会员自动化 → SpaceX Card OpenAPI</strong>，填写：</p>
+    <table>
+      <tr><th>字段</th><th>用途</th><th>要求</th></tr>
+      <tr><td><code>app_id</code></td><td>SpaceX Card OpenAPI 身份</td><td>接口未提供时可留空</td></tr>
+      <tr><td><code>app_secret</code></td><td>读取卡片和交易、执行受控资金动作</td><td>首次配置必填</td></tr>
+      <tr><td>Webhook 签名密钥</td><td>验证卡交易回调签名</td><td>配置 Webhook 后填写</td></tr>
+      <tr><td>SpaceXCard GPT Token</td><td>获取 Checkout 地址和 Cookie</td><td>首次配置必填</td></tr>
+    </table>
+    <p>点击 <strong>保存加密凭据</strong>。保存后页面只显示“已配置”，不会回显明文。</p>
+    <div class="callout safe">保存这些凭据会把付款 Gate 重置为 <code>disabled</code>。这是正确的安全默认，不要在基础配置阶段改成 <code>canary</code> 或 <code>automatic</code>。</div>
+    <p>SpaceX Card 交易 Webhook 地址配置为：</p>
+    <pre><code>https://apikey.vsakura.top/api/webhooks/spacexcard/card-transactions</code></pre>
+    <label><input type="checkbox" data-lesson-check /> 后台显示 app_secret、Webhook、GPT Token 的正确配置状态</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 5</div>
+    <h2>初始化卡片库存</h2>
+    <p>仍在同一后台页面，找到 <strong>卡片库存初始化与刷新</strong>：</p>
+    <ol>
+      <li>首次配置点击 <strong>初始化全部卡片</strong>。</li>
+      <li>等待任务完成，不要在进行中更换 OpenAPI 凭据。</li>
+      <li>以后日常同步使用 <strong>刷新库存与行情</strong>。</li>
+    </ol>
+    <p><strong>成功标志：</strong>实施状态中的“库存初始化”显示已完成，卡片列表只展示脱敏资料。</p>
+    <label><input type="checkbox" data-lesson-check /> 库存初始化已完成</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 6</div>
+    <h2>启动并确认 Go Worker</h2>
+    <pre><code>sudo systemctl enable --now kwmembership-worker
+sudo systemctl status kwmembership-worker --no-pager
+sudo journalctl -u kwmembership-worker -n 100 --no-pager</code></pre>
+    <p>后台 <strong>实施状态</strong> 应看到：</p>
+    <table>
+      <tr><th>字段</th><th>正确值</th></tr>
+      <tr><td>运行主体</td><td><code>go</code></td></tr>
+      <tr><td>状态</td><td>运行中</td></tr>
+      <tr><td>版本</td><td>当前 Go 发布版本</td></tr>
+      <tr><td>最近心跳 / Tick</td><td>持续更新</td></tr>
+      <tr><td>最近错误</td><td><code>无</code></td></tr>
+      <tr><td>结账执行器</td><td><code>go-headless</code></td></tr>
+      <tr><td>浏览器扩展</td><td>不需要</td></tr>
+    </table>
+    <label><input type="checkbox" data-lesson-check /> 服务与后台状态均健康</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 7</div>
+    <h2>用新订单验证自动接收</h2>
+    <ol>
+      <li>客户正常创建会员订单并提交可用 Session。</li>
+      <li>Go 按 <code>WORKER_POLL_MS</code> 执行 Tick（默认约 5 秒），自动发现部署水位线之后创建的新会员订单。</li>
+      <li>在后台“会员履约记录”刷新查看状态与错误码。</li>
+    </ol>
+    <div class="callout warn"><strong>历史订单不会自动批量接收。</strong>如果确实需要处理旧订单，只能在“会员履约记录”输入订单号并使用“补建单笔履约”。补建只建立编排记录，不等于授权付款。</div>
+    <p>Session 失效时，该订单会显示 <code>SESSION_INVALID</code>，不会因为一个坏 Session 停掉所有新订单。</p>
+    <label><input type="checkbox" data-lesson-check /> 能在后台找到新订单的 Go 履约状态</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 8</div>
+    <h2>知道在哪里停止：基础配置完成</h2>
+    <table>
+      <tr><th>Gate 模式</th><th>含义</th><th>本教程是否执行</th></tr>
+      <tr><td><code>disabled</code></td><td>不允许进入真实付款边界</td><td>是，保持此状态</td></tr>
+      <tr><td><code>no_charge</code></td><td>只做无扣款页面验证</td><td>后续受控验证</td></tr>
+      <tr><td><code>canary</code></td><td>只批准明确选中的单笔履约，且各阶段仍需页面快照批准</td><td>单独上线流程</td></tr>
+      <tr><td><code>automatic</code></td><td>只对已精确启用、已达资格的范围自动执行</td><td>Canary 成功后再评估</td></tr>
+    </table>
+    <div class="callout danger"><strong>不要把“Go 服务正在运行”理解成“必须开启付款”。</strong>Worker 在 Gate 关闭时仍会做安全检查、状态推进和必要对账；真实付款需要新的 <code>go-headless-v1</code> Canary 与范围授权。</div>
+    <label><input type="checkbox" data-lesson-check /> 当前付款 Gate 保持 <code>disabled</code></label>
+  </section>
+
+  <section class="card checklist">
+    <h2>完成度</h2>
+    <div class="progress"><span data-progress></span></div>
+    <p class="muted" data-progress-label>0/8 已完成</p>
+    <p>当 8 项全部完成，你已经配置好了 Go 自动化的“运行与观察部分”。真实扣款上线仍是下一课的受控 Canary，不属于基础配置。</p>
+  </section>
+
+  <details class="card">
+    <summary><strong>附：本地开发环境怎么启动</strong></summary>
+    <pre><code>cd /Users/varrge/workspace/kwRedeem
+npm install
+npm run db:init
+
+cd /Users/varrge/workspace/kwMembership
+cp .env.example .env
+# .env 中保持 KAWANG_PROJECT_ROOT=../kwRedeem
+bash scripts/build.sh
+bash scripts/check.sh
+bash scripts/start-worker.sh</code></pre>
+    <p>Go 官方说明，<code>go build</code> 会编译包及其依赖并生成可执行文件；本项目的 <code>scripts/build.sh</code> 已经封装了这一步。</p>
+  </details>
+
+  <h2>继续查阅</h2>
+  <ul>
+    <li><a href="../reference/kwmembership-operations-cheatsheet.html">一页运维速查表</a></li>
+    <li><a href="../../kwMembership/README.md">kwMembership 项目 README</a></li>
+    <li><a href="https://developer.chrome.com/docs/chromium/headless">Chrome Headless 官方说明</a></li>
+    <li><a href="https://www.sqlite.org/wal.html">SQLite WAL 官方说明</a></li>
+    <li><a href="https://www.freedesktop.org/software/systemd/man/255/journalctl.html">journalctl 官方手册</a></li>
+  </ul>
+  <p class="footer">有任何一步的输出和教程不同，先停在该步骤，把<strong>脱敏后的错误码</strong>发给我；不要发送 Session、Token、Cookie 或卡资料。</p>
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

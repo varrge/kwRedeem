@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kwMembership Go 运维速查</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+<main>
+  <div class="eyebrow">Quick reference</div>
+  <h1>kwMembership Go 运维速查</h1>
+  <p class="lede">只包含日常最常用的安全命令。默认不改变付款 Gate。</p>
+
+  <h2>固定位置</h2>
+  <table>
+    <tr><th>用途</th><th>位置</th></tr>
+    <tr><td>Go 项目</td><td><code>/opt/kwmembership</code></td></tr>
+    <tr><td>Go 运行参数</td><td><code>/etc/kwmembership.env</code></td></tr>
+    <tr><td>kwRedeem 项目</td><td><code>/var/local/1panel/apps/openresty/openresty/www/sites/key/index</code></td></tr>
+    <tr><td>共享数据库</td><td><code>…/index/data/kawang.db</code></td></tr>
+    <tr><td>服务</td><td><code>kwmembership-worker.service</code></td></tr>
+  </table>
+
+  <h2>健康检查</h2>
+  <pre><code>sudo systemctl status kwmembership-worker --no-pager
+sudo systemctl is-active kwmembership-worker
+sudo journalctl -u kwmembership-worker -n 100 --no-pager</code></pre>
+
+  <h2>安全自检</h2>
+  <pre><code>sudo bash -lc '
+  set -a
+  source /etc/kwmembership.env
+  set +a
+  cd /opt/kwmembership
+  ./bin/kwmembership-worker --check
+'</code></pre>
+  <p class="callout safe">成功标志：输出 <code>shared kwRedeem database configuration is valid</code>。该检查只打开共享数据库并启动一次 <code>about:blank</code> 无界面 Chrome，不领取订单。</p>
+
+  <h2>改完运行参数后</h2>
+  <pre><code>sudo systemctl restart kwmembership-worker
+sudo systemctl status kwmembership-worker --no-pager</code></pre>
+
+  <h2>后台健康标志</h2>
+  <table>
+    <tr><th>字段</th><th>应看到</th></tr>
+    <tr><td>运行主体</td><td><code>go</code></td></tr>
+    <tr><td>状态</td><td>运行中</td></tr>
+    <tr><td>心跳 / Tick</td><td>持续更新</td></tr>
+    <tr><td>最近错误</td><td><code>无</code></td></tr>
+    <tr><td>结账执行器</td><td><code>go-headless</code></td></tr>
+    <tr><td>浏览器扩展</td><td>不需要</td></tr>
+  </table>
+
+  <div class="callout danger"><strong>不要：</strong>打印 Session、Token 或卡资料；单独复制正在使用的 <code>kawang.db</code> 而忽略 WAL；为了测试直接选择 <code>canary</code> 或 <code>automatic</code>。</div>
+  <p class="footer"><a href="../lessons/0001-configure-kwmembership-go-worker.html">返回完整教程</a></p>
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

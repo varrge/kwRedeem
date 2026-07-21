@@ -24,3 +24,5 @@ The existing rollout rules remain fail-closed:
 ## Consequences
 
 Production needs Chrome or Chromium installed on the worker host. `kwmembership-worker --check` launches an isolated `about:blank` headless process to validate the binary and sandbox without contacting an external provider or claiming work. The old extension endpoints and tables may remain temporarily for compatibility and historical evidence, but the Go production path does not call them and new fulfillment states use `CHECKOUT_PREFLIGHT_READY` and `CHECKOUT_EXECUTION_WAIT` instead of `BROWSER_LEASE_WAIT`.
+
+Database initialization persists a Go Intake watermark. Automatic discovery accepts only membership orders created at or after that watermark, so deploying the worker cannot silently replay the historical order backlog; older orders require the existing explicit, audited single-order backfill path.

@@ -834,6 +834,13 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS membership_intake_settings (
+      id TEXT PRIMARY KEY,
+      accept_orders_created_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS membership_fulfillments (
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL UNIQUE,
@@ -1961,6 +1968,12 @@ function seedDefaults(db) {
       id, owner, holder_token, epoch, status, updated_at
     ) VALUES ('default', NULL, NULL, 0, 'stopped', ?)
   `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO membership_intake_settings (
+      id, accept_orders_created_at, created_at, created_by
+    ) VALUES ('default', ?, ?, 'system')
+  `).run(new Date().toISOString(), new Date().toISOString());
 
   db.prepare(`
     INSERT OR IGNORE INTO browser_fulfillment_lease (id, epoch, state, updated_at)

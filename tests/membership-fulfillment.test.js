@@ -370,6 +370,7 @@ test("database initializes membership tables and safe defaults", () => {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
   for (const name of [
     "membership_fulfillments",
+    "membership_intake_settings",
     "managed_cards",
     "managed_card_transactions",
     "card_capacity_reservations",
@@ -385,6 +386,8 @@ test("database initializes membership tables and safe defaults", () => {
   assert.equal(settings.enabled, 0);
   assert.equal(settings.inventory_status, "not_started");
   assert.equal(settings.business_timezone, "Asia/Shanghai");
+  const intake = db.prepare("SELECT * FROM membership_intake_settings WHERE id = 'default'").get();
+  assert.equal(Number.isFinite(Date.parse(intake.accept_orders_created_at)), true);
   assert.equal(db.prepare("SELECT state FROM browser_fulfillment_lease WHERE id = 'default'").get().state, "available");
 });
 

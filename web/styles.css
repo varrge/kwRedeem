@@ -454,7 +454,7 @@ input:focus, textarea:focus {
   font-size: 18px;
   font-weight: 700;
   text-align: center;
-  color: #fff;
+  color: var(--text);
 }
 
 .status-badge {
@@ -513,7 +513,7 @@ input:focus, textarea:focus {
 .result-item strong {
   display: block;
   font-size: 14px;
-  color: #fff;
+  color: var(--text);
   word-break: break-all;
 }
 
@@ -644,7 +644,7 @@ input:focus, textarea:focus {
 
 .modal-value {
   font-size: 15px;
-  color: #fff;
+  color: var(--text);
   font-weight: 700;
   word-break: break-all;
   text-align: right;

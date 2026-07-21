@@ -793,7 +793,8 @@ function getMembershipFulfillmentStatusLabel(value) {
 }
 
 function renderMembershipFulfillmentStatus(value) {
-  return renderStatus(value, MEMBERSHIP_FULFILLMENT_STATUS_LABELS);
+  const state = String(value || "");
+  return `<span class="table-badge status-${state.toLowerCase()}" title="${escapeHtml(`状态码：${state || "-"}`)}">${escapeHtml(getMembershipFulfillmentStatusLabel(state))}</span>`;
 }
 
 function getMembershipInventoryLabel(value) {
@@ -2048,7 +2049,7 @@ async function refreshMembershipInterventions() {
   const payload = await api("/api/admin/fulfillment-interventions?limit=200");
   renderTable(refs.membershipInterventionList, [
     { label: "履约 / 提醒", render: (item) => `<code>${escapeHtml(maskMembershipIdentifier(item.fulfillmentId))}</code><br/><span class="hint">${escapeHtml(maskMembershipIdentifier(item.id))}</span>` },
-    { label: "状态版本", render: (item) => `<code>${escapeHtml(item.state || "-")}</code><br/><span class="hint">revision ${Number(item.stateRevision) || 0}</span>` },
+    { label: "状态版本", render: (item) => `${renderMembershipFulfillmentStatus(item.state)}<br/><span class="hint">revision ${Number(item.stateRevision) || 0}</span>` },
     { label: "原因", render: (item) => `<code>${escapeHtml(item.reasonCode || "-")}</code>` },
     { label: "通知", render: (item) => `${escapeHtml(item.feishuStatus || "-")}<br/><span class="hint">${escapeHtml(item.feishuSentAt || item.createdAt || "-")}</span>` },
     { label: "确认", render: (item) => item.acknowledgedAt

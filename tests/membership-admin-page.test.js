@@ -122,6 +122,36 @@ test("membership fulfillment states are displayed in Chinese", () => {
   dom.window.close();
 });
 
+test("membership intervention fulfillment states are displayed in Chinese", async () => {
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:4174/",
+    runScripts: "outside-only"
+  });
+  dom.window.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      items: [{
+        id: "fi-chinese-state",
+        fulfillmentId: "mf-chinese-state",
+        state: "PLUS_APPROVAL_WAIT",
+        stateRevision: 7,
+        reasonCode: "CANARY_AUTHORIZATION_REQUIRED",
+        feishuStatus: "pending",
+        createdAt: "2026-07-21T00:00:00.000Z"
+      }]
+    })
+  });
+  dom.window.eval(app);
+
+  await dom.window.refreshMembershipInterventions();
+  const tableText = dom.window.document.querySelector("#membership-intervention-list")?.textContent || "";
+  assert.match(tableText, /Plus 付款等待批准/);
+  assert.doesNotMatch(tableText, /PLUS_APPROVAL_WAIT/);
+
+  dom.window.close();
+});
+
 test("extension delivery errors are displayed in Chinese", async () => {
   const dom = new JSDOM(html, {
     url: "http://127.0.0.1:4174/",

@@ -1,6 +1,6 @@
 # ChatGPT membership fulfillment implementation specification
 
-Status: Accepted design — Phase 4–7 代码实现与模拟验证完成；受控生产验收待执行。
+Status: Superseded for production checkout execution by [ADR-0006](./adr/0006-go-headless-membership-checkout.md). Retained as the safety contract and legacy extension reference.
 
 This specification turns [ADR-0005](./adr/0005-chatgpt-checkout-browser-automation.md) into an implementation contract for kwRedeem and the bound GPT Helper extension. It covers Plus, x5, and x20 card inventory, funding, browser checkout, confirmation, renewal protection, operations, and rollout. It does not modify the official `sub2api/` reference checkout or use `sub.vsakura.top` for this workflow.
 

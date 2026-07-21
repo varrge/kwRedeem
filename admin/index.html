@@ -62,7 +62,7 @@
             <span class="icon">🛍️</span> 商城交付
           </button>
           <button class="nav-item" data-tab="extension-delivery">
-            <span class="icon">🧩</span> 扩展交付
+			<span class="icon">🧩</span> 旧扩展兼容
           </button>
           <button class="nav-item" data-tab="membership-fulfillment">
             <span class="icon">💳</span> 会员自动化
@@ -389,8 +389,8 @@
         <!-- Extension Delivery -->
         <section class="tab-panel hidden" data-panel="extension-delivery">
           <div class="content-header">
-            <h2>扩展自动交付</h2>
-            <p>将允许站点的新订单 Session 安全交付给唯一绑定的运营 Chrome 扩展</p>
+			<h2>旧扩展兼容</h2>
+			<p>仅保留历史 Session 交付兼容；会员自动化由 Go 无界面 Chrome 执行，不需要绑定扩展</p>
           </div>
 
           <div class="grid grid-2">
@@ -530,6 +530,11 @@
                   <input id="membership-webhook-secret" type="password" autocomplete="new-password" placeholder="whsec_...；留空保持不变" />
                 </label>
                 <label><input id="membership-clear-webhook-secret" type="checkbox" /> 清除已保存的 Webhook 密钥</label>
+				<label class="field">
+				  <span>SpaceXCard GPT Token（Checkout / Cookie）</span>
+				  <input id="membership-gpt-token" type="password" autocomplete="new-password" placeholder="留空保持不变" />
+				</label>
+				<label><input id="membership-clear-gpt-token" type="checkbox" /> 清除已保存的 GPT Token</label>
                 <button type="submit" class="primary-btn">保存加密凭据</button>
               </form>
               <div id="membership-fulfillment-settings-result" class="hint"></div>
@@ -537,7 +542,7 @@
 
             <div class="card">
               <div class="card-header"><h3>实施状态</h3></div>
-              <div id="membership-fulfillment-status" class="hint">正在读取状态…</div>
+              <div id="membership-fulfillment-status" class="hint" aria-live="polite">正在读取状态…</div>
               <div class="stack mt-24">
                 <label class="field">
                   <span>会员状态接口（固定）</span>
@@ -562,7 +567,7 @@
             </div>
             <p class="hint">这里只显示脱敏后的编排状态与尝试记录，不显示账号身份、Session、Checkout 链接或卡片资料。</p>
             <form id="membership-fulfillment-backfill-form" class="actions-row mt-24">
-              <input id="membership-fulfillment-backfill-order" class="small-input" placeholder="输入已完成 Cookie 交付的订单号" autocomplete="off" required />
+			  <input id="membership-fulfillment-backfill-order" class="small-input" placeholder="输入已提交 Session 的订单号" autocomplete="off" required />
               <button type="submit" class="ghost-btn small">补建单笔履约</button>
             </form>
             <div id="membership-fulfillment-list" class="table-wrapper mt-24"></div>
@@ -639,7 +644,7 @@
                       <option value="x20">x20</option>
                     </select>
                   </label>
-                  <label class="field"><span>Adapter 版本</span><input id="membership-no-charge-adapter" placeholder="checkout-v1" required /></label>
+				  <label class="field"><span>Adapter 版本</span><input id="membership-no-charge-adapter" placeholder="go-headless-v1" required /></label>
                   <label class="field"><span>有效价格契约 ID</span><input id="membership-no-charge-contract" placeholder="cpc_..." required /></label>
                   <label class="field"><span>页面显示价（PHP）</span><input id="membership-no-charge-amount" type="number" min="0.01" max="10000000" step="0.01" required /></label>
                 </div>
@@ -708,7 +713,7 @@
                 <label class="field"><span>已严格完成的 Canary 履约 ID</span><input id="membership-qualification-fulfillment" autocomplete="off" required /></label>
                 <div class="grid grid-2">
                   <label class="field"><span>Adapter 版本</span><input id="membership-qualification-adapter" autocomplete="off" required /></label>
-                  <label class="field"><span>Adapter 路径</span><input id="membership-qualification-path" placeholder="checkout-v1" autocomplete="off" required /></label>
+				  <label class="field"><span>Adapter 路径</span><input id="membership-qualification-path" placeholder="go-headless-v1" autocomplete="off" required /></label>
                 </div>
                 <label class="field"><span>价格契约 ID</span><input id="membership-qualification-contract" autocomplete="off" required /></label>
                 <button type="submit" class="primary-btn">触发权威资格检查</button>

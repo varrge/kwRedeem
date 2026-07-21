@@ -190,6 +190,10 @@ test("progression permit snapshots auth ids once and any new authorization block
   });
   assert.deepEqual(blocked, { authorizationState: "unexpected", newAuthorization: true });
   assert.equal(db.prepare("SELECT state FROM membership_fulfillments WHERE id = 'mf-progression'").get().state, "UNEXPECTED_PREAUTH");
+  const intervention = db.prepare(`
+    SELECT state, reason_code FROM fulfillment_interventions WHERE fulfillment_id = 'mf-progression'
+  `).get();
+  assert.deepEqual(intervention, { state: "UNEXPECTED_PREAUTH", reason_code: "UNEXPECTED_PREAUTH" });
 });
 
 test("submit permit is the conservative boundary and cannot be reissued after a lost response", () => {

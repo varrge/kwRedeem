@@ -94,7 +94,8 @@ log "生成前后台运行时配置..."
 npm run config:runtime
 
 log "重启服务（PM2）..."
-# Use startOrGracefulReload with ecosystem file so processes are created if missing.
+# Go 会员 worker 使用独立 systemd 生命周期，不属于本 PM2 配置。
+pm2 delete kawang-membership-worker >/dev/null 2>&1 || true
 pm2 startOrGracefulReload ecosystem.config.cjs --update-env
 
 log "在线更新完成。"

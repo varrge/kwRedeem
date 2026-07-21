@@ -122,7 +122,7 @@ export function createMembershipFulfillmentRunner(options = {}) {
       SELECT f.order_no, o.session_payload
       FROM membership_fulfillments f
       JOIN redeem_orders o ON o.id = f.order_id
-      WHERE f.state = 'WAITING_SESSION_ACTIVATION'
+	  WHERE f.state IN ('WAITING_SESSION_VALIDATION', 'WAITING_SESSION_ACTIVATION')
         AND o.extension_delivery_status = 'succeeded'
       ORDER BY f.created_at ASC LIMIT ?
     `).all(limit);

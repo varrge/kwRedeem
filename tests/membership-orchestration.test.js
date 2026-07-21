@@ -101,7 +101,7 @@ test("aggregate snapshots the product tier and queues duplicate ChatGPT identiti
     createdAt: at
   });
   assert.equal(first.target_tier, "x5");
-  assert.equal(second.state, "WAITING_SESSION_ACTIVATION");
+	assert.equal(second.state, "WAITING_SESSION_VALIDATION");
   assert.equal(createMembershipFulfillmentForOrder(db, {
     orderId: "order-plain",
     orderNo: "KWMFPLAIN",

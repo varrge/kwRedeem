@@ -657,6 +657,65 @@ test("membership admin settings encrypt credentials and keep payment locked", as
   const token = login.json().token;
   const headers = { authorization: `Bearer ${token}` };
 
+  const seededProcessor = db.prepare("SELECT * FROM membership_processor_lease WHERE id = 'default'").get();
+  assert.deepEqual(
+    db.prepare("PRAGMA table_info(membership_processor_lease)").all().map((column) => column.name),
+    [
+      "id", "owner", "holder_token", "epoch", "status", "version", "started_at",
+      "heartbeat_at", "expires_at", "last_tick_at", "last_success_at", "last_error_code", "updated_at"
+    ]
+  );
+  assert.equal(seededProcessor.owner, null);
+  assert.equal(seededProcessor.holder_token, null);
+  assert.equal(seededProcessor.epoch, 0);
+  assert.equal(seededProcessor.status, "stopped");
+
+  db.prepare(`
+    UPDATE membership_processor_lease
+    SET owner = 'go', holder_token = 'processor-token-redacted', status = 'active',
+        version = 'v1.2.3', heartbeat_at = '2026-07-20T01:02:03.000Z',
+        expires_at = '2999-07-20T01:02:23.000Z',
+        last_tick_at = '2026-07-20T01:02:02.000Z',
+        last_success_at = '2026-07-20T01:02:01.000Z', last_error_code = 'UPSTREAM_TIMEOUT'
+    WHERE id = 'default'
+  `).run();
+  const statusResponse = await app.inject({
+    method: "GET",
+    url: "/api/admin/membership-fulfillment/settings",
+    headers
+  });
+  assert.equal(statusResponse.statusCode, 200);
+  assert.deepEqual(statusResponse.json().settings.processor, {
+    owner: "go",
+    status: "active",
+    version: "v1.2.3",
+    heartbeatAt: "2026-07-20T01:02:03.000Z",
+    expiresAt: "2999-07-20T01:02:23.000Z",
+    lastTickAt: "2026-07-20T01:02:02.000Z",
+    lastSuccessAt: "2026-07-20T01:02:01.000Z",
+    lastErrorCode: "UPSTREAM_TIMEOUT"
+  });
+  assert.doesNotMatch(statusResponse.body, /processor-token-redacted/);
+  db.prepare(`
+    UPDATE membership_processor_lease
+    SET expires_at = '2000-01-01T00:00:00.000Z'
+    WHERE id = 'default'
+  `).run();
+  const staleStatus = await app.inject({
+    method: "GET",
+    url: "/api/admin/membership-fulfillment/settings",
+    headers
+  });
+  assert.equal(staleStatus.statusCode, 200);
+  assert.equal(staleStatus.json().settings.processor.status, "stale");
+  db.prepare(`
+    UPDATE membership_processor_lease
+    SET owner = NULL, holder_token = NULL, epoch = 0, status = 'stopped', version = NULL,
+        started_at = NULL, heartbeat_at = NULL, expires_at = NULL, last_tick_at = NULL,
+        last_success_at = NULL, last_error_code = NULL
+    WHERE id = 'default'
+  `).run();
+
   const locked = await app.inject({
     method: "PATCH",
     url: "/api/admin/membership-fulfillment/settings",
@@ -673,7 +732,8 @@ test("membership admin settings encrypt credentials and keep payment locked", as
     payload: {
       appId: "ak_test_redacted",
       appSecret: "sk_test_redacted",
-      webhookSecret: "whsec_test_redacted"
+	  webhookSecret: "whsec_test_redacted",
+	  gptToken: "gpt_test_redacted"
     }
   });
   assert.equal(saved.statusCode, 200);
@@ -681,18 +741,21 @@ test("membership admin settings encrypt credentials and keep payment locked", as
   assert.equal(settings.paymentGateLocked, true);
   assert.equal(settings.hasAppSecret, true);
   assert.equal(settings.hasWebhookSecret, true);
+	assert.equal(settings.dependencies.hasGptToken, true);
   assert.equal("appSecret" in settings, false);
   assert.equal("webhookSecret" in settings, false);
 
   const row = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
   assert.notEqual(row.spacexcard_app_secret_encrypted, "sk_test_redacted");
   assert.notEqual(row.spacexcard_webhook_secret_encrypted, "whsec_test_redacted");
+	const gptSettings = db.prepare("SELECT spacexcard_api_token_encrypted FROM extension_delivery_settings WHERE id='default'").get();
+	assert.notEqual(gptSettings.spacexcard_api_token_encrypted, "gpt_test_redacted");
   const audit = db.prepare(`
     SELECT detail FROM admin_audit_logs
     WHERE action = 'membership_fulfillment.settings.update'
     ORDER BY created_at DESC LIMIT 1
   `).get();
-  assert.doesNotMatch(audit.detail, /sk_test_redacted|whsec_test_redacted/);
+	assert.doesNotMatch(audit.detail, /sk_test_redacted|whsec_test_redacted|gpt_test_redacted/);
 });
 
 test("SpaceX Card webhook verifies raw signatures, deduplicates, redacts PAN, and keeps terminal state", async () => {
@@ -1293,7 +1356,7 @@ test("manual membership CDKs create the target fulfillment and support one-order
   const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
   const original = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
   assert.equal(original.target_tier, "x20");
-  assert.equal(original.state, "WAITING_SESSION_ACTIVATION");
+	assert.equal(original.state, "WAITING_SESSION_VALIDATION");
 
   db.prepare("DELETE FROM membership_fulfillments WHERE id = ?").run(original.id);
   db.prepare(`
@@ -1310,7 +1373,7 @@ test("manual membership CDKs create the target fulfillment and support one-order
   assert.equal(repaired.statusCode, 200);
   assert.equal(repaired.json().created, true);
   assert.equal(repaired.json().item.targetTier, "x20");
-  assert.equal(repaired.json().item.state, "WAITING_SESSION_ACTIVATION");
+	assert.equal(repaired.json().item.state, "WAITING_SESSION_VALIDATION");
 
   const repeated = await app.inject({
     method: "POST",

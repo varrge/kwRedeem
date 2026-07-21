@@ -133,7 +133,25 @@ function serializeCheckoutValidationRun(row) {
   };
 }
 
-function serializeSettings(row, extensionSettings) {
+function serializeProcessor(row) {
+  const persistedStatus = row?.status || "stopped";
+  const expiresAt = row?.expires_at || null;
+  const expiresAtMs = Date.parse(expiresAt || "");
+  const leaseExpired = ["active", "standby"].includes(persistedStatus)
+    && (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now());
+  return {
+    owner: row?.owner || null,
+    status: leaseExpired ? "stale" : persistedStatus,
+    version: row?.version || null,
+    heartbeatAt: row?.heartbeat_at || null,
+    expiresAt,
+    lastTickAt: row?.last_tick_at || null,
+    lastSuccessAt: row?.last_success_at || null,
+    lastErrorCode: row?.last_error_code || null
+  };
+}
+
+function serializeSettings(row, extensionSettings, processorLease) {
   return {
     enabled: row.enabled === 1,
     paymentGateLocked: row.enabled !== 1 || !["canary", "automatic"].includes(row.rollout_mode),
@@ -148,7 +166,10 @@ function serializeSettings(row, extensionSettings) {
     resumeRevision: row.resume_revision,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+    processor: serializeProcessor(processorLease),
     dependencies: {
+		executor: "go-headless",
+		requiresExtension: false,
       openApiBaseUrl: spaceXCardOpenApiBaseUrl,
       membershipStateProviderUrl,
       checkoutBrokerUrl: CHECKOUT_BROKER_URL,
@@ -167,7 +188,8 @@ export function createMembershipFulfillmentService(options) {
     encryptText,
     requireAdmin,
     createAuditLog,
-    extensionDelivery
+    extensionDelivery,
+    isMaintenanceEnabled = () => false
   } = options;
   const extensionCommandRateLimits = new Map();
   const extensionEventRateLimits = new Map();
@@ -178,6 +200,14 @@ export function createMembershipFulfillmentService(options) {
 
   function getExtensionSettings() {
     return db.prepare("SELECT * FROM extension_delivery_settings WHERE id = 'default'").get();
+  }
+
+  function getProcessorStatus() {
+    return db.prepare(`
+      SELECT owner, status, version, heartbeat_at, expires_at,
+        last_tick_at, last_success_at, last_error_code
+      FROM membership_processor_lease WHERE id = 'default'
+    `).get();
   }
 
   function listCardProductPolicies(nowMs = Date.now()) {
@@ -472,11 +502,13 @@ export function createMembershipFulfillmentService(options) {
         : null;
       if (!stage || stage.state !== "checkout_pending" || !stage.card_id
         || contract?.status !== "active" || contract.tier !== current.target_tier || contract.currency !== "PHP") {
-        return transitionMembershipFulfillment(db, current.id, "UPGRADE_CHECKOUT_UNAVAILABLE", {
+        const updated = transitionMembershipFulfillment(db, current.id, "UPGRADE_CHECKOUT_UNAVAILABLE", {
           currentStage: "upgrade",
           failureCode: "UPGRADE_STAGE_SNAPSHOT_MISSING",
           at
         });
+        addIntervention(current.id, updated.state, "UPGRADE_STAGE_SNAPSHOT_MISSING", at);
+        return updated;
       }
       const attemptNo = db.prepare(`
         SELECT COALESCE(MAX(attempt_no), 0) + 1 AS attempt_no
@@ -1368,10 +1400,21 @@ export function createMembershipFulfillmentService(options) {
     }
 
     if (body.type === "CHECKOUT_UI_UNSUPPORTED") {
+      const permit = latestActionPermit(context);
+      if (permit && ["issued", "activated", "reported", "outcome_uncertain"].includes(permit.state)) {
+        const result = markEventUncertain(
+          context,
+          auth,
+          { ...body, permitId: permit.id },
+          "PAGE_CHANGED_AFTER_PERMIT"
+        );
+        return { accepted: true, state: result.state || "PAYMENT_OUTCOME_UNCERTAIN", confirmationOnly: true };
+      }
       const updated = transitionMembershipFulfillment(db, id, "CHECKOUT_UI_UNSUPPORTED", {
         currentStage: body.stage,
         failureCode: "CHECKOUT_UI_UNSUPPORTED"
       });
+      addIntervention(id, updated.state, "CHECKOUT_UI_UNSUPPORTED");
       return { accepted: true, state: updated.state };
     }
 
@@ -1479,7 +1522,7 @@ export function createMembershipFulfillmentService(options) {
 
         const existing = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
         if (existing) return { item: existing, created: false };
-        if (order.extension_delivery_status !== "succeeded") return { error: "delivery" };
+		if (!order.session_payload) return { error: "session" };
 
         let metadata = {};
         try {
@@ -1505,8 +1548,8 @@ export function createMembershipFulfillmentService(options) {
       }).immediate();
 
       if (result.error === "not_found") return reply.code(404).send({ message: "订单不存在" });
-      if (result.error === "delivery") {
-        return reply.code(409).send({ message: "该订单的 Cookie 交付尚未成功，不能补建会员履约" });
+	  if (result.error === "session") {
+		return reply.code(409).send({ message: "该订单没有可供 Go 校验的 Session，不能补建会员履约" });
       }
       if (result.error === "tier") return reply.code(409).send({ message: "该订单没有可识别的会员类型" });
       setNoStore(reply);
@@ -1545,7 +1588,7 @@ export function createMembershipFulfillmentService(options) {
 
   app.get("/api/admin/membership-fulfillment/settings", { preHandler: requireAdmin }, async (_request, reply) => {
     setNoStore(reply);
-    return { settings: serializeSettings(getSettings(), getExtensionSettings()) };
+    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()) };
   });
 
   app.patch("/api/admin/membership-fulfillment/settings", { preHandler: requireAdmin }, async (request, reply) => {
@@ -1555,7 +1598,9 @@ export function createMembershipFulfillmentService(options) {
       appSecret: z.string().trim().max(8192).optional(),
       clearAppSecret: z.boolean().optional().default(false),
       webhookSecret: z.string().trim().max(8192).optional(),
-      clearWebhookSecret: z.boolean().optional().default(false)
+	  clearWebhookSecret: z.boolean().optional().default(false),
+	  gptToken: z.string().trim().max(8192).optional(),
+	  clearGptToken: z.boolean().optional().default(false)
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ message: "会员履约设置参数无效" });
@@ -1567,6 +1612,7 @@ export function createMembershipFulfillmentService(options) {
     }
 
     const current = getSettings();
+	const currentExtension = getExtensionSettings();
     const activeInventory = db.prepare(`
       SELECT id FROM card_inventory_runs
       WHERE status IN ('discovering', 'reconciling') LIMIT 1
@@ -1588,6 +1634,9 @@ export function createMembershipFulfillmentService(options) {
     const webhookSecret = parsed.data.clearWebhookSecret
       ? null
       : (parsed.data.webhookSecret ? encryptText(parsed.data.webhookSecret) : current.spacexcard_webhook_secret_encrypted);
+	const gptToken = parsed.data.clearGptToken
+	  ? null
+	  : (parsed.data.gptToken ? encryptText(parsed.data.gptToken) : currentExtension.spacexcard_api_token_encrypted);
     const now = new Date().toISOString();
 
     db.transaction(() => {
@@ -1602,6 +1651,9 @@ export function createMembershipFulfillmentService(options) {
             updated_by = ?
         WHERE id = 'default'
       `).run(appId, appSecret, webhookSecret, now, request.admin.username);
+	  db.prepare(`UPDATE extension_delivery_settings
+		SET spacexcard_api_token_encrypted=?,updated_at=?,updated_by=? WHERE id='default'`)
+		.run(gptToken, now, request.admin.username);
       createAuditLog({
         action: "membership_fulfillment.settings.update",
         actor: request.admin.username,
@@ -1611,13 +1663,14 @@ export function createMembershipFulfillmentService(options) {
           appIdAction: Object.hasOwn(parsed.data, "appId") ? (appId ? "updated" : "cleared") : "unchanged",
           appSecretAction: parsed.data.clearAppSecret ? "cleared" : (parsed.data.appSecret ? "replaced" : "unchanged"),
           webhookSecretAction: parsed.data.clearWebhookSecret ? "cleared" : (parsed.data.webhookSecret ? "replaced" : "unchanged"),
+		  gptTokenAction: parsed.data.clearGptToken ? "cleared" : (parsed.data.gptToken ? "replaced" : "unchanged"),
           paymentGate: "locked"
         }
       });
     })();
 
     setNoStore(reply);
-    return { settings: serializeSettings(getSettings(), getExtensionSettings()) };
+    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()) };
   });
 
   function startInventory(request, reply, mode) {
@@ -2281,6 +2334,7 @@ export function createMembershipFulfillmentService(options) {
   });
 
   const outboxTimer = setInterval(() => {
+    if (isMaintenanceEnabled()) return;
     try {
       expireBrowserFulfillmentLease(db);
       dispatchMembershipOutbox();
@@ -2292,6 +2346,6 @@ export function createMembershipFulfillmentService(options) {
   return {
     dispatchMembershipOutbox,
     getSettings,
-    serializeSettings: () => serializeSettings(getSettings(), getExtensionSettings())
+    serializeSettings: () => serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus())
   };
 }

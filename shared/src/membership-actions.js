@@ -532,6 +532,14 @@ export function evaluateProgressionAuthorizationDelta(db, input = {}) {
             state_revision = state_revision + 1, updated_at = ?
         WHERE id = ?
       `).run(at, permit.fulfillment_id);
+      const fulfillment = db.prepare(`
+        SELECT state_revision FROM membership_fulfillments WHERE id = ?
+      `).get(permit.fulfillment_id);
+      db.prepare(`
+        INSERT OR IGNORE INTO fulfillment_interventions (
+          id, fulfillment_id, state, state_revision, reason_code, created_at
+        ) VALUES (?, ?, 'UNEXPECTED_PREAUTH', ?, 'UNEXPECTED_PREAUTH', ?)
+      `).run(`fi_${randomUUID()}`, permit.fulfillment_id, fulfillment.state_revision, at);
       return Object.freeze({ authorizationState: "unexpected", newAuthorization: true });
     }
     db.prepare(`

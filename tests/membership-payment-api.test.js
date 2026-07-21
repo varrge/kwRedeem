@@ -323,16 +323,19 @@ test("rollout gate and canary start require fresh credentials and select only on
   `).run();
   db.prepare(`
     UPDATE extension_delivery_settings
-    SET extension_token_sha256 = ?, bound_installation_id = 'install-api',
-        spacexcard_api_token_encrypted = 'encrypted-test'
+	SET extension_token_sha256 = NULL, bound_installation_id = NULL,
+		spacexcard_api_token_encrypted = 'encrypted-test'
     WHERE id = 'default'
-  `).run("b".repeat(64));
+	`).run();
   const enabled = await app.injectRoute("POST", "/api/admin/membership-fulfillment/rollout-mode", {
     ip: "127.0.0.2",
     body: { mode: "canary", credentials: adminSecrets }
   });
   assert.equal(enabled.statusCode, 200);
   assert.equal(enabled.body.item.paymentGateEnabled, true);
+	// Legacy extension-route tests below still need their independent transport credential.
+	db.prepare(`UPDATE extension_delivery_settings
+	  SET extension_token_sha256=?,bound_installation_id='install-api' WHERE id='default'`).run("b".repeat(64));
   db.prepare(`
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,

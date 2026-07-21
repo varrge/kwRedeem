@@ -43,113 +43,15 @@ import {
 } from "../../shared/src/notifications.js";
 import { getAvailableQuota } from "../../shared/src/quota-calc.js";
 import { createStoreFulfillmentRunner } from "../../shared/src/store-fulfillment-runner.js";
-import { createMembershipInventoryRunner } from "../../shared/src/membership-inventory.js";
-import { createMembershipFulfillmentRunner } from "../../shared/src/membership-fulfillment-runner.js";
-import { createMembershipPaymentRunner } from "../../shared/src/membership-payment-runner.js";
-import { createMembershipReconciliationRunner } from "../../shared/src/membership-reconciliation.js";
-import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
-import { cancelMembershipRenewal } from "../../shared/src/membership-renewal.js";
-import { generateUsAddressRecords } from "../../shared/src/us-address-generator.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
-const maintenancePath = resolveProjectPath("data", "maintenance.json");
+const maintenancePath = resolveProjectPath(env.maintenancePath);
 const storeFulfillmentRunner = createStoreFulfillmentRunner({
   db,
   redeemUrl: env.appUrl,
   workerId
-});
-const membershipInventoryRunner = createMembershipInventoryRunner({
-  db,
-  decryptText,
-  workerId
-});
-const membershipFulfillmentRunner = createMembershipFulfillmentRunner({
-  db,
-  decryptText,
-  identitySecret: env.jwtSecret
-});
-
-function createMembershipOpenApiClient() {
-  const settings = db.prepare(`
-    SELECT spacexcard_app_id, spacexcard_app_secret_encrypted
-    FROM membership_fulfillment_settings WHERE id = 'default'
-  `).get();
-  if (!settings?.spacexcard_app_secret_encrypted) {
-    const error = new Error("SpaceX Card OpenAPI 未配置");
-    error.code = "SPACEXCARD_OPENAPI_NOT_CONFIGURED";
-    throw error;
-  }
-  return new SpaceXCardOpenApiClient({
-    appId: settings.spacexcard_app_id,
-    appSecret: decryptText(settings.spacexcard_app_secret_encrypted)
-  });
-}
-
-const membershipPaymentProvider = Object.freeze({
-  listProducts: (...args) => createMembershipOpenApiClient().listProducts(...args),
-  listCards: (...args) => createMembershipOpenApiClient().listCards(...args),
-  getBalance: (...args) => createMembershipOpenApiClient().getBalance(...args),
-  openCard: (...args) => createMembershipOpenApiClient().openCard(...args),
-  rechargeCard: (...args) => createMembershipOpenApiClient().rechargeCard(...args),
-  classifyFundingError(error) {
-    return [
-      "SPACEXCARD_AUTH_FAILED",
-      "SPACEXCARD_ACCESS_DENIED",
-      "SPACEXCARD_OPERATION_REJECTED"
-    ].includes(error?.code) ? "known_failure" : "unknown";
-  }
-});
-
-function membershipPaymentGate(fulfillment) {
-  const settings = db.prepare(`
-    SELECT enabled, rollout_mode FROM membership_fulfillment_settings WHERE id = 'default'
-  `).get();
-  return Object.freeze({
-    enabled: settings?.enabled === 1 && settings.rollout_mode === fulfillment?.run_mode,
-    mode: fulfillment?.run_mode
-  });
-}
-
-const membershipPaymentRunner = createMembershipPaymentRunner({
-  db,
-  provider: membershipPaymentProvider,
-  paymentGate: membershipPaymentGate,
-  cardholder: async () => {
-    const generated = await generateUsAddressRecords({
-      count: 1,
-      state: "DE",
-      includePerson: true,
-      userAgent: BROWSER_UA
-    });
-    const person = generated.items?.[0]?.person;
-    if (!person?.firstName || !person?.lastName) {
-      const error = new Error("开卡持卡人生成失败");
-      error.code = "NEW_CARD_HOLDER_UNAVAILABLE";
-      throw error;
-    }
-    return { firstName: person.firstName, lastName: person.lastName };
-  }
-});
-
-const membershipReconciliationRunner = createMembershipReconciliationRunner({
-  db,
-  decryptText,
-  clientFactory: createMembershipOpenApiClient,
-  cancelRenewal: cancelMembershipRenewal,
-  getRenewalToken: () => {
-    const settings = db.prepare(`
-      SELECT spacexcard_api_token_encrypted
-      FROM extension_delivery_settings WHERE id = 'default'
-    `).get();
-    if (!settings?.spacexcard_api_token_encrypted) {
-      const error = new Error("续费取消 Token 未配置");
-      error.code = "RENEWAL_CANCEL_NOT_CONFIGURED";
-      throw error;
-    }
-    return decryptText(settings.spacexcard_api_token_encrypted);
-  }
 });
 
 function isMaintenanceEnabled() {
@@ -3377,30 +3279,6 @@ setInterval(() => {
   });
 }, 5000);
 
-setInterval(() => {
-  if (isMaintenanceEnabled()) return;
-  membershipInventoryRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-inventory", error?.code || error?.message || "unknown");
-  });
-}, 5000);
-
-setInterval(() => {
-  if (isMaintenanceEnabled()) return;
-  membershipFulfillmentRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-fulfillment", error?.code || "MEMBERSHIP_RUNNER_FAILED");
-  });
-}, 5000);
-
-setInterval(() => {
-  if (isMaintenanceEnabled()) return;
-  membershipPaymentRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-payment", error?.code || "MEMBERSHIP_PAYMENT_RUNNER_FAILED");
-  });
-  membershipReconciliationRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-reconciliation", error?.code || "MEMBERSHIP_RECONCILIATION_FAILED");
-  });
-}, 5000);
-
 if (!isMaintenanceEnabled()) {
   tick().catch((error) => {
     console.error("[KaWang worker]", error);
@@ -3428,19 +3306,4 @@ if (!isMaintenanceEnabled()) {
     console.error("[KaWang worker] store-fulfillment", error);
   });
 
-  membershipInventoryRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-inventory", error?.code || error?.message || "unknown");
-  });
-
-  membershipFulfillmentRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-fulfillment", error?.code || "MEMBERSHIP_RUNNER_FAILED");
-  });
-
-  membershipPaymentRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-payment", error?.code || "MEMBERSHIP_PAYMENT_RUNNER_FAILED");
-  });
-
-  membershipReconciliationRunner.tick().catch((error) => {
-    console.error("[KaWang worker] membership-reconciliation", error?.code || "MEMBERSHIP_RECONCILIATION_FAILED");
-  });
 }

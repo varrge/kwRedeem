@@ -88,6 +88,8 @@ const refs = {
   membershipClearAppSecret: document.querySelector("#membership-clear-app-secret"),
   membershipWebhookSecret: document.querySelector("#membership-webhook-secret"),
   membershipClearWebhookSecret: document.querySelector("#membership-clear-webhook-secret"),
+	membershipGptToken: document.querySelector("#membership-gpt-token"),
+	membershipClearGptToken: document.querySelector("#membership-clear-gpt-token"),
   membershipStateProviderUrl: document.querySelector("#membership-state-provider-url"),
   membershipCheckoutBrokerUrl: document.querySelector("#membership-checkout-broker-url"),
   membershipFulfillmentStatus: document.querySelector("#membership-fulfillment-status"),
@@ -641,10 +643,17 @@ const EXTENSION_DELIVERY_ERROR_LABELS = {
   CDKEY_VOIDED: "关联卡密已由后台作废",
   CHATGPT_SESSION_UNAUTHORIZED: "ChatGPT Session 已失效",
   CHATGPT_IDENTITY_MISSING: "无法获取 ChatGPT 账号邮箱",
-  CHATGPT_IDENTITY_MISMATCH: "ChatGPT 账号邮箱与订单不一致"
+	CHATGPT_IDENTITY_MISMATCH: "ChatGPT 账号邮箱与订单不一致",
+	HEADLESS_BROWSER_UNAVAILABLE: "Go 无界面浏览器不可用",
+	CHECKOUT_EXECUTION_WAIT: "等待 Go 执行结账",
+	CHECKOUT_PAGE_TIMEOUT: "Go 加载结账页面超时",
+	CHECKOUT_CONTEXT_INVALID: "结账页面来源不受信任",
+	CHECKOUT_ACTION_STATE_CHANGED: "结账操作状态已变化",
+	SECURITY_CHALLENGE_REQUIRED: "结账需要人工安全验证"
 };
 
 const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
+	waiting_session_validation: "等待 Go 校验登录会话",
   waiting_session_activation: "等待登录会话激活",
   queued: "已排队",
   account_fulfillment_wait: "等待同账号前序订单",
@@ -654,6 +663,8 @@ const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   inventory_not_ready: "卡片库存未就绪",
   inventory_checking: "正在检查卡片库存",
   card_price_unavailable: "卡片价格不可用",
+	checkout_preflight_ready: "等待 Go 预检结账页",
+	checkout_execution_wait: "等待 Go 执行结账",
   browser_lease_wait: "等待扩展接管",
   card_reserved: "卡片已预留",
   initial_checkout_preflight: "正在预检初始结账页",
@@ -725,6 +736,14 @@ const MEMBERSHIP_INVENTORY_LABELS = {
   inventory_card_sync_failed: "卡片同步失败"
 };
 
+const MEMBERSHIP_PROCESSOR_STATUS_LABELS = {
+  active: "运行中",
+  standby: "维护待机",
+  stale: "心跳已超时",
+  stopped: "已停止",
+  error: "异常停止"
+};
+
 const SUB2API_REBATE_STATUS_LABELS = {
   pending: "待审核",
   approved: "已到账",
@@ -779,6 +798,10 @@ function renderMembershipFulfillmentStatus(value) {
 
 function getMembershipInventoryLabel(value) {
   return getStatusLabel(value, MEMBERSHIP_INVENTORY_LABELS);
+}
+
+function getMembershipProcessorStatusLabel(value) {
+  return getStatusLabel(value, MEMBERSHIP_PROCESSOR_STATUS_LABELS);
 }
 
 function getExtensionDeliveryErrorLabel(value) {
@@ -1619,6 +1642,7 @@ async function refreshMembershipFulfillmentConsole() {
   const payload = await api("/api/admin/membership-fulfillment/settings");
   const settings = payload.settings || {};
   const dependencies = settings.dependencies || {};
+  const processor = settings.processor || {};
   refs.membershipOpenApiBase.value = dependencies.openApiBaseUrl || "";
   refs.membershipAppId.value = settings.appId || "";
   refs.membershipAppSecret.value = "";
@@ -1631,17 +1655,33 @@ async function refreshMembershipFulfillmentConsole() {
     ? "Webhook 密钥已加密保存；留空保持不变"
     : "whsec_...；配置回调后填写";
   refs.membershipClearWebhookSecret.checked = false;
+	refs.membershipGptToken.value = "";
+	refs.membershipGptToken.placeholder = dependencies.hasGptToken
+	  ? "GPT Token 已加密保存；留空保持不变"
+	  : "首次配置必填";
+	refs.membershipClearGptToken.checked = false;
   refs.membershipStateProviderUrl.value = dependencies.membershipStateProviderUrl || "";
   refs.membershipCheckoutBrokerUrl.value = dependencies.checkoutBrokerUrl || "";
   if (refs.membershipRolloutMode) refs.membershipRolloutMode.value = settings.rolloutMode || "disabled";
   refs.membershipFulfillmentStatus.innerHTML = `
+    <div class="membership-processor-status">
+      <div class="membership-processor-status-title">自动处理器</div>
+      <div>运行主体：<code>${escapeHtml(processor.owner || "未接管")}</code></div>
+      <div>状态：<strong title="${escapeHtml(`状态码：${processor.status || "stopped"}`)}">${escapeHtml(getMembershipProcessorStatusLabel(processor.status || "stopped"))}</strong></div>
+      <div>版本：<code>${escapeHtml(processor.version || "-")}</code></div>
+      <div>最近心跳：${escapeHtml(processor.heartbeatAt || "-")}</div>
+      <div>租约到期：${escapeHtml(processor.expiresAt || "-")}</div>
+      <div>最近 Tick：${escapeHtml(processor.lastTickAt || "-")}</div>
+      <div>最近成功：${escapeHtml(processor.lastSuccessAt || "-")}</div>
+      <div>最近错误：<code>${escapeHtml(processor.lastErrorCode || "无")}</code></div>
+    </div>
     <div>付款 Gate：<strong>${settings.paymentGateLocked ? "锁定（安全默认）" : (settings.enabled ? "已启用" : "已停用")}</strong></div>
     <div>Rollout 模式：<code>${escapeHtml(settings.rolloutMode || "disabled")}</code></div>
     <div>OpenAPI app_secret：<strong>${settings.hasAppSecret ? "已配置" : "未配置"}</strong></div>
     <div>Webhook 密钥：<strong>${settings.hasWebhookSecret ? "已配置" : "未配置"}</strong></div>
-    <div>GPT Token：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
-    <div>Extension Token：<strong>${dependencies.hasExtensionToken ? "已配置" : "未配置"}</strong></div>
-    <div>绑定扩展：<code>${escapeHtml(dependencies.boundInstallationId || "未绑定")}</code></div>
+	<div>GPT Token：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
+	<div>结账执行器：<code>${escapeHtml(dependencies.executor || "go-headless")}</code></div>
+	<div>浏览器扩展：<strong>${dependencies.requiresExtension === false ? "不需要" : "兼容模式"}</strong></div>
     <div>库存初始化：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
     <div>业务时区：${escapeHtml(settings.businessTimezone || "Asia/Shanghai")}</div>
     <div>更新时间：${escapeHtml(settings.updatedAt || "-")}</div>
@@ -1815,7 +1855,7 @@ async function viewMembershipFulfillment(id) {
         <div><strong>订单：</strong>${escapeHtml(item.orderNo || "-")}<br/><span class="hint">履约 ${escapeHtml(item.id || "-")}</span></div>
         <div><strong>目标：</strong>${escapeHtml(item.targetTier || "-")}<br/><span class="hint">客户状态 ${escapeHtml(projection.label || "-")}</span></div>
         <div><strong>状态：</strong>${renderMembershipFulfillmentStatus(item.state)}<br/><span class="hint">阶段 ${escapeHtml(item.currentStage || "-")} / 模式 ${escapeHtml(item.runMode || "-")}</span></div>
-        <div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">浏览器租约 ${item.browserLeaseEpoch ?? "-"}</span></div>
+		<div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">Go 无界面执行</span></div>
         <div><strong>失败码：</strong><code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span></div>
         <div><strong>时间：</strong>${escapeHtml(item.updatedAt || "-")}<br/><span class="hint">完成 ${escapeHtml(item.completedAt || "-")}</span></div>
       </div>
@@ -5375,7 +5415,9 @@ refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event)
         appSecret: refs.membershipAppSecret.value.trim(),
         clearAppSecret: refs.membershipClearAppSecret.checked,
         webhookSecret: refs.membershipWebhookSecret.value.trim(),
-        clearWebhookSecret: refs.membershipClearWebhookSecret.checked
+		clearWebhookSecret: refs.membershipClearWebhookSecret.checked,
+		gptToken: refs.membershipGptToken.value.trim(),
+		clearGptToken: refs.membershipClearGptToken.checked
       })
     });
     setHint(refs.membershipFulfillmentSettingsResult, "会员履约基础凭据已加密保存；付款 Gate 仍保持锁定");

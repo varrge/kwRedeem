@@ -98,7 +98,7 @@ export function createMembershipFulfillmentForOrder(db, input = {}) {
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,
       account_lock_key, resume_revision, state_revision, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_ACTIVATION', NULL, ?, NULL, 0, 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_VALIDATION', NULL, ?, NULL, 0, 0, ?, ?)
   `).run(id, input.orderId, input.orderNo, targetTier, runMode, at, at);
   return db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(id);
 }
@@ -118,7 +118,7 @@ export function activateMembershipFulfillmentIdentity(db, input = {}) {
       WHERE f.order_no = ? AND o.extension_delivery_status = 'succeeded'
     `).get(orderNo);
     if (!current) return null;
-    if (!["WAITING_SESSION_ACTIVATION", "ACCOUNT_FULFILLMENT_WAIT"].includes(current.state)) return current;
+    if (!["WAITING_SESSION_VALIDATION", "WAITING_SESSION_ACTIVATION", "ACCOUNT_FULFILLMENT_WAIT"].includes(current.state)) return current;
 
     const holder = db.prepare(`
       SELECT id FROM membership_fulfillments
@@ -169,7 +169,7 @@ export function transitionMembershipFulfillment(db, fulfillmentId, nextState, op
   return db.transaction(() => {
     const current = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(id);
     if (!current) return null;
-    if (current.state === "CANCELLED" && nextState !== "CANCELLED") return current;
+    if (ACTIVE_LOCK_TERMINAL_STATES.includes(current.state) && nextState !== current.state) return current;
     if (Number.isInteger(options.expectedRevision) && current.state_revision !== options.expectedRevision) {
       const error = new Error("会员履约版本已变化");
       error.code = "MEMBERSHIP_REVISION_CONFLICT";

@@ -44,6 +44,12 @@ npm run serve:admin
 - Admin: `http://127.0.0.1:4174`
 - API: `http://127.0.0.1:4300`
 
+## 独立会员自动化模块
+
+会员自动化代码位于独立的同级项目 `../kwMembership`，但它直接使用本项目的 `DATABASE_PATH` 和 `JWT_SECRET`。只有 Go worker 会发现会员订单、校验 Session，并推进履约、库存、资金、无界面结账与对账状态；kwRedeem 的 Node worker 不再运行会员自动化。
+
+Go 直接调用 SpaceXCard Checkout/Cookie/OpenAPI，并控制服务器上的无界面 Chrome；会员流程不需要浏览器扩展或人工打开浏览器。kwRedeem 后台和 Webhook 直接读写同一数据库，因此没有第二套会员库、任务分发或状态回调。后台“会员履约 → 实施状态”显示 Go owner、版本、心跳、最近 Tick 和脱敏错误码。构建、启动和 systemd 部署见 `../kwMembership/README.md`。
+
 ## 后台结构
 
 当前后台登录后提供 5 个核心页签：

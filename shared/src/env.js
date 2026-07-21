@@ -16,6 +16,7 @@ export const env = {
   adminUrl: process.env.ADMIN_URL ?? "http://127.0.0.1:4174",
   apiUrl: process.env.API_URL ?? "http://127.0.0.1:4300",
   databasePath: process.env.DATABASE_PATH ?? "./data/kawang.db",
+  maintenancePath: process.env.MAINTENANCE_PATH ?? "./data/maintenance.json",
   workerPollMs: Number(process.env.WORKER_POLL_MS ?? 5000),
   jwtSecret: process.env.JWT_SECRET ?? "replace-with-a-long-random-string",
   adminUsername: process.env.ADMIN_USERNAME ?? "admin",
@@ -26,5 +27,6 @@ export const env = {
 };
 
 export function resolveProjectPath(...parts) {
+  if (parts.length === 1 && path.isAbsolute(parts[0])) return parts[0];
   return path.join(projectRoot, ...parts);
 }

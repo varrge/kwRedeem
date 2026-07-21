@@ -12,7 +12,7 @@ import jwt from "jsonwebtoken";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
-import { env } from "../../shared/src/env.js";
+import { env, resolveProjectPath } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
@@ -22,6 +22,7 @@ import { createMembershipPaymentService } from "./membership-payment.js";
 import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
 import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
 import { persistManagedCardTransactions } from "../../shared/src/membership-reconciliation.js";
+import { membershipTiers } from "../../shared/src/membership-fulfillment.js";
 import {
   activateMembershipFulfillmentIdentity,
   createMembershipFulfillmentForOrder,
@@ -119,7 +120,7 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
-const maintenancePath = path.join(projectRoot, "data", "maintenance.json");
+const maintenancePath = resolveProjectPath(env.maintenancePath);
 const migrationTmpDir = path.join(projectRoot, "tmp", "migration");
 const migrationUploads = new Map();
 const MIGRATION_MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -518,6 +519,10 @@ function createAuditLog({ action, actor = "system", resourceType, resourceId = n
   `).run(nanoid(16), action, actor, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
 }
 
+// Production fulfillment intake is owned by the Go processor, which observes
+// orders and delivery facts in this database. Node keeps the legacy hook only
+// for the in-process API test suite.
+const nodeMembershipAutomationTest = process.env.KAWANG_SKIP_LISTEN === "1";
 const extensionDelivery = createExtensionDeliveryService({
   app,
   db,
@@ -526,13 +531,15 @@ const extensionDelivery = createExtensionDeliveryService({
   requireAdmin,
   createAuditLog,
   onDeliverySucceeded({ orderNo, verifiedEmail, at }) {
+    if (!nodeMembershipAutomationTest) return;
     activateMembershipFulfillmentIdentity(db, {
       orderNo,
       verifiedEmail,
       secret: env.jwtSecret,
       at
     });
-  }
+  },
+  isMaintenanceEnabled
 });
 
 createMembershipFulfillmentService({
@@ -542,7 +549,8 @@ createMembershipFulfillmentService({
   encryptText,
   requireAdmin,
   createAuditLog,
-  extensionDelivery
+  extensionDelivery,
+  isMaintenanceEnabled
 });
 
 function createConfiguredMembershipOpenApiClient() {
@@ -662,8 +670,12 @@ function writeMaintenanceState(reason, actor) {
 
 function isUserBusinessApi(request) {
   const url = request.url || "";
-  if (url.startsWith("/api/admin/") || url.startsWith("/api/mock/")) return false;
-  return url.startsWith("/api/public/");
+  const method = String(request.method || "GET").toUpperCase();
+  if (url.startsWith("/api/mock/")) return false;
+  if (url.startsWith("/api/admin/")) return !["GET", "HEAD"].includes(method);
+  return url.startsWith("/api/public/")
+    || url.startsWith("/api/extension/")
+    || url.startsWith("/api/internal/");
 }
 
 app.addHook("onRequest", async (request, reply) => {
@@ -6337,7 +6349,13 @@ app.post("/api/public/redeem", async (request, reply) => {
       const manualType = getCdkeyManualType(cdkey);
       const jobId = manualProcessing ? null : nanoid(18);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
-      const deliveryEnrollment = extensionDelivery.enrollmentForSite(site.slug, now);
+	  const productId = site.product_id || cdkey.product_id;
+	  const membershipTier = db.prepare("SELECT membership_tier FROM products WHERE id=?").get(productId)?.membership_tier;
+	  const goMembershipOrder = !nodeMembershipAutomationTest && (membershipTiers.includes(membershipTier)
+		|| membershipTiers.includes(String(manualType || "").toLowerCase()));
+	  const deliveryEnrollment = goMembershipOrder
+		? { status: null, expiresAt: null, updatedAt: null }
+		: extensionDelivery.enrollmentForSite(site.slug, now);
 
       db.prepare(`
         INSERT INTO redeem_orders (
@@ -6352,7 +6370,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         orderNo,
         cdkey.id,
         publicKey,
-        site.product_id || cdkey.product_id,
+		productId,
         site.activation_endpoint_id || cdkey.activation_endpoint_id,
         site.id,
         encryptText(JSON.stringify(session.parsed)),
@@ -6368,13 +6386,15 @@ app.post("/api/public/redeem", async (request, reply) => {
         deliveryEnrollment.updatedAt
       );
 
-      createMembershipFulfillmentForOrder(db, {
-        orderId,
-        orderNo,
-        productId: site.product_id || cdkey.product_id,
-        manualType: manualProcessing ? manualType : null,
-        createdAt: now
-      });
+      if (nodeMembershipAutomationTest) {
+        createMembershipFulfillmentForOrder(db, {
+          orderId,
+          orderNo,
+		  productId,
+          manualType: manualProcessing ? manualType : null,
+          createdAt: now
+        });
+      }
 
       if (!manualProcessing) {
         db.prepare(`
@@ -9357,10 +9377,10 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
         JOIN redeem_orders o ON o.id = f.order_id
         WHERE o.cdkey_id IN (${selectedPlaceholders})
           AND f.state IN (
-            'WAITING_SESSION_ACTIVATION', 'QUEUED', 'ACCOUNT_FULFILLMENT_WAIT',
+			'WAITING_SESSION_VALIDATION', 'WAITING_SESSION_ACTIVATION', 'QUEUED', 'ACCOUNT_FULFILLMENT_WAIT',
             'ACCOUNT_CHECKING', 'ACCOUNT_REPURCHASE_NOT_READY',
             'INVENTORY_NOT_READY', 'INVENTORY_CHECKING', 'CARD_PRICE_UNAVAILABLE',
-            'BROWSER_LEASE_WAIT', 'CHECKOUT_ADDRESS_UNAVAILABLE',
+			'CHECKOUT_PREFLIGHT_READY', 'CHECKOUT_EXECUTION_WAIT', 'BROWSER_LEASE_WAIT', 'CHECKOUT_ADDRESS_UNAVAILABLE',
             'CHECKOUT_PRICE_UNRECOGNIZED', 'CHECKOUT_UI_UNSUPPORTED',
             'CHECKOUT_PRE_SUBMIT_FAILED', 'MEMBERSHIP_CONTRACT_UNKNOWN'
           )

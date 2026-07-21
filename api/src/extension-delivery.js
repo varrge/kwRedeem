@@ -284,7 +284,8 @@ export function createExtensionDeliveryService({
   createAuditLog,
   converter = convertSessionToCookiePayload,
   now = () => new Date(),
-  onDeliverySucceeded = null
+  onDeliverySucceeded = null,
+  isMaintenanceEnabled = () => false
 }) {
   const wsRateLimits = new Map();
   const getRateLimits = new Map();
@@ -1234,8 +1235,10 @@ export function createExtensionDeliveryService({
   registerWebSocketRoute();
   registerAdminRoutes();
 
-  expirePendingDeliveries();
-  const expiryTimer = setInterval(expirePendingDeliveries, 60_000);
+  if (!isMaintenanceEnabled()) expirePendingDeliveries();
+  const expiryTimer = setInterval(() => {
+    if (!isMaintenanceEnabled()) expirePendingDeliveries();
+  }, 60_000);
   expiryTimer.unref?.();
   app.addHook("onClose", async () => {
     clearInterval(expiryTimer);
@@ -1251,6 +1254,13 @@ export function createExtensionDeliveryService({
     publishMembershipNotification,
     publishSessionAvailable,
     publishAllEligible,
+    hasActiveWork() {
+      return converterBusy || activeConverterOrders.size > 0 || subscriptionGuardPromises.size > 0;
+    },
+    closeForMaintenance() {
+      closeSocket(currentConnection?.socket, 1012, "MAINTENANCE_MODE");
+      currentConnection = null;
+    },
     serializeSettings
   };
 }

@@ -1,6 +1,6 @@
 # ChatGPT checkout browser automation
 
-Status: Accepted — Phase 4–7 代码实现与模拟验证完成；受控生产验收待执行。
+Status: Superseded for production membership execution by [ADR-0006](./0006-go-headless-membership-checkout.md). The extension protocol remains only as legacy/reference behavior.
 
 ## Context
 

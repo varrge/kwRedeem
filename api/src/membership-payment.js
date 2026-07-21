@@ -25,6 +25,7 @@ const RATE_WINDOW_MS = 60_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const CHECKOUT_ADAPTER = "checkout-v1";
+const GO_CHECKOUT_ADAPTER = "go-headless-v1";
 const PLAN_ADAPTER = "plan-management-v1";
 const TARGET_TIERS = ["plus", "x5", "x20"];
 
@@ -129,7 +130,7 @@ const canaryApprovalSchema = z.object({
   cardId: z.string().regex(SAFE_ID),
   fundingBudgetUsd: z.number().finite().positive().max(100_000),
   priceContractId: z.string().regex(SAFE_ID),
-  adapterVersion: z.enum([CHECKOUT_ADAPTER, PLAN_ADAPTER]),
+	adapterVersion: z.enum([CHECKOUT_ADAPTER, GO_CHECKOUT_ADAPTER, PLAN_ADAPTER]),
   pageFingerprint: z.string().regex(SHA256),
   credentials: credentialsSchema
 }).strict();
@@ -883,13 +884,12 @@ export function createMembershipPaymentService(options = {}) {
         SELECT * FROM membership_fulfillment_settings WHERE id = 'default'
       `).get();
       const extension = db.prepare(`
-        SELECT extension_token_sha256, bound_installation_id, spacexcard_api_token_encrypted
+		SELECT spacexcard_api_token_encrypted
         FROM extension_delivery_settings WHERE id = 'default'
       `).get();
       const moneyEnabled = ["canary", "automatic"].includes(parsed.data.mode);
       if (moneyEnabled && (current.inventory_status !== "completed"
         || !current.spacexcard_app_secret_encrypted
-        || !extension?.extension_token_sha256 || !extension.bound_installation_id
         || !extension.spacexcard_api_token_encrypted)) {
         return sendError(reply, 409, "MEMBERSHIP_ROLLOUT_DEPENDENCIES_NOT_READY");
       }
@@ -950,8 +950,8 @@ export function createMembershipPaymentService(options = {}) {
           : (fulfillment.target_tier === "x20" ? "x5" : null);
         if (previousTier && !db.prepare(`
           SELECT id FROM tier_rollout_qualifications
-          WHERE tier = ? AND adapter_version = ? LIMIT 1
-        `).get(previousTier, CHECKOUT_ADAPTER)) return { error: "qualification" };
+		  WHERE tier = ? AND adapter_version IN (?, ?) LIMIT 1
+		`).get(previousTier, GO_CHECKOUT_ADAPTER, CHECKOUT_ADAPTER)) return { error: "qualification" };
         const active = db.prepare(`
           SELECT id FROM membership_fulfillments
           WHERE id <> ? AND run_mode = 'canary'

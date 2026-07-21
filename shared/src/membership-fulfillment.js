@@ -30,6 +30,7 @@ const cardTransactionStatusPriority = Object.freeze({
 });
 
 export const membershipFulfillmentStates = Object.freeze([
+	"WAITING_SESSION_VALIDATION",
   "WAITING_SESSION_ACTIVATION",
   "QUEUED",
   "ACCOUNT_FULFILLMENT_WAIT",
@@ -39,6 +40,8 @@ export const membershipFulfillmentStates = Object.freeze([
   "INVENTORY_NOT_READY",
   "INVENTORY_CHECKING",
   "CARD_PRICE_UNAVAILABLE",
+	"CHECKOUT_PREFLIGHT_READY",
+	"CHECKOUT_EXECUTION_WAIT",
   "BROWSER_LEASE_WAIT",
   "CARD_RESERVED",
   "INITIAL_CHECKOUT_PREFLIGHT",

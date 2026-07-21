@@ -818,6 +818,22 @@ function createSchema(db) {
       updated_by TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS membership_processor_lease (
+      id TEXT PRIMARY KEY,
+      owner TEXT,
+      holder_token TEXT,
+      epoch INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'stopped',
+      version TEXT,
+      started_at TEXT,
+      heartbeat_at TEXT,
+      expires_at TEXT,
+      last_tick_at TEXT,
+      last_success_at TEXT,
+      last_error_code TEXT,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS membership_fulfillments (
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL UNIQUE,
@@ -1938,6 +1954,12 @@ function seedDefaults(db) {
       id, enabled, inventory_status, business_timezone, resume_revision, updated_at, updated_by
     )
     VALUES ('default', 0, 'not_started', 'Asia/Shanghai', 0, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO membership_processor_lease (
+      id, owner, holder_token, epoch, status, updated_at
+    ) VALUES ('default', NULL, NULL, 0, 'stopped', ?)
   `).run(new Date().toISOString());
 
   db.prepare(`

@@ -129,6 +129,7 @@ export const smsCardStatuses = {
 export const smsOrderStatuses = {
   pending: "pending",
   number_reserved: "number_reserved",
+  purchasing: "purchasing",
   waiting_code: "waiting_code",
   ready: "ready",
   timeout: "timeout",

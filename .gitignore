@@ -36,6 +36,8 @@ tests/*
 !tests/membership-payment-runner.test.js
 !tests/membership-payment-api.test.js
 !tests/membership-admin-page.test.js
+!tests/nexsms-client.test.js
+!tests/sms-deferred-purchase.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

@@ -59,6 +59,29 @@ export async function purchasePremiumNumber(apiKey, options) {
   return first;
 }
 
+export function parsePremiumPrefixData(data) {
+  const list = Array.isArray(data?.list) ? data.list : (Array.isArray(data) ? data : []);
+  return list
+    .map((item) => ({
+      prefix: String(item?.prefix ?? "").trim(),
+      stock: Math.max(0, Number(item?.num) || 0)
+    }))
+    .filter((item) => item.prefix && item.stock > 0);
+}
+
+export async function getPremiumPrefixes(apiKey, options = {}) {
+  const data = await request("/api/premium/prefix", {
+    apiKey,
+    query: {
+      appId: Number(options.appId),
+      type: Number(options.type || 1),
+      expiry: Number(options.expiry || 0)
+    },
+    timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS
+  });
+  return parsePremiumPrefixData(data);
+}
+
 export async function getPremiumSmsRecords(apiKey, tel, options = {}) {
   const data = await request("/api/premium/sms-records", {
     apiKey,

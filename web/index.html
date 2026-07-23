@@ -176,7 +176,7 @@
           <div class="section-heading">
             <p class="eyebrow">SMS</p>
             <h2>接码平台</h2>
-            <p class="panel-desc">先验证接码卡密，再为该卡密分配手机号并自动轮询验证码。</p>
+            <p class="panel-desc">先验证卡密并预览可用号段；只有点击“获取验证码”后才会购买完整号码并开始轮询。</p>
           </div>
           <form id="sms-form" class="stack">
             <div class="field">
@@ -185,6 +185,7 @@
             <div class="action-group">
               <button type="submit" id="sms-verify-btn" class="primary-btn">验证卡密</button>
               <button type="button" id="sms-submit" class="ghost-btn" disabled>获取号码</button>
+              <button type="button" id="sms-code-submit" class="primary-btn hidden" disabled>获取验证码</button>
             </div>
           </form>
           <div id="sms-result" class="result muted">请输入接码卡密并先验证。</div>
@@ -222,7 +223,7 @@
     <div id="sms-confirm-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sms-confirm-title">
       <div class="modal-box">
         <h3 id="sms-confirm-title" class="modal-title">确定已经发送了验证码？</h3>
-        <p class="modal-desc">请先在目标平台点击发送验证码，确认后将开始获取验证码。</p>
+        <p id="sms-confirm-desc" class="modal-desc">确认号段可用后，系统才会购买号码并开始获取验证码。</p>
         <div class="modal-actions">
           <button type="button" class="ghost-btn" id="sms-confirm-cancel">取消</button>
           <button type="button" class="primary-btn" id="sms-confirm-ok">确定</button>

@@ -16,6 +16,7 @@ const smsForm = document.querySelector("#sms-form");
 const smsKeyInput = document.querySelector("#sms-key");
 const smsVerifyBtn = document.querySelector("#sms-verify-btn");
 const smsSubmit = document.querySelector("#sms-submit");
+const smsCodeSubmit = document.querySelector("#sms-code-submit");
 const smsResult = document.querySelector("#sms-result");
 const statusContainer = document.querySelector("#status-container");
 const confirmModal = document.querySelector("#confirm-modal");
@@ -25,6 +26,8 @@ const confirmAbandonEl = document.querySelector("#confirm-abandon");
 const confirmOkBtn = document.querySelector("#confirm-ok");
 const confirmCancelBtn = document.querySelector("#confirm-cancel");
 const smsConfirmModal = document.querySelector("#sms-confirm-modal");
+const smsConfirmTitle = document.querySelector("#sms-confirm-title");
+const smsConfirmDesc = document.querySelector("#sms-confirm-desc");
 const smsConfirmOkBtn = document.querySelector("#sms-confirm-ok");
 const smsConfirmCancelBtn = document.querySelector("#sms-confirm-cancel");
 
@@ -36,14 +39,13 @@ let redeemStatusTimer = null;
 let pendingRedeemData = null;
 let verifiedSmsCard = null;
 let currentSmsOrderNo = null;
-let smsSubmitCooldownTimer = null;
+let currentSmsOrder = null;
 let pendingSmsConfirmResolve = null;
 
 // --- Constants ---
 
 const LIVE_STATUS_POLL_MS = 2000;
 const SMS_POLL_INTERVAL_MS = 3000;
-const SMS_LEGACY_RETRY_SECONDS = 60;
 
 const STATUS_LABELS = {
   active: "可用",
@@ -675,31 +677,6 @@ function stopSmsPolling() {
   }
 }
 
-function stopSmsSubmitCooldown() {
-  if (smsSubmitCooldownTimer) {
-    clearInterval(smsSubmitCooldownTimer);
-    smsSubmitCooldownTimer = null;
-  }
-  smsSubmit.textContent = "获取号码";
-}
-
-function startSmsSubmitCooldown(seconds = SMS_LEGACY_RETRY_SECONDS) {
-  stopSmsSubmitCooldown();
-  let remaining = seconds;
-  smsSubmit.disabled = true;
-  smsSubmit.textContent = `${remaining}s 后可再次获取`;
-
-  smsSubmitCooldownTimer = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      stopSmsSubmitCooldown();
-      smsSubmit.disabled = false;
-      return;
-    }
-    smsSubmit.textContent = `${remaining}s 后可再次获取`;
-  }, 1000);
-}
-
 function startSmsPolling(orderNo) {
   stopSmsPolling();
   const token = smsPollingToken;
@@ -710,11 +687,12 @@ function startSmsPolling(orderNo) {
     try {
       const payload = await request(`/api/public/sms/orders/${encodeURIComponent(orderNo)}`);
       if (token !== smsPollingToken) return;
+      currentSmsOrder = payload;
+      updateSmsActionButtons(payload);
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
       if (["ready", "timeout"].includes(payload.verificationStatus) || ["ready", "refunded", "failed", "cancelled"].includes(String(payload.status || "").toLowerCase())) {
         stopped = true;
         stopSmsPolling();
-        smsSubmit.disabled = false;
         currentSmsOrderNo = payload.orderNo || null;
       }
     } catch (error) {
@@ -739,16 +717,17 @@ function startSmsLegacyPolling(cardKey) {
     try {
       const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(cardKey)}`);
       if (token !== smsPollingToken) return;
+      currentSmsOrder = { ...payload, legacyStaticEntry: true };
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
       if (["ready", "timeout"].includes(payload.verificationStatus)) {
         stopped = true;
         stopSmsPolling();
-        smsSubmit.disabled = false;
+        smsCodeSubmit.disabled = true;
       }
     } catch (error) {
       stopped = true;
       stopSmsPolling();
-      smsSubmit.disabled = false;
+      smsCodeSubmit.disabled = false;
       setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
     } finally {
       if (!stopped && token === smsPollingToken) {
@@ -767,6 +746,15 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function renderVerificationStatus(payload) {
+  if (payload.purchaseStatus === "preview") {
+    return "尚未购买，请确认号段可用后点击获取验证码";
+  }
+  if (payload.purchaseStatus === "purchasing") {
+    return "正在购买号码，请稍候";
+  }
+  if (payload.status === "number_reserved") {
+    return "号码已保留，点击获取验证码后开始接收";
+  }
   switch (payload.verificationStatus) {
     case "ready":
       return escapeHtml(payload.verificationCode);
@@ -782,7 +770,8 @@ function renderVerificationStatus(payload) {
 }
 
 function renderSmsOrderResult(payload) {
-  const phoneHtml = `<div class="result-item"><span>手机号</span><strong>${escapeHtml(payload.phone || "-")}</strong></div>`;
+  const phoneLabel = payload.phone ? "手机号" : "号码预览";
+  const phoneHtml = `<div class="result-item"><span>${phoneLabel}</span><strong>${escapeHtml(payload.phone || payload.phonePreview || "-")}</strong></div>`;
   const verificationHtml = `<div class="result-item"><span>验证码</span><strong id="sms-verification-display">${renderVerificationStatus(payload)}</strong></div>`;
   const siteHtml = `<div class="result-item"><span>接码站点</span><strong>${escapeHtml(payload.siteName || verifiedSmsCard?.site?.name || "-")}</strong></div>`;
   const orderHtml = `<div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo || currentSmsOrderNo || "-")}</strong></div>`;
@@ -795,14 +784,34 @@ function isDynamicSmsProvider(card = verifiedSmsCard) {
   return ["nexsms", "383api"].includes(source) || ["nexsms", "383api"].includes(provider);
 }
 
-function shouldShowSmsConfirmBeforeFetch(card = verifiedSmsCard) {
-  return !isDynamicSmsProvider(card);
+function resetSmsActionButtons() {
+  smsSubmit.disabled = true;
+  smsSubmit.textContent = "获取号码";
+  smsCodeSubmit.disabled = true;
+  smsCodeSubmit.classList.add("hidden");
+  smsCodeSubmit.textContent = "获取验证码";
+}
+
+function updateSmsActionButtons(payload) {
+  currentSmsOrder = payload || null;
+  if (!payload) {
+    smsSubmit.disabled = false;
+    smsCodeSubmit.disabled = true;
+    smsCodeSubmit.classList.add("hidden");
+    return;
+  }
+
+  const canStartVerification = payload.purchaseStatus === "preview" || payload.status === "number_reserved";
+  smsSubmit.disabled = !payload.canRefreshPrefix;
+  smsSubmit.textContent = payload.canRefreshPrefix ? "换一个号段" : "获取号码";
+  smsCodeSubmit.classList.remove("hidden");
+  smsCodeSubmit.disabled = !canStartVerification;
+  smsCodeSubmit.textContent = payload.purchaseStatus === "purchasing" ? "正在购买..." : "获取验证码";
 }
 
 smsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   stopSmsPolling();
-  stopSmsSubmitCooldown();
 
   const key = smsKeyInput.value.trim();
   if (!key) {
@@ -811,7 +820,7 @@ smsForm.addEventListener("submit", async (event) => {
   }
 
   smsVerifyBtn.disabled = true;
-  smsSubmit.disabled = true;
+  resetSmsActionButtons();
   setState(smsResult, "正在验证接码卡密...");
 
   try {
@@ -821,17 +830,23 @@ smsForm.addEventListener("submit", async (event) => {
     });
     verifiedSmsCard = payload;
     currentSmsOrderNo = payload.latestOrder?.orderNo || null;
-    smsSubmit.disabled = false;
+    currentSmsOrder = payload.latestOrder || null;
+    updateSmsActionButtons(payload.latestOrder || null);
     setRichState(smsResult, `<div class="result-card"><div class="result-grid"><div class="result-item"><span>接码站点</span><strong>${escapeHtml(payload.site?.name || "-")}</strong></div><div class="result-item"><span>卡密状态</span><strong>${renderStatusText(payload.status)}</strong></div></div></div>`, "success");
     if (payload.latestOrder) {
       setRichState(smsResult, renderSmsOrderResult(payload.latestOrder), payload.latestOrder.verificationStatus === "ready" ? "success" : "muted");
-      if (payload.latestOrder.verificationStatus === "pending") {
+      if (
+        payload.latestOrder.verificationStatus === "pending" &&
+        ["purchased", "purchasing"].includes(payload.latestOrder.purchaseStatus)
+      ) {
         startSmsPolling(payload.latestOrder.orderNo);
       }
     }
   } catch (error) {
     verifiedSmsCard = null;
     currentSmsOrderNo = null;
+    currentSmsOrder = null;
+    resetSmsActionButtons();
     setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
   } finally {
     smsVerifyBtn.disabled = false;
@@ -844,36 +859,85 @@ smsSubmit.addEventListener("click", async () => {
     return;
   }
 
-  if (shouldShowSmsConfirmBeforeFetch()) {
-    const confirmed = await showSmsConfirmModal();
-    if (!confirmed) return;
-  }
-
   smsSubmit.disabled = true;
-  setState(smsResult, "正在分配手机号并创建接码订单...");
+  smsCodeSubmit.disabled = true;
+  const refreshingPrefix = currentSmsOrder?.canRefreshPrefix === true;
+  setState(
+    smsResult,
+    isDynamicSmsProvider()
+      ? (refreshingPrefix ? "正在更换可用号段，不会产生购买费用..." : "正在查询可用号段，不会产生购买费用...")
+      : "正在分配手机号..."
+  );
 
   try {
     if (verifiedSmsCard.legacyStaticEntry) {
       const payload = await request(`/api/public/sms/query?key=${encodeURIComponent(verifiedSmsCard.cardKey)}`);
       currentSmsOrderNo = null;
+      currentSmsOrder = {
+        ...payload,
+        legacyStaticEntry: true,
+        status: payload.verificationStatus === "ready" ? "ready" : "number_reserved"
+      };
       setRichState(smsResult, renderSmsOrderResult(payload), payload.verificationStatus === "ready" ? "success" : "muted");
-      startSmsSubmitCooldown();
+      updateSmsActionButtons(currentSmsOrder);
       return;
     }
 
     const payload = await request("/api/public/sms/orders", {
       method: "POST",
-      body: JSON.stringify({ cardKey: verifiedSmsCard.cardKey })
+      body: JSON.stringify({
+        cardKey: verifiedSmsCard.cardKey,
+        refreshPrefix: refreshingPrefix
+      })
     });
     currentSmsOrderNo = payload.orderNo;
+    currentSmsOrder = payload;
     setRichState(smsResult, renderSmsOrderResult(payload), "success");
+    updateSmsActionButtons(payload);
+  } catch (error) {
+    updateSmsActionButtons(currentSmsOrder);
+    setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
+  }
+});
+
+smsCodeSubmit.addEventListener("click", async () => {
+  if (!verifiedSmsCard?.cardKey || !currentSmsOrder) {
+    setState(smsResult, "请先获取号码", "error");
+    return;
+  }
+
+  const dynamic = isDynamicSmsProvider();
+  smsConfirmTitle.textContent = dynamic ? "确认使用这个号段？" : "确定已经发送了验证码？";
+  smsConfirmDesc.textContent = dynamic
+    ? "确认后系统才会购买该号段的真实号码。购买完成后，请使用返回的完整号码在目标平台发送验证码。"
+    : "请先在目标平台点击发送验证码，确认后将开始获取验证码。";
+  const confirmed = await showSmsConfirmModal();
+  if (!confirmed) return;
+
+  smsCodeSubmit.disabled = true;
+  smsCodeSubmit.textContent = dynamic ? "正在购买..." : "正在获取...";
+  setState(smsResult, dynamic ? "正在购买已确认的号段..." : "正在获取验证码...");
+
+  try {
+    if (verifiedSmsCard.legacyStaticEntry) {
+      setRichState(smsResult, renderSmsOrderResult(currentSmsOrder), "muted");
+      startSmsLegacyPolling(verifiedSmsCard.cardKey);
+      return;
+    }
+
+    const payload = await request(`/api/public/sms/orders/${encodeURIComponent(currentSmsOrderNo)}/verification`, {
+      method: "POST",
+      body: JSON.stringify({ cardKey: verifiedSmsCard.cardKey })
+    });
+    currentSmsOrder = payload;
+    setRichState(smsResult, renderSmsOrderResult(payload), "success");
+    updateSmsActionButtons(payload);
     if (payload.verificationStatus === "pending") {
       startSmsPolling(payload.orderNo);
-    } else {
-      smsSubmit.disabled = false;
     }
   } catch (error) {
-    smsSubmit.disabled = false;
+    smsCodeSubmit.disabled = false;
+    smsCodeSubmit.textContent = "获取验证码";
     setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
   }
 });

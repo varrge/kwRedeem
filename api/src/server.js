@@ -32,7 +32,7 @@ import {
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
-import { purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
+import { getPremiumPrefixes, purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
 import { purchase383ApiNumber, get383ApiSmsMessages } from "../../shared/src/383api-client.js";
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
@@ -1155,6 +1155,76 @@ function reserveSmsEntryForOrder() {
   `).get();
 }
 
+function normalizeSmsNumberPrefix(value) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function parseSmsNumberPrefixes(value) {
+  return String(value || "")
+    .split(",")
+    .map(normalizeSmsNumberPrefix)
+    .filter(Boolean);
+}
+
+function selectNexSmsNumberPrefix(prefixes, includeValue = "", excludeValue = "") {
+  const included = new Set(parseSmsNumberPrefixes(includeValue));
+  const excluded = new Set(parseSmsNumberPrefixes(excludeValue));
+  const candidates = prefixes
+    .map((item) => ({
+      prefix: normalizeSmsNumberPrefix(item?.prefix),
+      stock: Math.max(0, Number(item?.stock) || 0)
+    }))
+    .filter((item) => item.prefix && item.stock > 0)
+    .filter((item) => !included.size || included.has(item.prefix))
+    .filter((item) => !excluded.has(item.prefix))
+    .sort((left, right) => right.stock - left.stock || left.prefix.localeCompare(right.prefix));
+  return candidates[0] || null;
+}
+
+function getSmsOrderWithSiteById(orderId) {
+  return db.prepare(`
+    SELECT o.*, s.name AS site_name, s.slug AS site_slug
+    FROM sms_orders o
+    LEFT JOIN sms_sites s ON s.id = o.site_id
+    WHERE o.id = ?
+  `).get(orderId);
+}
+
+function getSmsPurchaseState(order, payload = safeParseJson(order?.provider_payload, {})) {
+  const dynamicProvider = ["nexsms", "383api"].includes(payload?.provider);
+  if (!dynamicProvider) return "not_required";
+  if (order?.phone) return "purchased";
+  if (order?.status === smsOrderStatuses.purchasing) return "purchasing";
+  return "preview";
+}
+
+function getSmsPhonePreview(numberPrefix) {
+  const normalized = normalizeSmsNumberPrefix(numberPrefix);
+  return normalized ? `+${normalized}${"•".repeat(Math.max(4, 11 - normalized.length))}` : "购买后分配完整号码";
+}
+
+async function notifyStaticSmsPoller(order) {
+  if (!order?.sms_entry_id || !order?.sms_url) return;
+  try {
+    const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
+    await fetch(workerUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": env.internalSecret
+      },
+      body: JSON.stringify({
+        publicKey: String(order.sms_entry_id),
+        smsUrl: order.sms_url,
+        smsEntryId: String(order.sms_entry_id)
+      }),
+      signal: AbortSignal.timeout(5000)
+    });
+  } catch {
+    // Worker unavailable; frontend polling will keep reading the order state.
+  }
+}
+
 function readSmsOrderVerification(order) {
   const storedCode = extractSmsVerificationCode(order?.verification_code);
   if (!order?.sms_entry_id) {
@@ -1267,11 +1337,21 @@ async function sync383ApiOrder(order) {
 
 function mapSmsOrderForPublic(order) {
   const verification = readSmsOrderVerification(order);
+  const providerPayload = safeParseJson(order.provider_payload, {});
+  const purchaseStatus = getSmsPurchaseState(order, providerPayload);
+  const numberPrefix = normalizeSmsNumberPrefix(
+    providerPayload.selectedPrefix || parseSmsNumberPrefixes(providerPayload.prefix)[0] || ""
+  );
   return {
     orderNo: order.order_no,
     siteName: order.site_name || null,
     siteSlug: order.site_slug || null,
     phone: order.phone || "",
+    phonePreview: order.phone || getSmsPhonePreview(numberPrefix),
+    numberPrefix: numberPrefix || null,
+    purchaseStatus,
+    requiresPurchase: purchaseStatus === "preview",
+    canRefreshPrefix: purchaseStatus === "preview" && providerPayload.provider === "nexsms",
     status: verification.verificationStatus === "ready" ? smsOrderStatuses.ready : order.status,
     verificationStatus: verification.verificationStatus,
     verificationCode: verification.verificationCode,
@@ -10595,7 +10675,8 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
 
 app.post("/api/public/sms/orders", async (request, reply) => {
   const schema = z.object({
-    cardKey: z.string().min(1)
+    cardKey: z.string().min(1),
+    refreshPrefix: z.boolean().optional().default(false)
   });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
@@ -10621,6 +10702,66 @@ app.post("/api/public/sms/orders", async (request, reply) => {
       WHERE o.id = ?
     `).get(card.current_order_id);
     if (currentOrder) {
+      const currentPayload = safeParseJson(currentOrder.provider_payload, {});
+      if (
+        parsed.data.refreshPrefix &&
+        currentPayload.provider === "nexsms" &&
+        !currentOrder.phone &&
+        currentOrder.status === smsOrderStatuses.number_reserved
+      ) {
+        let apiKey;
+        try {
+          apiKey = decryptText(card.sms_api_key);
+        } catch {
+          return reply.code(400).send({ message: "NexSMS API Key 解密失败" });
+        }
+        let prefixes;
+        try {
+          prefixes = await getPremiumPrefixes(apiKey, {
+            appId: card.sms_app_id,
+            type: card.sms_card_type || 1,
+            expiry: card.sms_expiry || 0
+          });
+        } catch (error) {
+          return reply.code(502).send({ message: `获取可用号段失败：${error.message}` });
+        }
+        const selected = selectNexSmsNumberPrefix(
+          prefixes,
+          card.sms_prefix_filter,
+          [
+            card.sms_exclude_prefix,
+            ...(Array.isArray(currentPayload.previewedPrefixes) ? currentPayload.previewedPrefixes : []),
+            currentPayload.selectedPrefix
+          ].filter(Boolean).join(",")
+        );
+        if (!selected) {
+          return reply.code(409).send({ message: "暂无其他可用号段，请稍后重试" });
+        }
+        const updatedPayload = {
+          ...currentPayload,
+          selectedPrefix: selected.prefix,
+          previewStock: selected.stock,
+          previewedPrefixes: [
+            ...(Array.isArray(currentPayload.previewedPrefixes) ? currentPayload.previewedPrefixes : []),
+            currentPayload.selectedPrefix,
+            selected.prefix
+          ].filter(Boolean).filter((prefix, index, all) => all.indexOf(prefix) === index)
+        };
+        const refreshed = db.prepare(`
+          UPDATE sms_orders
+          SET provider_payload = ?, error_message = NULL, updated_at = ?
+          WHERE id = ? AND phone IS NULL AND status = ?
+        `).run(JSON.stringify(updatedPayload), nowIso(), currentOrder.id, smsOrderStatuses.number_reserved);
+        if (refreshed.changes !== 1) {
+          return mapSmsOrderForPublic(getSmsOrderWithSiteById(currentOrder.id));
+        }
+        createSmsOrderEvent(currentOrder.id, "number_prefix_previewed", {
+          provider: "nexsms",
+          prefix: selected.prefix,
+          refreshed: true
+        });
+        return mapSmsOrderForPublic(getSmsOrderWithSiteById(currentOrder.id));
+      }
       return mapSmsOrderForPublic(currentOrder);
     }
   }
@@ -10628,6 +10769,8 @@ app.post("/api/public/sms/orders", async (request, reply) => {
   const now = nowIso();
   const orderId = nanoid(16);
   const orderNo = generateSmsOrderNo();
+  let smsEntry = null;
+  let providerPayload;
 
   if (card.inventory_source === "nexsms" || card.sms_provider === "nexsms") {
     if (!card.sms_api_key || !card.sms_app_id) {
@@ -10641,133 +10784,83 @@ app.post("/api/public/sms/orders", async (request, reply) => {
       return reply.code(400).send({ message: "NexSMS API Key 解密失败" });
     }
 
-    let purchased;
+    let prefixes;
     try {
-      purchased = await purchasePremiumNumber(apiKey, {
+      prefixes = await getPremiumPrefixes(apiKey, {
         appId: card.sms_app_id,
         type: card.sms_card_type || 1,
-        quantity: 1,
-        expiry: card.sms_expiry || 0,
-        prefix: card.sms_prefix_filter || null,
-        excludePrefix: card.sms_exclude_prefix || null
+        expiry: card.sms_expiry || 0
       });
     } catch (error) {
-      createSmsOrderEvent(orderId, "purchase_failed", { provider: "nexsms", message: error.message });
-      return reply.code(502).send({ message: "买号失败" });
+      return reply.code(502).send({ message: `获取可用号段失败：${error.message}` });
     }
 
-    db.prepare(`
-      INSERT INTO sms_orders (
-        id, order_no, site_id, card_id, sms_entry_id, phone, sms_url,
-        verification_code, status, error_message, provider_payload, refunded_at,
-        expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)
-    `).run(
-      orderId,
-      orderNo,
-      card.site_id,
-      card.id,
-      purchased.tel,
-      smsOrderStatuses.waiting_code,
-      JSON.stringify({
-        provider: "nexsms",
-        apiKeyEncrypted: card.sms_api_key,
-        appId: card.sms_app_id,
-        type: card.sms_card_type || 1,
-        expiry: card.sms_expiry || 0,
-        purchase: purchased
-      }),
-      getSmsOrderExpiresAt(purchased.endTime, card.sms_poll_timeout_ms),
-      now,
-      now
-    );
-
-    db.prepare(`
-      UPDATE sms_cards
-      SET status = ?, current_order_id = ?, resource_entry_id = NULL, updated_at = ?
-      WHERE id = ?
-    `).run(smsCardStatuses.in_use, orderId, now, card.id);
-
-    createSmsOrderEvent(orderId, "number_reserved", { provider: "nexsms", phone: purchased.tel, appName: purchased.appName || null });
+    const selected = selectNexSmsNumberPrefix(prefixes, card.sms_prefix_filter, card.sms_exclude_prefix);
+    if (!selected) {
+      return reply.code(409).send({ message: "当前配置下没有可用号段，请稍后重试或联系管理员" });
+    }
+    providerPayload = {
+      provider: "nexsms",
+      apiKeyEncrypted: card.sms_api_key,
+      appId: card.sms_app_id,
+      type: card.sms_card_type || 1,
+      expiry: card.sms_expiry || 0,
+      selectedPrefix: selected.prefix,
+      previewStock: selected.stock,
+      previewedPrefixes: [selected.prefix]
+    };
   } else if (card.inventory_source === "383api" || card.sms_provider === "383api") {
     if (!card.sms_api_key || !card.sms_app_id) {
       return reply.code(400).send({ message: "383api 站点未配置 API Key 或 project_id" });
     }
 
-    let apiKey;
     try {
-      apiKey = decryptText(card.sms_api_key);
+      decryptText(card.sms_api_key);
     } catch {
       return reply.code(400).send({ message: "383api API Key 解密失败" });
     }
-
-    let purchased;
-    try {
-      purchased = await purchase383ApiNumber(apiKey, {
-        projectId: card.sms_app_id,
-        quantity: 1,
-        prefix: card.sms_prefix_filter || null
-      });
-    } catch (error) {
-      createSmsOrderEvent(orderId, "purchase_failed", { provider: "383api", message: error.message });
-      return reply.code(502).send({ message: "买号失败" });
-    }
-
-    db.prepare(`
-      INSERT INTO sms_orders (
-        id, order_no, site_id, card_id, sms_entry_id, phone, sms_url,
-        verification_code, status, error_message, provider_payload, refunded_at,
-        expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)
-    `).run(
-      orderId,
-      orderNo,
-      card.site_id,
-      card.id,
-      purchased.phoneNumber,
-      smsOrderStatuses.waiting_code,
-      JSON.stringify({
-        provider: "383api",
-        apiKeyEncrypted: card.sms_api_key,
-        projectId: card.sms_app_id,
-        prefix: card.sms_prefix_filter || null,
-        purchase: purchased
-      }),
-      getSmsOrderExpiresAt(purchased.expiresAt, card.sms_poll_timeout_ms),
-      now,
-      now
-    );
-
-    db.prepare(`
-      UPDATE sms_cards
-      SET status = ?, current_order_id = ?, resource_entry_id = NULL, updated_at = ?
-      WHERE id = ?
-    `).run(smsCardStatuses.in_use, orderId, now, card.id);
-
-    createSmsOrderEvent(orderId, "number_reserved", { provider: "383api", phone: purchased.phoneNumber, remoteOrderNumber: purchased.orderNumber || null });
+    providerPayload = {
+      provider: "383api",
+      apiKeyEncrypted: card.sms_api_key,
+      projectId: card.sms_app_id,
+      selectedPrefix: parseSmsNumberPrefixes(card.sms_prefix_filter)[0] || null
+    };
   } else {
-    const smsEntry = reserveSmsEntryForOrder();
+    smsEntry = reserveSmsEntryForOrder();
     if (!smsEntry) {
       return reply.code(409).send({ message: "当前没有可分配的号码库存" });
     }
+    providerPayload = { source: "sms_entries" };
+  }
 
+  const result = withTransaction(() => {
+    const currentCard = db.prepare("SELECT current_order_id FROM sms_cards WHERE id = ?").get(card.id);
+    if (currentCard?.current_order_id) {
+      return { orderId: currentCard.current_order_id, created: false };
+    }
+    if (smsEntry) {
+      const locked = db.prepare("UPDATE sms_entries SET status = 'locked', updated_at = ? WHERE id = ? AND status = 'active'")
+        .run(now, smsEntry.id);
+      if (locked.changes !== 1) {
+        throw new Error("SMS_ENTRY_ALREADY_RESERVED");
+      }
+    }
     db.prepare(`
       INSERT INTO sms_orders (
         id, order_no, site_id, card_id, sms_entry_id, phone, sms_url,
         verification_code, status, error_message, provider_payload, refunded_at,
         expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, NULL, ?, ?)
     `).run(
       orderId,
       orderNo,
       card.site_id,
       card.id,
-      smsEntry.id,
-      smsEntry.phone,
-      smsEntry.sms_url,
-      smsOrderStatuses.waiting_code,
-      JSON.stringify({ source: "sms_entries" }),
-      getSmsOrderExpiresAt(),
+      smsEntry?.id || null,
+      smsEntry?.phone || null,
+      smsEntry?.sms_url || null,
+      smsOrderStatuses.number_reserved,
+      JSON.stringify(providerPayload),
       now,
       now
     );
@@ -10776,43 +10869,161 @@ app.post("/api/public/sms/orders", async (request, reply) => {
       UPDATE sms_cards
       SET status = ?, current_order_id = ?, resource_entry_id = ?, updated_at = ?
       WHERE id = ?
-    `).run(smsCardStatuses.in_use, orderId, smsEntry.id, now, card.id);
+    `).run(smsCardStatuses.in_use, orderId, smsEntry?.id || null, now, card.id);
+    return { orderId, created: true };
+  });
 
-    db.prepare(`
-      UPDATE sms_entries
-      SET status = 'locked', updated_at = ?
-      WHERE id = ?
-    `).run(now, smsEntry.id);
-
-    createSmsOrderEvent(orderId, "number_reserved", { smsEntryId: smsEntry.id, phone: smsEntry.phone });
-
-    try {
-      const workerUrl = `http://127.0.0.1:${env.workerInternalPort}/api/internal/sms/poll`;
-      await fetch(workerUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Internal-Secret": env.internalSecret
-        },
-        body: JSON.stringify({
-          publicKey: String(smsEntry.id),
-          smsUrl: smsEntry.sms_url,
-          smsEntryId: String(smsEntry.id)
-        }),
-        signal: AbortSignal.timeout(5000)
-      });
-    } catch {
-      // Worker unavailable; frontend polling will keep reading the order state.
-    }
+  if (result.created) {
+    createSmsOrderEvent(result.orderId, smsEntry ? "number_reserved" : "number_prefix_previewed", smsEntry
+      ? { smsEntryId: smsEntry.id, phone: smsEntry.phone }
+      : { provider: providerPayload.provider, prefix: providerPayload.selectedPrefix || null });
   }
 
-  const createdOrder = db.prepare(`
-    SELECT o.*, s.name AS site_name, s.slug AS site_slug
+  const createdOrder = getSmsOrderWithSiteById(result.orderId);
+  return mapSmsOrderForPublic(createdOrder);
+});
+
+app.post("/api/public/sms/orders/:orderNo/verification", async (request, reply) => {
+  const parsed = z.object({ cardKey: z.string().min(1) }).safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "请提供 cardKey" });
+  }
+
+  const orderNo = String(request.params.orderNo || "").trim();
+  let order = db.prepare(`
+    SELECT o.*, s.name AS site_name, s.slug AS site_slug, s.sms_poll_timeout_ms,
+           c.card_key
     FROM sms_orders o
     LEFT JOIN sms_sites s ON s.id = o.site_id
-    WHERE o.id = ?
-  `).get(orderId);
-  return mapSmsOrderForPublic(createdOrder);
+    LEFT JOIN sms_cards c ON c.id = o.card_id
+    WHERE o.order_no = ?
+  `).get(orderNo);
+  if (!order) {
+    return reply.code(404).send({ message: "接码订单不存在" });
+  }
+  if (order.card_key !== parsed.data.cardKey.trim()) {
+    return reply.code(403).send({ message: "卡密与接码订单不匹配" });
+  }
+
+  const providerPayload = safeParseJson(order.provider_payload, {});
+  const provider = providerPayload.provider || "";
+  if (!["nexsms", "383api"].includes(provider)) {
+    if (order.status === smsOrderStatuses.number_reserved) {
+      const now = nowIso();
+      const started = db.prepare(`
+        UPDATE sms_orders
+        SET status = ?, expires_at = ?, error_message = NULL, updated_at = ?
+        WHERE id = ? AND status = ?
+      `).run(
+        smsOrderStatuses.waiting_code,
+        getSmsOrderExpiresAt(null, order.sms_poll_timeout_ms),
+        now,
+        order.id,
+        smsOrderStatuses.number_reserved
+      );
+      if (started.changes === 1) {
+        createSmsOrderEvent(order.id, "verification_requested", { source: "sms_entries" });
+        order = getSmsOrderWithSiteById(order.id);
+        await notifyStaticSmsPoller(order);
+      }
+    }
+    return mapSmsOrderForPublic(getSmsOrderWithSiteById(order.id));
+  }
+
+  if (order.phone) {
+    return mapSmsOrderForPublic(order);
+  }
+  if (order.status === smsOrderStatuses.purchasing) {
+    return reply.code(409).send({ message: "号码正在购买中，请稍后查询订单" });
+  }
+  if (![smsOrderStatuses.number_reserved, smsOrderStatuses.pending].includes(order.status)) {
+    return mapSmsOrderForPublic(order);
+  }
+
+  const purchaseStartedAt = nowIso();
+  const acquired = db.prepare(`
+    UPDATE sms_orders
+    SET status = ?, error_message = NULL, updated_at = ?
+    WHERE id = ? AND phone IS NULL AND status IN (?, ?)
+  `).run(
+    smsOrderStatuses.purchasing,
+    purchaseStartedAt,
+    order.id,
+    smsOrderStatuses.number_reserved,
+    smsOrderStatuses.pending
+  );
+  if (acquired.changes !== 1) {
+    order = getSmsOrderWithSiteById(order.id);
+    if (order?.phone) return mapSmsOrderForPublic(order);
+    return reply.code(409).send({ message: "号码正在购买中，请稍后查询订单" });
+  }
+  createSmsOrderEvent(order.id, "purchase_started", {
+    provider,
+    prefix: providerPayload.selectedPrefix || null
+  });
+
+  let purchased;
+  try {
+    const apiKey = decryptText(providerPayload.apiKeyEncrypted);
+    if (provider === "nexsms") {
+      purchased = await purchasePremiumNumber(apiKey, {
+        appId: providerPayload.appId,
+        type: providerPayload.type || 1,
+        quantity: 1,
+        expiry: providerPayload.expiry || 0,
+        prefix: providerPayload.selectedPrefix || null
+      });
+    } else {
+      purchased = await purchase383ApiNumber(apiKey, {
+        projectId: providerPayload.projectId,
+        quantity: 1,
+        prefix: providerPayload.selectedPrefix || null
+      });
+    }
+  } catch (error) {
+    db.prepare(`
+      UPDATE sms_orders
+      SET status = ?, error_message = ?, updated_at = ?
+      WHERE id = ? AND status = ? AND phone IS NULL
+    `).run(smsOrderStatuses.number_reserved, error.message, nowIso(), order.id, smsOrderStatuses.purchasing);
+    createSmsOrderEvent(order.id, "purchase_failed", { provider, message: error.message });
+    return reply.code(502).send({ message: `买号失败：${error.message}` });
+  }
+
+  const phone = provider === "nexsms" ? purchased.tel : purchased.phoneNumber;
+  const providerEndTime = provider === "nexsms" ? purchased.endTime : purchased.expiresAt;
+  const completedAt = nowIso();
+  const storedPayload = {
+    ...providerPayload,
+    purchase: purchased,
+    purchasedAt: completedAt
+  };
+  const completed = db.prepare(`
+    UPDATE sms_orders
+    SET phone = ?, status = ?, provider_payload = ?, expires_at = ?,
+        error_message = NULL, updated_at = ?
+    WHERE id = ? AND status = ? AND phone IS NULL
+  `).run(
+    phone,
+    smsOrderStatuses.waiting_code,
+    JSON.stringify(storedPayload),
+    getSmsOrderExpiresAt(providerEndTime, order.sms_poll_timeout_ms),
+    completedAt,
+    order.id,
+    smsOrderStatuses.purchasing
+  );
+  if (completed.changes !== 1) {
+    createSmsOrderEvent(order.id, "purchase_persist_failed", { provider, phone });
+    return reply.code(500).send({ message: "号码已购买但订单保存失败，请立即联系管理员，勿重复点击" });
+  }
+
+  createSmsOrderEvent(order.id, "number_purchased", {
+    provider,
+    phone,
+    prefix: providerPayload.selectedPrefix || null,
+    remoteOrderNumber: purchased.orderNumber || null
+  });
+  return mapSmsOrderForPublic(getSmsOrderWithSiteById(order.id));
 });
 
 app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
@@ -10838,6 +11049,7 @@ app.get("/api/public/sms/orders/:orderNo", async (request, reply) => {
   if (
     verification.verificationStatus !== "ready" &&
     order.sms_url &&
+    [smsOrderStatuses.waiting_code, smsOrderStatuses.ready].includes(order.status) &&
     ![smsOrderStatuses.refunded, smsOrderStatuses.timeout, smsOrderStatuses.failed, smsOrderStatuses.cancelled].includes(order.status)
   ) {
     try {

@@ -325,7 +325,7 @@ An order-level retry state entered before checkout when KaWang's address API is 
 _Avoid_: Browser scraping fallback, submitting without required billing fields
 
 **Session-Driven Checkout Entry**:
-The Go checkout module locally chunks the protected order Session's `sessionToken` into allowlisted ChatGPT Cookies, verifies the authenticated account identity, reads the official current subscription, and uses the official checkout API to create a fixed Plus/month/one-seat entry inside an isolated unattended browser. An active paid subscription stops before checkout creation; accepted responses are limited to reviewed hosted or `openai_llc/oaics_*` routes, and preflight never invokes subscription renewal. It does not send the Session to a checkout-link broker or require a separately configured GPT Token.
+The Go checkout module locally chunks the protected order Session's `sessionToken` into allowlisted ChatGPT Cookies, verifies the authenticated account identity, reads the official current subscription, and uses the official checkout API with the extension-proven fixed `billing_details={country:PH,currency:PHP}`, hosted UI, Plus pricing-modal contract inside an isolated unattended browser. An active paid subscription stops before checkout creation; accepted responses are limited to reviewed hosted or `openai_llc/{oaics_*,cs_*}` routes, and preflight never invokes subscription renewal. It does not send the Session to a checkout-link broker or require a separately configured GPT Token.
 _Avoid_: Brokered Checkout Link, legacy pricing-button automation, account password automation, treating `accessToken` as a Cookie, logging Session/Cookie material, renewing during preflight
 
 **Unattended Checkout Browser**:

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { JSDOM } from "jsdom";
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kawang-sms-deferred-purchase-"));
 process.env.DATABASE_PATH = path.join(tmpDir, "test.db");
@@ -339,4 +340,55 @@ test("static inventory is only polled after the get-verification action", async 
   assert.equal(started.statusCode, 200);
   assert.equal(started.json().status, "waiting_code");
   assert.equal(pollCalls, 1);
+});
+
+test("SMS full-number preview enables the same button as 换一个号码", async () => {
+  const html = fs.readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
+  const appSource = fs.readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+  const dom = new JSDOM(html, {
+    url: "https://key.example.test/",
+    runScripts: "outside-only"
+  });
+  dom.window.KAWANG_CONFIG = { apiUrl: "https://api.example.test" };
+  dom.window.fetch = async (url) => {
+    assert.equal(url, "https://api.example.test/api/public/sms/cards/verify");
+    return jsonResponse({
+      valid: true,
+      cardKey: "SMS-TEST-KEY",
+      inventorySource: "383api",
+      smsProvider: "383api",
+      status: "in_use",
+      site: { name: "333站点", inventorySource: "383api", smsProvider: "383api" },
+      latestOrder: {
+        orderNo: "SMS-ORDER-1",
+        status: "number_reserved",
+        purchaseStatus: "preview",
+        previewKind: "phone",
+        phone: "",
+        phonePreview: "17252656782",
+        canRefreshNumber: true,
+        canRefreshPrefix: false,
+        verificationStatus: "pending"
+      }
+    });
+  };
+
+  dom.window.eval(appSource);
+  dom.window.document.querySelector("#sms-key").value = "SMS-TEST-KEY";
+  dom.window.document.querySelector("#sms-form").dispatchEvent(new dom.window.Event("submit", {
+    bubbles: true,
+    cancelable: true
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const button = dom.window.document.querySelector("#sms-submit");
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "换一个号码");
+  assert.match(dom.window.document.querySelector("#sms-result").textContent, /确认号码可用/);
+  dom.window.close();
+});
+
+test("SMS page cache-busts the frontend module after deployments", () => {
+  const html = fs.readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
+  assert.match(html, /import\(`\.\/app\.js\?v=\$\{Date\.now\(\)\}`\)/);
 });

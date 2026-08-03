@@ -33,7 +33,13 @@ import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateStri
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
 import { getPremiumPrefixes, purchasePremiumNumber, getPremiumSmsRecords } from "../../shared/src/nexsms-client.js";
-import { purchase383ApiNumber, get383ApiSmsMessages } from "../../shared/src/383api-client.js";
+import {
+  get383ApiMarketplaceLastInventoryPage,
+  get383ApiSmsMessages,
+  pick383ApiMarketplaceNumber,
+  purchase383ApiMarketplaceNumbers,
+  validate383ApiMarketplaceNumbers
+} from "../../shared/src/383api-client.js";
 import { verifyExternalCard, fetchClaimWarning, claimFromExternal } from "../../shared/src/quota-api.js";
 import { getTotalQuota, getAllocatedQuota, getAvailableQuota, getUniqueSubCardCode, generateExportText } from "../../shared/src/quota-calc.js";
 import { getBalance } from "../../shared/src/fivesim-client.js";
@@ -1181,6 +1187,16 @@ function selectNexSmsNumberPrefix(prefixes, includeValue = "", excludeValue = ""
   return candidates[0] || null;
 }
 
+async function select383ApiInventoryPreview(card, excludedNumbers = []) {
+  const apiKey = decryptText(card.sms_api_key);
+  const inventory = await get383ApiMarketplaceLastInventoryPage(apiKey, {
+    projectId: card.sms_app_id,
+    pageSize: 100
+  });
+  const selected = pick383ApiMarketplaceNumber(inventory.items, excludedNumbers);
+  return { apiKey, inventory, selected };
+}
+
 function getSmsOrderWithSiteById(orderId) {
   return db.prepare(`
     SELECT o.*, s.name AS site_name, s.slug AS site_slug
@@ -1342,16 +1358,21 @@ function mapSmsOrderForPublic(order) {
   const numberPrefix = normalizeSmsNumberPrefix(
     providerPayload.selectedPrefix || parseSmsNumberPrefixes(providerPayload.prefix)[0] || ""
   );
+  const selectedPhone = String(providerPayload.selectedPhone || "").trim();
+  const previewKind = (order.phone || selectedPhone) ? "phone" : (numberPrefix ? "prefix" : "pending");
   return {
     orderNo: order.order_no,
     siteName: order.site_name || null,
     siteSlug: order.site_slug || null,
     phone: order.phone || "",
-    phonePreview: order.phone || getSmsPhonePreview(numberPrefix),
+    phonePreview: order.phone || selectedPhone || getSmsPhonePreview(numberPrefix),
     numberPrefix: numberPrefix || null,
+    previewKind,
+    previewExpiresAt: providerPayload.selectedExpiresAt || null,
     purchaseStatus,
     requiresPurchase: purchaseStatus === "preview",
     canRefreshPrefix: purchaseStatus === "preview" && providerPayload.provider === "nexsms",
+    canRefreshNumber: purchaseStatus === "preview" && ["nexsms", "383api"].includes(providerPayload.provider),
     status: verification.verificationStatus === "ready" ? smsOrderStatuses.ready : order.status,
     verificationStatus: verification.verificationStatus,
     verificationCode: verification.verificationCode,
@@ -9460,7 +9481,8 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
 			'WAITING_SESSION_VALIDATION', 'WAITING_SESSION_ACTIVATION', 'QUEUED', 'ACCOUNT_FULFILLMENT_WAIT',
             'ACCOUNT_CHECKING', 'ACCOUNT_REPURCHASE_NOT_READY',
             'INVENTORY_NOT_READY', 'INVENTORY_CHECKING', 'CARD_PRICE_UNAVAILABLE',
-			'CHECKOUT_PREFLIGHT_READY', 'CHECKOUT_EXECUTION_WAIT', 'BROWSER_LEASE_WAIT', 'CHECKOUT_ADDRESS_UNAVAILABLE',
+			'CHECKOUT_PREFLIGHT_READY', 'CHECKOUT_LOGIN_READY', 'CHECKOUT_LOGIN_WAIT',
+			'CHECKOUT_LOGIN_PREFLIGHT_PASSED', 'CHECKOUT_EXECUTION_WAIT', 'BROWSER_LEASE_WAIT', 'CHECKOUT_ADDRESS_UNAVAILABLE',
             'CHECKOUT_PRICE_UNRECOGNIZED', 'CHECKOUT_UI_UNSUPPORTED',
             'CHECKOUT_PRE_SUBMIT_FAILED', 'MEMBERSHIP_CONTRACT_UNKNOWN'
           )
@@ -10676,12 +10698,14 @@ app.post("/api/public/sms/cards/verify", async (request, reply) => {
 app.post("/api/public/sms/orders", async (request, reply) => {
   const schema = z.object({
     cardKey: z.string().min(1),
-    refreshPrefix: z.boolean().optional().default(false)
+    refreshPrefix: z.boolean().optional().default(false),
+    refreshNumber: z.boolean().optional().default(false)
   });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ message: "请提供 cardKey" });
   }
+  const refreshRequested = parsed.data.refreshNumber || parsed.data.refreshPrefix;
 
   const card = getSmsCardDetail(parsed.data.cardKey.trim());
   if (!card) {
@@ -10704,7 +10728,7 @@ app.post("/api/public/sms/orders", async (request, reply) => {
     if (currentOrder) {
       const currentPayload = safeParseJson(currentOrder.provider_payload, {});
       if (
-        parsed.data.refreshPrefix &&
+        refreshRequested &&
         currentPayload.provider === "nexsms" &&
         !currentOrder.phone &&
         currentOrder.status === smsOrderStatuses.number_reserved
@@ -10762,6 +10786,53 @@ app.post("/api/public/sms/orders", async (request, reply) => {
         });
         return mapSmsOrderForPublic(getSmsOrderWithSiteById(currentOrder.id));
       }
+      if (
+        refreshRequested &&
+        currentPayload.provider === "383api" &&
+        !currentOrder.phone &&
+        currentOrder.status === smsOrderStatuses.number_reserved
+      ) {
+        let preview;
+        try {
+          preview = await select383ApiInventoryPreview(
+            card,
+            Array.isArray(currentPayload.previewedNumbers) ? currentPayload.previewedNumbers : [currentPayload.selectedPhone]
+          );
+        } catch (error) {
+          return reply.code(502).send({ message: `获取 383api 可用号码失败：${error.message}` });
+        }
+        if (!preview.selected) {
+          return reply.code(409).send({ message: "最后一页暂无其他可用号码，请稍后重试" });
+        }
+        const updatedPayload = {
+          ...currentPayload,
+          selectedPhone: preview.selected.phoneNumber,
+          selectedExpiresAt: preview.selected.expiresAt || null,
+          inventoryLastPage: preview.inventory.lastPage,
+          inventoryTotal: preview.inventory.total,
+          previewedNumbers: [
+            ...(Array.isArray(currentPayload.previewedNumbers) ? currentPayload.previewedNumbers : []),
+            currentPayload.selectedPhone,
+            preview.selected.phoneNumber
+          ].filter(Boolean).filter((phone, index, all) => all.indexOf(phone) === index)
+        };
+        const refreshed = db.prepare(`
+          UPDATE sms_orders
+          SET provider_payload = ?, error_message = NULL, updated_at = ?
+          WHERE id = ? AND phone IS NULL AND status = ?
+        `).run(JSON.stringify(updatedPayload), nowIso(), currentOrder.id, smsOrderStatuses.number_reserved);
+        if (refreshed.changes !== 1) {
+          return mapSmsOrderForPublic(getSmsOrderWithSiteById(currentOrder.id));
+        }
+        createSmsOrderEvent(currentOrder.id, "number_previewed", {
+          provider: "383api",
+          phone: preview.selected.phoneNumber,
+          expiresAt: preview.selected.expiresAt || null,
+          inventoryPage: preview.inventory.lastPage,
+          refreshed: true
+        });
+        return mapSmsOrderForPublic(getSmsOrderWithSiteById(currentOrder.id));
+      }
       return mapSmsOrderForPublic(currentOrder);
     }
   }
@@ -10814,16 +10885,24 @@ app.post("/api/public/sms/orders", async (request, reply) => {
       return reply.code(400).send({ message: "383api 站点未配置 API Key 或 project_id" });
     }
 
+    let preview;
     try {
-      decryptText(card.sms_api_key);
-    } catch {
-      return reply.code(400).send({ message: "383api API Key 解密失败" });
+      preview = await select383ApiInventoryPreview(card);
+    } catch (error) {
+      return reply.code(502).send({ message: `获取 383api 可用号码失败：${error.message}` });
+    }
+    if (!preview.selected) {
+      return reply.code(409).send({ message: "383api 最后一页没有可用号码" });
     }
     providerPayload = {
       provider: "383api",
       apiKeyEncrypted: card.sms_api_key,
       projectId: card.sms_app_id,
-      selectedPrefix: parseSmsNumberPrefixes(card.sms_prefix_filter)[0] || null
+      selectedPhone: preview.selected.phoneNumber,
+      selectedExpiresAt: preview.selected.expiresAt || null,
+      inventoryLastPage: preview.inventory.lastPage,
+      inventoryTotal: preview.inventory.total,
+      previewedNumbers: [preview.selected.phoneNumber]
     };
   } else {
     smsEntry = reserveSmsEntryForOrder();
@@ -10874,9 +10953,20 @@ app.post("/api/public/sms/orders", async (request, reply) => {
   });
 
   if (result.created) {
-    createSmsOrderEvent(result.orderId, smsEntry ? "number_reserved" : "number_prefix_previewed", smsEntry
+    const eventType = smsEntry
+      ? "number_reserved"
+      : (providerPayload.selectedPhone ? "number_previewed" : "number_prefix_previewed");
+    const eventDetail = smsEntry
       ? { smsEntryId: smsEntry.id, phone: smsEntry.phone }
-      : { provider: providerPayload.provider, prefix: providerPayload.selectedPrefix || null });
+      : (providerPayload.selectedPhone
+          ? {
+              provider: providerPayload.provider,
+              phone: providerPayload.selectedPhone,
+              expiresAt: providerPayload.selectedExpiresAt || null,
+              inventoryPage: providerPayload.inventoryLastPage || null
+            }
+          : { provider: providerPayload.provider, prefix: providerPayload.selectedPrefix || null });
+    createSmsOrderEvent(result.orderId, eventType, eventDetail);
   }
 
   const createdOrder = getSmsOrderWithSiteById(result.orderId);
@@ -10959,10 +11049,12 @@ app.post("/api/public/sms/orders/:orderNo/verification", async (request, reply) 
   }
   createSmsOrderEvent(order.id, "purchase_started", {
     provider,
-    prefix: providerPayload.selectedPrefix || null
+    prefix: providerPayload.selectedPrefix || null,
+    phone: providerPayload.selectedPhone || null
   });
 
   let purchased;
+  let purchaseFailureStatus = 502;
   try {
     const apiKey = decryptText(providerPayload.apiKeyEncrypted);
     if (provider === "nexsms") {
@@ -10974,11 +11066,33 @@ app.post("/api/public/sms/orders/:orderNo/verification", async (request, reply) 
         prefix: providerPayload.selectedPrefix || null
       });
     } else {
-      purchased = await purchase383ApiNumber(apiKey, {
+      const selectedPhone = String(providerPayload.selectedPhone || "").trim();
+      if (!selectedPhone) {
+        purchaseFailureStatus = 409;
+        throw new Error("订单没有可购买的预览号码，请重新获取号码");
+      }
+      const validation = await validate383ApiMarketplaceNumbers(apiKey, {
         projectId: providerPayload.projectId,
-        quantity: 1,
-        prefix: providerPayload.selectedPrefix || null
+        numbers: [selectedPhone]
       });
+      if (!validation.valid.includes(selectedPhone)) {
+        const invalidItem = validation.invalid.find((item) => {
+          const number = typeof item === "string" ? item : (item?.number || item?.phone_number || item?.phone);
+          return String(number || "").trim() === selectedPhone;
+        });
+        const reason = typeof invalidItem === "object" ? invalidItem?.reason : "";
+        purchaseFailureStatus = 409;
+        throw new Error(`该号码已不可购买${reason ? `：${reason}` : ""}，请重新获取号码`);
+      }
+      const purchaseResult = await purchase383ApiMarketplaceNumbers(apiKey, {
+        projectId: providerPayload.projectId,
+        numbers: [selectedPhone]
+      });
+      purchased = {
+        ...purchaseResult,
+        phoneNumber: selectedPhone,
+        expiresAt: providerPayload.selectedExpiresAt || ""
+      };
     }
   } catch (error) {
     db.prepare(`
@@ -10987,7 +11101,7 @@ app.post("/api/public/sms/orders/:orderNo/verification", async (request, reply) 
       WHERE id = ? AND status = ? AND phone IS NULL
     `).run(smsOrderStatuses.number_reserved, error.message, nowIso(), order.id, smsOrderStatuses.purchasing);
     createSmsOrderEvent(order.id, "purchase_failed", { provider, message: error.message });
-    return reply.code(502).send({ message: `买号失败：${error.message}` });
+    return reply.code(purchaseFailureStatus).send({ message: `买号失败：${error.message}` });
   }
 
   const phone = provider === "nexsms" ? purchased.tel : purchased.phoneNumber;

@@ -324,9 +324,13 @@ _Avoid_: Stored card profile, reusable checkout secret, extension-held OpenAPI c
 An order-level retry state entered before checkout when KaWang's address API is unavailable or returns an incomplete Delaware record. Automatic fulfillment does not use a third-party address site or submit an incomplete form while waiting.
 _Avoid_: Browser scraping fallback, submitting without required billing fields
 
-**Brokered Checkout Link**:
-A one-time ChatGPT checkout URL created by kwRedeem through the SpaceX Card GPT checkout API from the order's protected session, fixed Plus plan, Philippines region, and PHP currency. The browser extension receives the URL but never receives or submits the ChatGPT access token used to create it.
-_Avoid_: Extension-created checkout session, sending an access token from the extension
+**Session-Driven Checkout Entry**:
+The Go checkout module locally chunks the protected order Session's `sessionToken` into allowlisted ChatGPT Cookies, verifies the authenticated account identity, reads the official current subscription, and uses the official checkout API to create a fixed Plus/month/one-seat entry inside an isolated unattended browser. An active paid subscription stops before checkout creation; accepted responses are limited to reviewed hosted or `openai_llc/oaics_*` routes, and preflight never invokes subscription renewal. It does not send the Session to a checkout-link broker or require a separately configured GPT Token.
+_Avoid_: Brokered Checkout Link, legacy pricing-button automation, account password automation, treating `accessToken` as a Cookie, logging Session/Cookie material, renewing during preflight
+
+**Unattended Checkout Browser**:
+The isolated checkout browser controlled entirely by Membership Fulfillment without an operator opening, steering, or signing into it. Its rendering runtime may use a server-only virtual display, but that does not grant permission to bypass a security challenge or weaken any payment gate.
+_Avoid_: Headless-only browser, operator browser, browser extension, security-challenge bypass
 
 **Payment Stage Confirmation**:
 The agreement of two independent facts for one fulfillment stage: ChatGPT reports the expected membership state and SpaceX Card reports the matching non-declined OpenAI payment. Neither browser text nor either provider signal alone completes the stage.

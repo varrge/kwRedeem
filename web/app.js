@@ -747,7 +747,9 @@ document.addEventListener("visibilitychange", () => {
 
 function renderVerificationStatus(payload) {
   if (payload.purchaseStatus === "preview") {
-    return "尚未购买，请确认号段可用后点击获取验证码";
+    return payload.previewKind === "phone"
+      ? "尚未购买，请确认号码可用后点击获取验证码"
+      : "尚未购买，请确认号段可用后点击获取验证码";
   }
   if (payload.purchaseStatus === "purchasing") {
     return "正在购买号码，请稍候";
@@ -769,13 +771,22 @@ function renderVerificationStatus(payload) {
   }
 }
 
+function formatSmsPreviewExpiry(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : String(value);
+}
+
 function renderSmsOrderResult(payload) {
   const phoneLabel = payload.phone ? "手机号" : "号码预览";
   const phoneHtml = `<div class="result-item"><span>${phoneLabel}</span><strong>${escapeHtml(payload.phone || payload.phonePreview || "-")}</strong></div>`;
+  const expiryHtml = payload.previewExpiresAt
+    ? `<div class="result-item"><span>号码到期时间</span><strong>${escapeHtml(formatSmsPreviewExpiry(payload.previewExpiresAt))}</strong></div>`
+    : "";
   const verificationHtml = `<div class="result-item"><span>验证码</span><strong id="sms-verification-display">${renderVerificationStatus(payload)}</strong></div>`;
   const siteHtml = `<div class="result-item"><span>接码站点</span><strong>${escapeHtml(payload.siteName || verifiedSmsCard?.site?.name || "-")}</strong></div>`;
   const orderHtml = `<div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo || currentSmsOrderNo || "-")}</strong></div>`;
-  return `<div class="result-card"><div class="result-grid">${siteHtml}${orderHtml}${phoneHtml}${verificationHtml}</div></div>`;
+  return `<div class="result-card"><div class="result-grid">${siteHtml}${orderHtml}${phoneHtml}${expiryHtml}${verificationHtml}</div></div>`;
 }
 
 function isDynamicSmsProvider(card = verifiedSmsCard) {
@@ -802,8 +813,10 @@ function updateSmsActionButtons(payload) {
   }
 
   const canStartVerification = payload.purchaseStatus === "preview" || payload.status === "number_reserved";
-  smsSubmit.disabled = !payload.canRefreshPrefix;
-  smsSubmit.textContent = payload.canRefreshPrefix ? "换一个号段" : "获取号码";
+  const canRefresh = payload.canRefreshNumber || payload.canRefreshPrefix;
+  const refreshTarget = payload.previewKind === "phone" ? "号码" : "号段";
+  smsSubmit.disabled = !canRefresh;
+  smsSubmit.textContent = canRefresh ? `换一个${refreshTarget}` : "获取号码";
   smsCodeSubmit.classList.remove("hidden");
   smsCodeSubmit.disabled = !canStartVerification;
   smsCodeSubmit.textContent = payload.purchaseStatus === "purchasing" ? "正在购买..." : "获取验证码";
@@ -861,11 +874,12 @@ smsSubmit.addEventListener("click", async () => {
 
   smsSubmit.disabled = true;
   smsCodeSubmit.disabled = true;
-  const refreshingPrefix = currentSmsOrder?.canRefreshPrefix === true;
+  const refreshingNumber = currentSmsOrder?.canRefreshNumber === true || currentSmsOrder?.canRefreshPrefix === true;
+  const refreshTarget = currentSmsOrder?.previewKind === "phone" ? "号码" : "号段";
   setState(
     smsResult,
     isDynamicSmsProvider()
-      ? (refreshingPrefix ? "正在更换可用号段，不会产生购买费用..." : "正在查询可用号段，不会产生购买费用...")
+      ? (refreshingNumber ? `正在更换可用${refreshTarget}，不会产生购买费用...` : "正在查询可用号码，不会产生购买费用...")
       : "正在分配手机号..."
   );
 
@@ -887,7 +901,8 @@ smsSubmit.addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({
         cardKey: verifiedSmsCard.cardKey,
-        refreshPrefix: refreshingPrefix
+        refreshNumber: refreshingNumber,
+        refreshPrefix: currentSmsOrder?.canRefreshPrefix === true
       })
     });
     currentSmsOrderNo = payload.orderNo;
@@ -907,16 +922,24 @@ smsCodeSubmit.addEventListener("click", async () => {
   }
 
   const dynamic = isDynamicSmsProvider();
-  smsConfirmTitle.textContent = dynamic ? "确认使用这个号段？" : "确定已经发送了验证码？";
+  const previewIsPhone = currentSmsOrder.previewKind === "phone";
+  smsConfirmTitle.textContent = dynamic
+    ? (previewIsPhone ? "确认使用这个号码？" : "确认使用这个号段？")
+    : "确定已经发送了验证码？";
   smsConfirmDesc.textContent = dynamic
-    ? "确认后系统才会购买该号段的真实号码。购买完成后，请使用返回的完整号码在目标平台发送验证码。"
+    ? (previewIsPhone
+        ? "确认后系统才会购买这个完整号码，并立即开始等待验证码。"
+        : "确认后系统才会购买该号段的真实号码。购买完成后，请使用返回的完整号码在目标平台发送验证码。")
     : "请先在目标平台点击发送验证码，确认后将开始获取验证码。";
   const confirmed = await showSmsConfirmModal();
   if (!confirmed) return;
 
+  smsSubmit.disabled = true;
   smsCodeSubmit.disabled = true;
   smsCodeSubmit.textContent = dynamic ? "正在购买..." : "正在获取...";
-  setState(smsResult, dynamic ? "正在购买已确认的号段..." : "正在获取验证码...");
+  setState(smsResult, dynamic
+    ? (previewIsPhone ? "正在购买已确认的号码..." : "正在购买已确认的号段...")
+    : "正在获取验证码...");
 
   try {
     if (verifiedSmsCard.legacyStaticEntry) {
@@ -936,8 +959,7 @@ smsCodeSubmit.addEventListener("click", async () => {
       startSmsPolling(payload.orderNo);
     }
   } catch (error) {
-    smsCodeSubmit.disabled = false;
-    smsCodeSubmit.textContent = "获取验证码";
+    updateSmsActionButtons(currentSmsOrder);
     setState(smsResult, error.message || "请求失败，请检查网络连接", "error");
   }
 });

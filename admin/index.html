@@ -531,8 +531,8 @@
                 </label>
                 <label><input id="membership-clear-webhook-secret" type="checkbox" /> 清除已保存的 Webhook 密钥</label>
 				<label class="field">
-				  <span>SpaceXCard GPT Token（Checkout / Cookie）</span>
-				  <input id="membership-gpt-token" type="password" autocomplete="new-password" placeholder="留空保持不变" />
+				  <span>旧版 SpaceXCard GPT Broker Token（Go 自动化不使用）</span>
+				  <input id="membership-gpt-token" type="password" autocomplete="new-password" placeholder="仅旧流程兼容；留空保持不变" />
 				</label>
 				<label><input id="membership-clear-gpt-token" type="checkbox" /> 清除已保存的 GPT Token</label>
                 <button type="submit" class="primary-btn">保存加密凭据</button>
@@ -644,7 +644,7 @@
                       <option value="x20">x20</option>
                     </select>
                   </label>
-				  <label class="field"><span>Adapter 版本</span><input id="membership-no-charge-adapter" placeholder="go-headless-v1" required /></label>
+				  <label class="field"><span>Adapter 版本</span><input id="membership-no-charge-adapter" placeholder="go-session-api-checkout-v2" required /></label>
                   <label class="field"><span>有效价格契约 ID</span><input id="membership-no-charge-contract" placeholder="cpc_..." required /></label>
                   <label class="field"><span>页面显示价（PHP）</span><input id="membership-no-charge-amount" type="number" min="0.01" max="10000000" step="0.01" required /></label>
                 </div>
@@ -713,7 +713,7 @@
                 <label class="field"><span>已严格完成的 Canary 履约 ID</span><input id="membership-qualification-fulfillment" autocomplete="off" required /></label>
                 <div class="grid grid-2">
                   <label class="field"><span>Adapter 版本</span><input id="membership-qualification-adapter" autocomplete="off" required /></label>
-				  <label class="field"><span>Adapter 路径</span><input id="membership-qualification-path" placeholder="go-headless-v1" autocomplete="off" required /></label>
+				  <label class="field"><span>Adapter 路径</span><input id="membership-qualification-path" placeholder="go-session-api-checkout-v2" autocomplete="off" required /></label>
                 </div>
                 <label class="field"><span>价格契约 ID</span><input id="membership-qualification-contract" autocomplete="off" required /></label>
                 <button type="submit" class="primary-btn">触发权威资格检查</button>

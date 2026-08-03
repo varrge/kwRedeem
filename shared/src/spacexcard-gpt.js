@@ -86,13 +86,27 @@ export async function createSpaceXCardCheckout(sessionJson, apiToken, options = 
     try { envelope = JSON.parse(text); } catch {
       throw checkoutError("CHECKOUT_BROKER_RESPONSE_INVALID", "Checkout 服务响应不是合法 JSON");
     }
-    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
-      || envelope.code !== 0 || !envelope.data || typeof envelope.data !== "object" || Array.isArray(envelope.data)
-      || Object.keys(envelope.data).some((key) => key !== "link")) {
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+      throw checkoutError("CHECKOUT_BROKER_RESPONSE_INVALID", "Checkout 服务响应不是有效对象");
+    }
+    if (!Number.isInteger(envelope.code)) {
+      throw checkoutError("CHECKOUT_BROKER_CODE_INVALID", "Checkout 服务响应码无效");
+    }
+    if (![0, 200].includes(envelope.code)) {
+      throw checkoutError("CHECKOUT_BROKER_BUSINESS_REJECTED", "Checkout 服务拒绝了本次请求", {
+        retryable: false,
+        retryScope: "order"
+      });
+    }
+    if (!envelope.data || typeof envelope.data !== "object" || Array.isArray(envelope.data)
+      || typeof envelope.data.link !== "string" || !envelope.data.link.trim()) {
+      throw checkoutError("CHECKOUT_BROKER_LINK_MISSING", "Checkout 服务未返回地址");
+    }
+    if (Object.keys(envelope.data).some((key) => key !== "link")) {
       throw checkoutError("CHECKOUT_BROKER_CONTRACT_DRIFT", "Checkout 服务响应契约无法识别");
     }
     const checkoutUrl = validateChatGptCheckoutUrl(envelope.data.link);
-    if (!checkoutUrl) throw checkoutError("CHECKOUT_BROKER_CONTRACT_DRIFT", "Checkout 地址不在允许范围");
+    if (!checkoutUrl) throw checkoutError("CHECKOUT_BROKER_LINK_INVALID", "Checkout 地址不在允许范围");
     return Object.freeze({ checkoutUrl });
   } catch (error) {
     if (error?.code) throw error;

@@ -602,7 +602,7 @@ test("checkout broker uses the fixed Plus/PH/PHP contract and rejects drift", as
       fetchImpl: async (url, options) => {
         requests.push({ url, options });
         return new Response(JSON.stringify({
-          code: 0,
+          code: 200,
           data: { link: "https://pay.openai.com/checkout/redacted" },
           msg: "ok"
         }), { status: 200, headers: { "content-type": "application/json" } });
@@ -624,7 +624,13 @@ test("checkout broker uses the fixed Plus/PH/PHP contract and rejects drift", as
       code: 0,
       data: { link: "https://evil.example/checkout/token" }
     }), { status: 200 })
-  }), (error) => error.code === "CHECKOUT_BROKER_CONTRACT_DRIFT");
+  }), (error) => error.code === "CHECKOUT_BROKER_LINK_INVALID");
+  await assert.rejects(() => createSpaceXCardCheckout({}, "private-token", {
+    fetchImpl: async () => new Response(JSON.stringify({ code: 400, message: "not exposed" }), { status: 200 })
+  }), (error) => error.code === "CHECKOUT_BROKER_BUSINESS_REJECTED");
+  await assert.rejects(() => createSpaceXCardCheckout({}, "private-token", {
+    fetchImpl: async () => new Response(JSON.stringify({ code: 200, data: {} }), { status: 200 })
+  }), (error) => error.code === "CHECKOUT_BROKER_LINK_MISSING");
   await assert.rejects(() => createSpaceXCardCheckout({}, "private-token", {
     fetchImpl: async () => new Response("{}", { status: 429, headers: { "retry-after": "2" } })
   }), (error) => error.code === "CHECKOUT_BROKER_RATE_LIMITED" && error.retryAfterMs === 2000);

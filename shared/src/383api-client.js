@@ -44,7 +44,7 @@ async function request(path, { apiKey, method = "GET", query = {}, body = null, 
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload?.msg || payload?.message || `383api HTTP ${response.status}`);
+      throw new Error(payload?.detail || payload?.msg || payload?.message || `383api HTTP ${response.status}`);
     }
     return getPayloadData(payload);
   } catch (error) {
@@ -93,6 +93,118 @@ export function parse383ApiSmsMessages(data) {
     receivedAt: item?.received_at || item?.receivedAt || item?.created_at || item?.createdAt || "",
     raw: item
   }));
+}
+
+function normalizeMarketplacePhone(value) {
+  return String(value ?? "").trim();
+}
+
+export function parse383ApiMarketplaceInventory(data) {
+  const source = getPayloadData(data) || {};
+  const items = Array.isArray(source.items)
+    ? source.items
+    : (Array.isArray(source.numbers) ? source.numbers : (Array.isArray(source) ? source : []));
+  return {
+    items: items.map((item) => ({
+      phoneNumber: normalizeMarketplacePhone(item?.phone_number || item?.phoneNumber || item?.phone || item?.number),
+      expiresAt: item?.expires_at || item?.expiresAt || "",
+      raw: item
+    })).filter((item) => item.phoneNumber),
+    total: Math.max(0, Number(source.total ?? source.pagination?.total ?? items.length) || 0),
+    page: Math.max(1, Number(source.page ?? source.pagination?.page) || 1),
+    pageSize: Math.max(1, Number(source.page_size ?? source.pageSize ?? source.pagination?.page_size) || 100)
+  };
+}
+
+export async function get383ApiMarketplaceInventoryPage(apiKey, options = {}) {
+  const projectId = String(options.projectId || options.project_id || "").trim();
+  if (!projectId) throw new Error("383api marketplace project_id is missing");
+  const page = Math.max(1, Math.floor(Number(options.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(options.pageSize || options.page_size) || 100)));
+  const data = await request(`/api/marketplace/${encodeURIComponent(projectId)}/inventory`, {
+    apiKey,
+    query: { page, page_size: pageSize },
+    timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS,
+    baseUrl: options.baseUrl || BASE_URL
+  });
+  return { ...parse383ApiMarketplaceInventory(data), page, pageSize };
+}
+
+export async function get383ApiMarketplaceLastInventoryPage(apiKey, options = {}) {
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(options.pageSize || options.page_size) || 100)));
+  const firstPage = await get383ApiMarketplaceInventoryPage(apiKey, { ...options, page: 1, pageSize });
+  const lastPageNumber = Math.max(1, Math.ceil(firstPage.total / pageSize));
+  if (lastPageNumber === 1) {
+    return { ...firstPage, lastPage: 1 };
+  }
+  const lastPage = await get383ApiMarketplaceInventoryPage(apiKey, {
+    ...options,
+    page: lastPageNumber,
+    pageSize
+  });
+  return { ...lastPage, total: firstPage.total, lastPage: lastPageNumber };
+}
+
+export function pick383ApiMarketplaceNumber(items, excludedNumbers = [], random = Math.random) {
+  const excluded = new Set((excludedNumbers || []).map(normalizeMarketplacePhone).filter(Boolean));
+  const candidates = (items || []).filter((item) => item?.phoneNumber && !excluded.has(item.phoneNumber));
+  if (!candidates.length) return null;
+  const randomValue = Number(random());
+  const index = Math.min(candidates.length - 1, Math.max(0, Math.floor((Number.isFinite(randomValue) ? randomValue : 0) * candidates.length)));
+  return candidates[index];
+}
+
+function normalizeMarketplaceNumberList(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => normalizeMarketplacePhone(
+      typeof item === "string" ? item : (item?.number || item?.phone_number || item?.phoneNumber || item?.phone)
+    ))
+    .filter(Boolean);
+}
+
+export async function validate383ApiMarketplaceNumbers(apiKey, options = {}) {
+  const projectId = String(options.projectId || options.project_id || "").trim();
+  if (!projectId) throw new Error("383api marketplace project_id is missing");
+  const numbers = normalizeMarketplaceNumberList(options.numbers);
+  if (!numbers.length) throw new Error("383api marketplace numbers are missing");
+  const data = await request(`/api/marketplace/${encodeURIComponent(projectId)}/validate-numbers`, {
+    apiKey,
+    method: "POST",
+    body: { numbers },
+    timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS,
+    baseUrl: options.baseUrl || BASE_URL
+  });
+  const source = data || {};
+  return {
+    valid: normalizeMarketplaceNumberList(source.valid),
+    invalid: Array.isArray(source.invalid) ? source.invalid : [],
+    unitPrice: source.unit_price ?? source.unitPrice ?? null,
+    totalPrice: source.total_price ?? source.totalPrice ?? null,
+    raw: source
+  };
+}
+
+export async function purchase383ApiMarketplaceNumbers(apiKey, options = {}) {
+  const projectId = String(options.projectId || options.project_id || "").trim();
+  if (!projectId) throw new Error("383api marketplace project_id is missing");
+  const numbers = normalizeMarketplaceNumberList(options.numbers);
+  if (!numbers.length) throw new Error("383api marketplace numbers are missing");
+  const data = await request(`/api/marketplace/${encodeURIComponent(projectId)}/designated-purchase`, {
+    apiKey,
+    method: "POST",
+    body: { numbers },
+    timeoutMs: options.timeoutMs || 20000,
+    baseUrl: options.baseUrl || BASE_URL
+  });
+  const source = data || {};
+  return {
+    orderNumber: source.order_number || source.orderNumber || "",
+    projectName: source.project_name || source.projectName || "",
+    quantity: Number(source.quantity || numbers.length),
+    totalPrice: source.total_price ?? source.totalPrice ?? null,
+    numbers,
+    raw: source
+  };
 }
 
 export async function purchase383ApiNumber(apiKey, options = {}) {

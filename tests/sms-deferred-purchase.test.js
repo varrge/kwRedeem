@@ -119,14 +119,14 @@ test("dynamic get-number previews a NexSMS prefix and only verification purchase
   assert.equal(purchaseCalls, 1);
 });
 
-test("383api also defers its purchase until verification is requested", async () => {
+test("383api previews a full number from the last inventory page, can replace it, and purchases that exact number", async () => {
   const at = "2026-07-22T00:05:00.000Z";
   db.prepare(`
     INSERT INTO sms_sites (
       id, name, slug, inventory_source, status, note, created_at, updated_at,
       sms_provider, sms_api_key, sms_app_id, sms_prefix_filter
     ) VALUES ('sms-site-383-test', '383 测试', 'api_383_test', '383api', 'active', NULL, ?, ?,
-              '383api', ?, '9001', '4477')
+              '383api', ?, '63', NULL)
   `).run(at, at, encryptText("383-test-key"));
   db.prepare(`
     INSERT INTO sms_cards (
@@ -136,19 +136,40 @@ test("383api also defers its purchase until verification is requested", async ()
               'SMS', 'active', NULL, NULL, NULL, ?, ?)
   `).run(at, at);
 
-  let purchaseCalls = 0;
+  const inventoryPages = [];
+  const validatedNumbers = [];
+  const purchasedNumbers = [];
   globalThis.fetch = async (input, options = {}) => {
     const url = new URL(String(input));
-    if (url.pathname === "/api/open/purchase") {
-      purchaseCalls += 1;
-      assert.equal(JSON.parse(options.body).prefix, "4477");
+    if (url.pathname === "/api/marketplace/63/inventory") {
+      const page = Number(url.searchParams.get("page"));
+      inventoryPages.push(page);
+      return jsonResponse(page === 1
+        ? {
+            items: [{ phone_number: "+10000000001", expires_at: "2026-08-01T00:00:00.000Z" }],
+            total: 2_700
+          }
+        : {
+            items: [
+              { phone_number: "+19990000001", expires_at: "2026-12-30T00:00:00.000Z" },
+              { phone_number: "+19990000002", expires_at: "2026-12-31T00:00:00.000Z" }
+            ],
+            total: 2_700
+          });
+    }
+    if (url.pathname === "/api/marketplace/63/validate-numbers") {
+      const numbers = JSON.parse(options.body).numbers;
+      validatedNumbers.push(...numbers);
+      return jsonResponse({ valid: numbers, invalid: [], unit_price: 5, total_price: 5 });
+    }
+    if (url.pathname === "/api/marketplace/63/designated-purchase") {
+      const numbers = JSON.parse(options.body).numbers;
+      purchasedNumbers.push(...numbers);
       return jsonResponse({
-        code: 0,
-        msg: "success",
-        data: {
-          order_number: "383-ORDER-1",
-          numbers: [{ phone_number: "+447700900123", expires_at: "2026-07-22T01:00:00.000Z" }]
-        }
+        order_number: "383-ORDER-1",
+        project_name: "333站点",
+        quantity: 1,
+        total_price: 5
       });
     }
     throw new Error(`unexpected fetch: ${url}`);
@@ -161,18 +182,105 @@ test("383api also defers its purchase until verification is requested", async ()
   });
   assert.equal(preview.statusCode, 200);
   assert.equal(preview.json().purchaseStatus, "preview");
-  assert.equal(preview.json().numberPrefix, "4477");
+  assert.equal(preview.json().previewKind, "phone");
+  assert.ok(["+19990000001", "+19990000002"].includes(preview.json().phonePreview));
+  assert.equal(preview.json().canRefreshNumber, true);
   assert.equal(preview.json().phone, "");
-  assert.equal(purchaseCalls, 0);
+  assert.deepEqual(inventoryPages, [1, 27]);
+  assert.equal(purchasedNumbers.length, 0);
+
+  const refreshed = await app.inject({
+    method: "POST",
+    url: "/api/public/sms/orders",
+    payload: { cardKey: "SMS-383-KEY", refreshNumber: true }
+  });
+  assert.equal(refreshed.statusCode, 200);
+  assert.notEqual(refreshed.json().phonePreview, preview.json().phonePreview);
+  assert.ok(["+19990000001", "+19990000002"].includes(refreshed.json().phonePreview));
+  assert.deepEqual(inventoryPages, [1, 27, 1, 27]);
+  assert.equal(purchasedNumbers.length, 0);
 
   const purchased = await app.inject({
     method: "POST",
-    url: `/api/public/sms/orders/${preview.json().orderNo}/verification`,
+    url: `/api/public/sms/orders/${refreshed.json().orderNo}/verification`,
     payload: { cardKey: "SMS-383-KEY" }
   });
   assert.equal(purchased.statusCode, 200);
-  assert.equal(purchased.json().phone, "+447700900123");
-  assert.equal(purchaseCalls, 1);
+  assert.equal(purchased.json().phone, refreshed.json().phonePreview);
+  assert.deepEqual(validatedNumbers, [refreshed.json().phonePreview]);
+  assert.deepEqual(purchasedNumbers, [refreshed.json().phonePreview]);
+});
+
+test("383api does not substitute another number when the preview is no longer purchasable", async () => {
+  const at = "2026-07-22T00:07:00.000Z";
+  db.prepare(`
+    INSERT INTO sms_sites (
+      id, name, slug, inventory_source, status, note, created_at, updated_at,
+      sms_provider, sms_api_key, sms_app_id, sms_prefix_filter
+    ) VALUES ('sms-site-383-stale', '383 失效预览', 'api_383_stale', '383api', 'active', NULL, ?, ?,
+              '383api', ?, '64', NULL)
+  `).run(at, at, encryptText("383-stale-key"));
+  db.prepare(`
+    INSERT INTO sms_cards (
+      id, site_id, batch_id, card_key, prefix, status, current_order_id,
+      resource_entry_id, note, created_at, updated_at
+    ) VALUES ('sms-card-383-stale', 'sms-site-383-stale', NULL, 'SMS-383-STALE',
+              'SMS', 'active', NULL, NULL, NULL, ?, ?)
+  `).run(at, at);
+
+  let designatedPurchaseCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/marketplace/64/inventory") {
+      return jsonResponse({
+        items: [{ phone_number: "+18880000001", expires_at: "2026-12-31T00:00:00.000Z" }],
+        total: 1
+      });
+    }
+    if (url.pathname === "/api/marketplace/64/validate-numbers") {
+      return jsonResponse({
+        valid: [],
+        invalid: [{ number: "+18880000001", reason: "已售出" }],
+        unit_price: 5,
+        total_price: 0
+      });
+    }
+    if (url.pathname === "/api/marketplace/64/designated-purchase") {
+      designatedPurchaseCalls += 1;
+      return jsonResponse({ order_number: "SHOULD-NOT-HAPPEN" });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const preview = await app.inject({
+    method: "POST",
+    url: "/api/public/sms/orders",
+    payload: { cardKey: "SMS-383-STALE" }
+  });
+  assert.equal(preview.statusCode, 200);
+  assert.equal(preview.json().phonePreview, "+18880000001");
+
+  const purchase = await app.inject({
+    method: "POST",
+    url: `/api/public/sms/orders/${preview.json().orderNo}/verification`,
+    payload: { cardKey: "SMS-383-STALE" }
+  });
+  assert.equal(purchase.statusCode, 409);
+  assert.match(purchase.json().message, /已不可购买.*已售出.*重新获取号码/);
+  assert.equal(designatedPurchaseCalls, 0);
+
+  const order = db.prepare("SELECT status, phone FROM sms_orders WHERE order_no = ?").get(preview.json().orderNo);
+  assert.equal(order.status, "number_reserved");
+  assert.equal(order.phone, null);
+
+  const recovered = await app.inject({
+    method: "POST",
+    url: "/api/public/sms/cards/verify",
+    payload: { cardKey: "SMS-383-STALE" }
+  });
+  assert.equal(recovered.statusCode, 200);
+  assert.equal(recovered.json().latestOrder.purchaseStatus, "preview");
+  assert.equal(recovered.json().latestOrder.canRefreshNumber, true);
 });
 
 test("static inventory is only polled after the get-verification action", async () => {

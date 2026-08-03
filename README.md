@@ -46,9 +46,9 @@ npm run serve:admin
 
 ## 独立会员自动化模块
 
-会员自动化代码位于独立的同级项目 `../kwMembership`，但它直接使用本项目的 `DATABASE_PATH` 和 `JWT_SECRET`。只有 Go worker 会发现会员订单、校验 Session，并推进履约、库存、资金、无界面结账与对账状态；kwRedeem 的 Node worker 不再运行会员自动化。
+会员自动化代码位于独立的同级项目 `../kwMembership`，但它直接使用本项目的 `DATABASE_PATH` 和 `JWT_SECRET`。只有 Go worker 会发现会员订单、校验 Session，并推进履约、库存、资金、自动结账与对账状态；kwRedeem 的 Node worker 不再运行会员自动化。
 
-Go 直接调用 SpaceXCard Checkout/Cookie/OpenAPI，并控制服务器上的无界面 Chrome；会员流程不需要浏览器扩展或人工打开浏览器。kwRedeem 后台和 Webhook 直接读写同一数据库，因此没有第二套会员库、任务分发或状态回调。后台“会员履约 → 实施状态”显示 Go owner、版本、心跳、最近 Tick 和脱敏错误码。构建、启动和 systemd 部署见 `../kwMembership/README.md`。
+Go 在本地把订单 Session 生成 ChatGPT Cookie，在服务器私有 Xvfb 中验证身份、查询官方订阅状态，并通过官方 checkout API 创建受白名单约束的 Plus 结账入口；只有卡片与交易资料来自 SpaceXCard OpenAPI。会员流程不需要浏览器扩展、GPT Token、账号密码、旧的 `/#pricing` 套餐按钮或人工打开浏览器。kwRedeem 后台和 Webhook 直接读写同一数据库，因此没有第二套会员库、任务分发或状态回调。后台“会员履约 → 实施状态”显示 Go owner、版本、心跳、最近 Tick 和脱敏错误码。构建、启动和 systemd 部署见 `../kwMembership/README.md`。
 
 ## 后台结构
 

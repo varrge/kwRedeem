@@ -618,6 +618,7 @@ const EXTENSION_DELIVERY_ERROR_LABELS = {
   REQUEST_TOO_LARGE: "请求正文超过大小限制",
   UNSUPPORTED_MEDIA_TYPE: "请求格式不受支持",
   SESSION_INVALID: "Session 解密或解析失败",
+  SESSION_COOKIE_MISSING: "Session 缺少可写入浏览器的 sessionToken",
   EXPECTED_IDENTITY_MISSING: "Session 或 Cookie 响应缺少有效邮箱",
   CONVERTER_IDENTITY_MISMATCH: "Session 与 Cookie 响应邮箱不一致",
   COOKIE_PAYLOAD_INVALID: "Cookie 数据无效",
@@ -642,14 +643,34 @@ const EXTENSION_DELIVERY_ERROR_LABELS = {
   SUBSCRIPTION_GUARD_UNAVAILABLE: "订阅保护接口暂时不可用",
   CDKEY_VOIDED: "关联卡密已由后台作废",
   CHATGPT_SESSION_UNAUTHORIZED: "ChatGPT Session 已失效",
-  CHATGPT_IDENTITY_MISSING: "无法获取 ChatGPT 账号邮箱",
+  CHATGPT_SESSION_REFRESH_FAILED: "ChatGPT Session 暂时无法刷新，系统将自动重试",
+  CHATGPT_SESSION_IDENTITY_MISMATCH: "ChatGPT Session 账号与订单账号不一致",
+	CHATGPT_ACCOUNT_ALREADY_SUBSCRIBED: "ChatGPT 账号已有有效付费订阅",
+	CHATGPT_IDENTITY_MISSING: "无法获取 ChatGPT 账号邮箱",
 	CHATGPT_IDENTITY_MISMATCH: "ChatGPT 账号邮箱与订单不一致",
-	HEADLESS_BROWSER_UNAVAILABLE: "Go 无界面浏览器不可用",
+	HEADLESS_BROWSER_UNAVAILABLE: "Go 结账浏览器不可用",
 	CHECKOUT_EXECUTION_WAIT: "等待 Go 执行结账",
 	CHECKOUT_PAGE_TIMEOUT: "Go 加载结账页面超时",
+	CHECKOUT_ENTRY_UNAVAILABLE: "Go 无法进入 Plus 结账页",
+	CHECKOUT_PAGE_UNAVAILABLE: "Go 无法读取结账页面",
+	CHECKOUT_UI_UNSUPPORTED: "当前结账页面结构暂不支持自动处理",
+	CANARY_AUTHORIZATION_REQUIRED: "等待管理员确认本次 Canary 操作",
+	CHECKOUT_BROKER_NOT_CONFIGURED: "旧版结账代理 Token 未配置（当前 Go 流程不使用）",
+	CHECKOUT_BROKER_AUTH_FAILED: "旧版结账代理鉴权失败（当前 Go 流程不使用）",
+	CHECKOUT_API_AUTH_FAILED: "ChatGPT 官方结账接口拒绝当前登录会话",
+	CHECKOUT_API_CONTRACT_DRIFT: "ChatGPT 官方结账接口格式已变化",
 	CHECKOUT_CONTEXT_INVALID: "结账页面来源不受信任",
 	CHECKOUT_ACTION_STATE_CHANGED: "结账操作状态已变化",
-	SECURITY_CHALLENGE_REQUIRED: "结账需要人工安全验证"
+	SECURITY_CHALLENGE_REQUIRED: "结账需要人工安全验证",
+	CLOUDFLARE_CHALLENGE_REQUIRED: "等待人工完成 Cloudflare 安全验证",
+	SECURITY_CHALLENGE_HANDOFF_FAILED: "安全验证页面接管失败",
+	SECURITY_CHALLENGE_TIMEOUT: "人工安全验证等待超时",
+	INTERACTIVE_LOGIN_REQUIRED: "等待管理员在临时浏览器完成登录并进入 Plus 结账页",
+	INTERACTIVE_LOGIN_DISABLED: "服务器未启用可视登录浏览器",
+	INTERACTIVE_LOGIN_HANDOFF_FAILED: "人工登录页面接管失败",
+	INTERACTIVE_LOGIN_TIMEOUT: "人工登录或进入结账页等待超时",
+	INTERACTIVE_LOGIN_IDENTITY_MISMATCH: "登录账号与订单账号不一致",
+	INTERACTIVE_LOGIN_IDENTITY_UNVERIFIED: "无法核对当前浏览器登录账号"
 };
 
 const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
@@ -663,7 +684,11 @@ const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   inventory_not_ready: "卡片库存未就绪",
   inventory_checking: "正在检查卡片库存",
   card_price_unavailable: "卡片价格不可用",
-	checkout_preflight_ready: "等待 Go 预检结账页",
+	checkout_preflight_ready: "等待 Go 注入 Session 并预检结账页",
+	checkout_challenge_wait: "等待人工完成安全验证",
+	checkout_login_ready: "等待 Go 打开人工登录页",
+	checkout_login_wait: "等待人工登录并进入 Plus 结账页",
+	checkout_login_preflight_passed: "人工登录预检通过（未进入资金流程）",
 	checkout_execution_wait: "等待 Go 执行结账",
   browser_lease_wait: "等待扩展接管",
   card_reserved: "卡片已预留",
@@ -1680,7 +1705,7 @@ async function refreshMembershipFulfillmentConsole() {
     <div>Rollout 模式：<code>${escapeHtml(settings.rolloutMode || "disabled")}</code></div>
     <div>OpenAPI app_secret：<strong>${settings.hasAppSecret ? "已配置" : "未配置"}</strong></div>
     <div>Webhook 密钥：<strong>${settings.hasWebhookSecret ? "已配置" : "未配置"}</strong></div>
-	<div>GPT Token：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
+	<div>旧版 GPT Broker Token（Go 不使用）：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
 	<div>结账执行器：<code>${escapeHtml(dependencies.executor || "go-headless")}</code></div>
 	<div>浏览器扩展：<strong>${dependencies.requiresExtension === false ? "不需要" : "兼容模式"}</strong></div>
     <div>库存初始化：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
@@ -1722,7 +1747,7 @@ async function refreshMembershipFulfillments() {
     },
     {
       label: "阻塞信息",
-      render: (item) => `<code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span>`
+      render: (item) => `${renderExtensionDeliveryError(item.failureCode)}<br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span>`
     },
     {
       label: "更新时间",
@@ -1851,13 +1876,14 @@ async function viewMembershipFulfillment(id) {
     const payload = await api(`/api/admin/membership-fulfillments/${encodeURIComponent(id)}`);
     const item = payload.item || {};
     const projection = payload.customerProjection || {};
+	const interactiveLogin = String(item.state || "").startsWith("CHECKOUT_LOGIN_");
     refs.membershipFulfillmentDetail.innerHTML = `
       <div class="grid grid-2">
         <div><strong>订单：</strong>${escapeHtml(item.orderNo || "-")}<br/><span class="hint">履约 ${escapeHtml(item.id || "-")}</span></div>
         <div><strong>目标：</strong>${escapeHtml(item.targetTier || "-")}<br/><span class="hint">客户状态 ${escapeHtml(projection.label || "-")}</span></div>
         <div><strong>状态：</strong>${renderMembershipFulfillmentStatus(item.state)}<br/><span class="hint">阶段 ${escapeHtml(item.currentStage || "-")} / 模式 ${escapeHtml(item.runMode || "-")}</span></div>
-		<div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">Go 无界面执行</span></div>
-        <div><strong>失败码：</strong><code>${escapeHtml(item.failureCode || "-")}</code><br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span></div>
+		<div><strong>版本：</strong>状态 ${Number(item.stateRevision) || 0} / 恢复 ${Number(item.resumeRevision) || 0}<br/><span class="hint">${interactiveLogin ? "Go 可视浏览器 / 密码不入库" : "Go Session Cookie 自动执行"}</span></div>
+        <div><strong>失败原因：</strong>${renderExtensionDeliveryError(item.failureCode)}<br/><span class="hint">重试 ${escapeHtml(item.retryAt || "-")}</span></div>
         <div><strong>时间：</strong>${escapeHtml(item.updatedAt || "-")}<br/><span class="hint">完成 ${escapeHtml(item.completedAt || "-")}</span></div>
       </div>
       <div data-membership-fulfillment-attempts class="table-wrapper mt-24"></div>
@@ -1865,7 +1891,7 @@ async function viewMembershipFulfillment(id) {
     renderTable(refs.membershipFulfillmentDetail.querySelector("[data-membership-fulfillment-attempts]"), [
       { label: "阶段 / 次数", render: (attempt) => `<strong>${escapeHtml(attempt.stage)}</strong> / ${Number(attempt.attemptNo) || 0}` },
       { label: "版本", render: (attempt) => `<code>${escapeHtml(attempt.adapterVersion || "-")}</code><br/><span class="hint">价格 ${attempt.priceContractVersion ?? "-"} / 恢复 ${Number(attempt.resumeRevision) || 0}</span>` },
-      { label: "结果", render: (attempt) => `<code>${escapeHtml(attempt.outcomeCode || "进行中")}</code>` },
+      { label: "结果", render: (attempt) => attempt.outcomeCode ? renderExtensionDeliveryError(attempt.outcomeCode) : "进行中" },
       { label: "时间", render: (attempt) => `<span class="hint">${escapeHtml(attempt.startedAt || "-")}<br/>${escapeHtml(attempt.endedAt || "-")}</span>` }
     ], payload.attempts || [], "暂无阶段尝试", { paginate: false });
     refs.membershipFulfillmentDetail.scrollIntoView({ behavior: "smooth", block: "nearest" });

@@ -17,9 +17,9 @@
     <div>kwRedeem 后台<span>保存凭据与展示状态</span></div>
     <div>SQLite / WAL<span>唯一共享数据源</span></div>
     <div>Go Worker<span>完整自动化流程</span></div>
-    <div>Headless Chrome<span>不可见的结账引擎</span></div>
+    <div>Xvfb Chrome<span>私有虚拟屏幕中的结账引擎</span></div>
   </div>
-  <p class="muted">关键理解：Go 不需要第二套数据库，也不需要扩展。它直接读写 kwRedeem 的数据库；“不用打开浏览器”指不用人工打开可见窗口，Go 仍通过无界面 Chrome 处理真实网页。Chrome 官方也将 Headless 定义为无可见 UI 的自动化运行方式。</p>
+  <p class="muted">关键理解：Go 不需要第二套数据库，也不需要扩展。它直接读写 kwRedeem 的数据库；“不用打开浏览器”指不需要人工打开或操作窗口。服务器 Chrome 运行在私有 Xvfb 虚拟屏幕中，并始终由 Go 控制。</p>
 
   <section class="step">
     <div class="step-number">Step 1</div>
@@ -43,10 +43,14 @@
     <p>当前服务器应使用：</p>
     <pre><code>KAWANG_PROJECT_ROOT=/var/local/1panel/apps/openresty/openresty/www/sites/key/index
 KWMEMBERSHIP_CHROME_PATH=/usr/bin/google-chrome-stable
+KWMEMBERSHIP_CHROME_PROXY_SERVER=http://127.0.0.1:7890
+KWMEMBERSHIP_VISIBLE_BROWSER=true
 KWMEMBERSHIP_BROWSER_TIMEOUT_MS=90000</code></pre>
     <ul>
       <li><code>KAWANG_PROJECT_ROOT</code>：告诉 Go 去哪里读取 kwRedeem 的 <code>.env</code>、数据库路径和 JWT 密钥。</li>
-      <li><code>KWMEMBERSHIP_CHROME_PATH</code>：无界面 Chrome 的可执行文件。</li>
+      <li><code>KWMEMBERSHIP_CHROME_PATH</code>：Go 控制的 Chrome 可执行文件。</li>
+      <li><code>KWMEMBERSHIP_CHROME_PROXY_SERVER</code>：只让结账 Chrome 走服务器本机的新加坡代理。</li>
+      <li><code>KWMEMBERSHIP_VISIBLE_BROWSER</code>：服务器设为 <code>true</code> 后使用 Xvfb；正常流程仍然全自动。</li>
       <li><code>KWMEMBERSHIP_BROWSER_TIMEOUT_MS</code>：一次结账浏览器会话的总超时，默认 90 秒。</li>
     </ul>
     <div class="callout safe">这个文件不需要复制 <code>DATABASE_PATH</code> 或 <code>JWT_SECRET</code>。Go 会从 kwRedeem 的 <code>.env</code> 读取，确保两边使用同一数据库和同一加密密钥。</div>
@@ -64,7 +68,7 @@ KWMEMBERSHIP_BROWSER_TIMEOUT_MS=90000</code></pre>
   ./bin/kwmembership-worker --check
 '</code></pre>
     <p><strong>成功标志：</strong><code>shared kwRedeem database configuration is valid</code></p>
-    <p>它会检查共享数据库表结构，并实际启动一次 <code>about:blank</code> Headless Chrome；不会获取订单、调用 Provider 或付款。</p>
+    <p>它会检查共享数据库表结构，并在配置的 Xvfb 模式下实际启动一次 <code>about:blank</code> Chrome；不会获取订单、调用 Provider 或付款。</p>
     <label><input type="checkbox" data-lesson-check /> 自检成功且没有配置错误</label>
   </section>
 
@@ -77,13 +81,13 @@ KWMEMBERSHIP_BROWSER_TIMEOUT_MS=90000</code></pre>
       <tr><td><code>app_id</code></td><td>SpaceX Card OpenAPI 身份</td><td>接口未提供时可留空</td></tr>
       <tr><td><code>app_secret</code></td><td>读取卡片和交易、执行受控资金动作</td><td>首次配置必填</td></tr>
       <tr><td>Webhook 签名密钥</td><td>验证卡交易回调签名</td><td>配置 Webhook 后填写</td></tr>
-      <tr><td>SpaceXCard GPT Token</td><td>获取 Checkout 地址和 Cookie</td><td>首次配置必填</td></tr>
+      <tr><td>SpaceXCard GPT Token</td><td>旧版兼容字段，Go Session Cookie 流程不读取</td><td>无需填写</td></tr>
     </table>
     <p>点击 <strong>保存加密凭据</strong>。保存后页面只显示“已配置”，不会回显明文。</p>
     <div class="callout safe">保存这些凭据会把付款 Gate 重置为 <code>disabled</code>。这是正确的安全默认，不要在基础配置阶段改成 <code>canary</code> 或 <code>automatic</code>。</div>
     <p>SpaceX Card 交易 Webhook 地址配置为：</p>
     <pre><code>https://apikey.vsakura.top/api/webhooks/spacexcard/card-transactions</code></pre>
-    <label><input type="checkbox" data-lesson-check /> 后台显示 app_secret、Webhook、GPT Token 的正确配置状态</label>
+    <label><input type="checkbox" data-lesson-check /> 后台显示 app_secret 与 Webhook 的正确配置状态</label>
   </section>
 
   <section class="step">
@@ -113,7 +117,7 @@ sudo journalctl -u kwmembership-worker -n 100 --no-pager</code></pre>
       <tr><td>版本</td><td>当前 Go 发布版本</td></tr>
       <tr><td>最近心跳 / Tick</td><td>持续更新</td></tr>
       <tr><td>最近错误</td><td><code>无</code></td></tr>
-      <tr><td>结账执行器</td><td><code>go-headless</code></td></tr>
+      <tr><td>结账执行器</td><td><code>go-session-api-checkout-v2</code></td></tr>
       <tr><td>浏览器扩展</td><td>不需要</td></tr>
     </table>
     <label><input type="checkbox" data-lesson-check /> 服务与后台状态均健康</label>
@@ -142,7 +146,7 @@ sudo journalctl -u kwmembership-worker -n 100 --no-pager</code></pre>
       <tr><td><code>canary</code></td><td>只批准明确选中的单笔履约，且各阶段仍需页面快照批准</td><td>单独上线流程</td></tr>
       <tr><td><code>automatic</code></td><td>只对已精确启用、已达资格的范围自动执行</td><td>Canary 成功后再评估</td></tr>
     </table>
-    <div class="callout danger"><strong>不要把“Go 服务正在运行”理解成“必须开启付款”。</strong>Worker 在 Gate 关闭时仍会做安全检查、状态推进和必要对账；真实付款需要新的 <code>go-headless-v1</code> Canary 与范围授权。</div>
+    <div class="callout danger"><strong>不要把“Go 服务正在运行”理解成“必须开启付款”。</strong>Worker 在 Gate 关闭时仍会做安全检查、状态推进和必要对账；真实付款需要新的 <code>go-session-api-checkout-v2</code> Canary 与范围授权。</div>
     <label><input type="checkbox" data-lesson-check /> 当前付款 Gate 保持 <code>disabled</code></label>
   </section>
 
@@ -172,7 +176,7 @@ bash scripts/start-worker.sh</code></pre>
   <ul>
     <li><a href="../reference/kwmembership-operations-cheatsheet.html">一页运维速查表</a></li>
     <li><a href="../../kwMembership/README.md">kwMembership 项目 README</a></li>
-    <li><a href="https://developer.chrome.com/docs/chromium/headless">Chrome Headless 官方说明</a></li>
+    <li><a href="https://www.x.org/releases/X11R7.7/doc/man/man1/Xvfb.1.xhtml">Xvfb 手册</a></li>
     <li><a href="https://www.sqlite.org/wal.html">SQLite WAL 官方说明</a></li>
     <li><a href="https://www.freedesktop.org/software/systemd/man/255/journalctl.html">journalctl 官方手册</a></li>
   </ul>

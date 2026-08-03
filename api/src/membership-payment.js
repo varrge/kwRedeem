@@ -25,7 +25,7 @@ const RATE_WINDOW_MS = 60_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const CHECKOUT_ADAPTER = "checkout-v1";
-const GO_CHECKOUT_ADAPTER = "go-headless-v1";
+const GO_CHECKOUT_ADAPTER = "go-session-api-checkout-v2";
 const PLAN_ADAPTER = "plan-management-v1";
 const TARGET_TIERS = ["plus", "x5", "x20"];
 

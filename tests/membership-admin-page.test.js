@@ -113,7 +113,10 @@ test("membership fulfillment states are displayed in Chinese", () => {
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("QUEUED"), "已排队");
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("ACCOUNT_CHECKING"), "正在检查订阅状态");
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CARD_PRICE_UNAVAILABLE"), "卡片价格不可用");
+	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_PREFLIGHT_READY"), "等待 Go 注入 Session 并预检结账页");
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("FUNDING_READY"), "资金准备就绪");
+	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_LOGIN_WAIT"), "等待人工登录并进入 Plus 结账页");
+	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_LOGIN_PREFLIGHT_PASSED"), "人工登录预检通过（未进入资金流程）");
   for (const state of membershipFulfillmentStates) {
     assert.notEqual(dom.window.getMembershipFulfillmentStatusLabel(state), state, `${state} 缺少中文显示名称`);
   }
@@ -181,6 +184,7 @@ test("extension delivery errors are displayed in Chinese", async () => {
   for (const code of [
     "DELIVERY_EXPIRED",
     "SESSION_INVALID",
+	"SESSION_COOKIE_MISSING",
     "EXPECTED_IDENTITY_MISSING",
     "CONVERTER_IDENTITY_MISMATCH",
     "COOKIE_PAYLOAD_INVALID",
@@ -197,6 +201,17 @@ test("extension delivery errors are displayed in Chinese", async () => {
     "SUBSCRIPTION_GUARD_UNAVAILABLE",
     "CDKEY_VOIDED",
     "CHATGPT_SESSION_UNAUTHORIZED",
+	"CHATGPT_SESSION_REFRESH_FAILED",
+	"CHATGPT_SESSION_IDENTITY_MISMATCH",
+	"CHATGPT_ACCOUNT_ALREADY_SUBSCRIBED",
+	"CHECKOUT_ENTRY_UNAVAILABLE",
+	"CHECKOUT_PAGE_UNAVAILABLE",
+	"CHECKOUT_UI_UNSUPPORTED",
+	"CHECKOUT_API_AUTH_FAILED",
+	"CHECKOUT_API_CONTRACT_DRIFT",
+	"CANARY_AUTHORIZATION_REQUIRED",
+	"CHECKOUT_BROKER_NOT_CONFIGURED",
+	"CHECKOUT_BROKER_AUTH_FAILED",
     "CHATGPT_IDENTITY_MISSING",
     "CHATGPT_IDENTITY_MISMATCH"
   ]) {

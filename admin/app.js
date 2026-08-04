@@ -46,6 +46,8 @@ const refs = {
   storeProductId: document.querySelector("#store-product-id"),
   storeSkuId: document.querySelector("#store-sku-id"),
   storeProductTitle: document.querySelector("#store-product-title"),
+  storeFulfillmentKind: document.querySelector("#store-fulfillment-kind"),
+  storeSpaceXPlan: document.querySelector("#store-spacex-plan"),
   storeManualType: document.querySelector("#store-manual-type"),
   storeSiteId: document.querySelector("#store-site-id"),
   storePrefix: document.querySelector("#store-prefix"),
@@ -60,6 +62,21 @@ const refs = {
   storeTaskListRefreshBtn: document.querySelector("#store-task-list-refresh-btn"),
   storeTaskList: document.querySelector("#store-task-list"),
   storeTaskResult: document.querySelector("#store-task-result"),
+  spaceXCdkSettingsForm: document.querySelector("#spacex-cdk-settings-form"),
+  spaceXCdkBaseUrl: document.querySelector("#spacex-cdk-base-url"),
+  spaceXCdkApiKey: document.querySelector("#spacex-cdk-api-key"),
+  spaceXCdkWebhookSecret: document.querySelector("#spacex-cdk-webhook-secret"),
+  spaceXCdkRolloutPlan: document.querySelector("#spacex-cdk-rollout-plan"),
+  spaceXCdkEnabled: document.querySelector("#spacex-cdk-enabled"),
+  spaceXCdkAdminUsername: document.querySelector("#spacex-cdk-admin-username"),
+  spaceXCdkAdminPassword: document.querySelector("#spacex-cdk-admin-password"),
+  spaceXCdkTestBtn: document.querySelector("#spacex-cdk-test-btn"),
+  spaceXCdkSettingsStatus: document.querySelector("#spacex-cdk-settings-status"),
+  spaceXCdkSettingsResult: document.querySelector("#spacex-cdk-settings-result"),
+  spaceXCdkInventoryRefresh: document.querySelector("#spacex-cdk-inventory-refresh"),
+  spaceXCdkInventoryList: document.querySelector("#spacex-cdk-inventory-list"),
+  spaceXCdkActivationsRefresh: document.querySelector("#spacex-cdk-activations-refresh"),
+  spaceXCdkActivationList: document.querySelector("#spacex-cdk-activation-list"),
   extensionDeliverySettingsForm: document.querySelector("#extension-delivery-settings-form"),
   extensionDeliveryEnabled: document.querySelector("#extension-delivery-enabled"),
   extensionDeliverySites: document.querySelector("#extension-delivery-sites"),
@@ -581,6 +598,21 @@ const STATUS_LABELS = {
   failed: "失败",
   expired: "已过期",
   retrying: "重试中",
+  refund_pending: "退款锁定中",
+  issuance_uncertain: "发码结果待核对",
+  inventory: "可复用库存",
+  allocated: "已分配",
+  claimed: "已绑定账号",
+  submitting: "正在提交兑换",
+  queued: "排队中",
+  running: "开通中",
+  review: "等待支付对账",
+  failed_resolution: "等待人工处理",
+  refund_hold: "退款核验中",
+  held: "暂停使用",
+  held_contract: "接口契约不完整",
+  funding_blocked: "资金不足",
+  contract_blocked: "接口契约不完整",
   blocked: "需人工处理",
   conflict: "交付冲突",
   canceled: "已取消",
@@ -1474,9 +1506,24 @@ function resetStoreMappingForm() {
   refs.storeMappingFormTitle.textContent = "添加商品映射";
   refs.storeSkuId.value = "0";
   refs.storeManualType.value = "PLUS";
+  refs.storeFulfillmentKind.value = "manual";
+  refs.storeSpaceXPlan.value = "plus";
   refs.storePrefix.value = "PLUS";
   refs.storeMappingEnabled.value = "true";
   refs.storeMappingCancelBtn.classList.add("hidden");
+  syncStoreMappingKind();
+}
+
+function syncStoreMappingKind() {
+  const spacex = refs.storeFulfillmentKind.value === "spacex_cdk";
+  refs.storeSpaceXPlan.disabled = !spacex;
+  refs.storeManualType.disabled = spacex;
+  refs.storePrefix.readOnly = spacex;
+  if (spacex) {
+    const plan = refs.storeSpaceXPlan.value;
+    refs.storePrefix.value = { plus: "91GPTPLUS", pro_5x: "91GPT5X", pro_20x: "91GPT20X" }[plan] || "91GPTPLUS";
+    refs.storeManualType.value = { plus: "PLUS", pro_5x: "x5", pro_20x: "x20" }[plan] || "PLUS";
+  }
 }
 
 async function refreshStoreMappings() {
@@ -1484,7 +1531,9 @@ async function refreshStoreMappings() {
   storeMappingsCache = payload.items || [];
   renderTable(refs.storeMappingList, [
     { label: "商品 / SKU", render: (item) => `<code>${escapeHtml(item.productId)}</code> / <code>${escapeHtml(item.skuId)}</code><br/><span class="hint">${escapeHtml(item.productTitle || "-")}</span>` },
-    { label: "人工类型", render: (item) => `<span class="table-badge status-processing">${escapeHtml(item.manualType)}</span>` },
+    { label: "履约类型", render: (item) => item.fulfillmentKind === "spacex_cdk"
+      ? `<span class="table-badge status-processing">SpaceX CDK / ${escapeHtml(item.spacexPlan)}</span>`
+      : `<span class="table-badge status-processing">人工 / ${escapeHtml(item.manualType)}</span>` },
     { label: "KaWang 站点", render: (item) => escapeHtml(item.siteName || item.siteId) },
     { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
     { label: "状态", render: (item) => renderStatus(item.enabled ? "active" : "disabled") },
@@ -1504,10 +1553,13 @@ function editStoreMapping(id) {
   refs.storeProductId.value = item.productId;
   refs.storeSkuId.value = item.skuId;
   refs.storeProductTitle.value = item.productTitle || "";
+  refs.storeFulfillmentKind.value = item.fulfillmentKind || "manual";
+  refs.storeSpaceXPlan.value = item.spacexPlan || "plus";
   refs.storeManualType.value = item.manualType;
   refs.storeSiteId.value = item.siteId;
   refs.storePrefix.value = item.prefix;
   refs.storeMappingEnabled.value = item.enabled ? "true" : "false";
+  syncStoreMappingKind();
   refs.storeMappingFormTitle.textContent = "编辑商品映射";
   refs.storeMappingCancelBtn.classList.remove("hidden");
   refs.storeMappingForm.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1538,7 +1590,7 @@ async function refreshStoreTasks() {
     { label: "商城订单", render: (item) => `<code>${escapeHtml(item.parentOrderNo)}</code>${item.remoteOrderNo !== item.parentOrderNo ? `<br/><span class="hint">子单 <code>${escapeHtml(item.remoteOrderNo)}</code></span>` : ""}` },
     { label: "商品", render: (item) => `<span title="${escapeHtml(storeTaskProducts(item))}">${escapeHtml(storeTaskProducts(item) || "-")}</span>` },
     { label: "映射快照", render: (item) => (item.mappingSnapshot || []).length
-      ? (item.mappingSnapshot || []).map((mapping) => `${escapeHtml(mapping.manualType)} / ${escapeHtml(mapping.siteName || mapping.siteId)} / <code>${escapeHtml(mapping.prefix)}</code>`).join("<br/>")
+      ? (item.mappingSnapshot || []).map((mapping) => `${mapping.fulfillmentKind === "spacex_cdk" ? `SpaceX ${escapeHtml(mapping.spacexPlan)}` : escapeHtml(mapping.manualType)} / ${escapeHtml(mapping.siteName || mapping.siteId)} / <code>${escapeHtml(mapping.prefix)}</code>`).join("<br/>")
       : "-" },
     { label: "CDK", render: (item) => (item.cdkeys || []).length
       ? (item.cdkeys || []).map((card) => `<code>${escapeHtml(card.publicKey)}</code>`).join("<br/>")
@@ -1585,13 +1637,81 @@ async function runStoreTaskAction(id, action) {
 
 async function refreshStoreFulfillmentConsole() {
   await Promise.all([refreshStoreSettings(), refreshStoreSites()]);
-  await Promise.all([refreshStoreMappings(), refreshStoreTasks()]);
+  await Promise.all([refreshStoreMappings(), refreshStoreTasks(), refreshSpaceXCdkConsole()]);
+}
+
+async function refreshSpaceXCdkSettings() {
+  const payload = await api("/api/admin/spacex-cdk/settings");
+  const settings = payload.settings || {};
+  refs.spaceXCdkBaseUrl.value = settings.baseUrl || "https://spacexcard.com";
+  refs.spaceXCdkApiKey.value = "";
+  refs.spaceXCdkWebhookSecret.value = "";
+  refs.spaceXCdkApiKey.placeholder = settings.hasApiKey ? "已保存；留空保持" : "尚未配置";
+  refs.spaceXCdkWebhookSecret.placeholder = settings.hasWebhookSecret ? "已保存；留空保持" : "尚未配置";
+  refs.spaceXCdkRolloutPlan.value = settings.rolloutPlan || "disabled";
+  refs.spaceXCdkEnabled.value = settings.enabled ? "true" : "false";
+  refs.spaceXCdkAdminPassword.value = "";
+  const balance = settings.lastBalanceMinor == null
+    ? "尚未读取余额"
+    : `余额 ${(Number(settings.lastBalanceMinor) / 100).toFixed(2)} ${settings.balanceCurrency || ""}`;
+  const liability = `未兑换负债 ${(Number(settings.outstandingLiabilityMinor || 0) / 100).toFixed(2)} ${settings.balanceCurrency || ""}（${settings.outstandingCount || 0} 张）`;
+  const unknown = settings.unknownLiabilityCount ? `；${settings.unknownLiabilityCount} 张缺少权威资金上限` : "";
+  setHint(refs.spaceXCdkSettingsStatus, `${settings.enabled ? "履约已启用" : "履约已停用"}；${balance}；${liability}${unknown}${settings.lastBalanceError ? `；错误：${settings.lastBalanceError}` : ""}`);
+}
+
+async function refreshSpaceXCdkInventory() {
+  const payload = await api("/api/admin/spacex-cdk/inventory");
+  renderTable(refs.spaceXCdkInventoryList, [
+    { label: "SpaceX 资产", render: (item) => `<code>${escapeHtml(item.codePrefix)}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamId)}</span>` },
+    { label: "套餐", render: (item) => escapeHtml(item.plan) },
+    { label: "本地 / 上游状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.upstreamStatus || "-")}</span>` },
+    { label: "资金上限", render: (item) => item.fundingCapMinor == null ? `<span style="color:var(--error)">缺失</span>` : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}` },
+    { label: "包装 CDK", render: (item) => item.wrapperPublicKey ? `<code>${escapeHtml(item.wrapperPublicKey)}</code>` : "库存待分配" },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='revealSpaceXCdk(${JSON.stringify(item.id)})'>验密查看并复制</button>` }
+  ], payload.items || [], "暂无 SpaceX CDK 资产");
+}
+
+async function refreshSpaceXCdkActivations() {
+  const payload = await api("/api/admin/spacex-cdk/activations");
+  renderTable(refs.spaceXCdkActivationList, [
+    { label: "订单 / CDK", render: (item) => `<code>${escapeHtml(item.orderNo)}</code><br/><code>${escapeHtml(item.publicKey)}</code>` },
+    { label: "套餐 / 账号", render: (item) => `${escapeHtml(item.plan)}<br/><span class="hint">${escapeHtml(item.accountMasked || "-")}</span>` },
+    { label: "状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.message || "-")}</span>` },
+    { label: "时间", render: (item) => `<span class="hint">创建 ${escapeHtml(item.createdAt)}<br/>更新 ${escapeHtml(item.updatedAt)}</span>` }
+  ], payload.items || [], "暂无 SpaceX 激活记录");
+}
+
+async function refreshSpaceXCdkConsole() {
+  await Promise.all([refreshSpaceXCdkSettings(), refreshSpaceXCdkInventory(), refreshSpaceXCdkActivations()]);
+}
+
+async function revealSpaceXCdk(id) {
+  const adminUsername = refs.spaceXCdkAdminUsername.value.trim();
+  const adminPassword = refs.spaceXCdkAdminPassword.value;
+  if (!adminUsername || !adminPassword) {
+    setHint(refs.spaceXCdkSettingsResult, "请先在 SpaceX 配置表单中输入管理员账号和密码，再查看完整码");
+    return;
+  }
+  const reason = window.prompt("填写查看完整 SpaceX CDK 的原因（至少 3 个字符）");
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/spacex-cdk/inventory/${encodeURIComponent(id)}/reveal`, {
+      method: "POST",
+      body: JSON.stringify({ adminUsername, adminPassword, reason })
+    });
+    refs.spaceXCdkAdminPassword.value = "";
+    await copyTextToClipboard(payload.code);
+    setHint(refs.spaceXCdkSettingsResult, `完整 SpaceX CDK 已复制；查看行为已审计（${payload.codePrefix}）`);
+  } catch (error) {
+    setHint(refs.spaceXCdkSettingsResult, error.message);
+  }
 }
 
 window.editStoreMapping = editStoreMapping;
 window.deleteStoreMapping = deleteStoreMapping;
 window.copyStoreTaskCdkeys = copyStoreTaskCdkeys;
 window.runStoreTaskAction = runStoreTaskAction;
+window.revealSpaceXCdk = revealSpaceXCdk;
 
 async function refreshExtensionDeliverySettings() {
   const payload = await api("/api/admin/extension-delivery/settings");
@@ -5900,6 +6020,8 @@ refs.storeMappingForm?.addEventListener("submit", async (event) => {
         skuId: refs.storeSkuId.value.trim() || "0",
         productTitle: refs.storeProductTitle.value.trim(),
         manualType: refs.storeManualType.value,
+        fulfillmentKind: refs.storeFulfillmentKind.value,
+        spacexPlan: refs.storeFulfillmentKind.value === "spacex_cdk" ? refs.storeSpaceXPlan.value : null,
         siteId: refs.storeSiteId.value,
         prefix: refs.storePrefix.value.trim(),
         enabled: refs.storeMappingEnabled.value === "true"
@@ -5913,6 +6035,8 @@ refs.storeMappingForm?.addEventListener("submit", async (event) => {
   }
 });
 
+refs.storeFulfillmentKind?.addEventListener("change", syncStoreMappingKind);
+refs.storeSpaceXPlan?.addEventListener("change", syncStoreMappingKind);
 refs.storeMappingCancelBtn?.addEventListener("click", resetStoreMappingForm);
 refs.storeMappingsRefreshBtn?.addEventListener("click", () => refreshStoreMappings().catch((error) => setHint(refs.storeMappingResult, error.message)));
 refs.storeTasksRefreshBtn?.addEventListener("click", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
@@ -5927,6 +6051,45 @@ refs.storeTaskListRefreshBtn?.addEventListener("click", async () => {
     setButtonBusy(refs.storeTaskListRefreshBtn, false);
   }
 });
+
+refs.spaceXCdkSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/admin/spacex-cdk/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: refs.spaceXCdkEnabled.value === "true",
+        rolloutPlan: refs.spaceXCdkRolloutPlan.value,
+        baseUrl: refs.spaceXCdkBaseUrl.value.trim(),
+        apiKey: refs.spaceXCdkApiKey.value,
+        webhookSecret: refs.spaceXCdkWebhookSecret.value,
+        adminUsername: refs.spaceXCdkAdminUsername.value.trim(),
+        adminPassword: refs.spaceXCdkAdminPassword.value
+      })
+    });
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(refs.spaceXCdkSettingsResult, "SpaceX CDK 配置已保存；保存动作本身未发起发码");
+    await refreshSpaceXCdkSettings();
+  } catch (error) {
+    setHint(refs.spaceXCdkSettingsResult, error.message);
+  }
+});
+
+refs.spaceXCdkTestBtn?.addEventListener("click", async () => {
+  setButtonBusy(refs.spaceXCdkTestBtn, true, "测试中...");
+  try {
+    const payload = await api("/api/admin/spacex-cdk/test", { method: "POST", body: JSON.stringify({}) });
+    setHint(refs.spaceXCdkSettingsResult, `只读余额测试成功：${(Number(payload.funding.balanceMinor) / 100).toFixed(2)} ${payload.funding.currency}`);
+    await refreshSpaceXCdkSettings();
+  } catch (error) {
+    setHint(refs.spaceXCdkSettingsResult, error.message);
+  } finally {
+    setButtonBusy(refs.spaceXCdkTestBtn, false);
+  }
+});
+
+refs.spaceXCdkInventoryRefresh?.addEventListener("click", () => refreshSpaceXCdkInventory().catch((error) => setHint(refs.spaceXCdkSettingsResult, error.message)));
+refs.spaceXCdkActivationsRefresh?.addEventListener("click", () => refreshSpaceXCdkActivations().catch((error) => setHint(refs.spaceXCdkSettingsResult, error.message)));
 refs.storeTaskStatusFilter?.addEventListener("change", () => refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message)));
 refs.storeTaskQuery?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message));

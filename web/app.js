@@ -35,6 +35,7 @@ const smsConfirmCancelBtn = document.querySelector("#sms-confirm-cancel");
 
 let verifiedKey = null;
 let verifiedSiteSlug = null;
+let verifiedProcessingMode = null;
 let redeemStatusTimer = null;
 let pendingRedeemData = null;
 let verifiedSmsCard = null;
@@ -55,6 +56,13 @@ const STATUS_LABELS = {
   void: "已作废",
   unavailable: "不可兑换",
   pending: "排队中",
+  submitting: "正在提交",
+  queued: "排队中",
+  running: "开通中",
+  review: "等待支付对账",
+  failed_resolution: "等待人工处理",
+  refund_pending: "退款锁定中",
+  issuance_uncertain: "发码结果待核对",
   processing: "处理中",
   succeeded: "已成功",
   completed: "已成功",
@@ -165,6 +173,7 @@ document.querySelector("#back-to-step-1").addEventListener("click", () => goToSt
 document.querySelector("#start-over").addEventListener("click", () => {
   verifiedKey = null;
   verifiedSiteSlug = null;
+  verifiedProcessingMode = null;
   publicKeyInput.value = "";
   document.querySelector("#session-payload").value = "";
   setState(verifyResult, "请输入卡密并点击验证。");
@@ -318,6 +327,8 @@ function renderVerifyResult(payload) {
         <div class="result-item"><span>本地状态</span><strong>${renderStatusText(payload.status)}</strong></div>
         <div class="result-item"><span>远端校验</span><strong>${escapeHtml(verifyMessage)}</strong></div>
         <div class="result-item"><span>可兑换</span><strong>${payload.canRedeem ? "是" : "否"}</strong></div>
+        ${payload.processingMode === "spacex_cdk" ? `<div class="result-item"><span>激活方式</span><strong>SpaceX CDK 自动激活</strong></div>` : ""}
+        ${payload.spacexPlan ? `<div class="result-item"><span>会员套餐</span><strong>${escapeHtml({ plus: "Plus", pro_5x: "Pro x5", pro_20x: "Pro x20" }[payload.spacexPlan] || payload.spacexPlan)}</strong></div>` : ""}
         <div class="result-item"><span>库存等级</span><strong>${escapeHtml(getStockLevelLabel(payload.stockLevel))}</strong></div>
       </div>
     </div>
@@ -325,11 +336,14 @@ function renderVerifyResult(payload) {
 }
 
 function renderRedeemSuccess(payload) {
+  const spacexActivation = payload.spaceXCdkActivation || null;
   const manualProcessing = payload.processingMode === "manual" || payload.pollingDisabled;
   const hasLiveTask = Boolean(payload.liveTaskStatus);
-  const liveStatus = hasLiveTask
+  const liveStatus = spacexActivation
+    ? (spacexActivation.state === "completed" ? "succeeded" : (spacexActivation.state === "failed_resolution" ? "failed" : "processing"))
+    : (hasLiveTask
     ? (payload.liveTaskStatus === "completed" ? "succeeded" : payload.liveTaskStatus)
-    : (payload.job?.status || payload.status || "processing");
+    : (payload.job?.status || payload.status || "processing"));
   const apiMessage = getApiMessage(payload.job || {});
   const sessionFixNeeded = isSessionFixNeededMessage(apiMessage) || isSessionFixNeededMessage(payload.errorMessage);
   const liveStage = String(payload.liveStage || "").trim();
@@ -337,7 +351,9 @@ function renderRedeemSuccess(payload) {
   const liveErrorMessage = String(payload.liveErrorMessage || "").trim();
 
   let statusHint;
-  if (manualProcessing) {
+  if (spacexActivation) {
+    statusHint = spacexActivation.message || spacexActivation.stateText || "SpaceX 会员状态正在同步。";
+  } else if (manualProcessing) {
     statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
   } else if (hasLiveTask) {
     statusHint = liveErrorMessage || payload.liveMessage || "任务状态会自动刷新。";
@@ -367,6 +383,9 @@ function renderRedeemSuccess(payload) {
       <div class="result-grid">
         <div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo)}</strong></div>
         ${manualProcessing ? `<div class="result-item"><span>处理方式</span><strong>人工处理${payload.manualType ? ` / ${escapeHtml(payload.manualType)}` : ""}</strong></div>` : ""}
+        ${spacexActivation ? `<div class="result-item"><span>处理方式</span><strong>SpaceX CDK 自动激活</strong></div>` : ""}
+        ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
+        ${spacexActivation?.state ? `<div class="result-item"><span>激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
         <div class="result-item"><span>实时任务状态</span><strong>${renderStatusText(liveStatus)}</strong></div>
         ${queueHtml}
         ${progressHtml}
@@ -386,6 +405,7 @@ function renderOrderResult(payload) {
   const apiMessage = getApiMessage(job);
   const title = payload.lookupType === "publicKey" ? "卡密关联订单" : "订单追踪结果";
   const liveProgress = Number.isFinite(Number(payload.liveProgress)) ? Number(payload.liveProgress) : null;
+  const spacexActivation = payload.spaceXCdkActivation || null;
 
   return `
     <div class="result-card compact-card">
@@ -401,8 +421,11 @@ function renderOrderResult(payload) {
         <div class="result-item"><span>重试次数</span><strong>${escapeHtml(job.attemptCount ?? 0)}</strong></div>
         <div class="result-item"><span>处理进度</span><strong>${liveProgress != null ? `${escapeHtml(liveProgress)}%` : "-"}</strong></div>
         <div class="result-item"><span>用户邮箱</span><strong>${escapeHtml(payload.sessionPreview?.email || "-")}</strong></div>
+        ${spacexActivation ? `<div class="result-item"><span>SpaceX 激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
+        ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
         <div class="result-item"><span>覆盖提交</span><strong>${payload.abandonRemainingTime ? "是" : "否"}</strong></div>
         <div class="result-item result-item-wide"><span>当前阶段</span><strong>${escapeHtml(payload.liveStage || payload.liveMessage || "-")}</strong></div>
+        ${spacexActivation?.message ? `<div class="result-item result-item-wide"><span>SpaceX 处理说明</span><strong>${escapeHtml(spacexActivation.message)}</strong></div>` : ""}
         ${payload.cdkeyStatus ? `<div class="result-item"><span>卡密状态</span><strong>${renderStatusText(payload.cdkeyStatus)}</strong></div>` : ""}
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
@@ -568,6 +591,7 @@ verifyForm.addEventListener("submit", async (event) => {
 
     verifiedKey = payload.canRedeem ? payload.publicKey : null;
     verifiedSiteSlug = payload.canRedeem ? (payload.siteSlug || null) : null;
+    verifiedProcessingMode = payload.canRedeem ? (payload.processingMode || null) : null;
     redeemSubmit.disabled = !payload.canRedeem;
     setRichState(verifyResult, renderVerifyResult(payload), payload.canRedeem ? "success" : "error");
 
@@ -577,6 +601,7 @@ verifyForm.addEventListener("submit", async (event) => {
   } catch (error) {
     verifiedKey = null;
     verifiedSiteSlug = null;
+    verifiedProcessingMode = null;
     redeemSubmit.disabled = true;
     setState(verifyResult, error.message, "error");
   }
@@ -617,7 +642,7 @@ redeemForm.addEventListener("submit", async (event) => {
     const sessionPayload = document.querySelector("#session-payload").value.trim();
     const sessionData = parseSessionPayloadInput(sessionPayload);
     validateSessionForSiteSlug(verifiedSiteSlug, sessionData);
-    const abandonRemainingTime = shouldConfirmOverwrite(sessionData);
+    const abandonRemainingTime = verifiedProcessingMode === "spacex_cdk" ? false : shouldConfirmOverwrite(sessionData);
     const email = extractEmail(sessionData);
 
     pendingRedeemData = { sessionPayload, abandonRemainingTime };

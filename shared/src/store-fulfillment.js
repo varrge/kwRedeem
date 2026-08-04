@@ -1,6 +1,8 @@
 export const STORE_FULFILLMENT_STATUSES = {
   pending: "pending",
   retrying: "retrying",
+  refundPending: "refund_pending",
+  issuanceUncertain: "issuance_uncertain",
   succeeded: "succeeded",
   blocked: "blocked",
   conflict: "conflict",

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
@@ -50,6 +51,15 @@ import {
   STORE_FULFILLMENT_STATUSES,
   normalizeDujiaoBaseUrl
 } from "../../shared/src/store-fulfillment.js";
+import { createSpaceXCdkService } from "../../shared/src/spacex-cdk-service.js";
+import { verifyFreshAdminCredentials } from "../../shared/src/membership-rollout.js";
+import {
+  SPACEX_CDK_PLAN_MANUAL_TYPES,
+  SPACEX_CDK_PLAN_PREFIXES,
+  SPACEX_CDK_PLANS,
+  normalizeSpaceXCdkBaseUrl,
+  verifySpaceXCdkWebhookSignature
+} from "../../shared/src/spacex-cdk.js";
 import {
   DEFAULT_API_FOOTBALL_SETTINGS,
   getApiFootballQuotaSnapshot,
@@ -118,6 +128,7 @@ import {
 
 const app = Fastify({ logger: false });
 const db = getDb();
+const spaceXCdkService = createSpaceXCdkService({ db });
 const execFileAsync = promisify(execFile);
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const SMS_PROVIDER_CODE_SYNC_TIMEOUT_MS = 4000;
@@ -516,6 +527,16 @@ async function requireInternalSecret(request, reply) {
   if (secret !== env.internalSecret) {
     return reply.code(401).send({ message: "unauthorized" });
   }
+}
+
+async function captureRawRequestBody(request, _reply, payload) {
+  const chunks = [];
+  for await (const chunk of payload) chunks.push(Buffer.from(chunk));
+  const rawBody = Buffer.concat(chunks);
+  request.rawBody = rawBody;
+  const replay = Readable.from(rawBody);
+  replay.receivedEncodedLength = rawBody.length;
+  return replay;
 }
 
 function createAuditLog({ action, actor = "system", resourceType, resourceId = null, detail = null }) {
@@ -1469,6 +1490,7 @@ function getOrderDetail(orderNo) {
 
   const lastResponse = getJsonBodyOrNull(order.job_response);
   const liveInfo = extractLiveTaskInfo(lastResponse, order.site_polling_enabled);
+  const spaceXCdkActivation = spaceXCdkService.activationForOrder(order.id);
   const membershipFulfillment = db.prepare(`
     SELECT * FROM membership_fulfillments WHERE order_id = ?
   `).get(order.id);
@@ -1486,10 +1508,12 @@ function getOrderDetail(orderNo) {
     siteName: order.site_name || order.product_title,
     siteSlug: order.site_slug || null,
     status: order.status,
-    processingMode: isManualProcessingCdkey({
-      processing_mode: order.cdkey_processing_mode,
-      metadata: order.cdkey_metadata
-    }) ? "manual" : "auto",
+    processingMode: order.cdkey_processing_mode === "spacex_cdk"
+      ? "spacex_cdk"
+      : (isManualProcessingCdkey({
+        processing_mode: order.cdkey_processing_mode,
+        metadata: order.cdkey_metadata
+      }) ? "manual" : "auto"),
     manualType: getCdkeyManualType({
       manual_type: order.cdkey_manual_type,
       metadata: order.cdkey_metadata
@@ -1510,6 +1534,7 @@ function getOrderDetail(orderNo) {
     liveProgress: liveInfo.liveProgress ?? null,
     liveErrorMessage: liveInfo.liveErrorMessage || null,
     membershipDelivery: projectMembershipDelivery(membershipFulfillment, membershipCompensation),
+    spaceXCdkActivation,
     job: {
       status: order.job_status,
       lastError: order.job_error,
@@ -1522,6 +1547,7 @@ function getOrderDetail(orderNo) {
 function getCdkeyLookupDetail(publicKey) {
   const key = db.prepare(`
     SELECT
+      c.id,
       c.public_key,
       c.status,
       c.prefix,
@@ -2062,9 +2088,12 @@ async function verifyCdkeyForPublic(publicKey) {
       s.verify_success_rule,
       s.verify_failure_rule,
       s.timeout_seconds,
-      s.request_cookies
+      s.request_cookies,
+      sx.plan AS spacex_plan,
+      sx.state AS spacex_state
     FROM cdkeys c
     LEFT JOIN sites s ON s.id = c.site_id
+    LEFT JOIN spacex_cdks sx ON sx.current_wrapper_cdkey_id = c.id
     WHERE c.public_key = ?
   `).get(publicKey);
 
@@ -2074,8 +2103,9 @@ async function verifyCdkeyForPublic(publicKey) {
 
   const supportOnly = isSupportOnlyCdkey(key.metadata);
   const manualProcessing = isManualProcessingCdkey(key);
+  const spaceXCdkProcessing = key.processing_mode === "spacex_cdk";
   const manualType = getCdkeyManualType(key);
-  const sourceKey = supportOnly || manualProcessing ? "" : decryptText(key.source_key);
+  const sourceKey = supportOnly || manualProcessing || spaceXCdkProcessing ? "" : decryptText(key.source_key);
   const verifyContext = {
     publicKey: key.public_key,
     sourceKey,
@@ -2090,7 +2120,10 @@ async function verifyCdkeyForPublic(publicKey) {
   const canSupportAccess = key.status === cdkeyStatuses.active
     && String(key.site_slug || "").trim().toLowerCase() === MEIMEI_SITE_SLUG;
 
-  if (manualProcessing) {
+  if (spaceXCdkProcessing) {
+    canRedeem = key.status === cdkeyStatuses.active && key.spacex_state === "allocated";
+    remoteMessage = canRedeem ? "SpaceX CDK 已就绪，可提交 Session 自动激活" : "SpaceX CDK 当前不可激活";
+  } else if (manualProcessing) {
     canRedeem = key.status === cdkeyStatuses.active;
     remoteMessage = "手动处理卡密，无需远端原始卡密校验";
   } else if (canRedeem && key.verify_api_url) {
@@ -2127,8 +2160,9 @@ async function verifyCdkeyForPublic(publicKey) {
       siteName: key.site_name || "未命名网站",
       siteSlug: key.site_slug || null,
       supportOnly,
-      processingMode: manualProcessing ? "manual" : "auto",
+      processingMode: spaceXCdkProcessing ? "spacex_cdk" : (manualProcessing ? "manual" : "auto"),
       manualType,
+      spacexPlan: key.spacex_plan || null,
       canRedeem,
       canSupportAccess,
       hasBoundEmailToken: Boolean(emailToken),
@@ -2230,6 +2264,32 @@ function serializeStoreFulfillmentSettings(row) {
     lastTestAt: row?.last_test_at || null,
     lastTestStatus: row?.last_test_status || null,
     lastTestError: row?.last_test_error || null,
+    updatedAt: row?.updated_at || null,
+    updatedBy: row?.updated_by || null
+  };
+}
+
+function serializeSpaceXCdkSettings(row) {
+  const liability = db.prepare(`
+    SELECT COUNT(*) AS count,
+           COALESCE(SUM(CASE WHEN funding_cap_minor IS NULL THEN 0 ELSE funding_cap_minor END), 0) AS liability_minor,
+           SUM(CASE WHEN funding_cap_minor IS NULL OR funding_currency IS NULL THEN 1 ELSE 0 END) AS unknown_count
+    FROM spacex_cdks
+    WHERE state IN ('inventory', 'allocated', 'claimed', 'pending', 'refund_hold', 'held_contract')
+  `).get();
+  return {
+    enabled: Boolean(row?.enabled),
+    rolloutPlan: row?.rollout_plan || "disabled",
+    baseUrl: row?.base_url || "https://spacexcard.com",
+    hasApiKey: Boolean(row?.api_key_encrypted),
+    hasWebhookSecret: Boolean(row?.webhook_secret_encrypted),
+    lastBalanceMinor: row?.last_balance_minor ?? null,
+    balanceCurrency: row?.balance_currency || null,
+    lastBalanceAt: row?.last_balance_at || null,
+    lastBalanceError: row?.last_balance_error || null,
+    outstandingCount: Number(liability?.count || 0),
+    outstandingLiabilityMinor: Number(liability?.liability_minor || 0),
+    unknownLiabilityCount: Number(liability?.unknown_count || 0),
     updatedAt: row?.updated_at || null,
     updatedBy: row?.updated_by || null
   };
@@ -6411,6 +6471,21 @@ app.post("/api/public/redeem", async (request, reply) => {
       metadata: preflight.cdkey_metadata
     });
 
+    if (preflight.cdkey_processing_mode === "spacex_cdk") {
+      const result = await spaceXCdkService.activate({
+        publicKey,
+        session: session.parsed,
+        customerIp: request.ip
+      });
+      createAuditLog({
+        action: "spacex_cdk.activation.submitted",
+        actor: "public",
+        resourceType: "spacex_cdk_activation",
+        detail: { publicKey, orderNo: result.orderNo, plan: result.spacexPlan }
+      });
+      return result;
+    }
+
     if (!manualProcessing) {
       await assertSiteQueueReady(preflight);
     }
@@ -6659,6 +6734,192 @@ app.get("/api/admin/dashboard", { preHandler: requireAdmin }, async () => {
   return { counts, recentLogs };
 });
 
+app.post("/api/webhooks/spacex-cdk", { preParsing: captureRawRequestBody }, async (request, reply) => {
+  const current = spaceXCdkService.settings();
+  if (!current?.webhook_secret_encrypted) {
+    return reply.code(503).send({ message: "SpaceX CDK Webhook 尚未配置" });
+  }
+  const valid = verifySpaceXCdkWebhookSignature(
+    request.rawBody || Buffer.alloc(0),
+    request.headers["x-signature"],
+    decryptText(current.webhook_secret_encrypted)
+  );
+  if (!valid) return reply.code(401).send({ message: "Webhook 签名无效" });
+  try {
+    return { ok: true, ...spaceXCdkService.applyWebhookEvent(request.body) };
+  } catch (error) {
+    return reply.code(400).send({ message: error?.message || "Webhook 内容不正确" });
+  }
+});
+
+app.get("/api/admin/spacex-cdk/settings", { preHandler: requireAdmin }, async () => ({
+  settings: serializeSpaceXCdkSettings(spaceXCdkService.settings())
+}));
+
+app.put("/api/admin/spacex-cdk/settings", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    enabled: z.boolean(),
+    rolloutPlan: z.enum(["disabled", ...SPACEX_CDK_PLANS]),
+    baseUrl: z.string().trim().min(1),
+    apiKey: z.string().optional().default(""),
+    webhookSecret: z.string().optional().default(""),
+    adminUsername: z.string().optional().default(""),
+    adminPassword: z.string().optional().default("")
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "SpaceX CDK 配置参数不正确" });
+  const existing = spaceXCdkService.settings();
+  if (parsed.data.enabled || parsed.data.rolloutPlan !== "disabled") {
+    try {
+      verifyFreshAdminCredentials(
+        { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+        { username: env.adminUsername, password: env.adminPassword }
+      );
+    } catch {
+      return reply.code(401).send({ message: "启用 SpaceX CDK 前必须重新验证管理员账号和密码" });
+    }
+  }
+  let baseUrl;
+  try {
+    baseUrl = normalizeSpaceXCdkBaseUrl(parsed.data.baseUrl);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+  const apiKeyEncrypted = parsed.data.apiKey.trim() ? encryptText(parsed.data.apiKey.trim()) : existing?.api_key_encrypted;
+  const webhookSecretEncrypted = parsed.data.webhookSecret.trim()
+    ? encryptText(parsed.data.webhookSecret.trim())
+    : existing?.webhook_secret_encrypted;
+  if (parsed.data.enabled && (!apiKeyEncrypted || !webhookSecretEncrypted || parsed.data.rolloutPlan === "disabled")) {
+    return reply.code(400).send({ message: "启用前必须配置 API Key、Webhook Secret 和有效的灰度套餐" });
+  }
+  const updatedAt = nowIso();
+  db.prepare(`
+    UPDATE spacex_cdk_settings
+    SET enabled = ?, rollout_plan = ?, base_url = ?, api_key_encrypted = ?, webhook_secret_encrypted = ?,
+        updated_at = ?, updated_by = ?
+    WHERE id = 'default'
+  `).run(
+    parsed.data.enabled ? 1 : 0,
+    parsed.data.rolloutPlan,
+    baseUrl,
+    apiKeyEncrypted || null,
+    webhookSecretEncrypted || null,
+    updatedAt,
+    request.admin.username
+  );
+  createAuditLog({
+    action: "spacex_cdk.settings.update",
+    actor: request.admin.username,
+    resourceType: "spacex_cdk_settings",
+    resourceId: "default",
+    detail: {
+      enabled: parsed.data.enabled,
+      rolloutPlan: parsed.data.rolloutPlan,
+      baseUrl,
+      apiKeyUpdated: Boolean(parsed.data.apiKey.trim()),
+      webhookSecretUpdated: Boolean(parsed.data.webhookSecret.trim())
+    }
+  });
+  return { settings: serializeSpaceXCdkSettings(spaceXCdkService.settings()) };
+});
+
+app.post("/api/admin/spacex-cdk/test", { preHandler: requireAdmin }, async (_request, reply) => {
+  try {
+    const funding = await spaceXCdkService.refreshFundingSnapshot();
+    return { ok: true, funding };
+  } catch (error) {
+    return reply.code(400).send({ message: error?.message || "SpaceX CDK 只读测试失败" });
+  }
+});
+
+app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (request) => {
+  const state = String(request.query.state || "").trim();
+  const plan = String(request.query.plan || "").trim();
+  let sql = `
+    SELECT a.*, c.public_key AS wrapper_public_key, u.task_id, u.state AS unit_state
+    FROM spacex_cdks a
+    LEFT JOIN cdkeys c ON c.id = a.current_wrapper_cdkey_id
+    LEFT JOIN spacex_cdk_units u ON u.id = a.current_unit_id
+    WHERE 1 = 1
+  `;
+  const params = [];
+  if (state) { sql += " AND a.state = ?"; params.push(state); }
+  if (plan) { sql += " AND a.plan = ?"; params.push(plan); }
+  sql += " ORDER BY a.created_at DESC LIMIT 500";
+  return {
+    items: db.prepare(sql).all(...params).map((item) => ({
+      id: item.id,
+      upstreamId: item.upstream_id,
+      codePrefix: item.code_prefix,
+      plan: item.plan,
+      state: item.state,
+      upstreamStatus: item.upstream_status,
+      fundingCapMinor: item.funding_cap_minor,
+      fundingCurrency: item.funding_currency,
+      feeAmountMinor: item.fee_amount_minor,
+      wrapperPublicKey: item.wrapper_public_key || null,
+      taskId: item.task_id || null,
+      unitState: item.unit_state || null,
+      lastVerifiedAt: item.last_verified_at || null,
+      recycledAt: item.recycled_at || null,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at
+    }))
+  };
+});
+
+app.post("/api/admin/spacex-cdk/inventory/:id/reveal", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    adminUsername: z.string().min(1),
+    adminPassword: z.string().min(1),
+    reason: z.string().trim().min(3).max(300)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "请重新验证管理员并填写查看原因" });
+  try {
+    verifyFreshAdminCredentials(
+      { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+      { username: env.adminUsername, password: env.adminPassword }
+    );
+  } catch {
+    return reply.code(401).send({ message: "管理员账号或密码错误" });
+  }
+  const revealed = spaceXCdkService.revealAsset(request.params.id);
+  if (!revealed) return reply.code(404).send({ message: "SpaceX CDK 不存在" });
+  createAuditLog({
+    action: "spacex_cdk.secret.reveal",
+    actor: request.admin.username,
+    resourceType: "spacex_cdk",
+    resourceId: revealed.asset.id,
+    detail: { reason: parsed.data.reason, codePrefix: revealed.asset.code_prefix }
+  });
+  return { code: revealed.code, codePrefix: revealed.asset.code_prefix };
+});
+
+app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async () => ({
+  items: db.prepare(`
+    SELECT a.*, o.order_no, c.public_key, sx.plan
+    FROM spacex_cdk_activations a
+    JOIN redeem_orders o ON o.id = a.redeem_order_id
+    JOIN cdkeys c ON c.id = a.wrapper_cdkey_id
+    JOIN spacex_cdks sx ON sx.id = a.spacex_cdk_id
+    ORDER BY a.created_at DESC LIMIT 500
+  `).all().map((item) => ({
+    id: item.id,
+    orderNo: item.order_no,
+    publicKey: item.public_key,
+    plan: item.plan,
+    accountMasked: item.account_masked,
+    state: item.state,
+    upstreamStatus: item.upstream_status || null,
+    stage: item.stage || null,
+    message: item.public_message || null,
+    lastError: item.last_error || null,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at,
+    completedAt: item.completed_at || null,
+    failedAt: item.failed_at || null
+  }))
+}));
+
 app.get("/api/admin/store-fulfillment/settings", { preHandler: requireAdmin }, async () => ({
   settings: serializeStoreFulfillmentSettings(getStoreFulfillmentSettings())
 }));
@@ -6749,6 +7010,8 @@ app.get("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, a
     skuId: item.sku_id,
     productTitle: item.product_title || "",
     manualType: item.manual_type,
+    fulfillmentKind: item.fulfillment_kind || "manual",
+    spacexPlan: item.spacex_plan || null,
     siteId: item.site_id,
     siteName: item.site_name || "",
     prefix: item.prefix,
@@ -6763,9 +7026,15 @@ const storeProductMappingSchema = z.object({
   skuId: z.coerce.string().trim().min(1).default("0"),
   productTitle: z.string().trim().optional().default(""),
   manualType: z.enum(MANUAL_CDKEY_TYPES),
+  fulfillmentKind: z.enum(["manual", "spacex_cdk"]).optional().default("manual"),
+  spacexPlan: z.enum(SPACEX_CDK_PLANS).nullable().optional().default(null),
   siteId: z.string().trim().min(1),
   prefix: z.string().trim().min(1),
   enabled: z.boolean().optional().default(true)
+}).superRefine((value, context) => {
+  if (value.fulfillmentKind === "spacex_cdk" && !value.spacexPlan) {
+    context.addIssue({ code: "custom", path: ["spacexPlan"], message: "SpaceX 履约必须选择套餐" });
+  }
 });
 
 app.post("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, async (request, reply) => {
@@ -6780,11 +7049,19 @@ app.post("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, 
   const now = nowIso();
   db.prepare(`
     INSERT INTO store_product_mappings (
-      id, product_id, sku_id, product_title, manual_type, site_id, prefix, enabled, created_at, updated_at, updated_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, product_id, sku_id, product_title, manual_type, fulfillment_kind, spacex_plan,
+      site_id, prefix, enabled, created_at, updated_at, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, parsed.data.productId, parsed.data.skuId, parsed.data.productTitle || null,
-    parsed.data.manualType, parsed.data.siteId, parsed.data.prefix, parsed.data.enabled ? 1 : 0,
+    parsed.data.fulfillmentKind === "spacex_cdk"
+      ? SPACEX_CDK_PLAN_MANUAL_TYPES[parsed.data.spacexPlan]
+      : parsed.data.manualType,
+    parsed.data.fulfillmentKind,
+    parsed.data.fulfillmentKind === "spacex_cdk" ? parsed.data.spacexPlan : null,
+    parsed.data.siteId,
+    parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_PREFIXES[parsed.data.spacexPlan] : parsed.data.prefix,
+    parsed.data.enabled ? 1 : 0,
     now, now, request.admin.username
   );
   createAuditLog({
@@ -6792,7 +7069,7 @@ app.post("/api/admin/store-fulfillment/mappings", { preHandler: requireAdmin }, 
     actor: request.admin.username,
     resourceType: "store_product_mapping",
     resourceId: id,
-    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, manualType: parsed.data.manualType, siteId: parsed.data.siteId }
+    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, fulfillmentKind: parsed.data.fulfillmentKind, spacexPlan: parsed.data.spacexPlan, siteId: parsed.data.siteId }
   });
   return { id };
 });
@@ -6811,19 +7088,29 @@ app.patch("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmi
   if (duplicate) return reply.code(409).send({ message: "该商品与 SKU 已配置映射" });
   db.prepare(`
     UPDATE store_product_mappings
-    SET product_id = ?, sku_id = ?, product_title = ?, manual_type = ?, site_id = ?, prefix = ?,
+    SET product_id = ?, sku_id = ?, product_title = ?, manual_type = ?, fulfillment_kind = ?, spacex_plan = ?, site_id = ?, prefix = ?,
         enabled = ?, updated_at = ?, updated_by = ?
     WHERE id = ?
   `).run(
-    parsed.data.productId, parsed.data.skuId, parsed.data.productTitle || null, parsed.data.manualType,
-    parsed.data.siteId, parsed.data.prefix, parsed.data.enabled ? 1 : 0, nowIso(), request.admin.username, existing.id
+    parsed.data.productId,
+    parsed.data.skuId,
+    parsed.data.productTitle || null,
+    parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_MANUAL_TYPES[parsed.data.spacexPlan] : parsed.data.manualType,
+    parsed.data.fulfillmentKind,
+    parsed.data.fulfillmentKind === "spacex_cdk" ? parsed.data.spacexPlan : null,
+    parsed.data.siteId,
+    parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_PREFIXES[parsed.data.spacexPlan] : parsed.data.prefix,
+    parsed.data.enabled ? 1 : 0,
+    nowIso(),
+    request.admin.username,
+    existing.id
   );
   createAuditLog({
     action: "store_fulfillment.mapping.update",
     actor: request.admin.username,
     resourceType: "store_product_mapping",
     resourceId: existing.id,
-    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, manualType: parsed.data.manualType, siteId: parsed.data.siteId, enabled: parsed.data.enabled }
+    detail: { productId: parsed.data.productId, skuId: parsed.data.skuId, fulfillmentKind: parsed.data.fulfillmentKind, spacexPlan: parsed.data.spacexPlan, siteId: parsed.data.siteId, enabled: parsed.data.enabled }
   });
   return { id: existing.id };
 });

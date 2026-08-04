@@ -128,32 +128,120 @@ Expired invite codes do not count against either limit. A configured value of `0
 _Avoid_: One global fixed quota, treating zero as no invites allowed, expired codes consuming quota
 
 **Store Fulfillment Order**:
-A paid Dujiao store order awaiting or undergoing delivery, from which KaWang may issue the purchased manual-processing CDK.
+A paid Dujiao store order awaiting or undergoing delivery, from which KaWang issues the buyer-facing CDK promised by the mapped product.
 _Avoid_: KaWang redeem order, activation job
 
 **Manual-Processing CDK**:
 A KaWang redeemable card whose eventual redemption creates work for an operator instead of starting automatic activation.
 _Avoid_: Source key, automatically activated CDK, fulfillment record
 
+**SpaceX CDK**:
+A one-time upstream SpaceX Card credential for a fixed membership plan. KaWang allocates it during store fulfillment and keeps the full value server-side rather than delivering it directly to the buyer.
+_Avoid_: KaWang activation code, card number, reusable inventory key
+
+**KaWang SpaceX Activation CDK**:
+The buyer-visible KaWang code that wraps exactly one SpaceX CDK. Dujiao delivers this wrapper, and the player submits it on the KaWang frontend to activate the corresponding membership plan.
+_Avoid_: Exposing the SpaceX CDK to the buyer, sharing one SpaceX CDK across wrappers, manual-processing CDK
+
+**SpaceX Activation Prefix**:
+The buyer-visible plan marker on a KaWang SpaceX Activation CDK: `91GPTPLUS` for Plus, `91GPT5X` for Pro x5, and `91GPT20X` for Pro x20. The prefix mirrors the bound SpaceX CDK plan and does not change it.
+_Avoid_: Inferring the upstream plan from a product title, using one prefix for every plan
+
+**Proxied SpaceX CDK Activation**:
+The automatic activation flow started when a player submits a KaWang SpaceX Activation CDK together with the target account's ChatGPT Session. KaWang keeps the bound SpaceX CDK server-side and performs the upstream preview, preflight, redeem, and result checks on the player's behalf.
+_Avoid_: Revealing the SpaceX CDK, sending the player to redeem it manually, routing the request through the retired Go checkout automation
+
+**Ephemeral SpaceX Activation Session**:
+The player's raw ChatGPT Session used only in memory while KaWang obtains preflight and submits the upstream redeem request. KaWang discards it after upstream acceptance and persists only the masked account identity, stable client request identity, and upstream tracking data; an interruption before acceptance requires the same account to resubmit a Session.
+_Avoid_: Persisting the raw Session, logging it, reusing it for another activation, retaining it for result polling
+
+**SpaceX Activation Claim**:
+The one-account claim created only after SpaceX preflight accepts the player's ChatGPT Session. Invalid Session or failed preflight leaves the KaWang SpaceX Activation CDK unused; after a claim, the wrapper cannot be moved to another ChatGPT account while activation is unresolved.
+_Avoid_: Consuming a code before preflight, switching accounts after preflight, treating a frontend submission as a successful claim
+
+**Pending SpaceX Activation**:
+A claimed activation whose upstream result is `queued`, `running`, `review`, or `pending`. It remains bound and non-resubmittable until an authoritative result changes it.
+_Avoid_: Releasing the wrapper, submitting another redeem request, reporting activation success
+
+**SpaceX Activation Result Sync**:
+KaWang's authoritative local projection of an upstream SpaceX activation. Verified Webhooks update it idempotently by stable event ID, low-frequency order reconciliation repairs missed events, and the player frontend reads only the KaWang projection.
+_Avoid_: Browser polling SpaceX directly, Webhook-only truth, treating duplicate or out-of-order events as new redemption attempts
+
+**Failed SpaceX Activation Resolution**:
+The operator-owned resolution required when a claimed activation reaches an upstream terminal failure such as `declined`, `failed_precharge`, or `cancelled`. KaWang does not automatically release the wrapper or move it to another account.
+_Avoid_: Blind automatic retry, silent wrapper reset, discarding the account binding
+
+**Uncertain SpaceX CDK Issuance**:
+A store-fulfillment state in which SpaceX may have issued and charged for a CDK but KaWang did not durably receive its full value. The store order remains undelivered and requires operator reconciliation; KaWang never issues an automatic replacement because the upstream list cannot recover the full code.
+_Avoid_: Retrying with a new idempotency key, delivering an unbacked wrapper, assuming a timeout means no CDK was issued
+
+**Uncertain SpaceX Issuance Resolution**:
+The audited super-administrator procedure for closing an uncertain issuance. A provider-confirmed absence may resume with the original idempotency key; a provider-confirmed issued code whose full value was lost must first be deleted and refunded before a newly authorized recovery key may replace it; otherwise the store order is refunded without replacement.
+_Avoid_: Operator replacement without evidence, leaving the old code live, marking an unbacked wrapper delivered
+
+**SpaceX Issuance Unit**:
+One purchased store unit with exactly one allocated SpaceX CDK and exactly one KaWang SpaceX Activation CDK. It first consumes matching reusable inventory; when new upstream issuance is required, that unit has its own stable issuance idempotency key so an uncertain result is isolated to the unit.
+_Avoid_: One shared SpaceX CDK for multiple units, buying a new code while matching reusable inventory exists, changing the idempotency key on retry
+
+**Complete SpaceX Store Delivery Set**:
+The full set of KaWang SpaceX Activation CDKs promised by one store fulfillment target. Dujiao receives the set only after every issuance unit has a durable one-to-one binding; an uncertain unit blocks delivery of the whole set.
+_Avoid_: Partial buyer delivery, omitting an uncertain unit, replacing the whole set after one unit fails
+
+**Protected SpaceX CDK Secret**:
+The encrypted full value of a SpaceX CDK. Routine admin views, APIs, and logs expose only its prefix and lifecycle state; only a super administrator who passes fresh verification and supplies a reason may reveal it temporarily, with an immutable audit record.
+_Avoid_: Plaintext database storage, routine admin display, logging full codes, unaudited reveal
+
+**Reusable SpaceX CDK Inventory**:
+SpaceX CDKs detached from permanently invalidated buyer-facing wrappers that never reached an activation claim and whose authoritative upstream state is currently `unused`. A later store fulfillment transactionally allocates verified inventory for the exact same plan before purchasing another SpaceX CDK; inability to verify inventory pauses fulfillment instead of triggering a new purchase.
+_Avoid_: Reusing the invalidated KaWang wrapper, trusting local state alone, allocating across plans, buying new matching inventory first
+
+**Pre-Activation SpaceX Wrapper Refund**:
+A store refund that permanently invalidates the buyer-visible KaWang SpaceX Activation CDK without deleting or refunding its upstream SpaceX CDK. The detached upstream code returns to reusable inventory for a future purchase of the same plan.
+_Avoid_: Reactivating the refunded wrapper, deleting the upstream code, purchasing replacement inventory before reallocation
+
+**SpaceX Activation-Refund Race**:
+The serialized decision between an activation claim and a refund hold on the same KaWang SpaceX Activation CDK. The first committed lock wins: a refund hold prevents preflight and may reclaim an authoritatively unused upstream code, while an existing activation claim blocks automatic inventory reclamation and requires operator resolution.
+_Avoid_: Refund and activation both succeeding, reclaiming a claimed code, allowing activation through an existing refund hold
+
+**Outstanding SpaceX Funding Liability**:
+The sum of the immutable `owner_funding_cap_minor` snapshots for SpaceX CDKs that can still incur owner-funded redemption costs, including reusable inventory and buyer-allocated codes. KaWang treats this amount as already committed even though SpaceX deducts the actual funding only when a player redeems a code.
+_Avoid_: Counting only currently activating codes, using the eventual actual charge as the pre-sale commitment, ignoring reusable inventory
+
+**Authoritative SpaceX Funding Cap**:
+The `owner_funding_cap_minor` and currency returned by SpaceX for an individually issued CDK and stored as an immutable local snapshot. Their presence is a hard issuance contract; KaWang blocks `spacex_cdk` fulfillment when either value is absent rather than estimating future liability.
+_Avoid_: Locally guessed caps, mutable plan defaults as historical truth, accepting a fee-only issuance response
+
+**Funding-Covered SpaceX Fulfillment**:
+A store fulfillment for which the current SpaceX account balance, after subtracting outstanding funding liabilities and the new issuance service fee, still covers the new CDK's funding cap. If not, KaWang blocks new issuance and delivery so funds remain available for previously sold codes.
+_Avoid_: Selling first and checking balance at player activation, treating a warning as funding coverage, spending committed balance on new issuance
+
+**SpaceX CDK Rollout Gate**:
+The disabled-by-default production permission for `spacex_cdk` fulfillment. After simulated-provider verification, one explicitly authorized quantity-one Plus store order must prove issuance, wrapping, delivery, activation, result sync, and funding liability before x5 and then x20 may be enabled; real SpaceX API tests require separate owner authorization.
+_Avoid_: Enabling all plans together, treating test doubles as live proof, reusing the retired Go checkout rollout state
+
 **Voided CDK Queue Cancellation**:
 When an administrator voids a redeemed CDK, KaWang atomically cancels its still-pending activation job, Session Activation Delivery, redeem order, and pre-exposure Membership Fulfillment. A task already processing an external activation, holding a browser lease or card reservation, or entering the funding/payment boundary blocks the void action instead of pretending that in-flight work was cancelled. Completed delivery truth remains unchanged.
 _Avoid_: Voiding only the CDK row, reviving a cancelled queue item, discarding payment or reservation evidence
 
 **Store Product Mapping**:
-An explicit association from a Dujiao product and optional SKU to the kind, KaWang site, and public prefix of the manual-processing CDK the purchase promises.
+An explicit association from a Dujiao product and optional SKU to the fulfillment kind, promised plan, KaWang site, and public prefix of the CDK the purchase delivers.
 _Avoid_: Product-title matching, implicit prefix matching
+
+**SpaceX CDK Fulfillment Mode**:
+The explicit `spacex_cdk` store-product fulfillment kind that allocates and wraps a SpaceX CDK for each newly created fulfillment unit, reusing eligible matching inventory before new issuance. Only mappings deliberately switched to this mode use it; existing tasks retain their snapshotted manual-processing contract.
+_Avoid_: Reinterpreting every Plus/x5/x20 manual mapping, changing historical tasks during retry, inferring the mode from a prefix
 
 **Store Connection**:
 The single Dujiao store that KaWang observes and fulfills using a dedicated service administrator.
 _Avoid_: KaWang site, Sub2api connection, buyer account
 
 **Order-Issued CDK**:
-A new manual-processing CDK created specifically for one purchased unit in a store fulfillment order rather than selected from pre-existing card inventory.
+A new buyer-facing KaWang CDK created specifically for one purchased unit in a store fulfillment order rather than selected from pre-existing card inventory. For SpaceX fulfillment, it is a KaWang SpaceX Activation CDK bound one-to-one to an allocated SpaceX CDK, whether reused or newly issued.
 _Avoid_: Stock CDK, shared CDK, reusable CDK
 
 **Store-Delivered CDK**:
-An order-issued CDK whose value has been confirmed in the Dujiao fulfillment but remains redeemable in KaWang until the buyer submits it for manual processing.
-_Avoid_: Used CDK, completed manual-processing order
+An order-issued CDK whose value has been confirmed in the Dujiao fulfillment but remains redeemable in KaWang until the buyer submits it for its mapped activation flow.
+_Avoid_: Used CDK, completed activation
 
 **Store Order Number**:
 The customer-facing Dujiao parent order number that identifies the purchase for which an order-issued CDK was created.

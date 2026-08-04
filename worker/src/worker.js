@@ -43,15 +43,18 @@ import {
 } from "../../shared/src/notifications.js";
 import { getAvailableQuota } from "../../shared/src/quota-calc.js";
 import { createStoreFulfillmentRunner } from "../../shared/src/store-fulfillment-runner.js";
+import { createSpaceXCdkService } from "../../shared/src/spacex-cdk-service.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const maintenancePath = resolveProjectPath(env.maintenancePath);
+const spaceXCdkService = createSpaceXCdkService({ db });
 const storeFulfillmentRunner = createStoreFulfillmentRunner({
   db,
   redeemUrl: env.appUrl,
-  workerId
+  workerId,
+  spaceXCdkService
 });
 
 function isMaintenanceEnabled() {
@@ -3279,6 +3282,13 @@ setInterval(() => {
   });
 }, 5000);
 
+setInterval(() => {
+  if (isMaintenanceEnabled()) return;
+  spaceXCdkService.reconcileDue().catch((error) => {
+    console.error("[KaWang worker] spacex-cdk-reconciliation", error);
+  });
+}, 15000);
+
 if (!isMaintenanceEnabled()) {
   tick().catch((error) => {
     console.error("[KaWang worker]", error);
@@ -3304,6 +3314,10 @@ if (!isMaintenanceEnabled()) {
 
   storeFulfillmentRunner.tick().catch((error) => {
     console.error("[KaWang worker] store-fulfillment", error);
+  });
+
+  spaceXCdkService.reconcileDue().catch((error) => {
+    console.error("[KaWang worker] spacex-cdk-reconciliation", error);
   });
 
 }

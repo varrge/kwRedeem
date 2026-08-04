@@ -769,6 +769,8 @@ function createSchema(db) {
       sku_id TEXT NOT NULL DEFAULT '0',
       product_title TEXT,
       manual_type TEXT NOT NULL,
+      fulfillment_kind TEXT NOT NULL DEFAULT 'manual',
+      spacex_plan TEXT,
       site_id TEXT NOT NULL,
       prefix TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -801,6 +803,92 @@ function createSchema(db) {
       canceled_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS spacex_cdk_settings (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      rollout_plan TEXT NOT NULL DEFAULT 'disabled',
+      base_url TEXT NOT NULL DEFAULT 'https://spacexcard.com',
+      api_key_encrypted TEXT,
+      webhook_secret_encrypted TEXT,
+      last_balance_minor INTEGER,
+      balance_currency TEXT,
+      last_balance_at TEXT,
+      last_balance_error TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS spacex_cdks (
+      id TEXT PRIMARY KEY,
+      upstream_id TEXT NOT NULL UNIQUE,
+      code_encrypted TEXT NOT NULL,
+      code_prefix TEXT NOT NULL,
+      plan TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'inventory',
+      upstream_status TEXT NOT NULL DEFAULT 'unused',
+      funding_cap_minor INTEGER,
+      funding_currency TEXT,
+      fee_amount_minor INTEGER NOT NULL DEFAULT 0,
+      current_unit_id TEXT,
+      current_wrapper_cdkey_id TEXT,
+      last_verified_at TEXT,
+      recycled_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS spacex_cdk_units (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      unit_index INTEGER NOT NULL,
+      plan TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      recovery_revision INTEGER NOT NULL DEFAULT 0,
+      spacex_cdk_id TEXT,
+      wrapper_cdkey_id TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(task_id, item_id, unit_index)
+    );
+
+    CREATE TABLE IF NOT EXISTS spacex_cdk_activations (
+      id TEXT PRIMARY KEY,
+      wrapper_cdkey_id TEXT NOT NULL UNIQUE,
+      spacex_cdk_id TEXT NOT NULL,
+      redeem_order_id TEXT NOT NULL UNIQUE,
+      account_key TEXT NOT NULL,
+      account_masked TEXT,
+      state TEXT NOT NULL,
+      client_request_id TEXT NOT NULL UNIQUE,
+      redemption_token_encrypted TEXT,
+      device_id TEXT NOT NULL,
+      upstream_order_id TEXT,
+      upstream_status TEXT,
+      stage TEXT,
+      public_message TEXT,
+      last_error TEXT,
+      reconcile_attempts INTEGER NOT NULL DEFAULT 0,
+      next_reconcile_at TEXT,
+      claimed_at TEXT NOT NULL,
+      completed_at TEXT,
+      failed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS spacex_cdk_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      activation_id TEXT,
+      payload_hash TEXT NOT NULL,
+      processing_status TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      processed_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS membership_fulfillment_settings (
@@ -1311,6 +1399,8 @@ function createSchema(db) {
   ensureColumn(db, "cdkeys", "store_order_no", "TEXT");
   ensureColumn(db, "cdkeys", "store_fulfillment_target_no", "TEXT");
   ensureColumn(db, "cdkeys", "store_fulfillment_task_id", "TEXT");
+  ensureColumn(db, "store_product_mappings", "fulfillment_kind", "TEXT NOT NULL DEFAULT 'manual'");
+  ensureColumn(db, "store_product_mappings", "spacex_plan", "TEXT");
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "redeem_orders", "extension_delivery_status", "TEXT");
@@ -1470,6 +1560,11 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_store_product_mappings_lookup ON store_product_mappings(product_id, sku_id, enabled);
     CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_status ON store_fulfillment_tasks(status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_store_fulfillment_tasks_parent ON store_fulfillment_tasks(parent_order_no, remote_order_no);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdks_inventory ON spacex_cdks(plan, state, created_at);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdks_wrapper ON spacex_cdks(current_wrapper_cdkey_id);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdk_units_task ON spacex_cdk_units(task_id, state, unit_index);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdk_activations_due ON spacex_cdk_activations(state, next_reconcile_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdk_activations_upstream ON spacex_cdk_activations(upstream_order_id);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_due ON membership_fulfillments(state, retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_order ON membership_fulfillments(order_no);
     DROP INDEX IF EXISTS idx_membership_active_account_lock;
@@ -1947,6 +2042,13 @@ function seedDefaults(db) {
       id, enabled, poll_interval_seconds, updated_at, updated_by
     )
     VALUES ('default', 0, 30, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO spacex_cdk_settings (
+      id, enabled, rollout_plan, base_url, updated_at, updated_by
+    )
+    VALUES ('default', 0, 'disabled', 'https://spacexcard.com', ?, 'system')
   `).run(new Date().toISOString());
 
   db.prepare(`

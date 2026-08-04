@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { cdkeyStatuses } from "./constants.js";
 import { decryptText, encryptText } from "./secure.js";
+import { SPACEX_CDK_PLANS, SPACEX_CDK_PLAN_PREFIXES } from "./spacex-cdk.js";
 import {
   DujiaoAdminClient,
   DujiaoApiError,
@@ -99,6 +100,12 @@ function buildMappingSnapshot(db, items) {
       errors.push(`商品映射绑定的 KaWang 站点已停用：${mapping.site_name || mapping.site_id}`);
       continue;
     }
+    const fulfillmentKind = String(mapping.fulfillment_kind || "manual");
+    const spacexPlan = String(mapping.spacex_plan || "");
+    if (fulfillmentKind === "spacex_cdk" && !SPACEX_CDK_PLANS.includes(spacexPlan)) {
+      errors.push(`商品 ${item.productId}/${item.skuId} 的 SpaceX 套餐映射无效`);
+      continue;
+    }
     snapshots.push({
       itemId: item.id,
       productId: item.productId,
@@ -107,9 +114,11 @@ function buildMappingSnapshot(db, items) {
       quantity: item.quantity,
       mappingId: mapping.id,
       manualType: mapping.manual_type,
+      fulfillmentKind,
+      spacexPlan: fulfillmentKind === "spacex_cdk" ? spacexPlan : null,
       siteId: mapping.site_id,
       siteName: mapping.site_name || "",
-      prefix: mapping.prefix,
+      prefix: fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_PREFIXES[spacexPlan] : mapping.prefix,
       kawangProductId: mapping.kawang_product_id || "prod_demo",
       kawangActivationEndpointId: mapping.kawang_activation_endpoint_id || "endpoint_demo"
     });
@@ -117,7 +126,7 @@ function buildMappingSnapshot(db, items) {
   return { snapshots, errors };
 }
 
-function issueTaskCards(db, task, redeemUrl) {
+function issueTaskCards(db, task, redeemUrl, spaceXCdkService = null) {
   const items = taskItems(task);
   const existingMappings = taskMappings(task);
   const resolved = existingMappings.length
@@ -143,7 +152,7 @@ function issueTaskCards(db, task, redeemUrl) {
     VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 'manual', ?, ?, ?, ?, ?, ?, ?)
   `);
   const createdAt = nowIso();
-  for (const mapping of resolved.snapshots) {
+  for (const mapping of resolved.snapshots.filter((item) => item.fulfillmentKind !== "spacex_cdk")) {
     for (let index = 0; index < mapping.quantity; index += 1) {
       const id = nanoid(18);
       const publicKey = generatePublicKey(db, mapping.prefix);
@@ -176,6 +185,10 @@ function issueTaskCards(db, task, redeemUrl) {
     }
   }
 
+  if (spaceXCdkService) {
+    spaceXCdkService.ensureTaskUnits(task, resolved.snapshots);
+  }
+
   const delivery = buildStoreDelivery(
     task.id,
     task.parent_order_no || task.remote_order_no,
@@ -190,7 +203,7 @@ function issueTaskCards(db, task, redeemUrl) {
     WHERE id = ?
   `).run(
     JSON.stringify(resolved.snapshots),
-    cards.length,
+    resolved.snapshots.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
     JSON.stringify(cards),
     delivery.payload,
     JSON.stringify(delivery.deliveryData),
@@ -206,7 +219,7 @@ function issueTaskCards(db, task, redeemUrl) {
   return cards;
 }
 
-export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker-${process.pid}`, logger = console }) {
+export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker-${process.pid}`, logger = console, spaceXCdkService = null }) {
   let running = false;
   let client = null;
   let clientSettingsVersion = "";
@@ -270,7 +283,7 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
         createdAt
       );
       const task = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(id);
-      issueTaskCards(db, task, redeemUrl);
+      issueTaskCards(db, task, redeemUrl, spaceXCdkService);
     });
     create();
     return db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(id);
@@ -293,15 +306,29 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
     const remote = getClient(current);
     const parents = [
       ...(await listAllOrders(remote, "fulfilling")),
-      ...(await listAllOrders(remote, "partially_delivered"))
+      ...(await listAllOrders(remote, "partially_delivered")),
+      ...(await listAllOrders(remote, "refunded")),
+      ...(await listAllOrders(remote, "partially_refunded")),
+      ...(await listAllOrders(remote, "canceled")),
+      ...(await listAllOrders(remote, "cancelled"))
     ];
     const seen = new Set();
     let discovered = 0;
     for (const parent of parents) {
       for (const target of collectDujiaoFulfillmentTargets(parent)) {
-        if (target.status !== ACTIVE_TARGET_STATUS || seen.has(target.orderId)) continue;
+        if (seen.has(target.orderId)) continue;
         seen.add(target.orderId);
-        if (!db.prepare("SELECT 1 FROM store_fulfillment_tasks WHERE remote_order_id = ?").get(target.orderId)) {
+        const existing = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE remote_order_id = ?").get(target.orderId);
+        if (TERMINAL_REMOTE_STATUSES.has(target.status) && existing && existing.status === STORE_FULFILLMENT_STATUSES.succeeded) {
+          db.prepare(`
+            UPDATE store_fulfillment_tasks
+            SET status = ?, next_retry_at = NULL, locked_at = NULL, locked_by = NULL, updated_at = ?
+            WHERE id = ?
+          `).run(STORE_FULFILLMENT_STATUSES.refundPending, nowIso(), existing.id);
+          continue;
+        }
+        if (target.status !== ACTIVE_TARGET_STATUS) continue;
+        if (!existing) {
           createTask(target);
           discovered += 1;
         }
@@ -317,12 +344,18 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
     const candidate = db.prepare(`
       SELECT *
       FROM store_fulfillment_tasks
-      WHERE status IN (?, ?)
+      WHERE status IN (?, ?, ?)
         AND (next_retry_at IS NULL OR next_retry_at <= ?)
         AND (locked_at IS NULL OR locked_at < ?)
       ORDER BY created_at ASC
       LIMIT 1
-    `).get(STORE_FULFILLMENT_STATUSES.pending, STORE_FULFILLMENT_STATUSES.retrying, now, expired);
+    `).get(
+      STORE_FULFILLMENT_STATUSES.pending,
+      STORE_FULFILLMENT_STATUSES.retrying,
+      STORE_FULFILLMENT_STATUSES.refundPending,
+      now,
+      expired
+    );
     if (!candidate) return null;
     const changed = db.prepare(`
       UPDATE store_fulfillment_tasks
@@ -380,7 +413,22 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
     );
   }
 
-  function cancelTask(task) {
+  async function cancelTask(task) {
+    if (spaceXCdkService && taskMappings(task).some((item) => item.fulfillmentKind === "spacex_cdk")) {
+      try {
+        await spaceXCdkService.reclaimCanceledTask(task);
+      } catch (error) {
+        markBlocked(task, error?.message || "商城退款 CDK 回收失败");
+        return false;
+      }
+      db.prepare(`
+        UPDATE store_fulfillment_tasks
+        SET status = ?, next_retry_at = NULL, last_error = NULL, locked_at = NULL, locked_by = NULL,
+            canceled_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(STORE_FULFILLMENT_STATUSES.canceled, nowIso(), nowIso(), task.id);
+      return true;
+    }
     const cards = taskCards(task);
     const cancel = db.transaction(() => {
       if (cards.length) {
@@ -405,6 +453,7 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
       `).run(STORE_FULFILLMENT_STATUSES.canceled, nowIso(), nowIso(), task.id);
     });
     cancel();
+    return true;
   }
 
   async function processTask(current, claimed) {
@@ -414,6 +463,10 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
       const order = await remote.getOrder(task.remote_order_id);
       if (!order) {
         markBlocked(task, "Dujiao 订单不存在");
+        return;
+      }
+      if (TERMINAL_REMOTE_STATUSES.has(String(order.status || ""))) {
+        await cancelTask(task);
         return;
       }
       const cards = taskCards(task);
@@ -426,19 +479,37 @@ export function createStoreFulfillmentRunner({ db, redeemUrl, workerId = `worker
         }
         return;
       }
-      if (TERMINAL_REMOTE_STATUSES.has(String(order.status || ""))) {
-        cancelTask(task);
-        return;
-      }
       if (String(order.status || "") !== ACTIVE_TARGET_STATUS) {
         markBlocked(task, `Dujiao 订单状态已变为 ${order.status || "unknown"}，不再允许自动交付`);
         return;
       }
-      if (!cards.length) {
-        const issue = db.transaction(() => issueTaskCards(db, task, redeemUrl));
+      if (!taskMappings(task).length) {
+        const issue = db.transaction(() => issueTaskCards(db, task, redeemUrl, spaceXCdkService));
         issue();
         task = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(task.id);
         if (task.status === STORE_FULFILLMENT_STATUSES.blocked) return;
+      }
+      if (taskMappings(task).some((item) => item.fulfillmentKind === "spacex_cdk")) {
+        if (!spaceXCdkService) {
+          markBlocked(task, "SpaceX CDK 履约服务未配置");
+          return;
+        }
+        try {
+          task = await spaceXCdkService.provisionTask(task);
+        } catch (error) {
+          markBlocked(
+            task,
+            error?.message || "SpaceX CDK 履约失败",
+            error?.uncertain || error?.code === "SPACEX_CDK_ISSUANCE_UNCERTAIN"
+              ? STORE_FULFILLMENT_STATUSES.issuanceUncertain
+              : STORE_FULFILLMENT_STATUSES.blocked
+          );
+          return;
+        }
+      }
+      if (taskCards(task).length !== Number(task.quantity || 0)) {
+        markBlocked(task, "商城交付 CDK 数量尚未完整，禁止部分交付");
+        return;
       }
       const assignedKeys = taskCards(task).map((item) => item.publicKey);
       const expectedPayload = buildStoreDelivery(

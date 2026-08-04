@@ -55,9 +55,11 @@ import {
 import { createSpaceXCdkService } from "../../shared/src/spacex-cdk-service.js";
 import { verifyFreshAdminCredentials } from "../../shared/src/membership-rollout.js";
 import {
+  SPACEX_CDK_ASSET_STATES,
   SPACEX_CDK_PLAN_MANUAL_TYPES,
   SPACEX_CDK_PLAN_PREFIXES,
   SPACEX_CDK_PLANS,
+  SPACEX_CDK_UNIT_STATES,
   normalizeSpaceXCdkBaseUrl,
   verifySpaceXCdkWebhookSignature
 } from "../../shared/src/spacex-cdk.js";
@@ -6844,10 +6846,12 @@ app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (
   const state = String(request.query.state || "").trim();
   const plan = String(request.query.plan || "").trim();
   let sql = `
-    SELECT a.*, c.public_key AS wrapper_public_key, u.task_id, u.state AS unit_state
+    SELECT a.*, c.public_key AS wrapper_public_key, u.task_id, u.state AS unit_state,
+           t.remote_order_no, t.status AS task_status
     FROM spacex_cdks a
     LEFT JOIN cdkeys c ON c.id = a.current_wrapper_cdkey_id
     LEFT JOIN spacex_cdk_units u ON u.id = a.current_unit_id
+    LEFT JOIN store_fulfillment_tasks t ON t.id = u.task_id
     WHERE 1 = 1
   `;
   const params = [];
@@ -6871,7 +6875,16 @@ app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (
       feeAmountMinor: item.fee_amount_minor,
       wrapperPublicKey: item.wrapper_public_key || null,
       taskId: item.task_id || null,
+      taskStatus: item.task_status || null,
+      remoteOrderNo: item.remote_order_no || null,
       unitState: item.unit_state || null,
+      canManualClose: Boolean(
+        item.task_id
+        && !item.current_wrapper_cdkey_id
+        && [SPACEX_CDK_ASSET_STATES.heldContract, SPACEX_CDK_ASSET_STATES.consumed].includes(item.state)
+        && [SPACEX_CDK_UNIT_STATES.contractBlocked, SPACEX_CDK_UNIT_STATES.fundingBlocked].includes(item.unit_state)
+        && [STORE_FULFILLMENT_STATUSES.blocked, STORE_FULFILLMENT_STATUSES.retrying].includes(item.task_status)
+      ),
       lastVerifiedAt: item.last_verified_at || null,
       recycledAt: item.recycled_at || null,
       createdAt: item.created_at,
@@ -6905,6 +6918,44 @@ app.post("/api/admin/spacex-cdk/inventory/:id/reveal", { preHandler: requireAdmi
     detail: { reason: parsed.data.reason, codePrefix: revealed.asset.code_prefix }
   });
   return { code: revealed.code, codePrefix: revealed.asset.code_prefix };
+});
+
+app.post("/api/admin/spacex-cdk/inventory/:id/manual-close", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    adminUsername: z.string().min(1),
+    adminPassword: z.string().min(1),
+    reason: z.string().trim().min(3).max(300)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "请重新验证管理员并填写人工收尾原因" });
+  try {
+    verifyFreshAdminCredentials(
+      { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+      { username: env.adminUsername, password: env.adminPassword }
+    );
+  } catch {
+    return reply.code(401).send({ message: "管理员账号或密码错误" });
+  }
+  let closed;
+  try {
+    closed = await spaceXCdkService.manuallyCloseConsumedAsset(request.params.id);
+  } catch (error) {
+    const statusCode = error?.code === "SPACEX_CDK_ASSET_NOT_FOUND" ? 404 : 409;
+    return reply.code(statusCode).send({ message: error?.message || "SpaceX CDK 人工收尾失败", code: error?.code || null });
+  }
+  createAuditLog({
+    action: "spacex_cdk.asset.manual_close",
+    actor: request.admin.username,
+    resourceType: "spacex_cdk",
+    resourceId: closed.assetId,
+    detail: {
+      reason: parsed.data.reason,
+      upstreamId: closed.upstreamId,
+      taskId: closed.taskId,
+      remoteOrderNo: closed.remoteOrderNo,
+      verifiedUpstreamStatus: "consumed"
+    }
+  });
+  return { closed };
 });
 
 app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async () => ({

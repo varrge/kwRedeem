@@ -613,6 +613,8 @@ const STATUS_LABELS = {
   held_contract: "接口契约不完整",
   funding_blocked: "资金不足",
   contract_blocked: "接口契约不完整",
+  manually_closed: "已人工收尾",
+  consumed: "已消耗",
   blocked: "需人工处理",
   conflict: "交付冲突",
   canceled: "已取消",
@@ -1666,12 +1668,19 @@ async function refreshSpaceXCdkInventory() {
     { label: "套餐", render: (item) => escapeHtml(item.plan) },
     { label: "本地 / 上游状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.upstreamStatus || "-")}</span>` },
     { label: "资金上限", render: (item) => item.fundingContractMode === "unlimited"
-      ? `<span style="color:var(--error)">无限授权（已拦截）</span>`
+      ? (item.state === "consumed" ? "无限授权（资产已消耗）" : `<span style="color:var(--error)">无限授权（已拦截）</span>`)
       : (item.fundingContractMode !== "bounded" || item.fundingCapMinor == null
         ? `<span style="color:var(--error)">缺少有界额度</span>`
         : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}`) },
-    { label: "包装 CDK", render: (item) => item.wrapperPublicKey ? `<code>${escapeHtml(item.wrapperPublicKey)}</code>` : "库存待分配" },
-    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='revealSpaceXCdk(${JSON.stringify(item.id)})'>验密查看并复制</button>` }
+    { label: "包装 CDK", render: (item) => item.wrapperPublicKey
+      ? `<code>${escapeHtml(item.wrapperPublicKey)}</code>`
+      : (item.unitState === "manually_closed" ? "未生成（已人工收尾）" : (item.state === "consumed" ? "未生成（资产已消耗）" : "库存待分配")) },
+    { label: "操作", render: (item) => `
+      <div class="actions-row">
+        <button class="ghost-btn small" type="button" onclick='revealSpaceXCdk(${JSON.stringify(item.id)})'>验密查看并复制</button>
+        ${item.canManualClose ? `<button class="danger-btn small" type="button" onclick='manualCloseSpaceXCdk(${JSON.stringify(item.id)})'>取消自动任务</button>` : ""}
+      </div>
+    ` }
   ], payload.items || [], "暂无 SpaceX CDK 资产");
 }
 
@@ -1711,11 +1720,36 @@ async function revealSpaceXCdk(id) {
   }
 }
 
+async function manualCloseSpaceXCdk(id) {
+  const adminUsername = refs.spaceXCdkAdminUsername.value.trim();
+  const adminPassword = refs.spaceXCdkAdminPassword.value;
+  if (!adminUsername || !adminPassword) {
+    setHint(refs.spaceXCdkSettingsResult, "请先在 SpaceX 配置表单中输入管理员账号和密码，再取消自动任务");
+    return;
+  }
+  if (!window.confirm("仅当该订单已人工处理，且原始 SpaceX CDK 已经用完时才能继续。确认取消本地自动任务？")) return;
+  const reason = window.prompt("填写人工收尾原因（至少 3 个字符）", "订单已人工处理，原始 CDK 已使用");
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/spacex-cdk/inventory/${encodeURIComponent(id)}/manual-close`, {
+      method: "POST",
+      body: JSON.stringify({ adminUsername, adminPassword, reason })
+    });
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(refs.spaceXCdkSettingsResult, `自动任务已取消并完成审计（商城订单 ${payload.closed?.remoteOrderNo || "-"}）`);
+    await Promise.all([refreshSpaceXCdkInventory(), refreshStoreTasks(), refreshSpaceXCdkSettings()]);
+  } catch (error) {
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(refs.spaceXCdkSettingsResult, error.message);
+  }
+}
+
 window.editStoreMapping = editStoreMapping;
 window.deleteStoreMapping = deleteStoreMapping;
 window.copyStoreTaskCdkeys = copyStoreTaskCdkeys;
 window.runStoreTaskAction = runStoreTaskAction;
 window.revealSpaceXCdk = revealSpaceXCdk;
+window.manualCloseSpaceXCdk = manualCloseSpaceXCdk;
 
 async function refreshExtensionDeliverySettings() {
   const payload = await api("/api/admin/extension-delivery/settings");

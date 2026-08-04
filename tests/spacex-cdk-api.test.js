@@ -27,6 +27,19 @@ globalThis.fetch = async (url) => {
   if (parsed.pathname === "/api/v1/cdk/preflight") return response({ preflight_token: "preflight-token", account_id: "account-1" });
   if (parsed.pathname === "/api/v1/cdk/redeem") return response({ order_id: "upstream-order-1", status: "queued", stage: "queued" });
   if (parsed.pathname === "/openapi/v1/balance") return response({ balance: 100, currency: "USD" });
+  if (parsed.pathname === "/openapi/v1/gpt-direct/cdks") {
+    return response({
+      list: [{
+        id: "manual-close-upstream",
+        code_prefix: "GPTD-MANUAL-CLOSE",
+        plan: "plus",
+        status: "consumed",
+        owner_funding_cap_minor: 0,
+        owner_funding_currency: "USD",
+        unlimited_cap: 1
+      }]
+    });
+  }
   throw new Error(`unexpected SpaceX request: ${url}`);
 };
 
@@ -227,4 +240,82 @@ test("revealing an upstream SpaceX CDK requires fresh credentials, a reason, and
   assert.ok(audit);
   assert.match(audit.detail, /人工核对上游订单/);
   assert.doesNotMatch(audit.detail, /SXC-API-FULL/);
+});
+
+test("an admin can close a blocked task only after the SpaceX CDK is authoritatively consumed", async () => {
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE spacex_cdk_settings
+    SET base_url = 'https://spacex.example.com', api_key_encrypted = ?, updated_at = ?, updated_by = 'test'
+    WHERE id = 'default'
+  `).run(encryptText("api-key"), now);
+  db.prepare(`
+    INSERT INTO store_fulfillment_tasks (
+      id, remote_order_id, remote_order_no, parent_order_no, items_json, mapping_snapshot,
+      quantity, status, cdkeys_json, last_error, created_at, updated_at
+    ) VALUES ('manual-close-task', 'manual-close-remote', 'DJ-MANUAL-1', 'DJ-MANUAL', '[]', '[]',
+              1, 'blocked', '[]', 'SpaceX CDK 使用无限资金授权', ?, ?)
+  `).run(now, now);
+  db.prepare(`
+    INSERT INTO spacex_cdk_units (
+      id, task_id, item_id, unit_index, plan, state, idempotency_key, recovery_revision,
+      spacex_cdk_id, created_at, updated_at
+    ) VALUES ('manual-close-unit', 'manual-close-task', 'manual-close-item', 0, 'plus',
+              'contract_blocked', 'manual-close-idempotency', 0, 'manual-close-asset', ?, ?)
+  `).run(now, now);
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_currency, funding_contract_mode, fee_amount_minor,
+      current_unit_id, created_at, updated_at
+    ) VALUES ('manual-close-asset', 'manual-close-upstream', ?, 'GPTD-MANUAL-CLOSE', 'plus',
+              'held_contract', 'unused', 0, 'USD', 'unlimited', 100,
+              'manual-close-unit', ?, ?)
+  `).run(encryptText("GPTD-MANUAL-CLOSE-FULL"), now, now);
+
+  const token = await login();
+  const headers = { authorization: `Bearer ${token}` };
+  const inventory = await app.inject({ method: "GET", url: "/api/admin/spacex-cdk/inventory", headers });
+  const pendingItem = inventory.json().items.find((item) => item.id === "manual-close-asset");
+  assert.equal(pendingItem.canManualClose, true);
+  assert.equal(pendingItem.remoteOrderNo, "DJ-MANUAL-1");
+
+  const denied = await app.inject({
+    method: "POST",
+    url: "/api/admin/spacex-cdk/inventory/manual-close-asset/manual-close",
+    headers,
+    payload: {
+      adminUsername: "admin",
+      adminPassword: "wrong-password",
+      reason: "订单已人工处理，原始 CDK 已使用"
+    }
+  });
+  assert.equal(denied.statusCode, 401);
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = 'manual-close-task'").get().status, "blocked");
+
+  const closed = await app.inject({
+    method: "POST",
+    url: "/api/admin/spacex-cdk/inventory/manual-close-asset/manual-close",
+    headers,
+    payload: {
+      adminUsername: "admin",
+      adminPassword: "test-password",
+      reason: "订单已人工处理，原始 CDK 已使用"
+    }
+  });
+
+  assert.equal(closed.statusCode, 200);
+  assert.equal(db.prepare("SELECT state, upstream_status FROM spacex_cdks WHERE id = 'manual-close-asset'").get().state, "consumed");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = 'manual-close-unit'").get().state, "manually_closed");
+  const task = db.prepare("SELECT status, last_error, canceled_at FROM store_fulfillment_tasks WHERE id = 'manual-close-task'").get();
+  assert.equal(task.status, "canceled");
+  assert.equal(task.last_error, null);
+  assert.ok(task.canceled_at);
+  const audit = db.prepare(`
+    SELECT detail FROM admin_audit_logs
+    WHERE action = 'spacex_cdk.asset.manual_close' AND resource_id = 'manual-close-asset'
+    ORDER BY created_at DESC LIMIT 1
+  `).get();
+  assert.match(audit?.detail || "", /订单已人工处理/);
+  assert.doesNotMatch(audit?.detail || "", /GPTD-MANUAL-CLOSE-FULL/);
 });

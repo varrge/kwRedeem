@@ -15,7 +15,7 @@ import {
   SpaceXCdkClient,
   normalizeActivationResult
 } from "./spacex-cdk.js";
-import { STORE_CDK_ORIGINS } from "./store-fulfillment.js";
+import { STORE_CDK_ORIGINS, STORE_FULFILLMENT_STATUSES } from "./store-fulfillment.js";
 
 const ACTIVE_LIABILITY_STATES = [
   SPACEX_CDK_ASSET_STATES.inventory,
@@ -30,6 +30,14 @@ const PLAN_RANK = Object.freeze({ disabled: 0, plus: 1, pro_5x: 2, pro_20x: 3 })
 const TERMINAL_ACTIVATION_STATES = new Set([
   SPACEX_CDK_ACTIVATION_STATES.completed,
   SPACEX_CDK_ACTIVATION_STATES.failedResolution
+]);
+const MANUALLY_CLOSEABLE_TASK_STATES = new Set([
+  STORE_FULFILLMENT_STATUSES.blocked,
+  STORE_FULFILLMENT_STATUSES.retrying
+]);
+const MANUALLY_CLOSEABLE_UNIT_STATES = new Set([
+  SPACEX_CDK_UNIT_STATES.contractBlocked,
+  SPACEX_CDK_UNIT_STATES.fundingBlocked
 ]);
 
 function nowIso() {
@@ -917,6 +925,86 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     return { recycled: cards.length };
   }
 
+  async function manuallyCloseConsumedAsset(assetId) {
+    const context = db.prepare(`
+      SELECT a.*, u.id AS unit_id, u.task_id, u.state AS unit_state,
+             t.remote_order_no, t.status AS task_status, t.locked_at, t.locked_by
+      FROM spacex_cdks a
+      LEFT JOIN spacex_cdk_units u ON u.id = a.current_unit_id
+      LEFT JOIN store_fulfillment_tasks t ON t.id = u.task_id
+      WHERE a.id = ?
+    `).get(assetId);
+    if (!context) throw errorWithCode("SpaceX CDK 资产不存在", "SPACEX_CDK_ASSET_NOT_FOUND");
+    if (!context.unit_id || !context.task_id) {
+      throw errorWithCode("该 SpaceX CDK 没有关联的自动交付任务", "SPACEX_CDK_MANUAL_CLOSE_TASK_MISSING");
+    }
+    if (!MANUALLY_CLOSEABLE_TASK_STATES.has(context.task_status)
+      || !MANUALLY_CLOSEABLE_UNIT_STATES.has(context.unit_state)) {
+      throw errorWithCode("当前 SpaceX CDK 或交付任务状态不允许人工收尾", "SPACEX_CDK_MANUAL_CLOSE_STATE_INVALID");
+    }
+    if (context.locked_at || context.locked_by) {
+      throw errorWithCode("交付任务正在处理中，请稍后刷新再操作", "SPACEX_CDK_MANUAL_CLOSE_TASK_BUSY");
+    }
+    if (context.current_wrapper_cdkey_id) {
+      throw errorWithCode("该资产已经生成包装 CDK，不能从资产列表人工收尾", "SPACEX_CDK_MANUAL_CLOSE_WRAPPER_EXISTS");
+    }
+    if (db.prepare("SELECT 1 FROM spacex_cdk_activations WHERE spacex_cdk_id = ?").get(context.id)) {
+      throw errorWithCode("该资产已有激活记录，不能从资产列表人工收尾", "SPACEX_CDK_MANUAL_CLOSE_ACTIVATION_EXISTS");
+    }
+
+    let upstream;
+    try {
+      upstream = await client().getCdk(context.upstream_id);
+    } catch (error) {
+      throw errorWithCode("SpaceX CDK 上游状态暂时无法核实", "SPACEX_CDK_MANUAL_CLOSE_VERIFY_FAILED", { cause: error });
+    }
+    if (!upstream || upstream.status !== "consumed" || upstream.plan !== context.plan) {
+      throw errorWithCode("仅能收尾上游已确认 consumed 的同套餐 CDK", "SPACEX_CDK_MANUAL_CLOSE_NOT_CONSUMED");
+    }
+
+    const closedAt = nowIso();
+    db.transaction(() => {
+      const freshTask = db.prepare("SELECT status, locked_at, locked_by FROM store_fulfillment_tasks WHERE id = ?").get(context.task_id);
+      const freshUnit = db.prepare("SELECT state, wrapper_cdkey_id FROM spacex_cdk_units WHERE id = ?").get(context.unit_id);
+      const freshAsset = db.prepare("SELECT current_wrapper_cdkey_id FROM spacex_cdks WHERE id = ?").get(context.id);
+      if (!freshTask || !freshUnit || !freshAsset
+        || !MANUALLY_CLOSEABLE_TASK_STATES.has(freshTask.status)
+        || !MANUALLY_CLOSEABLE_UNIT_STATES.has(freshUnit.state)
+        || freshTask.locked_at || freshTask.locked_by
+        || freshUnit.wrapper_cdkey_id || freshAsset.current_wrapper_cdkey_id) {
+        throw errorWithCode("人工收尾前任务状态已变化，请刷新后重试", "SPACEX_CDK_MANUAL_CLOSE_RACE_LOST");
+      }
+      if (db.prepare("SELECT 1 FROM spacex_cdk_activations WHERE spacex_cdk_id = ?").get(context.id)) {
+        throw errorWithCode("人工收尾前出现了激活记录，请刷新后核对", "SPACEX_CDK_MANUAL_CLOSE_RACE_LOST");
+      }
+      db.prepare(`
+        UPDATE spacex_cdks
+        SET state = ?, upstream_status = 'consumed', last_verified_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(SPACEX_CDK_ASSET_STATES.consumed, closedAt, closedAt, context.id);
+      db.prepare(`
+        UPDATE spacex_cdk_units
+        SET state = ?, last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(SPACEX_CDK_UNIT_STATES.manuallyClosed, closedAt, context.unit_id);
+      db.prepare(`
+        UPDATE store_fulfillment_tasks
+        SET status = ?, next_retry_at = NULL, last_error = NULL, locked_at = NULL, locked_by = NULL,
+            canceled_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(STORE_FULFILLMENT_STATUSES.canceled, closedAt, closedAt, context.task_id);
+    })();
+    return {
+      assetId: context.id,
+      upstreamId: context.upstream_id,
+      taskId: context.task_id,
+      remoteOrderNo: context.remote_order_no,
+      state: SPACEX_CDK_ASSET_STATES.consumed,
+      taskStatus: STORE_FULFILLMENT_STATUSES.canceled,
+      closedAt
+    };
+  }
+
   function activationForOrder(orderId) {
     const row = db.prepare("SELECT * FROM spacex_cdk_activations WHERE redeem_order_id = ?").get(orderId);
     if (!row) return null;
@@ -950,6 +1038,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     reconcileDue,
     applyWebhookEvent,
     reclaimCanceledTask,
+    manuallyCloseConsumedAsset,
     activationForOrder,
     revealAsset
   };

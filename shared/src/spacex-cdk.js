@@ -31,6 +31,7 @@ export const SPACEX_CDK_UNIT_STATES = Object.freeze({
   wrapped: "wrapped",
   fundingBlocked: "funding_blocked",
   contractBlocked: "contract_blocked",
+  manuallyClosed: "manually_closed",
   issuanceUncertain: "issuance_uncertain",
   refundHold: "refund_hold",
   refunded: "refunded"

@@ -103,6 +103,71 @@ test("admin script boots with the phase 4-7 DOM without an authenticated session
   dom.window.close();
 });
 
+test("a consumed blocked SpaceX CDK exposes the audited manual-close action", async () => {
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:4174/",
+    runScripts: "outside-only"
+  });
+  const requests = [];
+  dom.window.fetch = async (url, options = {}) => {
+    const pathname = new URL(String(url)).pathname;
+    requests.push({ pathname, method: options.method || "GET", body: options.body || null });
+    let payload = {};
+    if (pathname === "/api/admin/spacex-cdk/inventory") {
+      payload = {
+        items: [{
+          id: "manual-close-asset",
+          upstreamId: "1589",
+          codePrefix: "GPTD-337125621",
+          plan: "plus",
+          state: "consumed",
+          upstreamStatus: "consumed",
+          fundingContractMode: "unlimited",
+          wrapperPublicKey: null,
+          unitState: "contract_blocked",
+          remoteOrderNo: "DJ-MANUAL-1",
+          canManualClose: true
+        }]
+      };
+    } else if (pathname === "/api/admin/spacex-cdk/inventory/manual-close-asset/manual-close") {
+      payload = { closed: { remoteOrderNo: "DJ-MANUAL-1" } };
+    } else if (pathname === "/api/admin/store-fulfillment/tasks") {
+      payload = { items: [] };
+    } else if (pathname === "/api/admin/spacex-cdk/settings") {
+      payload = { settings: {} };
+    }
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  dom.window.confirm = () => true;
+  dom.window.prompt = () => "订单已人工处理，原始 CDK 已使用";
+  dom.window.eval(app);
+
+  await dom.window.refreshSpaceXCdkInventory();
+  const inventoryText = dom.window.document.querySelector("#spacex-cdk-inventory-list")?.textContent || "";
+  assert.match(inventoryText, /已消耗/);
+  assert.match(inventoryText, /无限授权（资产已消耗）/);
+  assert.match(inventoryText, /未生成（资产已消耗）/);
+  assert.match(inventoryText, /取消自动任务/);
+  assert.doesNotMatch(inventoryText, /CONSUMED/);
+
+  dom.window.document.querySelector("#spacex-cdk-admin-username").value = "admin";
+  dom.window.document.querySelector("#spacex-cdk-admin-password").value = "test-password";
+  await dom.window.manualCloseSpaceXCdk("manual-close-asset");
+  const request = requests.find((item) => item.pathname.endsWith("/manual-close"));
+  assert.deepEqual(request, {
+    pathname: "/api/admin/spacex-cdk/inventory/manual-close-asset/manual-close",
+    method: "POST",
+    body: JSON.stringify({
+      adminUsername: "admin",
+      adminPassword: "test-password",
+      reason: "订单已人工处理，原始 CDK 已使用"
+    })
+  });
+  assert.equal(dom.window.document.querySelector("#spacex-cdk-admin-password").value, "");
+
+  dom.window.close();
+});
+
 test("membership fulfillment states are displayed in Chinese", () => {
   const dom = new JSDOM(html, {
     url: "http://127.0.0.1:4174/",

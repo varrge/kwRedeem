@@ -52,6 +52,8 @@ test("SpaceX CDK client issues one code with a stable idempotency key and author
     feeAmountMinor: 100,
     fundingCapMinor: 2500,
     fundingCurrency: "USD",
+    fundingContractMode: "bounded",
+    fundingSnapshot: null,
     contractValid: true
   });
 });
@@ -69,6 +71,41 @@ test("SpaceX CDK client preserves a returned full code while flagging a missing 
   assert.equal(result.code, "SXC-ONLY-ONCE");
   assert.equal(result.contractValid, false);
   assert.equal(result.fundingCapMinor, null);
+});
+
+test("SpaceX CDK lookup exposes the provider funding contract without treating unlimited as zero liability", async () => {
+  const client = new SpaceXCdkClient({
+    baseUrl: "https://spacex.example.com",
+    apiKey: "secret-key",
+    fetchImpl: async () => jsonResponse({
+      code: 0,
+      data: {
+        list: [{
+          id: 1589,
+          code_prefix: "GPTD-337125621",
+          plan: "plus",
+          status: "unused",
+          fee_amount_minor: 30,
+          fee_currency: "USD",
+          owner_funding_enabled: true,
+          owner_funding_cap_minor: 0,
+          funding_snapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1"
+        }]
+      }
+    })
+  });
+
+  assert.deepEqual(await client.getCdk("1589"), {
+    upstreamId: "1589",
+    plan: "plus",
+    status: "unused",
+    codePrefix: "GPTD-337125621",
+    fundingCapMinor: 0,
+    fundingCurrency: "USD",
+    fundingContractMode: "unlimited",
+    fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1",
+    contractValid: false
+  });
 });
 
 test("SpaceX balance accepts provider precision and floors conservatively to cents", async () => {

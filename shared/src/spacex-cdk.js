@@ -104,6 +104,37 @@ function integerMinor(value) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
+function parseFundingSnapshot(value) {
+  const raw = String(value || "").trim().slice(0, 500);
+  const fields = Object.fromEntries(
+    raw.split(/\s+/)
+      .map((item) => item.split("=", 2))
+      .filter(([key, fieldValue]) => key && fieldValue !== undefined)
+  );
+  return { raw: raw || null, fields };
+}
+
+function readFundingContract(item = {}, envelope = {}) {
+  const fundingCapMinor = integerMinor(item.owner_funding_cap_minor ?? item.funding_cap_minor);
+  const fundingCurrency = String(
+    item.funding_currency || item.currency || item.fee_currency || envelope.funding_currency || envelope.currency || envelope.fee_currency || ""
+  ).trim().toUpperCase() || null;
+  const snapshot = parseFundingSnapshot(item.funding_snapshot ?? envelope.funding_snapshot);
+  const unlimited = [true, 1, "1", "true"].includes(item.owner_funding_unlimited)
+    || snapshot.fields.unlimited_cap === "1"
+    || snapshot.fields.unlimited_cap === "true";
+  const fundingContractMode = unlimited
+    ? "unlimited"
+    : (fundingCapMinor !== null && fundingCapMinor > 0 && fundingCurrency ? "bounded" : "missing");
+  return {
+    fundingCapMinor,
+    fundingCurrency,
+    fundingContractMode,
+    fundingSnapshot: snapshot.raw,
+    contractValid: fundingContractMode === "bounded"
+  };
+}
+
 export function decimalToMinor(value) {
   const raw = String(value ?? "").trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
@@ -214,17 +245,14 @@ export class SpaceXCdkClient {
       });
     }
     const item = issued[0];
-    const fundingCapMinor = integerMinor(item.owner_funding_cap_minor ?? item.funding_cap_minor);
-    const fundingCurrency = String(item.funding_currency || item.currency || data?.currency || "").trim().toUpperCase() || null;
+    const funding = readFundingContract(item, data);
     return {
       upstreamId: String(item.id),
       code: String(item.code),
       codePrefix: String(item.code_prefix || String(item.code).slice(0, 16)),
       plan: String(item.plan || plan),
       feeAmountMinor: integerMinor(item.fee_amount_minor) ?? 0,
-      fundingCapMinor,
-      fundingCurrency,
-      contractValid: fundingCapMinor !== null && Boolean(fundingCurrency)
+      ...funding
     };
   }
 
@@ -246,7 +274,8 @@ export class SpaceXCdkClient {
       upstreamId: String(row.id ?? row.cdk_id),
       plan: String(row.plan || ""),
       status: normalizeStatus(row.status),
-      codePrefix: String(row.code_prefix || "")
+      codePrefix: String(row.code_prefix || ""),
+      ...readFundingContract(row)
     };
   }
 

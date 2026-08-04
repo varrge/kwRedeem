@@ -144,6 +144,34 @@ function operationalErrorSummary(error, fallback) {
   return fallback;
 }
 
+function issuedContractFailure(issued) {
+  if (issued?.upstreamStatus && issued.upstreamStatus !== "unused") {
+    return {
+      code: "SPACEX_CDK_UPSTREAM_NOT_UNUSED",
+      message: `SpaceX CDK 上游状态为 ${issued.upstreamStatus}，禁止自动交付`
+    };
+  }
+  if (issued?.fundingContractMode === "unlimited") {
+    return {
+      code: "SPACEX_CDK_FUNDING_UNLIMITED",
+      message: "SpaceX CDK 使用无限资金授权，禁止按 0 元负债自动交付"
+    };
+  }
+  return {
+    code: "SPACEX_CDK_ISSUE_CONTRACT_INVALID",
+    message: "SpaceX 发码响应及回读记录均缺少有界资金上限或币种"
+  };
+}
+
+function hasBoundedFundingContract(item) {
+  return item?.funding_contract_mode === "bounded"
+    || (
+      item?.funding_contract_mode !== "unlimited"
+      && Number(item?.funding_cap_minor) > 0
+      && Boolean(item?.funding_currency)
+    );
+}
+
 export function createSpaceXCdkService({ db, clientFactory = null, logger = console } = {}) {
   let cachedClient = null;
   let cachedVersion = "";
@@ -215,11 +243,11 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     const balance = await client().getBalance();
     const placeholders = ACTIVE_LIABILITY_STATES.map(() => "?").join(",");
     const assets = db.prepare(`
-      SELECT funding_cap_minor, funding_currency
+      SELECT funding_cap_minor, funding_currency, funding_contract_mode
       FROM spacex_cdks
       WHERE state IN (${placeholders})
     `).all(...ACTIVE_LIABILITY_STATES);
-    const unknownCount = assets.filter((item) => item.funding_cap_minor === null || !item.funding_currency).length;
+    const unknownCount = assets.filter((item) => !hasBoundedFundingContract(item)).length;
     const currencyMismatch = assets.some((item) => item.funding_currency && String(item.funding_currency).toUpperCase() !== balance.currency);
     const liabilityMinor = assets.reduce((sum, item) => sum + Number(item.funding_cap_minor || 0), 0);
     const covered = unknownCount === 0 && !currencyMismatch && balance.balanceMinor >= liabilityMinor;
@@ -303,13 +331,19 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
         return existing;
       }
       const assetId = nanoid(18);
-      const state = issued.contractValid ? SPACEX_CDK_ASSET_STATES.allocated : SPACEX_CDK_ASSET_STATES.heldContract;
+      const failure = issued.contractValid ? null : issuedContractFailure(issued);
+      const state = issued.contractValid
+        ? SPACEX_CDK_ASSET_STATES.allocated
+        : (issued.upstreamStatus && issued.upstreamStatus !== "unused"
+          ? SPACEX_CDK_ASSET_STATES.held
+          : SPACEX_CDK_ASSET_STATES.heldContract);
       db.prepare(`
         INSERT INTO spacex_cdks (
           id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
-          funding_cap_minor, funding_currency, fee_amount_minor, current_unit_id,
+          funding_cap_minor, funding_currency, funding_contract_mode, funding_snapshot,
+          fee_amount_minor, current_unit_id,
           current_wrapper_cdkey_id, last_verified_at, recycled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'unused', ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
       `).run(
         assetId,
         issued.upstreamId,
@@ -317,8 +351,11 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
         issued.codePrefix,
         issued.plan,
         state,
+        issued.upstreamStatus || "unused",
         issued.fundingCapMinor,
         issued.fundingCurrency,
+        issued.fundingContractMode || (issued.contractValid ? "bounded" : "missing"),
+        issued.fundingSnapshot || null,
         issued.feeAmountMinor,
         unit.id,
         createdAt,
@@ -332,7 +369,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
       `).run(
         issued.contractValid ? SPACEX_CDK_UNIT_STATES.allocated : SPACEX_CDK_UNIT_STATES.contractBlocked,
         assetId,
-        issued.contractValid ? null : "SpaceX 发码响应缺少 owner_funding_cap_minor 或币种",
+        failure?.message || null,
         createdAt,
         unit.id
       );
@@ -379,7 +416,30 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     if (issued.plan !== unit.plan) {
       issued.contractValid = false;
     }
-    return persistIssuedAsset(unit, issued);
+    if (!issued.contractValid) {
+      try {
+        const readBack = await client().getCdk(issued.upstreamId);
+        if (readBack) {
+          issued = {
+            ...issued,
+            fundingCapMinor: readBack.fundingCapMinor,
+            fundingCurrency: readBack.fundingCurrency,
+            fundingContractMode: readBack.fundingContractMode,
+            fundingSnapshot: readBack.fundingSnapshot,
+            upstreamStatus: readBack.status || "unused",
+            contractValid: readBack.contractValid && readBack.plan === unit.plan && readBack.status === "unused"
+          };
+        }
+      } catch {
+        // Preserve the only full code below; an unreadable contract must remain blocked.
+      }
+    }
+    const asset = persistIssuedAsset(unit, issued);
+    if (!issued.contractValid) {
+      const failure = issuedContractFailure(issued);
+      throw errorWithCode(failure.message, failure.code);
+    }
+    return asset;
   }
 
   function createWrapper(task, unit, mapping, asset) {
@@ -457,7 +517,14 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
         throw errorWithCode("SpaceX 发码结果不确定，等待超级管理员核对", "SPACEX_CDK_ISSUANCE_UNCERTAIN", { uncertain: true });
       }
       if (unit.state === SPACEX_CDK_UNIT_STATES.contractBlocked) {
-        throw errorWithCode(unit.last_error || "SpaceX 发码契约不完整", "SPACEX_CDK_ISSUE_CONTRACT_INVALID");
+        const blockedAsset = unit.spacex_cdk_id
+          ? db.prepare("SELECT * FROM spacex_cdks WHERE id = ?").get(unit.spacex_cdk_id)
+          : null;
+        const failure = issuedContractFailure(blockedAsset ? {
+          upstreamStatus: blockedAsset.upstream_status,
+          fundingContractMode: blockedAsset.funding_contract_mode
+        } : null);
+        throw errorWithCode(unit.last_error || failure.message, failure.code);
       }
       const mapping = mappingForUnit(task, unit);
       if (!mapping) throw errorWithCode("商城任务缺少 SpaceX 商品映射快照", "SPACEX_CDK_MAPPING_SNAPSHOT_MISSING");

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>测试 SpaceX CDK 自动履约</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+<main>
+  <div class="eyebrow">Lesson 02 · One-order Canary</div>
+  <h1>测试 SpaceX CDK 自动履约</h1>
+  <p class="lede">用一个独立的 Plus 测试商品和一笔数量为 1 的新订单，验证“商城订单 → SpaceX CDK → 91GPTPLUS 包装码 → 玩家激活 → Webhook/轮询完成”的完整链路。</p>
+  <div class="meta"><span class="pill">约 15 分钟</span><span class="pill">会产生一次真实发码服务费</span><span class="pill">仅 Plus</span></div>
+
+  <div class="architecture" aria-label="Canary 流程">
+    <div>独角数卡测试订单<span>数量固定为 1</span></div>
+    <div>SpaceX CDK<span>库存优先，否则发码</span></div>
+    <div>91GPTPLUS 包装码<span>商城只交付这一层</span></div>
+    <div>玩家前台激活<span>Webhook + 轮询对账</span></div>
+  </div>
+
+  <section class="card">
+    <h2>服务器当前状态</h2>
+    <table>
+      <tr><th>项目</th><th>当前值</th></tr>
+      <tr><td>SpaceX CDK 开关</td><td>已启用</td></tr>
+      <tr><td>最高灰度套餐</td><td><code>plus</code></td></tr>
+      <tr><td>API Key / Webhook Secret</td><td>均已保存</td></tr>
+      <tr><td>余额读取</td><td>正常</td></tr>
+      <tr><td>商城连接</td><td>已启用，最近同步成功，30 秒轮询</td></tr>
+      <tr><td>SpaceX 商品映射</td><td><strong>尚未配置</strong></td></tr>
+      <tr><td>SpaceX CDK 库存</td><td>0 张</td></tr>
+    </table>
+    <div class="callout warn">因为库存是 0，第一笔测试订单会真实调用一次 SpaceX 发码并扣发码服务费。创建这笔订单就是本次 Canary 的资金动作，不要同时提交第二笔。</div>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 1</div>
+    <h2>在独角数卡创建专用测试商品</h2>
+    <ol>
+      <li>新建一个只用于 Canary 的商品，例如“SpaceX Plus 自动化测试”。</li>
+      <li>履约方式选择人工交付，让 KaWang 接管交付内容。</li>
+      <li>不要复用正在售卖的 Plus 商品，避免普通客户进入测试。</li>
+      <li>记下商品的 <code>product_id</code>；没有单独 SKU 时使用 <code>sku_id=0</code>。</li>
+    </ol>
+    <label><input type="checkbox" data-lesson-check /> 我已拿到独立测试商品的 product_id</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 2</div>
+    <h2>在 KaWang 后台添加唯一映射</h2>
+    <p>进入 <strong>商城自动发货 → 商品映射</strong>，填写：</p>
+    <table>
+      <tr><th>字段</th><th>填写值</th></tr>
+      <tr><td>商品 ID</td><td>上一步的真实 <code>product_id</code></td></tr>
+      <tr><td>SKU ID</td><td>真实 SKU；没有则填 <code>0</code></td></tr>
+      <tr><td>履约类型</td><td><code>SpaceX CDK 自动激活</code></td></tr>
+      <tr><td>SpaceX 套餐</td><td><code>Plus</code></td></tr>
+      <tr><td>KaWang 站点</td><td>建议选当前启用的 <code>plus91</code></td></tr>
+      <tr><td>前缀</td><td>系统自动锁定为 <code>91GPTPLUS</code></td></tr>
+      <tr><td>状态</td><td>启用</td></tr>
+    </table>
+    <div class="callout safe">映射只影响映射保存后发现的新订单。现有 26 个 blocked 任务不会自动重试，也不会因新增映射突然发码。</div>
+    <label><input type="checkbox" data-lesson-check /> 后台列表显示 SpaceX CDK / plus / 91GPTPLUS</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 3</div>
+    <h2>确认 Webhook 地址</h2>
+    <p>在 SpaceX 对应 API Key 的 Webhook 配置中订阅 <code>gpt_direct.*</code> 和 <code>cdk.*</code>，地址使用：</p>
+    <pre><code>https://apikey.vsakura.top/api/webhooks/spacex-cdk</code></pre>
+    <p>Webhook 是主同步路径；即使偶发漏推，Worker 仍会用结果接口补账。</p>
+    <label><input type="checkbox" data-lesson-check /> Webhook 地址和事件订阅已确认</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 4</div>
+    <h2>提交唯一一笔 Plus 订单</h2>
+    <ol>
+      <li>购买刚才的测试商品，数量必须为 <strong>1</strong>。</li>
+      <li>完成支付，让订单进入待人工履约/履约中状态。</li>
+      <li>等待最多 30 秒，然后刷新 KaWang 的商城履约任务。</li>
+      <li>在本单明确完成或失败以前，不要创建第二笔测试订单。</li>
+    </ol>
+    <p>正常路径是：<code>pending → 发码/分配 → succeeded</code>。商城收到的内容只能包含一个 <code>91GPTPLUS-...</code> 包装码和提交网址，绝不能出现 <code>SXC-...</code> 上游码。</p>
+    <div class="callout danger">若状态是 <code>issuance_uncertain</code> 或“发码结果待核对”，立即停止，不要点击重试；系统故意禁止自动补买。</div>
+    <label><input type="checkbox" data-lesson-check /> 商城只收到了一个 91GPTPLUS 包装码</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 5</div>
+    <h2>核对发码与资金契约</h2>
+    <p>在后台 <strong>SpaceX CDK 资产</strong> 中应看到一条 Plus 记录：</p>
+    <table>
+      <tr><th>字段</th><th>通过标准</th></tr>
+      <tr><td>本地状态</td><td><code>allocated</code> / 已分配</td></tr>
+      <tr><td>上游状态</td><td><code>unused</code></td></tr>
+      <tr><td>包装 CDK</td><td>与商城交付的 <code>91GPTPLUS-...</code> 一致</td></tr>
+      <tr><td>资金上限</td><td>必须存在金额和币种</td></tr>
+      <tr><td>完整 SpaceX CDK</td><td>默认不展示，也不需要查看</td></tr>
+    </table>
+    <div class="callout warn">若显示 <code>contract_blocked</code> / “接口契约不完整”，系统已经安全保存唯一完整码，但不会交付。不要重试或重新购买，把该任务交给人工核对。</div>
+    <label><input type="checkbox" data-lesson-check /> 资产为 allocated，资金上限与币种完整</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 6</div>
+    <h2>用包装码完成玩家激活</h2>
+    <ol>
+      <li>打开商城交付内容中的 KaWang 提交网址。</li>
+      <li>输入 <code>91GPTPLUS-...</code> 包装码并验证。</li>
+      <li>提交目标 ChatGPT 账号的 Session JSON；原始 Session 只在本次请求内使用。</li>
+      <li>等待状态从“正在提交/排队中/开通中”进入“会员开通成功”。</li>
+    </ol>
+    <p>若进入 <code>review</code> 或 <code>pending</code>，页面会显示“等待支付对账”，此时不要重复提交，Webhook 或 Worker 会继续同步。</p>
+    <label><input type="checkbox" data-lesson-check /> 玩家订单最终显示会员开通成功</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 7</div>
+    <h2>用后台证据判定 Canary</h2>
+    <table>
+      <tr><th>检查点</th><th>通过标准</th></tr>
+      <tr><td>商城履约任务</td><td><code>succeeded</code>，数量 1</td></tr>
+      <tr><td>SpaceX 资产</td><td><code>consumed</code></td></tr>
+      <tr><td>SpaceX 激活记录</td><td><code>completed</code></td></tr>
+      <tr><td>玩家订单</td><td><code>succeeded</code></td></tr>
+      <tr><td>敏感信息</td><td>页面、任务和日志都没有完整 SXC 码或原始 Session</td></tr>
+      <tr><td>重复发行</td><td>本订单只产生一条 SpaceX 资产</td></tr>
+    </table>
+    <p>全部通过才算 Plus Canary 成功。不要立刻切换 x5/x20；先把订单号和四处状态保留下来作为验收证据。</p>
+    <label><input type="checkbox" data-lesson-check /> 六项验收标准全部满足</label>
+  </section>
+
+  <section class="card checklist">
+    <h2>Canary 完成度</h2>
+    <div class="progress"><span data-progress></span></div>
+    <p class="muted" data-progress-label>0/7 已完成</p>
+  </section>
+
+  <h2>遇到这些状态就停</h2>
+  <table>
+    <tr><th>状态</th><th>动作</th></tr>
+    <tr><td><code>issuance_uncertain</code></td><td>禁止重试，人工核对上游是否已发码/扣费</td></tr>
+    <tr><td><code>contract_blocked</code></td><td>禁止补买，核对资金上限和币种字段</td></tr>
+    <tr><td><code>funding_blocked</code></td><td>先补足所有未兑换负债，再使用原任务重试</td></tr>
+    <tr><td><code>review</code> / <code>pending</code></td><td>等待对账，不重复提交玩家兑换</td></tr>
+    <tr><td><code>failed_resolution</code></td><td>保持账号绑定，转人工处理</td></tr>
+  </table>
+
+  <h2>主要依据</h2>
+  <ul>
+    <li><a href="../spacexcard-openapi%20(1).md">SpaceX Card OpenAPI 文档</a></li>
+    <li><a href="../docs/adr/0009-wrap-spacex-cdks-for-store-fulfillment.md">KaWang SpaceX CDK 架构决策</a></li>
+    <li><a href="0001-configure-kwmembership-go-worker.html">上一课：旧 Go Worker 运维背景</a></li>
+  </ul>
+  <p class="footer">任何一步与教程不同，都先停下并发送“商城订单号 + 本地中文状态 + 失败码”。不要发送 Session、Token、API Key、完整 SXC 码或卡资料；我可以继续帮你逐步判断。</p>
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

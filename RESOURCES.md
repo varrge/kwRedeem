@@ -2,6 +2,10 @@
 
 ## Knowledge
 
+- [SpaceX Card OpenAPI 文档](./spacexcard-openapi%20(1).md)
+  上游余额、鉴权和状态字段的第一手接口契约。SpaceX CDK Canary 应优先按真实响应与本项目的保守约束核对。
+- [KaWang SpaceX CDK 架构决策](./docs/adr/0009-wrap-spacex-cdks-for-store-fulfillment.md)
+  记录包装码、库存优先、发码不确定、资金负债、玩家激活及退款竞态的项目约束。
 - [kwMembership README](../kwMembership/README.md)
   本项目的真实目录、配置项、自检和自动处理流程。项目配置发生变化时优先以此文件和源码为准。
 - [Go：编译和安装应用](https://go.dev/doc/tutorial/compile-install)

@@ -431,3 +431,106 @@ test("a missing authoritative funding cap preserves the only full code and block
   );
   assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = ?").get(asset.id).state, "held_contract");
 });
+
+test("a missing issuance contract is recovered from the bounded read-after-write record", async () => {
+  configureSpaceX();
+  db.prepare("UPDATE spacex_cdks SET state = 'held' WHERE state IN ('held_contract', 'inventory')").run();
+  const task = addSnapshottedTask({ taskId: "contract-recovered-task", itemId: "contract-recovered-item" });
+  let lookupCount = 0;
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async getBalance() { return { balanceMinor: 100_000, currency: "USD" }; },
+      async issueOne({ plan }) {
+        return {
+          upstreamId: "contract-recovered-upstream",
+          code: "SXC-CONTRACT-RECOVERED-FULL",
+          codePrefix: "SXC-CONTRACT-RECOVERED",
+          plan,
+          feeAmountMinor: 30,
+          fundingCapMinor: null,
+          fundingCurrency: null,
+          fundingContractMode: "missing",
+          fundingSnapshot: null,
+          contractValid: false
+        };
+      },
+      async getCdk(id) {
+        lookupCount += 1;
+        assert.equal(id, "contract-recovered-upstream");
+        return {
+          upstreamId: id,
+          plan: "plus",
+          status: "unused",
+          codePrefix: "SXC-CONTRACT-RECOVERED",
+          fundingCapMinor: 2_100,
+          fundingCurrency: "USD",
+          fundingContractMode: "bounded",
+          fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=0",
+          contractValid: true
+        };
+      }
+    })
+  });
+
+  await service.provisionTask(task);
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE upstream_id = 'contract-recovered-upstream'").get();
+  assert.equal(lookupCount, 1);
+  assert.equal(asset.state, "allocated");
+  assert.equal(asset.funding_cap_minor, 2_100);
+  assert.equal(asset.funding_currency, "USD");
+  assert.equal(asset.funding_contract_mode, "bounded");
+  assert.equal(asset.funding_snapshot, "plan=plus open_and_balance_minor=2100 unlimited_cap=0");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE task_id = ?").get(task.id).state, "wrapped");
+});
+
+test("an unlimited read-after-write funding contract remains blocked instead of becoming zero liability", async () => {
+  configureSpaceX();
+  db.prepare("UPDATE spacex_cdks SET state = 'held' WHERE state IN ('held_contract', 'inventory')").run();
+  const task = addSnapshottedTask({ taskId: "contract-unlimited-task", itemId: "contract-unlimited-item" });
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async getBalance() { return { balanceMinor: 100_000, currency: "USD" }; },
+      async issueOne({ plan }) {
+        return {
+          upstreamId: "contract-unlimited-upstream",
+          code: "SXC-CONTRACT-UNLIMITED-FULL",
+          codePrefix: "SXC-CONTRACT-UNLIMITED",
+          plan,
+          feeAmountMinor: 30,
+          fundingCapMinor: null,
+          fundingCurrency: null,
+          fundingContractMode: "missing",
+          fundingSnapshot: null,
+          contractValid: false
+        };
+      },
+      async getCdk(id) {
+        return {
+          upstreamId: id,
+          plan: "plus",
+          status: "unused",
+          codePrefix: "SXC-CONTRACT-UNLIMITED",
+          fundingCapMinor: 0,
+          fundingCurrency: "USD",
+          fundingContractMode: "unlimited",
+          fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1",
+          contractValid: false
+        };
+      }
+    })
+  });
+
+  await assert.rejects(
+    service.provisionTask(task),
+    (error) => error.code === "SPACEX_CDK_FUNDING_UNLIMITED"
+  );
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE upstream_id = 'contract-unlimited-upstream'").get();
+  assert.equal(asset.state, "held_contract");
+  assert.equal(asset.funding_cap_minor, 0);
+  assert.equal(asset.funding_currency, "USD");
+  assert.equal(asset.funding_contract_mode, "unlimited");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE task_id = ?").get(task.id).state, "contract_blocked");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM cdkeys WHERE store_fulfillment_task_id = ?").get(task.id).count, 0);
+});

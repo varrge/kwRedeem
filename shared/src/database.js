@@ -830,6 +830,8 @@ function createSchema(db) {
       upstream_status TEXT NOT NULL DEFAULT 'unused',
       funding_cap_minor INTEGER,
       funding_currency TEXT,
+      funding_contract_mode TEXT NOT NULL DEFAULT 'missing',
+      funding_snapshot TEXT,
       fee_amount_minor INTEGER NOT NULL DEFAULT 0,
       current_unit_id TEXT,
       current_wrapper_cdkey_id TEXT,
@@ -1401,6 +1403,16 @@ function createSchema(db) {
   ensureColumn(db, "cdkeys", "store_fulfillment_task_id", "TEXT");
   ensureColumn(db, "store_product_mappings", "fulfillment_kind", "TEXT NOT NULL DEFAULT 'manual'");
   ensureColumn(db, "store_product_mappings", "spacex_plan", "TEXT");
+  ensureColumn(db, "spacex_cdks", "funding_contract_mode", "TEXT NOT NULL DEFAULT 'missing'");
+  ensureColumn(db, "spacex_cdks", "funding_snapshot", "TEXT");
+  db.prepare(`
+    UPDATE spacex_cdks
+    SET funding_contract_mode = 'bounded'
+    WHERE funding_contract_mode = 'missing'
+      AND funding_cap_minor IS NOT NULL
+      AND funding_cap_minor > 0
+      AND funding_currency IS NOT NULL
+  `).run();
   ensureColumn(db, "redeem_orders", "site_id", "TEXT");
   ensureColumn(db, "redeem_orders", "abandon_remaining_time", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "redeem_orders", "extension_delivery_status", "TEXT");

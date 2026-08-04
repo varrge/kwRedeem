@@ -2272,8 +2272,14 @@ function serializeStoreFulfillmentSettings(row) {
 function serializeSpaceXCdkSettings(row) {
   const liability = db.prepare(`
     SELECT COUNT(*) AS count,
-           COALESCE(SUM(CASE WHEN funding_cap_minor IS NULL THEN 0 ELSE funding_cap_minor END), 0) AS liability_minor,
-           SUM(CASE WHEN funding_cap_minor IS NULL OR funding_currency IS NULL THEN 1 ELSE 0 END) AS unknown_count
+           COALESCE(SUM(CASE
+             WHEN funding_contract_mode = 'bounded'
+               OR (funding_contract_mode <> 'unlimited' AND funding_cap_minor > 0 AND funding_currency IS NOT NULL)
+             THEN funding_cap_minor ELSE 0 END), 0) AS liability_minor,
+           SUM(CASE
+             WHEN funding_contract_mode = 'bounded'
+               OR (funding_contract_mode <> 'unlimited' AND funding_cap_minor > 0 AND funding_currency IS NOT NULL)
+             THEN 0 ELSE 1 END) AS unknown_count
     FROM spacex_cdks
     WHERE state IN ('inventory', 'allocated', 'claimed', 'pending', 'refund_hold', 'held_contract')
   `).get();
@@ -6855,6 +6861,10 @@ app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (
       upstreamStatus: item.upstream_status,
       fundingCapMinor: item.funding_cap_minor,
       fundingCurrency: item.funding_currency,
+      fundingContractMode: item.funding_contract_mode === "bounded"
+        || (item.funding_contract_mode !== "unlimited" && Number(item.funding_cap_minor) > 0 && item.funding_currency)
+        ? "bounded"
+        : (item.funding_contract_mode || "missing"),
       feeAmountMinor: item.fee_amount_minor,
       wrapperPublicKey: item.wrapper_public_key || null,
       taskId: item.task_id || null,

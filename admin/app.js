@@ -1655,7 +1655,7 @@ async function refreshSpaceXCdkSettings() {
     ? "尚未读取余额"
     : `余额 ${(Number(settings.lastBalanceMinor) / 100).toFixed(2)} ${settings.balanceCurrency || ""}`;
   const liability = `未兑换负债 ${(Number(settings.outstandingLiabilityMinor || 0) / 100).toFixed(2)} ${settings.balanceCurrency || ""}（${settings.outstandingCount || 0} 张）`;
-  const unknown = settings.unknownLiabilityCount ? `；${settings.unknownLiabilityCount} 张缺少权威资金上限` : "";
+  const unknown = settings.unknownLiabilityCount ? `；${settings.unknownLiabilityCount} 张缺少有界资金契约` : "";
   setHint(refs.spaceXCdkSettingsStatus, `${settings.enabled ? "履约已启用" : "履约已停用"}；${balance}；${liability}${unknown}${settings.lastBalanceError ? `；错误：${settings.lastBalanceError}` : ""}`);
 }
 
@@ -1665,7 +1665,11 @@ async function refreshSpaceXCdkInventory() {
     { label: "SpaceX 资产", render: (item) => `<code>${escapeHtml(item.codePrefix)}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamId)}</span>` },
     { label: "套餐", render: (item) => escapeHtml(item.plan) },
     { label: "本地 / 上游状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.upstreamStatus || "-")}</span>` },
-    { label: "资金上限", render: (item) => item.fundingCapMinor == null ? `<span style="color:var(--error)">缺失</span>` : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}` },
+    { label: "资金上限", render: (item) => item.fundingContractMode === "unlimited"
+      ? `<span style="color:var(--error)">无限授权（已拦截）</span>`
+      : (item.fundingContractMode !== "bounded" || item.fundingCapMinor == null
+        ? `<span style="color:var(--error)">缺少有界额度</span>`
+        : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}`) },
     { label: "包装 CDK", render: (item) => item.wrapperPublicKey ? `<code>${escapeHtml(item.wrapperPublicKey)}</code>` : "库存待分配" },
     { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='revealSpaceXCdk(${JSON.stringify(item.id)})'>验密查看并复制</button>` }
   ], payload.items || [], "暂无 SpaceX CDK 资产");

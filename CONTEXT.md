@@ -208,8 +208,12 @@ The sum of the immutable `owner_funding_cap_minor` snapshots for SpaceX CDKs tha
 _Avoid_: Counting only currently activating codes, using the eventual actual charge as the pre-sale commitment, ignoring reusable inventory
 
 **Authoritative SpaceX Funding Cap**:
-The `owner_funding_cap_minor` and currency returned by SpaceX for an individually issued CDK and stored as an immutable local snapshot. Their presence is a hard issuance contract; KaWang blocks `spacex_cdk` fulfillment when either value is absent rather than estimating future liability.
-_Avoid_: Locally guessed caps, mutable plan defaults as historical truth, accepting a fee-only issuance response
+The strictly positive, bounded `owner_funding_cap_minor` and currency returned by SpaceX for an individually issued CDK, either in the one-time issuance response or its immediate read-after-write list record, and stored as an immutable local snapshot. Their presence is a hard issuance contract; KaWang blocks `spacex_cdk` fulfillment when either value is absent rather than estimating future liability.
+_Avoid_: Locally guessed caps, mutable plan defaults as historical truth, accepting a fee-only issuance response, treating an unlimited zero cap as zero liability
+
+**Unbounded SpaceX Funding Authorization**:
+A SpaceX CDK contract whose read-after-write record reports `owner_funding_cap_minor=0` together with `unlimited_cap=1`. KaWang records and labels this provider state explicitly but blocks buyer wrapper creation because the outstanding liability has no authoritative finite bound.
+_Avoid_: Reporting the contract as merely missing, summing it as zero liability, deriving a cap from a pricing snapshot, automatically delivering the CDK
 
 **Funding-Covered SpaceX Fulfillment**:
 A store fulfillment for which the current SpaceX account balance, after subtracting outstanding funding liabilities and the new issuance service fee, still covers the new CDK's funding cap. If not, KaWang blocks new issuance and delivery so funds remain available for previously sold codes.

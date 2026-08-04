@@ -41,6 +41,7 @@ tests/*
 !tests/spacex-cdk-client.test.js
 !tests/spacex-cdk-flow.test.js
 !tests/spacex-cdk-api.test.js
+!tests/system-update.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

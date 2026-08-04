@@ -20,6 +20,7 @@ import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
 import { createMembershipPaymentService } from "./membership-payment.js";
+import { buildUpdateProcessEnv } from "./system-update.js";
 import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
 import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
 import { persistManagedCardTransactions } from "../../shared/src/membership-reconciliation.js";
@@ -453,9 +454,11 @@ function startUpdateTask(actor) {
 
   appendUpdateLog(`管理员 ${actor} 触发在线更新`);
 
+  const updateProcessEnv = buildUpdateProcessEnv();
+  appendUpdateLog(`更新任务使用 Node ${process.version}：${process.execPath}`);
   const child = spawn("bash", ["scripts/update.sh"], {
     cwd: projectRoot,
-    env: process.env,
+    env: updateProcessEnv,
     stdio: ["ignore", "pipe", "pipe"]
   });
 

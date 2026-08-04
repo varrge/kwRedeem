@@ -71,6 +71,18 @@ test("SpaceX CDK client preserves a returned full code while flagging a missing 
   assert.equal(result.fundingCapMinor, null);
 });
 
+test("SpaceX balance accepts provider precision and floors conservatively to cents", async () => {
+  const client = new SpaceXCdkClient({
+    baseUrl: "https://spacex.example.com",
+    apiKey: "secret-key",
+    fetchImpl: async () => jsonResponse({
+      code: 0,
+      data: { balance: 128.12345678901234, currency: "USD" }
+    })
+  });
+  assert.deepEqual(await client.getBalance(), { balanceMinor: 12812, currency: "USD" });
+});
+
 test("SpaceX CDK issuance treats a lost response as uncertain", async () => {
   const client = new SpaceXCdkClient({
     baseUrl: "https://spacex.example.com",

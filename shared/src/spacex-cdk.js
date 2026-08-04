@@ -112,6 +112,23 @@ export function decimalToMinor(value) {
   return Number.isSafeInteger(result) ? result : null;
 }
 
+export function decimalToMinorFloor(value) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
+  if (!match) return null;
+  const whole = match[1];
+  const fraction = match[2] || "";
+  const exponent = Number(match[3] || 0);
+  if (!Number.isSafeInteger(exponent)) return null;
+  const digits = `${whole}${fraction}`;
+  const shift = exponent - fraction.length + 2;
+  const minorDigits = shift >= 0
+    ? `${digits}${"0".repeat(shift)}`
+    : digits.slice(0, Math.max(0, digits.length + shift));
+  const minor = BigInt(minorDigits || "0");
+  return minor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(minor) : null;
+}
+
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -170,7 +187,7 @@ export class SpaceXCdkClient {
 
   async getBalance() {
     const { data } = await this.request("/openapi/v1/balance", { authenticated: true });
-    const balanceMinor = decimalToMinor(data?.balance);
+    const balanceMinor = decimalToMinorFloor(data?.balance);
     const currency = String(data?.currency || "").trim().toUpperCase();
     if (balanceMinor === null || !currency) {
       throw new SpaceXCdkApiError("SpaceX 余额响应缺少金额或币种", { code: "SPACEX_CDK_BALANCE_CONTRACT_INVALID" });

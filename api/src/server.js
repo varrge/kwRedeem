@@ -52,7 +52,7 @@ import {
   STORE_FULFILLMENT_STATUSES,
   normalizeDujiaoBaseUrl
 } from "../../shared/src/store-fulfillment.js";
-import { createSpaceXCdkService } from "../../shared/src/spacex-cdk-service.js";
+import { createSpaceXCdkService, readSpaceXCdkSessionCredential } from "../../shared/src/spacex-cdk-service.js";
 import { verifyFreshAdminCredentials } from "../../shared/src/membership-rollout.js";
 import {
   SPACEX_CDK_ASSET_STATES,
@@ -890,7 +890,13 @@ function parseSessionPayload(rawValue) {
     parsed.account?.id,
     parsed.account?.email
   ];
-  if (!loginEvidence.some((value) => typeof value === "string" && value.trim())) {
+  let hasSessionCookie = false;
+  try {
+    hasSessionCookie = Boolean(readSpaceXCdkSessionCredential(parsed));
+  } catch {
+    // Other fulfillment modes may still use accessToken or account identity evidence.
+  }
+  if (!hasSessionCookie && !loginEvidence.some((value) => typeof value === "string" && value.trim())) {
     throw new Error("未检测到登录信息，请先登录 ChatGPT，再复制完整的 Session JSON");
   }
 
@@ -2127,7 +2133,7 @@ async function verifyCdkeyForPublic(publicKey) {
 
   if (spaceXCdkProcessing) {
     canRedeem = key.status === cdkeyStatuses.active && key.spacex_state === "allocated";
-    remoteMessage = canRedeem ? "SpaceX CDK 已就绪，可提交 Session 自动激活" : "SpaceX CDK 当前不可激活";
+    remoteMessage = canRedeem ? "自动化已就绪，可提交 Session 自动激活" : "自动化当前不可激活";
   } else if (manualProcessing) {
     canRedeem = key.status === cdkeyStatuses.active;
     remoteMessage = "手动处理卡密，无需远端原始卡密校验";
@@ -6653,7 +6659,10 @@ app.post("/api/public/redeem", async (request, reply) => {
     if (extensionDeliveryPending) extensionDelivery.publishSessionAvailable(result.orderNo);
     return response;
   } catch (error) {
-    return reply.code(400).send({ message: error.message || "提交失败" });
+    const publicMessage = String(error?.message || "提交失败")
+      .replaceAll("SpaceX CDK", "自动化")
+      .replaceAll("SpaceX", "自动化");
+    return reply.code(400).send({ message: publicMessage });
   }
 });
 

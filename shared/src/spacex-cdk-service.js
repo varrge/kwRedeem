@@ -78,16 +78,47 @@ function planAllowed(rolloutPlan, plan) {
   return (PLAN_RANK[rolloutPlan] || 0) >= (PLAN_RANK[plan] || Number.POSITIVE_INFINITY);
 }
 
-function readSessionCredential(session) {
-  const value = [
-    session?.accessToken,
-    session?.access_token,
-    session?.sessionToken,
-    session?.session_token,
-    session?.token
-  ].find((item) => typeof item === "string" && item.trim());
-  if (!value) throw new Error("Session 缺少可用于 SpaceX 预检的登录令牌");
-  return value.trim();
+function readNamedSessionCookie(entries, baseName) {
+  const direct = entries.find(([name, value]) => name === baseName && typeof value === "string" && value.trim());
+  if (direct) return direct[1].trim();
+  const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = entries
+    .map(([name, value]) => {
+      const match = String(name).match(new RegExp(`^${escaped}\\.(\\d+)$`));
+      return match && typeof value === "string" && value.trim()
+        ? { index: Number(match[1]), value: value.trim() }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.index - right.index);
+  if (!parts.length || !parts.every((part, index) => part.index === index)) return "";
+  return parts.map((part) => part.value).join("");
+}
+
+export function readSpaceXCdkSessionCredential(session) {
+  const sessionToken = [session?.sessionToken, session?.session_token]
+    .find((item) => typeof item === "string" && item.trim());
+  if (sessionToken) return sessionToken.trim();
+
+  const entries = Object.entries(session && typeof session === "object" ? session : {});
+  const cookies = session?.cookies;
+  if (cookies && typeof cookies === "object" && !Array.isArray(cookies)) {
+    entries.push(...Object.entries(cookies));
+  } else if (Array.isArray(cookies)) {
+    entries.push(...cookies.map((item) => [item?.name, item?.value]));
+  }
+  for (const cookieText of [session?.cookie, typeof cookies === "string" ? cookies : ""]) {
+    if (typeof cookieText !== "string") continue;
+    entries.push(...cookieText.split(";").map((item) => {
+      const separator = item.indexOf("=");
+      return separator > 0 ? [item.slice(0, separator).trim(), item.slice(separator + 1).trim()] : ["", ""];
+    }));
+  }
+  for (const name of ["__Secure-next-auth.session-token", "next-auth.session-token"]) {
+    const value = readNamedSessionCookie(entries, name);
+    if (value) return value;
+  }
+  throw new Error("自动化激活需要 Session Cookie；请提交包含 sessionToken 或 __Secure-next-auth.session-token 的完整 Session JSON，不能使用 accessToken");
 }
 
 function accountIdentity(session, preflight) {
@@ -748,7 +779,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     if (wrapper.status !== cdkeyStatuses.active || asset.state !== SPACEX_CDK_ASSET_STATES.allocated) {
       throw new Error("当前卡密状态不可兑换");
     }
-    const credential = readSessionCredential(session);
+    const credential = readSpaceXCdkSessionCredential(session);
     const deviceId = `kawang-${nanoid(24)}`;
     const upstreamCode = decryptText(asset.code_encrypted);
     const preview = await client().preview({ code: upstreamCode, deviceId });

@@ -15,16 +15,28 @@ process.env.KAWANG_SKIP_LISTEN = "1";
 const { getDb } = await import("../shared/src/database.js");
 const { encryptText, decryptText } = await import("../shared/src/secure.js");
 const db = getDb();
+const sessionAccessTokenFixture = "RAW-ACCESS-TOKEN-MUST-NOT-BE-SENT";
+const sessionCookieFixture = "RAW-SESSION-COOKIE-MUST-NOT-PERSIST";
 
 const previousFetch = globalThis.fetch;
-globalThis.fetch = async (url) => {
+globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
   const response = (data) => new Response(JSON.stringify({ code: 200, data }), {
     status: 200,
     headers: { "content-type": "application/json" }
   });
   if (parsed.pathname === "/api/v1/cdk/preview") return response({ redemption_token: "redemption-token", plan: "plus" });
-  if (parsed.pathname === "/api/v1/cdk/preflight") return response({ preflight_token: "preflight-token", account_id: "account-1" });
+  if (parsed.pathname === "/api/v1/cdk/preflight") {
+    const body = JSON.parse(String(options.body || "{}"));
+    if (body?.credential?.session === sessionAccessTokenFixture) {
+      return new Response(JSON.stringify({
+        code: 400,
+        message: "不能使用 Access Token，请填写 __Secure-next-auth.session-token 或包含 sessionToken 的完整 Session JSON"
+      }), { status: 400, headers: { "content-type": "application/json" } });
+    }
+    assert.equal(body?.credential?.session, sessionCookieFixture);
+    return response({ preflight_token: "preflight-token", account_id: "account-1" });
+  }
   if (parsed.pathname === "/api/v1/cdk/redeem") return response({ order_id: "upstream-order-1", status: "queued", stage: "queued" });
   if (parsed.pathname === "/openapi/v1/balance") return response({ balance: 100, currency: "USD" });
   if (parsed.pathname === "/openapi/v1/gpt-direct/cdks") {
@@ -169,6 +181,12 @@ test("SpaceX store mapping forces the canonical plan prefix", async () => {
 });
 
 test("public SpaceX activation never persists the raw Session and a signed Webhook completes it idempotently", async () => {
+  db.prepare(`
+    UPDATE spacex_cdk_settings
+    SET base_url = 'https://spacex.example.com', api_key_encrypted = ?, webhook_secret_encrypted = ?,
+        updated_at = ?, updated_by = 'test'
+    WHERE id = 'default'
+  `).run(encryptText("api-key"), encryptText("webhook-secret"), new Date().toISOString());
   seedWrapper();
   const verified = await app.inject({
     method: "POST",
@@ -179,21 +197,29 @@ test("public SpaceX activation never persists the raw Session and a signed Webho
   assert.equal(verified.json().processingMode, "spacex_cdk");
   assert.equal(verified.json().spacexPlan, "plus");
   assert.equal(verified.json().canRedeem, true);
+  assert.equal(verified.json().remoteMessage, "自动化已就绪，可提交 Session 自动激活");
+  assert.doesNotMatch(verified.json().remoteMessage, /SpaceX/);
 
-  const rawSecret = "RAW-SESSION-MUST-NOT-PERSIST";
   const redeemed = await app.inject({
     method: "POST",
     url: "/api/public/redeem",
     payload: {
       publicKey: "91GPTPLUS-API1234567",
-      sessionPayload: JSON.stringify({ accessToken: rawSecret, user: { id: "account-1", email: "player@example.com" } })
+      sessionPayload: JSON.stringify({
+        accessToken: sessionAccessTokenFixture,
+        sessionToken: sessionCookieFixture,
+        user: { id: "account-1", email: "player@example.com" }
+      })
     }
   });
+  assert.doesNotMatch(redeemed.json().message || "", /不能使用 Access Token/);
   assert.equal(redeemed.statusCode, 200);
   assert.equal(redeemed.json().processingMode, "spacex_cdk");
   const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
   assert.deepEqual(JSON.parse(decryptText(order.session_payload)), { ephemeral: true });
-  assert.doesNotMatch(JSON.stringify(db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(order.id)), new RegExp(rawSecret));
+  const persistedOrder = JSON.stringify(db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(order.id));
+  assert.doesNotMatch(persistedOrder, new RegExp(sessionAccessTokenFixture));
+  assert.doesNotMatch(persistedOrder, new RegExp(sessionCookieFixture));
 
   const event = JSON.stringify({
     event_id: "event-1",

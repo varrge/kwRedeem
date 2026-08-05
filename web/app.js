@@ -251,7 +251,22 @@ function hasSessionLoginEvidence(sessionData) {
     sessionData?.account?.id,
     sessionData?.account?.email
   ];
-  return candidates.some((value) => typeof value === "string" && value.trim());
+  const cookieObject = sessionData?.cookies && typeof sessionData.cookies === "object" && !Array.isArray(sessionData.cookies)
+    ? sessionData.cookies
+    : {};
+  const cookieCandidates = [
+    sessionData?.["__Secure-next-auth.session-token"],
+    sessionData?.["next-auth.session-token"],
+    cookieObject["__Secure-next-auth.session-token"],
+    cookieObject["next-auth.session-token"],
+    sessionData?.cookie,
+    typeof sessionData?.cookies === "string" ? sessionData.cookies : "",
+    ...(Array.isArray(sessionData?.cookies) ? sessionData.cookies.map((item) => item?.value) : []),
+    ...Object.entries(sessionData || {})
+      .filter(([key]) => /^(__Secure-)?next-auth\.session-token\.\d+$/.test(key))
+      .map(([, value]) => value)
+  ];
+  return [...candidates, ...cookieCandidates].some((value) => typeof value === "string" && value.trim());
 }
 
 function validateSessionForSiteSlug(siteSlug, sessionData) {
@@ -327,7 +342,7 @@ function renderVerifyResult(payload) {
         <div class="result-item"><span>本地状态</span><strong>${renderStatusText(payload.status)}</strong></div>
         <div class="result-item"><span>远端校验</span><strong>${escapeHtml(verifyMessage)}</strong></div>
         <div class="result-item"><span>可兑换</span><strong>${payload.canRedeem ? "是" : "否"}</strong></div>
-        ${payload.processingMode === "spacex_cdk" ? `<div class="result-item"><span>激活方式</span><strong>SpaceX CDK 自动激活</strong></div>` : ""}
+        ${payload.processingMode === "spacex_cdk" ? `<div class="result-item"><span>激活方式</span><strong>自动化激活</strong></div>` : ""}
         ${payload.spacexPlan ? `<div class="result-item"><span>会员套餐</span><strong>${escapeHtml({ plus: "Plus", pro_5x: "Pro x5", pro_20x: "Pro x20" }[payload.spacexPlan] || payload.spacexPlan)}</strong></div>` : ""}
         <div class="result-item"><span>库存等级</span><strong>${escapeHtml(getStockLevelLabel(payload.stockLevel))}</strong></div>
       </div>
@@ -352,7 +367,7 @@ function renderRedeemSuccess(payload) {
 
   let statusHint;
   if (spacexActivation) {
-    statusHint = spacexActivation.message || spacexActivation.stateText || "SpaceX 会员状态正在同步。";
+    statusHint = spacexActivation.message || spacexActivation.stateText || "会员状态正在同步。";
   } else if (manualProcessing) {
     statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
   } else if (hasLiveTask) {
@@ -383,7 +398,7 @@ function renderRedeemSuccess(payload) {
       <div class="result-grid">
         <div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo)}</strong></div>
         ${manualProcessing ? `<div class="result-item"><span>处理方式</span><strong>人工处理${payload.manualType ? ` / ${escapeHtml(payload.manualType)}` : ""}</strong></div>` : ""}
-        ${spacexActivation ? `<div class="result-item"><span>处理方式</span><strong>SpaceX CDK 自动激活</strong></div>` : ""}
+        ${spacexActivation ? `<div class="result-item"><span>处理方式</span><strong>自动化激活</strong></div>` : ""}
         ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
         ${spacexActivation?.state ? `<div class="result-item"><span>激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
         <div class="result-item"><span>实时任务状态</span><strong>${renderStatusText(liveStatus)}</strong></div>
@@ -421,11 +436,11 @@ function renderOrderResult(payload) {
         <div class="result-item"><span>重试次数</span><strong>${escapeHtml(job.attemptCount ?? 0)}</strong></div>
         <div class="result-item"><span>处理进度</span><strong>${liveProgress != null ? `${escapeHtml(liveProgress)}%` : "-"}</strong></div>
         <div class="result-item"><span>用户邮箱</span><strong>${escapeHtml(payload.sessionPreview?.email || "-")}</strong></div>
-        ${spacexActivation ? `<div class="result-item"><span>SpaceX 激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
+        ${spacexActivation ? `<div class="result-item"><span>自动化激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
         ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
         <div class="result-item"><span>覆盖提交</span><strong>${payload.abandonRemainingTime ? "是" : "否"}</strong></div>
         <div class="result-item result-item-wide"><span>当前阶段</span><strong>${escapeHtml(payload.liveStage || payload.liveMessage || "-")}</strong></div>
-        ${spacexActivation?.message ? `<div class="result-item result-item-wide"><span>SpaceX 处理说明</span><strong>${escapeHtml(spacexActivation.message)}</strong></div>` : ""}
+        ${spacexActivation?.message ? `<div class="result-item result-item-wide"><span>自动化处理说明</span><strong>${escapeHtml(spacexActivation.message)}</strong></div>` : ""}
         ${payload.cdkeyStatus ? `<div class="result-item"><span>卡密状态</span><strong>${renderStatusText(payload.cdkeyStatus)}</strong></div>` : ""}
       </div>
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}

@@ -11,7 +11,7 @@ process.env.APP_URL = "https://key.example.com";
 
 const { getDb } = await import("../shared/src/database.js");
 const { encryptText, decryptText } = await import("../shared/src/secure.js");
-const { createSpaceXCdkService } = await import("../shared/src/spacex-cdk-service.js");
+const { createSpaceXCdkService, readSpaceXCdkSessionCredential } = await import("../shared/src/spacex-cdk-service.js");
 const { createStoreFulfillmentRunner } = await import("../shared/src/store-fulfillment-runner.js");
 const { SpaceXCdkApiError } = await import("../shared/src/spacex-cdk.js");
 
@@ -25,6 +25,24 @@ after(() => {
 function nowIso() {
   return new Date().toISOString();
 }
+
+test("SpaceX activation prefers a Session Cookie and joins complete cookie chunks", () => {
+  assert.equal(readSpaceXCdkSessionCredential({
+    accessToken: "must-not-win",
+    sessionToken: "session-cookie-wins"
+  }), "session-cookie-wins");
+  assert.equal(readSpaceXCdkSessionCredential({
+    "__Secure-next-auth.session-token.1": "part-two",
+    "__Secure-next-auth.session-token.0": "part-one"
+  }), "part-onepart-two");
+  assert.equal(readSpaceXCdkSessionCredential({
+    cookies: [{ name: "__Secure-next-auth.session-token", value: "cookie-array-value" }]
+  }), "cookie-array-value");
+  assert.throws(
+    () => readSpaceXCdkSessionCredential({ accessToken: "access-token-only" }),
+    /不能使用 accessToken/
+  );
+});
 
 function configureSpaceX() {
   db.prepare(`
@@ -234,7 +252,7 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
   const service = createSpaceXCdkService({ db, clientFactory: () => fakeClient });
   const response = await service.activate({
     publicKey: wrapper.public_key,
-    session: { accessToken: "RAW-SESSION-SECRET", user: { id: "acct-123", email: "player@example.com" } },
+    session: { sessionToken: "RAW-SESSION-SECRET", user: { id: "acct-123", email: "player@example.com" } },
     customerIp: "127.0.0.1"
   });
   assert.equal(response.processingMode, "spacex_cdk");

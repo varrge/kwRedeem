@@ -51,6 +51,7 @@ test("SpaceX CDK client issues one code with a stable idempotency key and author
     plan: "plus",
     feeAmountMinor: 100,
     fundingCapMinor: 2500,
+    fundingLiabilityMinor: 2500,
     fundingCurrency: "USD",
     fundingContractMode: "bounded",
     fundingSnapshot: null,
@@ -101,11 +102,38 @@ test("SpaceX CDK lookup exposes the provider funding contract without treating u
     status: "unused",
     codePrefix: "GPTD-337125621",
     fundingCapMinor: 0,
+    fundingLiabilityMinor: 2100,
     fundingCurrency: "USD",
     fundingContractMode: "unlimited",
     fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1",
     contractValid: false
   });
+});
+
+test("SpaceX CDK lookup rejects an unlimited snapshot whose plan does not match the asset", async () => {
+  const client = new SpaceXCdkClient({
+    baseUrl: "https://spacex.example.com",
+    apiKey: "secret-key",
+    fetchImpl: async () => jsonResponse({
+      code: 0,
+      data: {
+        list: [{
+          id: 1592,
+          code_prefix: "GPTD-MISMATCH",
+          plan: "plus",
+          status: "unused",
+          fee_currency: "USD",
+          owner_funding_cap_minor: 0,
+          funding_snapshot: "plan=pro_20x open_and_balance_minor=2100 unlimited_cap=1"
+        }]
+      }
+    })
+  });
+
+  const result = await client.getCdk("1592");
+  assert.equal(result.fundingContractMode, "unlimited");
+  assert.equal(result.fundingLiabilityMinor, null);
+  assert.equal(result.contractValid, false);
 });
 
 test("SpaceX balance accepts provider precision and floors conservatively to cents", async () => {

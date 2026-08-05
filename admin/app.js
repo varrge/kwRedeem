@@ -68,6 +68,7 @@ const refs = {
   spaceXCdkWebhookSecret: document.querySelector("#spacex-cdk-webhook-secret"),
   spaceXCdkRolloutPlan: document.querySelector("#spacex-cdk-rollout-plan"),
   spaceXCdkEnabled: document.querySelector("#spacex-cdk-enabled"),
+  spaceXCdkUnlimitedFundingPolicy: document.querySelector("#spacex-cdk-unlimited-funding-policy"),
   spaceXCdkAdminUsername: document.querySelector("#spacex-cdk-admin-username"),
   spaceXCdkAdminPassword: document.querySelector("#spacex-cdk-admin-password"),
   spaceXCdkTestBtn: document.querySelector("#spacex-cdk-test-btn"),
@@ -1652,13 +1653,17 @@ async function refreshSpaceXCdkSettings() {
   refs.spaceXCdkWebhookSecret.placeholder = settings.hasWebhookSecret ? "已保存；留空保持" : "尚未配置";
   refs.spaceXCdkRolloutPlan.value = settings.rolloutPlan || "disabled";
   refs.spaceXCdkEnabled.value = settings.enabled ? "true" : "false";
+  refs.spaceXCdkUnlimitedFundingPolicy.value = settings.unlimitedFundingPolicy || "block";
   refs.spaceXCdkAdminPassword.value = "";
   const balance = settings.lastBalanceMinor == null
     ? "尚未读取余额"
     : `余额 ${(Number(settings.lastBalanceMinor) / 100).toFixed(2)} ${settings.balanceCurrency || ""}`;
   const liability = `未兑换负债 ${(Number(settings.outstandingLiabilityMinor || 0) / 100).toFixed(2)} ${settings.balanceCurrency || ""}（${settings.outstandingCount || 0} 张）`;
-  const unknown = settings.unknownLiabilityCount ? `；${settings.unknownLiabilityCount} 张缺少有界资金契约` : "";
-  setHint(refs.spaceXCdkSettingsStatus, `${settings.enabled ? "履约已启用" : "履约已停用"}；${balance}；${liability}${unknown}${settings.lastBalanceError ? `；错误：${settings.lastBalanceError}` : ""}`);
+  const unknown = settings.unknownLiabilityCount ? `；${settings.unknownLiabilityCount} 张缺少可记账资金契约` : "";
+  const policy = settings.unlimitedFundingPolicy === "snapshot_budget"
+    ? "；无限授权按快照金额记本地负债（上游仍为无限授权）"
+    : "；无限授权已拦截";
+  setHint(refs.spaceXCdkSettingsStatus, `${settings.enabled ? "履约已启用" : "履约已停用"}；${balance}；${liability}${unknown}${policy}${settings.lastBalanceError ? `；错误：${settings.lastBalanceError}` : ""}`);
 }
 
 async function refreshSpaceXCdkInventory() {
@@ -1667,17 +1672,20 @@ async function refreshSpaceXCdkInventory() {
     { label: "SpaceX 资产", render: (item) => `<code>${escapeHtml(item.codePrefix)}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamId)}</span>` },
     { label: "套餐", render: (item) => escapeHtml(item.plan) },
     { label: "本地 / 上游状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.upstreamStatus || "-")}</span>` },
-    { label: "资金上限", render: (item) => item.fundingContractMode === "unlimited"
+    { label: "资金上限", render: (item) => item.fundingContractMode === "snapshot_budgeted"
+      ? `<span style="color:var(--warning)">本地预算 ${escapeHtml((Number(item.fundingLiabilityMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}（上游无限）</span>`
+      : (item.fundingContractMode === "unlimited"
       ? (item.state === "consumed" ? "无限授权（资产已消耗）" : `<span style="color:var(--error)">无限授权（已拦截）</span>`)
       : (item.fundingContractMode !== "bounded" || item.fundingCapMinor == null
         ? `<span style="color:var(--error)">缺少有界额度</span>`
-        : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}`) },
+        : `${escapeHtml((Number(item.fundingCapMinor) / 100).toFixed(2))} ${escapeHtml(item.fundingCurrency || "")}`)) },
     { label: "包装 CDK", render: (item) => item.wrapperPublicKey
       ? `<code>${escapeHtml(item.wrapperPublicKey)}</code>`
       : (item.unitState === "manually_closed" ? "未生成（已人工收尾）" : (item.state === "consumed" ? "未生成（资产已消耗）" : "库存待分配")) },
     { label: "操作", render: (item) => `
       <div class="actions-row">
         <button class="ghost-btn small" type="button" onclick='revealSpaceXCdk(${JSON.stringify(item.id)})'>验密查看并复制</button>
+        ${item.canSnapshotRecover ? `<button class="primary-btn small" type="button" onclick='recoverSpaceXCdkSnapshotBudget(${JSON.stringify(item.id)})'>按快照预算恢复</button>` : ""}
         ${item.canManualClose ? `<button class="danger-btn small" type="button" onclick='manualCloseSpaceXCdk(${JSON.stringify(item.id)})'>取消自动任务</button>` : ""}
       </div>
     ` }
@@ -1737,6 +1745,30 @@ async function manualCloseSpaceXCdk(id) {
     });
     refs.spaceXCdkAdminPassword.value = "";
     setHint(refs.spaceXCdkSettingsResult, `自动任务已取消并完成审计（商城订单 ${payload.closed?.remoteOrderNo || "-"}）`);
+    await Promise.all([refreshSpaceXCdkInventory(), refreshStoreTasks(), refreshSpaceXCdkSettings()]);
+  } catch (error) {
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(refs.spaceXCdkSettingsResult, error.message);
+  }
+}
+
+async function recoverSpaceXCdkSnapshotBudget(id) {
+  const adminUsername = refs.spaceXCdkAdminUsername.value.trim();
+  const adminPassword = refs.spaceXCdkAdminPassword.value;
+  if (!adminUsername || !adminPassword) {
+    setHint(refs.spaceXCdkSettingsResult, "请先输入管理员账号和密码，再恢复该资产");
+    return;
+  }
+  if (!window.confirm("确认复用原 SpaceX CDK，并按 funding_snapshot.open_and_balance_minor 记本地负债？上游授权仍是无限额度，操作不会新发码。")) return;
+  const reason = window.prompt("填写恢复原因（至少 3 个字符）", "接受上游无限授权风险，复用原 CDK 并继续交付");
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/spacex-cdk/inventory/${encodeURIComponent(id)}/snapshot-recover`, {
+      method: "POST",
+      body: JSON.stringify({ adminUsername, adminPassword, reason })
+    });
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(refs.spaceXCdkSettingsResult, `原资产已按快照预算恢复，未新发码；商城订单 ${payload.recovered?.remoteOrderNo || "-"} 已继续自动交付`);
     await Promise.all([refreshSpaceXCdkInventory(), refreshStoreTasks(), refreshSpaceXCdkSettings()]);
   } catch (error) {
     refs.spaceXCdkAdminPassword.value = "";
@@ -6101,6 +6133,7 @@ refs.spaceXCdkSettingsForm?.addEventListener("submit", async (event) => {
         baseUrl: refs.spaceXCdkBaseUrl.value.trim(),
         apiKey: refs.spaceXCdkApiKey.value,
         webhookSecret: refs.spaceXCdkWebhookSecret.value,
+        unlimitedFundingPolicy: refs.spaceXCdkUnlimitedFundingPolicy.value,
         adminUsername: refs.spaceXCdkAdminUsername.value.trim(),
         adminPassword: refs.spaceXCdkAdminPassword.value
       })

@@ -2278,10 +2278,16 @@ function serializeSpaceXCdkSettings(row) {
   const liability = db.prepare(`
     SELECT COUNT(*) AS count,
            COALESCE(SUM(CASE
+             WHEN funding_contract_mode = 'snapshot_budgeted'
+               AND funding_liability_minor > 0 AND funding_currency IS NOT NULL
+             THEN funding_liability_minor
              WHEN funding_contract_mode = 'bounded'
                OR (funding_contract_mode <> 'unlimited' AND funding_cap_minor > 0 AND funding_currency IS NOT NULL)
-             THEN funding_cap_minor ELSE 0 END), 0) AS liability_minor,
+             THEN COALESCE(funding_liability_minor, funding_cap_minor) ELSE 0 END), 0) AS liability_minor,
            SUM(CASE
+             WHEN funding_contract_mode = 'snapshot_budgeted'
+               AND funding_liability_minor > 0 AND funding_currency IS NOT NULL
+             THEN 0
              WHEN funding_contract_mode = 'bounded'
                OR (funding_contract_mode <> 'unlimited' AND funding_cap_minor > 0 AND funding_currency IS NOT NULL)
              THEN 0 ELSE 1 END) AS unknown_count
@@ -2291,6 +2297,7 @@ function serializeSpaceXCdkSettings(row) {
   return {
     enabled: Boolean(row?.enabled),
     rolloutPlan: row?.rollout_plan || "disabled",
+    unlimitedFundingPolicy: row?.unlimited_funding_policy || "block",
     baseUrl: row?.base_url || "https://spacexcard.com",
     hasApiKey: Boolean(row?.api_key_encrypted),
     hasWebhookSecret: Boolean(row?.webhook_secret_encrypted),
@@ -6774,12 +6781,14 @@ app.put("/api/admin/spacex-cdk/settings", { preHandler: requireAdmin }, async (r
     baseUrl: z.string().trim().min(1),
     apiKey: z.string().optional().default(""),
     webhookSecret: z.string().optional().default(""),
+    unlimitedFundingPolicy: z.enum(["block", "snapshot_budget"]).optional(),
     adminUsername: z.string().optional().default(""),
     adminPassword: z.string().optional().default("")
   }).safeParse(getBodyObject(request.body));
   if (!parsed.success) return reply.code(400).send({ message: "SpaceX CDK 配置参数不正确" });
   const existing = spaceXCdkService.settings();
-  if (parsed.data.enabled || parsed.data.rolloutPlan !== "disabled") {
+  const unlimitedFundingPolicy = parsed.data.unlimitedFundingPolicy || existing?.unlimited_funding_policy || "block";
+  if (parsed.data.enabled || parsed.data.rolloutPlan !== "disabled" || unlimitedFundingPolicy === "snapshot_budget") {
     try {
       verifyFreshAdminCredentials(
         { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
@@ -6805,12 +6814,13 @@ app.put("/api/admin/spacex-cdk/settings", { preHandler: requireAdmin }, async (r
   const updatedAt = nowIso();
   db.prepare(`
     UPDATE spacex_cdk_settings
-    SET enabled = ?, rollout_plan = ?, base_url = ?, api_key_encrypted = ?, webhook_secret_encrypted = ?,
+    SET enabled = ?, rollout_plan = ?, unlimited_funding_policy = ?, base_url = ?, api_key_encrypted = ?, webhook_secret_encrypted = ?,
         updated_at = ?, updated_by = ?
     WHERE id = 'default'
   `).run(
     parsed.data.enabled ? 1 : 0,
     parsed.data.rolloutPlan,
+    unlimitedFundingPolicy,
     baseUrl,
     apiKeyEncrypted || null,
     webhookSecretEncrypted || null,
@@ -6825,6 +6835,7 @@ app.put("/api/admin/spacex-cdk/settings", { preHandler: requireAdmin }, async (r
     detail: {
       enabled: parsed.data.enabled,
       rolloutPlan: parsed.data.rolloutPlan,
+      unlimitedFundingPolicy,
       baseUrl,
       apiKeyUpdated: Boolean(parsed.data.apiKey.trim()),
       webhookSecretUpdated: Boolean(parsed.data.webhookSecret.trim())
@@ -6867,11 +6878,14 @@ app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (
       state: item.state,
       upstreamStatus: item.upstream_status,
       fundingCapMinor: item.funding_cap_minor,
+      fundingLiabilityMinor: item.funding_liability_minor,
       fundingCurrency: item.funding_currency,
-      fundingContractMode: item.funding_contract_mode === "bounded"
+      fundingContractMode: item.funding_contract_mode === "snapshot_budgeted"
+        ? "snapshot_budgeted"
+        : (item.funding_contract_mode === "bounded"
         || (item.funding_contract_mode !== "unlimited" && Number(item.funding_cap_minor) > 0 && item.funding_currency)
         ? "bounded"
-        : (item.funding_contract_mode || "missing"),
+        : (item.funding_contract_mode || "missing")),
       feeAmountMinor: item.fee_amount_minor,
       wrapperPublicKey: item.wrapper_public_key || null,
       taskId: item.task_id || null,
@@ -6882,6 +6896,15 @@ app.get("/api/admin/spacex-cdk/inventory", { preHandler: requireAdmin }, async (
         item.task_id
         && !item.current_wrapper_cdkey_id
         && [SPACEX_CDK_ASSET_STATES.heldContract, SPACEX_CDK_ASSET_STATES.consumed].includes(item.state)
+        && [SPACEX_CDK_UNIT_STATES.contractBlocked, SPACEX_CDK_UNIT_STATES.fundingBlocked].includes(item.unit_state)
+        && [STORE_FULFILLMENT_STATUSES.blocked, STORE_FULFILLMENT_STATUSES.retrying].includes(item.task_status)
+      ),
+      canSnapshotRecover: Boolean(
+        item.task_id
+        && !item.current_wrapper_cdkey_id
+        && item.state === SPACEX_CDK_ASSET_STATES.heldContract
+        && item.upstream_status === "unused"
+        && item.funding_contract_mode === "unlimited"
         && [SPACEX_CDK_UNIT_STATES.contractBlocked, SPACEX_CDK_UNIT_STATES.fundingBlocked].includes(item.unit_state)
         && [STORE_FULFILLMENT_STATUSES.blocked, STORE_FULFILLMENT_STATUSES.retrying].includes(item.task_status)
       ),
@@ -6956,6 +6979,46 @@ app.post("/api/admin/spacex-cdk/inventory/:id/manual-close", { preHandler: requi
     }
   });
   return { closed };
+});
+
+app.post("/api/admin/spacex-cdk/inventory/:id/snapshot-recover", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    adminUsername: z.string().min(1),
+    adminPassword: z.string().min(1),
+    reason: z.string().trim().min(3).max(300)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "请重新验证管理员并填写快照预算恢复原因" });
+  try {
+    verifyFreshAdminCredentials(
+      { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+      { username: env.adminUsername, password: env.adminPassword }
+    );
+  } catch {
+    return reply.code(401).send({ message: "管理员账号或密码错误" });
+  }
+  let recovered;
+  try {
+    recovered = await spaceXCdkService.recoverSnapshotBudgetAsset(request.params.id);
+  } catch (error) {
+    const statusCode = error?.code === "SPACEX_CDK_ASSET_NOT_FOUND" ? 404 : 409;
+    return reply.code(statusCode).send({ message: error?.message || "SpaceX CDK 快照预算恢复失败", code: error?.code || null });
+  }
+  createAuditLog({
+    action: "spacex_cdk.asset.snapshot_recover",
+    actor: request.admin.username,
+    resourceType: "spacex_cdk",
+    resourceId: recovered.assetId,
+    detail: {
+      reason: parsed.data.reason,
+      upstreamId: recovered.upstreamId,
+      taskId: recovered.taskId,
+      remoteOrderNo: recovered.remoteOrderNo,
+      liabilityMinor: recovered.liabilityMinor,
+      currency: recovered.currency,
+      upstreamAuthorization: "unlimited"
+    }
+  });
+  return { recovered };
 });
 
 app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async () => ({

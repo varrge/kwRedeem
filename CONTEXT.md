@@ -204,19 +204,23 @@ The serialized decision between an activation claim and a refund hold on the sam
 _Avoid_: Refund and activation both succeeding, reclaiming a claimed code, allowing activation through an existing refund hold
 
 **Outstanding SpaceX Funding Liability**:
-The sum of the immutable `owner_funding_cap_minor` snapshots for SpaceX CDKs that can still incur owner-funded redemption costs, including reusable inventory and buyer-allocated codes. KaWang treats this amount as already committed even though SpaceX deducts the actual funding only when a player redeems a code.
-_Avoid_: Counting only currently activating codes, using the eventual actual charge as the pre-sale commitment, ignoring reusable inventory
+The sum of each active SpaceX CDK's immutable bounded funding cap or explicitly accepted snapshot-budgeted liability. KaWang treats this amount as already committed even though SpaceX deducts the actual funding only when a player redeems a code.
+_Avoid_: Counting only currently activating codes, using the eventual actual charge as the pre-sale commitment, ignoring reusable inventory, summing an unlimited upstream cap as zero
 
 **Authoritative SpaceX Funding Cap**:
 The strictly positive, bounded `owner_funding_cap_minor` and currency returned by SpaceX for an individually issued CDK, either in the one-time issuance response or its immediate read-after-write list record, and stored as an immutable local snapshot. Their presence is a hard issuance contract; KaWang blocks `spacex_cdk` fulfillment when either value is absent rather than estimating future liability.
 _Avoid_: Locally guessed caps, mutable plan defaults as historical truth, accepting a fee-only issuance response, treating an unlimited zero cap as zero liability
 
 **Unbounded SpaceX Funding Authorization**:
-A SpaceX CDK contract whose read-after-write record reports `owner_funding_cap_minor=0` together with `unlimited_cap=1`. KaWang records and labels this provider state explicitly but blocks buyer wrapper creation because the outstanding liability has no authoritative finite bound.
-_Avoid_: Reporting the contract as merely missing, summing it as zero liability, deriving a cap from a pricing snapshot, automatically delivering the CDK
+A SpaceX CDK contract whose read-after-write record reports `owner_funding_cap_minor=0` together with `unlimited_cap=1`. KaWang records and labels this provider state explicitly; it remains blocked unless the owner has explicitly enabled snapshot-budgeted acceptance.
+_Avoid_: Reporting the contract as merely missing, summing it as zero liability, silently enabling delivery, presenting a local budget as an upstream cap
+
+**Snapshot-Budgeted SpaceX Funding Liability**:
+The immutable positive `open_and_balance_minor` amount and currency from an unbounded SpaceX CDK's issuance snapshot, accepted by explicit owner policy as KaWang's local liability budget. It permits wrapper delivery without claiming to limit the upstream authorization or guarantee the eventual charge.
+_Avoid_: Authoritative funding cap, zero liability, live recalculation, hidden risk override
 
 **Funding-Covered SpaceX Fulfillment**:
-A store fulfillment for which the current SpaceX account balance, after subtracting outstanding funding liabilities and the new issuance service fee, still covers the new CDK's funding cap. If not, KaWang blocks new issuance and delivery so funds remain available for previously sold codes.
+A store fulfillment for which the current SpaceX account balance, after subtracting outstanding funding liabilities and the new issuance service fee, still covers the new CDK's bounded cap or accepted snapshot budget. If not, KaWang blocks new issuance and delivery so funds remain available for previously sold codes.
 _Avoid_: Selling first and checking balance at player activation, treating a warning as funding coverage, spending committed balance on new issuance
 
 **SpaceX CDK Rollout Gate**:

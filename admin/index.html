@@ -394,6 +394,13 @@
                   <span>新发码与商城交付</span>
                   <select id="spacex-cdk-enabled"><option value="false">停用</option><option value="true">启用</option></select>
                 </label>
+                <label class="field">
+                  <span>上游无限授权处理</span>
+                  <select id="spacex-cdk-unlimited-funding-policy">
+                    <option value="block">拦截交付</option>
+                    <option value="snapshot_budget">按快照金额记本地负债（上游仍无限）</option>
+                  </select>
+                </label>
                 <label class="field"><span>重新输入管理员账号</span><input id="spacex-cdk-admin-username" autocomplete="off" /></label>
                 <label class="field"><span>重新输入管理员密码</span><input id="spacex-cdk-admin-password" type="password" autocomplete="new-password" /></label>
               </div>

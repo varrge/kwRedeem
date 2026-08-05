@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>处理 SpaceX CDK 无限授权</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+<main>
+  <div class="eyebrow">Lesson 03 · Unlimited funding</div>
+  <h1>处理“无限授权（已拦截）”</h1>
+  <p class="lede">当前已采用“快照金额记本地负债”的自动交付路径；后台会明确保留上游无限授权风险。</p>
+  <div class="meta"><span class="pill">当前资产 1592</span><span class="pill">上游 unused</span><span class="pill">尚无包装 CDK</span></div>
+
+  <section class="card">
+    <h2>截图代表什么</h2>
+    <table>
+      <tr><th>字段</th><th>含义</th></tr>
+      <tr><td>接口契约不完整</td><td>自动任务已安全停止</td></tr>
+      <tr><td><code>unused</code></td><td>原始 SpaceX CDK 尚未兑换</td></tr>
+      <tr><td>无限授权（已拦截）</td><td>上游没有有限资金上限，不能按 0 元负债放行</td></tr>
+      <tr><td>库存待分配</td><td>没有生成 <code>91GPTPLUS</code> 包装码，也没有商城交付</td></tr>
+    </table>
+    <div class="callout danger"><strong>不要点击：</strong>“验密查看并复制”和“取消自动任务”。1592 要由“按快照预算恢复”复用，不能转成人工，也不能新发码。</div>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 1 · Policy</div>
+    <h2>启用快照预算策略</h2>
+    <ol>
+      <li>在“SpaceX CDK 双层履约”中，把“上游无限授权处理”设为“按快照金额记本地负债（上游仍无限）”。</li>
+      <li>重新输入管理员账号和密码，保存配置。</li>
+      <li>后台不会把快照金额伪装成上游资金上限，而会独立记录为本地负债。</li>
+    </ol>
+    <label><input type="checkbox" data-lesson-check /> 我已看到“上游仍无限”的风险提示</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 2 · Recover 1592</div>
+    <h2>恢复原资产并继续商城交付</h2>
+    <ol>
+      <li>在资产 1592 行输入管理员账号、密码后点击“按快照预算恢复”。</li>
+      <li>确认风险并填写原因。系统只读回查同一上游 ID，必须同时满足同套餐、<code>unused</code>、正数 <code>open_and_balance_minor</code> 和币种。</li>
+      <li>核验通过后，1592 会变为“本地预算 …（上游无限）”，原商城任务重新进入待处理。</li>
+      <li>系统生成一张 <code>91GPTPLUS</code> 包装码并交付商城；此恢复入口不会调用发码接口。</li>
+    </ol>
+    <div class="callout warn">任一核验条件不满足都会停止恢复。不要点击商城任务的普通“重试”来替代这个恢复操作。</div>
+    <label><input type="checkbox" data-lesson-check /> 我确认恢复的是 1592，且没有生成新的 SpaceX CDK</label>
+  </section>
+
+  <section class="step">
+    <div class="step-number">Step 3 · Verify</div>
+    <h2>确认交付结果</h2>
+    <ol>
+      <li>商城任务状态应变为“成功”，交付内容只显示 <code>91GPTPLUS-…</code> 包装码。</li>
+      <li>SpaceX 资产总数不能增加；1592 仍是本次包装码绑定的唯一上游资产。</li>
+      <li>本地未兑换负债按快照金额增加，余额必须覆盖全部本地负债。</li>
+      <li>不要在测试中兑换包装码，除非准备继续验证玩家前台激活。</li>
+    </ol>
+    <label><input type="checkbox" data-lesson-check /> 我已核对商城只收到自有包装码</label>
+  </section>
+
+  <section class="card checklist">
+    <h2>理解进度</h2>
+    <div class="progress"><span data-progress></span></div>
+    <p class="muted" data-progress-label>0/3 已完成</p>
+  </section>
+
+  <h2>主要依据</h2>
+  <ul>
+    <li><a href="../docs/adr/0009-wrap-spacex-cdks-for-store-fulfillment.md">KaWang SpaceX CDK 架构决策</a></li>
+    <li><a href="../docs/adr/0010-accept-spacex-unlimited-funding-snapshots.md">无限授权快照预算决策</a></li>
+    <li><a href="../spacexcard-openapi%20(1).md">SpaceX Card OpenAPI 文档</a></li>
+    <li><a href="0002-test-spacex-cdk-canary.html">上一课：测试 SpaceX CDK 自动履约</a></li>
+  </ul>
+  <p class="footer">不确定时保持资产 <code>unused</code> 并停止操作，然后把资产 ID、商城订单号和中文状态发给我。不要发送完整 CDK、API Key 或 Session。</p>
+</main>
+<script src="../assets/lesson.js"></script>
+</body>
+</html>

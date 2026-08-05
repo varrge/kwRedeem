@@ -809,6 +809,7 @@ function createSchema(db) {
       id TEXT PRIMARY KEY,
       enabled INTEGER NOT NULL DEFAULT 0,
       rollout_plan TEXT NOT NULL DEFAULT 'disabled',
+      unlimited_funding_policy TEXT NOT NULL DEFAULT 'block',
       base_url TEXT NOT NULL DEFAULT 'https://spacexcard.com',
       api_key_encrypted TEXT,
       webhook_secret_encrypted TEXT,
@@ -829,6 +830,7 @@ function createSchema(db) {
       state TEXT NOT NULL DEFAULT 'inventory',
       upstream_status TEXT NOT NULL DEFAULT 'unused',
       funding_cap_minor INTEGER,
+      funding_liability_minor INTEGER,
       funding_currency TEXT,
       funding_contract_mode TEXT NOT NULL DEFAULT 'missing',
       funding_snapshot TEXT,
@@ -1403,12 +1405,23 @@ function createSchema(db) {
   ensureColumn(db, "cdkeys", "store_fulfillment_task_id", "TEXT");
   ensureColumn(db, "store_product_mappings", "fulfillment_kind", "TEXT NOT NULL DEFAULT 'manual'");
   ensureColumn(db, "store_product_mappings", "spacex_plan", "TEXT");
+  ensureColumn(db, "spacex_cdk_settings", "unlimited_funding_policy", "TEXT NOT NULL DEFAULT 'block'");
+  ensureColumn(db, "spacex_cdks", "funding_liability_minor", "INTEGER");
   ensureColumn(db, "spacex_cdks", "funding_contract_mode", "TEXT NOT NULL DEFAULT 'missing'");
   ensureColumn(db, "spacex_cdks", "funding_snapshot", "TEXT");
   db.prepare(`
     UPDATE spacex_cdks
     SET funding_contract_mode = 'bounded'
     WHERE funding_contract_mode = 'missing'
+      AND funding_cap_minor IS NOT NULL
+      AND funding_cap_minor > 0
+      AND funding_currency IS NOT NULL
+  `).run();
+  db.prepare(`
+    UPDATE spacex_cdks
+    SET funding_liability_minor = funding_cap_minor
+    WHERE funding_liability_minor IS NULL
+      AND funding_contract_mode = 'bounded'
       AND funding_cap_minor IS NOT NULL
       AND funding_cap_minor > 0
       AND funding_currency IS NOT NULL

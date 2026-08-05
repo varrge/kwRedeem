@@ -534,3 +534,122 @@ test("an unlimited read-after-write funding contract remains blocked instead of 
   assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE task_id = ?").get(task.id).state, "contract_blocked");
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM cdkeys WHERE store_fulfillment_task_id = ?").get(task.id).count, 0);
 });
+
+test("explicit snapshot budgeting recovers the exact blocked unused asset without issuing a replacement", async () => {
+  configureSpaceX();
+  db.prepare("UPDATE spacex_cdk_settings SET unlimited_funding_policy = 'snapshot_budget' WHERE id = 'default'").run();
+  db.prepare("UPDATE spacex_cdks SET state = 'held' WHERE state IN ('held_contract', 'inventory')").run();
+  const task = addSnapshottedTask({ taskId: "snapshot-recovery-task", itemId: "snapshot-recovery-item" });
+  let issueCount = 0;
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async getBalance() { return { balanceMinor: 1_000_000, currency: "USD" }; },
+      async issueOne() { issueCount += 1; throw new Error("must not issue"); },
+      async getCdk(id) {
+        assert.equal(id, "snapshot-recovery-upstream");
+        return {
+          upstreamId: id,
+          plan: "plus",
+          status: "unused",
+          codePrefix: "GPTD-SNAPSHOT-RECOVERY",
+          fundingCapMinor: 0,
+          fundingLiabilityMinor: 2_100,
+          fundingCurrency: "USD",
+          fundingContractMode: "unlimited",
+          fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1",
+          contractValid: false
+        };
+      }
+    })
+  });
+  service.ensureTaskUnits(task);
+  const unit = db.prepare("SELECT * FROM spacex_cdk_units WHERE task_id = ?").get(task.id);
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_liability_minor, funding_currency, funding_contract_mode,
+      funding_snapshot, fee_amount_minor, current_unit_id, created_at, updated_at
+    ) VALUES ('snapshot-recovery-asset', 'snapshot-recovery-upstream', ?, 'GPTD-SNAPSHOT-RECOVERY',
+              'plus', 'held_contract', 'unused', 0, NULL, 'USD', 'unlimited',
+              'plan=plus open_and_balance_minor=2100 unlimited_cap=1', 30, ?, ?, ?)
+  `).run(encryptText("GPTD-SNAPSHOT-RECOVERY-FULL"), unit.id, createdAt, createdAt);
+  db.prepare(`
+    UPDATE spacex_cdk_units
+    SET state = 'contract_blocked', spacex_cdk_id = 'snapshot-recovery-asset',
+        last_error = 'SpaceX CDK 使用无限资金授权', updated_at = ?
+    WHERE id = ?
+  `).run(createdAt, unit.id);
+  db.prepare("UPDATE store_fulfillment_tasks SET status = 'blocked', last_error = 'SpaceX CDK 使用无限资金授权' WHERE id = ?")
+    .run(task.id);
+
+  const recovered = await service.recoverSnapshotBudgetAsset("snapshot-recovery-asset");
+  assert.equal(recovered.upstreamId, "snapshot-recovery-upstream");
+  assert.equal(recovered.liabilityMinor, 2_100);
+  assert.equal(issueCount, 0);
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE id = 'snapshot-recovery-asset'").get();
+  assert.equal(asset.state, "allocated");
+  assert.equal(asset.funding_cap_minor, 0);
+  assert.equal(asset.funding_liability_minor, 2_100);
+  assert.equal(asset.funding_contract_mode, "snapshot_budgeted");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = ?").get(unit.id).state, "allocated");
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = ?").get(task.id).status, "pending");
+
+  await service.provisionTask(db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(task.id));
+  assert.equal(issueCount, 0);
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = ?").get(unit.id).state, "wrapped");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM cdkeys WHERE store_fulfillment_task_id = ?").get(task.id).count, 1);
+});
+
+test("snapshot budgeting accepts a newly issued unlimited contract only when the policy is enabled", async () => {
+  configureSpaceX();
+  db.prepare("UPDATE spacex_cdk_settings SET unlimited_funding_policy = 'snapshot_budget' WHERE id = 'default'").run();
+  db.prepare("UPDATE spacex_cdks SET state = 'held' WHERE state IN ('held_contract', 'inventory')").run();
+  const task = addSnapshottedTask({ taskId: "snapshot-new-task", itemId: "snapshot-new-item" });
+  let issueCount = 0;
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async getBalance() { return { balanceMinor: 100_000, currency: "USD" }; },
+      async issueOne({ plan }) {
+        issueCount += 1;
+        return {
+          upstreamId: "snapshot-new-upstream",
+          code: "GPTD-SNAPSHOT-NEW-FULL",
+          codePrefix: "GPTD-SNAPSHOT-NEW",
+          plan,
+          feeAmountMinor: 30,
+          fundingCapMinor: null,
+          fundingLiabilityMinor: null,
+          fundingCurrency: null,
+          fundingContractMode: "missing",
+          fundingSnapshot: null,
+          contractValid: false
+        };
+      },
+      async getCdk(id) {
+        return {
+          upstreamId: id,
+          plan: "plus",
+          status: "unused",
+          codePrefix: "GPTD-SNAPSHOT-NEW",
+          fundingCapMinor: 0,
+          fundingLiabilityMinor: 2_100,
+          fundingCurrency: "USD",
+          fundingContractMode: "unlimited",
+          fundingSnapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1",
+          contractValid: false
+        };
+      }
+    })
+  });
+
+  await service.provisionTask(task);
+  assert.equal(issueCount, 1);
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE upstream_id = 'snapshot-new-upstream'").get();
+  assert.equal(asset.state, "allocated");
+  assert.equal(asset.funding_liability_minor, 2_100);
+  assert.equal(asset.funding_contract_mode, "snapshot_budgeted");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE task_id = ?").get(task.id).state, "wrapped");
+});

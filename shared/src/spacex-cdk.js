@@ -118,17 +118,31 @@ function parseFundingSnapshot(value) {
 function readFundingContract(item = {}, envelope = {}) {
   const fundingCapMinor = integerMinor(item.owner_funding_cap_minor ?? item.funding_cap_minor);
   const fundingCurrency = String(
-    item.funding_currency || item.currency || item.fee_currency || envelope.funding_currency || envelope.currency || envelope.fee_currency || ""
+    item.owner_funding_currency || item.funding_currency || item.currency || item.fee_currency
+      || envelope.owner_funding_currency || envelope.funding_currency || envelope.currency || envelope.fee_currency || ""
   ).trim().toUpperCase() || null;
   const snapshot = parseFundingSnapshot(item.funding_snapshot ?? envelope.funding_snapshot);
+  const itemPlan = String(item.plan || "").trim();
+  const snapshotPlan = String(snapshot.fields.plan || "").trim();
+  const snapshotLiabilityMinor = integerMinor(snapshot.fields.open_and_balance_minor);
+  const snapshotMatchesPlan = Boolean(itemPlan && snapshotPlan && itemPlan === snapshotPlan);
   const unlimited = [true, 1, "1", "true"].includes(item.owner_funding_unlimited)
     || snapshot.fields.unlimited_cap === "1"
     || snapshot.fields.unlimited_cap === "true";
   const fundingContractMode = unlimited
     ? "unlimited"
     : (fundingCapMinor !== null && fundingCapMinor > 0 && fundingCurrency ? "bounded" : "missing");
+  const fundingLiabilityMinor = fundingContractMode === "bounded"
+    ? fundingCapMinor
+    : (fundingContractMode === "unlimited"
+      && snapshotMatchesPlan
+      && snapshotLiabilityMinor !== null
+      && snapshotLiabilityMinor > 0
+      ? snapshotLiabilityMinor
+      : null);
   return {
     fundingCapMinor,
+    fundingLiabilityMinor,
     fundingCurrency,
     fundingContractMode,
     fundingSnapshot: snapshot.raw,

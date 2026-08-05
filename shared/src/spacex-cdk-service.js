@@ -180,6 +180,43 @@ function hasBoundedFundingContract(item) {
     );
 }
 
+function fundingLiabilityMinor(item) {
+  if (item?.funding_contract_mode === "snapshot_budgeted") {
+    const value = Number(item?.funding_liability_minor);
+    return Number.isSafeInteger(value) && value > 0 && item?.funding_currency ? value : null;
+  }
+  if (hasBoundedFundingContract(item)) {
+    const value = Number(item?.funding_liability_minor ?? item?.funding_cap_minor);
+    return Number.isSafeInteger(value) && value > 0 && item?.funding_currency ? value : null;
+  }
+  return null;
+}
+
+function applyFundingPolicy(issued, currentSettings, expectedPlan) {
+  if (issued?.contractValid) {
+    return {
+      ...issued,
+      fundingLiabilityMinor: issued.fundingLiabilityMinor ?? issued.fundingCapMinor
+    };
+  }
+  const liabilityMinor = Number(issued?.fundingLiabilityMinor);
+  const snapshotBudgetValid = currentSettings?.unlimited_funding_policy === "snapshot_budget"
+    && issued?.fundingContractMode === "unlimited"
+    && issued?.plan === expectedPlan
+    && (!issued?.upstreamStatus || issued.upstreamStatus === "unused")
+    && Number.isSafeInteger(liabilityMinor)
+    && liabilityMinor > 0
+    && Boolean(issued?.fundingCurrency)
+    && Boolean(issued?.fundingSnapshot);
+  if (!snapshotBudgetValid) return issued;
+  return {
+    ...issued,
+    fundingLiabilityMinor: liabilityMinor,
+    fundingContractMode: "snapshot_budgeted",
+    contractValid: true
+  };
+}
+
 export function createSpaceXCdkService({ db, clientFactory = null, logger = console } = {}) {
   let cachedClient = null;
   let cachedVersion = "";
@@ -251,13 +288,13 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     const balance = await client().getBalance();
     const placeholders = ACTIVE_LIABILITY_STATES.map(() => "?").join(",");
     const assets = db.prepare(`
-      SELECT funding_cap_minor, funding_currency, funding_contract_mode
+      SELECT funding_cap_minor, funding_liability_minor, funding_currency, funding_contract_mode
       FROM spacex_cdks
       WHERE state IN (${placeholders})
     `).all(...ACTIVE_LIABILITY_STATES);
-    const unknownCount = assets.filter((item) => !hasBoundedFundingContract(item)).length;
+    const unknownCount = assets.filter((item) => fundingLiabilityMinor(item) === null).length;
     const currencyMismatch = assets.some((item) => item.funding_currency && String(item.funding_currency).toUpperCase() !== balance.currency);
-    const liabilityMinor = assets.reduce((sum, item) => sum + Number(item.funding_cap_minor || 0), 0);
+    const liabilityMinor = assets.reduce((sum, item) => sum + Number(fundingLiabilityMinor(item) || 0), 0);
     const covered = unknownCount === 0 && !currencyMismatch && balance.balanceMinor >= liabilityMinor;
     db.prepare(`
       UPDATE spacex_cdk_settings
@@ -348,10 +385,10 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
       db.prepare(`
         INSERT INTO spacex_cdks (
           id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
-          funding_cap_minor, funding_currency, funding_contract_mode, funding_snapshot,
+          funding_cap_minor, funding_liability_minor, funding_currency, funding_contract_mode, funding_snapshot,
           fee_amount_minor, current_unit_id,
           current_wrapper_cdkey_id, last_verified_at, recycled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
       `).run(
         assetId,
         issued.upstreamId,
@@ -361,6 +398,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
         state,
         issued.upstreamStatus || "unused",
         issued.fundingCapMinor,
+        issued.fundingLiabilityMinor ?? null,
         issued.fundingCurrency,
         issued.fundingContractMode || (issued.contractValid ? "bounded" : "missing"),
         issued.fundingSnapshot || null,
@@ -431,6 +469,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
           issued = {
             ...issued,
             fundingCapMinor: readBack.fundingCapMinor,
+            fundingLiabilityMinor: readBack.fundingLiabilityMinor,
             fundingCurrency: readBack.fundingCurrency,
             fundingContractMode: readBack.fundingContractMode,
             fundingSnapshot: readBack.fundingSnapshot,
@@ -442,6 +481,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
         // Preserve the only full code below; an unreadable contract must remain blocked.
       }
     }
+    issued = applyFundingPolicy(issued, settings(), unit.plan);
     const asset = persistIssuedAsset(unit, issued);
     if (!issued.contractValid) {
       const failure = issuedContractFailure(issued);
@@ -1005,6 +1045,117 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     };
   }
 
+  async function recoverSnapshotBudgetAsset(assetId) {
+    const currentSettings = settings();
+    if (currentSettings?.unlimited_funding_policy !== "snapshot_budget") {
+      throw errorWithCode("请先启用无限授权的快照预算策略", "SPACEX_CDK_SNAPSHOT_POLICY_DISABLED");
+    }
+    const context = db.prepare(`
+      SELECT a.*, u.id AS unit_id, u.task_id, u.state AS unit_state, u.wrapper_cdkey_id AS unit_wrapper_cdkey_id,
+             t.remote_order_no, t.status AS task_status, t.locked_at, t.locked_by
+      FROM spacex_cdks a
+      LEFT JOIN spacex_cdk_units u ON u.id = a.current_unit_id
+      LEFT JOIN store_fulfillment_tasks t ON t.id = u.task_id
+      WHERE a.id = ?
+    `).get(assetId);
+    if (!context) throw errorWithCode("SpaceX CDK 资产不存在", "SPACEX_CDK_ASSET_NOT_FOUND");
+    if (!context.unit_id || !context.task_id) {
+      throw errorWithCode("该 SpaceX CDK 没有关联的自动交付任务", "SPACEX_CDK_SNAPSHOT_TASK_MISSING");
+    }
+    if (context.state !== SPACEX_CDK_ASSET_STATES.heldContract
+      || context.funding_contract_mode !== "unlimited"
+      || context.upstream_status !== "unused"
+      || !MANUALLY_CLOSEABLE_TASK_STATES.has(context.task_status)
+      || !MANUALLY_CLOSEABLE_UNIT_STATES.has(context.unit_state)) {
+      throw errorWithCode("当前 SpaceX CDK 或交付任务状态不允许按快照预算恢复", "SPACEX_CDK_SNAPSHOT_STATE_INVALID");
+    }
+    if (context.locked_at || context.locked_by) {
+      throw errorWithCode("交付任务正在处理中，请稍后刷新再操作", "SPACEX_CDK_SNAPSHOT_TASK_BUSY");
+    }
+    if (context.current_wrapper_cdkey_id || context.unit_wrapper_cdkey_id) {
+      throw errorWithCode("该资产已经生成包装 CDK，不能执行恢复", "SPACEX_CDK_SNAPSHOT_WRAPPER_EXISTS");
+    }
+    if (db.prepare("SELECT 1 FROM spacex_cdk_activations WHERE spacex_cdk_id = ?").get(context.id)) {
+      throw errorWithCode("该资产已有激活记录，不能执行恢复", "SPACEX_CDK_SNAPSHOT_ACTIVATION_EXISTS");
+    }
+
+    let upstream;
+    try {
+      upstream = await client().getCdk(context.upstream_id);
+    } catch (error) {
+      throw errorWithCode("SpaceX CDK 上游状态暂时无法核实", "SPACEX_CDK_SNAPSHOT_VERIFY_FAILED", { cause: error });
+    }
+    const accepted = applyFundingPolicy({ ...upstream, upstreamStatus: upstream?.status }, currentSettings, context.plan);
+    if (!upstream
+      || upstream.upstreamId !== context.upstream_id
+      || upstream.status !== "unused"
+      || upstream.plan !== context.plan
+      || accepted.fundingContractMode !== "snapshot_budgeted"
+      || !accepted.contractValid) {
+      throw errorWithCode("上游记录不是同一张、同套餐、unused 且含有效快照预算的 CDK", "SPACEX_CDK_SNAPSHOT_CONTRACT_INVALID");
+    }
+
+    const recoveredAt = nowIso();
+    db.transaction(() => {
+      const freshTask = db.prepare("SELECT status, locked_at, locked_by FROM store_fulfillment_tasks WHERE id = ?").get(context.task_id);
+      const freshUnit = db.prepare("SELECT state, wrapper_cdkey_id, spacex_cdk_id FROM spacex_cdk_units WHERE id = ?").get(context.unit_id);
+      const freshAsset = db.prepare("SELECT state, upstream_status, funding_contract_mode, current_wrapper_cdkey_id, current_unit_id FROM spacex_cdks WHERE id = ?").get(context.id);
+      if (!freshTask || !freshUnit || !freshAsset
+        || !MANUALLY_CLOSEABLE_TASK_STATES.has(freshTask.status)
+        || !MANUALLY_CLOSEABLE_UNIT_STATES.has(freshUnit.state)
+        || freshTask.locked_at || freshTask.locked_by
+        || freshUnit.wrapper_cdkey_id
+        || freshUnit.spacex_cdk_id !== context.id
+        || freshAsset.state !== SPACEX_CDK_ASSET_STATES.heldContract
+        || freshAsset.upstream_status !== "unused"
+        || freshAsset.funding_contract_mode !== "unlimited"
+        || freshAsset.current_wrapper_cdkey_id
+        || freshAsset.current_unit_id !== context.unit_id) {
+        throw errorWithCode("恢复前任务状态已变化，请刷新后重试", "SPACEX_CDK_SNAPSHOT_RACE_LOST");
+      }
+      if (db.prepare("SELECT 1 FROM spacex_cdk_activations WHERE spacex_cdk_id = ?").get(context.id)) {
+        throw errorWithCode("恢复前出现了激活记录，请刷新后核对", "SPACEX_CDK_SNAPSHOT_RACE_LOST");
+      }
+      db.prepare(`
+        UPDATE spacex_cdks
+        SET state = ?, upstream_status = 'unused', funding_cap_minor = 0,
+            funding_liability_minor = ?, funding_currency = ?, funding_contract_mode = 'snapshot_budgeted',
+            funding_snapshot = ?, last_verified_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        SPACEX_CDK_ASSET_STATES.allocated,
+        accepted.fundingLiabilityMinor,
+        accepted.fundingCurrency,
+        accepted.fundingSnapshot,
+        recoveredAt,
+        recoveredAt,
+        context.id
+      );
+      db.prepare(`
+        UPDATE spacex_cdk_units
+        SET state = ?, last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(SPACEX_CDK_UNIT_STATES.allocated, recoveredAt, context.unit_id);
+      db.prepare(`
+        UPDATE store_fulfillment_tasks
+        SET status = ?, next_retry_at = NULL, last_error = NULL, locked_at = NULL, locked_by = NULL,
+            completed_at = NULL, canceled_at = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(STORE_FULFILLMENT_STATUSES.pending, recoveredAt, context.task_id);
+    })();
+    return {
+      assetId: context.id,
+      upstreamId: context.upstream_id,
+      taskId: context.task_id,
+      remoteOrderNo: context.remote_order_no,
+      liabilityMinor: accepted.fundingLiabilityMinor,
+      currency: accepted.fundingCurrency,
+      state: SPACEX_CDK_ASSET_STATES.allocated,
+      taskStatus: STORE_FULFILLMENT_STATUSES.pending,
+      recoveredAt
+    };
+  }
+
   function activationForOrder(orderId) {
     const row = db.prepare("SELECT * FROM spacex_cdk_activations WHERE redeem_order_id = ?").get(orderId);
     if (!row) return null;
@@ -1038,6 +1189,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     reconcileDue,
     applyWebhookEvent,
     reclaimCanceledTask,
+    recoverSnapshotBudgetAsset,
     manuallyCloseConsumedAsset,
     activationForOrder,
     revealAsset

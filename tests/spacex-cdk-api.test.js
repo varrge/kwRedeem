@@ -28,6 +28,19 @@ globalThis.fetch = async (url) => {
   if (parsed.pathname === "/api/v1/cdk/redeem") return response({ order_id: "upstream-order-1", status: "queued", stage: "queued" });
   if (parsed.pathname === "/openapi/v1/balance") return response({ balance: 100, currency: "USD" });
   if (parsed.pathname === "/openapi/v1/gpt-direct/cdks") {
+    if (parsed.searchParams.get("q") === "snapshot-api-upstream") {
+      return response({
+        list: [{
+          id: "snapshot-api-upstream",
+          code_prefix: "GPTD-SNAPSHOT-API",
+          plan: "plus",
+          status: "unused",
+          owner_funding_cap_minor: 0,
+          owner_funding_currency: "USD",
+          funding_snapshot: "plan=plus open_and_balance_minor=2100 unlimited_cap=1"
+        }]
+      });
+    }
     return response({
       list: [{
         id: "manual-close-upstream",
@@ -87,6 +100,7 @@ test("SpaceX CDK admin settings remain disabled by default and require fresh cre
   const initial = await app.inject({ method: "GET", url: "/api/admin/spacex-cdk/settings", headers });
   assert.equal(initial.statusCode, 200);
   assert.equal(initial.json().settings.enabled, false);
+  assert.equal(initial.json().settings.unlimitedFundingPolicy, "block");
 
   const denied = await app.inject({
     method: "PUT",
@@ -98,6 +112,7 @@ test("SpaceX CDK admin settings remain disabled by default and require fresh cre
       baseUrl: "https://spacex.example.com",
       apiKey: "api-key",
       webhookSecret: "webhook-secret",
+      unlimitedFundingPolicy: "snapshot_budget",
       adminUsername: "admin",
       adminPassword: "wrong"
     }
@@ -114,6 +129,7 @@ test("SpaceX CDK admin settings remain disabled by default and require fresh cre
       baseUrl: "https://spacex.example.com",
       apiKey: "api-key",
       webhookSecret: "webhook-secret",
+      unlimitedFundingPolicy: "snapshot_budget",
       adminUsername: "admin",
       adminPassword: "test-password"
     }
@@ -122,6 +138,7 @@ test("SpaceX CDK admin settings remain disabled by default and require fresh cre
   assert.equal(saved.json().settings.enabled, true);
   assert.equal(saved.json().settings.hasApiKey, true);
   assert.equal(saved.json().settings.hasWebhookSecret, true);
+  assert.equal(saved.json().settings.unlimitedFundingPolicy, "snapshot_budget");
 });
 
 test("SpaceX store mapping forces the canonical plan prefix", async () => {
@@ -318,4 +335,74 @@ test("an admin can close a blocked task only after the SpaceX CDK is authoritati
   `).get();
   assert.match(audit?.detail || "", /订单已人工处理/);
   assert.doesNotMatch(audit?.detail || "", /GPTD-MANUAL-CLOSE-FULL/);
+});
+
+test("an admin can recover the exact blocked unused asset with an audited snapshot liability", async () => {
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE spacex_cdk_settings
+    SET unlimited_funding_policy = 'snapshot_budget', base_url = 'https://spacex.example.com',
+        api_key_encrypted = ?, updated_at = ?, updated_by = 'test'
+    WHERE id = 'default'
+  `).run(encryptText("api-key"), now);
+  db.prepare(`
+    INSERT INTO store_fulfillment_tasks (
+      id, remote_order_id, remote_order_no, parent_order_no, items_json, mapping_snapshot,
+      quantity, status, cdkeys_json, last_error, created_at, updated_at
+    ) VALUES ('snapshot-api-task', 'snapshot-api-remote', 'DJ-SNAPSHOT-1', 'DJ-SNAPSHOT', '[]', '[]',
+              1, 'blocked', '[]', 'SpaceX CDK 使用无限资金授权', ?, ?)
+  `).run(now, now);
+  db.prepare(`
+    INSERT INTO spacex_cdk_units (
+      id, task_id, item_id, unit_index, plan, state, idempotency_key, recovery_revision,
+      spacex_cdk_id, created_at, updated_at
+    ) VALUES ('snapshot-api-unit', 'snapshot-api-task', 'snapshot-api-item', 0, 'plus',
+              'contract_blocked', 'snapshot-api-idempotency', 0, 'snapshot-api-asset', ?, ?)
+  `).run(now, now);
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_liability_minor, funding_currency, funding_contract_mode,
+      funding_snapshot, fee_amount_minor, current_unit_id, created_at, updated_at
+    ) VALUES ('snapshot-api-asset', 'snapshot-api-upstream', ?, 'GPTD-SNAPSHOT-API', 'plus',
+              'held_contract', 'unused', 0, NULL, 'USD', 'unlimited',
+              'plan=plus open_and_balance_minor=2100 unlimited_cap=1', 100,
+              'snapshot-api-unit', ?, ?)
+  `).run(encryptText("GPTD-SNAPSHOT-API-FULL"), now, now);
+
+  const token = await login();
+  const headers = { authorization: `Bearer ${token}` };
+  const inventory = await app.inject({ method: "GET", url: "/api/admin/spacex-cdk/inventory", headers });
+  assert.equal(inventory.json().items.find((item) => item.id === "snapshot-api-asset").canSnapshotRecover, true);
+
+  const denied = await app.inject({
+    method: "POST",
+    url: "/api/admin/spacex-cdk/inventory/snapshot-api-asset/snapshot-recover",
+    headers,
+    payload: { adminUsername: "admin", adminPassword: "wrong", reason: "接受无限授权风险并恢复原资产" }
+  });
+  assert.equal(denied.statusCode, 401);
+
+  const recovered = await app.inject({
+    method: "POST",
+    url: "/api/admin/spacex-cdk/inventory/snapshot-api-asset/snapshot-recover",
+    headers,
+    payload: { adminUsername: "admin", adminPassword: "test-password", reason: "接受无限授权风险并恢复原资产" }
+  });
+  assert.equal(recovered.statusCode, 200);
+  assert.equal(recovered.json().recovered.liabilityMinor, 2100);
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE id = 'snapshot-api-asset'").get();
+  assert.equal(asset.state, "allocated");
+  assert.equal(asset.funding_cap_minor, 0);
+  assert.equal(asset.funding_liability_minor, 2100);
+  assert.equal(asset.funding_contract_mode, "snapshot_budgeted");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = 'snapshot-api-unit'").get().state, "allocated");
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = 'snapshot-api-task'").get().status, "pending");
+  const audit = db.prepare(`
+    SELECT detail FROM admin_audit_logs
+    WHERE action = 'spacex_cdk.asset.snapshot_recover' AND resource_id = 'snapshot-api-asset'
+    ORDER BY created_at DESC LIMIT 1
+  `).get();
+  assert.match(audit?.detail || "", /2100/);
+  assert.doesNotMatch(audit?.detail || "", /GPTD-SNAPSHOT-API-FULL/);
 });

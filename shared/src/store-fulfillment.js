@@ -70,6 +70,14 @@ function assertDujiaoEnvelope(response, text, json) {
   return json || {};
 }
 
+function isDujiaoAuthenticationFailure(error) {
+  if (!(error instanceof DujiaoApiError)) return false;
+  if (error.status === 401) return true;
+  const signal = `${String(error.code || "")} ${String(error.message || "")}`.toLowerCase();
+  return ["invalid_token", "token_invalid", "token_expired", "unauthorized"].some((value) => signal.includes(value))
+    || /(?:无效|过期|失效)[^\n]{0,24}token|token[^\n]{0,24}(?:无效|过期|失效)/i.test(signal);
+}
+
 export class DujiaoAdminClient {
   constructor({ baseUrl, username, password, fetchImpl = globalThis.fetch, timeoutMs = 15000 }) {
     this.baseUrl = normalizeDujiaoBaseUrl(baseUrl);
@@ -124,7 +132,7 @@ export class DujiaoAdminClient {
     try {
       return await this.#requestRaw(pathname, { ...options, token: this.token });
     } catch (error) {
-      if (allowRelogin && error instanceof DujiaoApiError && error.status === 401) {
+      if (allowRelogin && isDujiaoAuthenticationFailure(error)) {
         this.token = "";
         await this.login();
         return this.request(pathname, options, false);

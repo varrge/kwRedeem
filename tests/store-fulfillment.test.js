@@ -136,6 +136,31 @@ test("Dujiao client relogs once after an expired JWT", async () => {
   assert.equal(orderCount, 2);
 });
 
+test("Dujiao client relogs when the API returns a business-level invalid-token response", async () => {
+  let loginCount = 0;
+  let orderCount = 0;
+  const client = new DujiaoAdminClient({
+    baseUrl: "https://shop.example.com",
+    username: "service",
+    password: "secret",
+    fetchImpl: async (url) => {
+      if (url.endsWith("/api/v1/admin/login")) {
+        loginCount += 1;
+        return envelope({ requires_totp: false, token: `token-${loginCount}` });
+      }
+      orderCount += 1;
+      if (orderCount === 1) {
+        return new Response(JSON.stringify({ status_code: 1, msg: "无效的 token" }), { status: 200 });
+      }
+      return envelope([], { pagination: { total_page: 1 } });
+    }
+  });
+  const result = await client.listOrders({ status: "fulfilling" });
+  assert.equal(result.items.length, 0);
+  assert.equal(loginCount, 2);
+  assert.equal(orderCount, 2);
+});
+
 test("runner issues one active manual CDK per purchased unit and delivers idempotently", async () => {
   const now = new Date().toISOString();
   db.prepare(`

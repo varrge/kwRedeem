@@ -1,41 +1,41 @@
-/* Apple-inspired presentation layer for the administration workspace. */
+/* Apple-inspired presentation layer for the administration workspace with Holographic Dark Glass style. */
 :root {
-  color-scheme: light dark;
-  --bg: #f5f5f7;
-  --panel: rgba(255, 255, 255, 0.72);
-  --panel-strong: rgba(255, 255, 255, 0.92);
-  --control: rgba(255, 255, 255, 0.82);
-  --line: rgba(0, 0, 0, 0.1);
-  --text: #1d1d1f;
-  --muted: #6e6e73;
-  --primary: #0071e3;
-  --accent: #0071e3;
-  --success: #248a3d;
-  --error: #d70015;
-  --cyber-cyan: #00b8d9;
-  --cyber-magenta: #d929d7;
-  --cyber-violet: #7c5cff;
-  --shadow: 0 20px 62px rgba(46, 36, 140, 0.1), 0 4px 20px rgba(0, 184, 217, 0.07);
+  color-scheme: dark;
+  --bg: #070913;
+  --panel: rgba(18, 24, 43, 0.55);
+  --panel-strong: rgba(26, 33, 56, 0.82);
+  --control: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #f3f5f9;
+  --muted: #8e9bb0;
+  --primary: #a855f7;
+  --accent: #a855f7;
+  --success: #4ade80;
+  --error: #f43f5e;
+  --cyber-cyan: #38bdf8;
+  --cyber-magenta: #ec4899;
+  --cyber-violet: #a855f7;
+  --shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.6), 0 0 35px rgba(168, 85, 247, 0.15);
   --sidebar-width: 272px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000;
-    --panel: rgba(28, 28, 30, 0.72);
-    --panel-strong: rgba(44, 44, 46, 0.9);
-    --control: rgba(44, 44, 46, 0.76);
+    --bg: #070913;
+    --panel: rgba(18, 24, 43, 0.55);
+    --panel-strong: rgba(26, 33, 56, 0.82);
+    --control: rgba(255, 255, 255, 0.08);
     --line: rgba(255, 255, 255, 0.12);
-    --text: #f5f5f7;
-    --muted: #a1a1a6;
-    --primary: #2997ff;
-    --accent: #2997ff;
-    --success: #30d158;
-    --error: #ff453a;
-    --cyber-cyan: #00e5ff;
-    --cyber-magenta: #ff3bd4;
-    --cyber-violet: #9b7bff;
-    --shadow: 0 24px 76px rgba(0, 0, 0, 0.42), 0 0 34px rgba(0, 229, 255, 0.08), 0 0 48px rgba(255, 59, 212, 0.06);
+    --text: #f3f5f9;
+    --muted: #8e9bb0;
+    --primary: #a855f7;
+    --accent: #a855f7;
+    --success: #4ade80;
+    --error: #f43f5e;
+    --cyber-cyan: #38bdf8;
+    --cyber-magenta: #ec4899;
+    --cyber-violet: #a855f7;
+    --shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.6), 0 0 35px rgba(168, 85, 247, 0.15);
   }
 }
 
@@ -47,9 +47,9 @@ html {
 
 body {
   background:
-    repeating-linear-gradient(180deg, rgba(0, 184, 217, 0.025) 0 1px, transparent 1px 6px),
-    radial-gradient(circle at 8% -12%, color-mix(in srgb, var(--cyber-cyan) 18%, transparent), transparent 34rem),
-    radial-gradient(circle at 94% 4%, color-mix(in srgb, var(--cyber-magenta) 13%, transparent), transparent 32rem),
+    radial-gradient(circle at 10% -5%, rgba(168, 85, 247, 0.22), transparent 36rem),
+    radial-gradient(circle at 90% 15%, rgba(236, 72, 153, 0.18), transparent 32rem),
+    radial-gradient(circle at 50% 105%, rgba(56, 189, 248, 0.18), transparent 38rem),
     var(--bg);
   color: var(--text);
   font-family: inherit;

@@ -1,62 +1,64 @@
-/* Shared Apple-inspired presentation layer for every public page. */
+/* Shared Apple-inspired presentation layer with Holographic Dark Glass (玻璃高级简约微光幻彩) presentation. */
 :root {
-  color-scheme: light dark;
-  --bg: #f5f5f7;
-  --panel: rgba(255, 255, 255, 0.74);
-  --panel-strong: rgba(255, 255, 255, 0.92);
-  --panel-soft: rgba(118, 118, 128, 0.08);
-  --panel-weak: rgba(255, 255, 255, 0.58);
-  --control: rgba(255, 255, 255, 0.82);
-  --line: rgba(0, 0, 0, 0.1);
-  --text: #1d1d1f;
-  --muted: #6e6e73;
-  --primary: #0071e3;
-  --accent: #0071e3;
-  --accent-strong: #0077ed;
-  --accent-soft: rgba(0, 113, 227, 0.1);
-  --success: #248a3d;
-  --warning: #b25000;
-  --warn: #b25000;
-  --error: #d70015;
-  --danger: #d70015;
-  --blue: #0071e3;
-  --purple: #8944ab;
-  --cyber-cyan: #00b8d9;
-  --cyber-magenta: #d929d7;
-  --cyber-violet: #7c5cff;
-  --shadow: 0 20px 62px rgba(46, 36, 140, 0.1), 0 4px 20px rgba(0, 184, 217, 0.07);
-  --shadow-compact: 0 10px 30px rgba(46, 36, 140, 0.08), 0 2px 8px rgba(0, 184, 217, 0.06);
-  --radius-card: 32px;
-  --radius-control: 17px;
+  color-scheme: dark;
+  --bg: #070913;
+  --panel: rgba(18, 24, 43, 0.55);
+  --panel-strong: rgba(26, 33, 56, 0.78);
+  --panel-soft: rgba(255, 255, 255, 0.04);
+  --panel-weak: rgba(255, 255, 255, 0.025);
+  --control: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #f3f5f9;
+  --muted: #8e9bb0;
+  --primary: #a855f7;
+  --accent: #a855f7;
+  --accent-strong: #c084fc;
+  --accent-soft: rgba(168, 85, 247, 0.16);
+  --success: #4ade80;
+  --warning: #facc15;
+  --warn: #facc15;
+  --error: #f43f5e;
+  --danger: #f43f5e;
+  --blue: #38bdf8;
+  --purple: #a855f7;
+  --cyber-cyan: #38bdf8;
+  --cyber-magenta: #ec4899;
+  --cyber-violet: #a855f7;
+  --iri-gradient: linear-gradient(135deg, rgba(255, 255, 255, 0.35) 0%, rgba(168, 85, 247, 0.28) 35%, rgba(56, 189, 248, 0.25) 70%, rgba(236, 72, 153, 0.28) 100%);
+  --iri-pill: linear-gradient(135deg, #a855f7, #6366f1 50%, #ec4899);
+  --shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.6), 0 0 35px rgba(168, 85, 247, 0.15);
+  --shadow-compact: 0 16px 40px -10px rgba(0, 0, 0, 0.45), 0 0 20px rgba(168, 85, 247, 0.12);
+  --radius-card: 24px;
+  --radius-control: 14px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000000;
-    --panel: rgba(28, 28, 30, 0.72);
-    --panel-strong: rgba(44, 44, 46, 0.9);
-    --panel-soft: rgba(118, 118, 128, 0.16);
-    --panel-weak: rgba(28, 28, 30, 0.56);
-    --control: rgba(44, 44, 46, 0.78);
+    --bg: #070913;
+    --panel: rgba(18, 24, 43, 0.55);
+    --panel-strong: rgba(26, 33, 56, 0.78);
+    --panel-soft: rgba(255, 255, 255, 0.04);
+    --panel-weak: rgba(255, 255, 255, 0.025);
+    --control: rgba(255, 255, 255, 0.08);
     --line: rgba(255, 255, 255, 0.12);
-    --text: #f5f5f7;
-    --muted: #a1a1a6;
-    --primary: #2997ff;
-    --accent: #2997ff;
-    --accent-strong: #64b5ff;
-    --accent-soft: rgba(41, 151, 255, 0.16);
-    --success: #30d158;
-    --warning: #ff9f0a;
-    --warn: #ff9f0a;
-    --error: #ff453a;
-    --danger: #ff453a;
-    --blue: #0a84ff;
-    --purple: #bf5af2;
-    --cyber-cyan: #00e5ff;
-    --cyber-magenta: #ff3bd4;
-    --cyber-violet: #9b7bff;
-    --shadow: 0 24px 76px rgba(0, 0, 0, 0.42), 0 0 34px rgba(0, 229, 255, 0.08), 0 0 48px rgba(255, 59, 212, 0.06);
-    --shadow-compact: 0 12px 34px rgba(0, 0, 0, 0.28), 0 0 22px rgba(0, 229, 255, 0.06);
+    --text: #f3f5f9;
+    --muted: #8e9bb0;
+    --primary: #a855f7;
+    --accent: #a855f7;
+    --accent-strong: #c084fc;
+    --accent-soft: rgba(168, 85, 247, 0.16);
+    --success: #4ade80;
+    --warning: #facc15;
+    --warn: #facc15;
+    --error: #f43f5e;
+    --danger: #f43f5e;
+    --blue: #38bdf8;
+    --purple: #a855f7;
+    --cyber-cyan: #38bdf8;
+    --cyber-magenta: #ec4899;
+    --cyber-violet: #a855f7;
+    --shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.6), 0 0 35px rgba(168, 85, 247, 0.15);
+    --shadow-compact: 0 16px 40px -10px rgba(0, 0, 0, 0.45), 0 0 20px rgba(168, 85, 247, 0.12);
   }
 }
 
@@ -71,10 +73,9 @@ html {
 body {
   position: relative;
   background:
-    repeating-linear-gradient(180deg, rgba(0, 184, 217, 0.025) 0 1px, transparent 1px 6px),
-    radial-gradient(circle at 12% -8%, color-mix(in srgb, var(--cyber-cyan) 18%, transparent), transparent 36rem),
-    radial-gradient(circle at 92% 6%, color-mix(in srgb, var(--cyber-magenta) 15%, transparent), transparent 32rem),
-    radial-gradient(circle at 52% 112%, color-mix(in srgb, var(--cyber-violet) 12%, transparent), transparent 38rem),
+    radial-gradient(circle at 10% -5%, rgba(168, 85, 247, 0.22), transparent 36rem),
+    radial-gradient(circle at 90% 15%, rgba(236, 72, 153, 0.18), transparent 32rem),
+    radial-gradient(circle at 50% 105%, rgba(56, 189, 248, 0.18), transparent 38rem),
     var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -89,8 +90,8 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    linear-gradient(115deg, color-mix(in srgb, var(--cyber-cyan) 7%, transparent), transparent 34%),
-    linear-gradient(245deg, color-mix(in srgb, var(--cyber-magenta) 6%, transparent), transparent 30%);
+    linear-gradient(115deg, rgba(168, 85, 247, 0.06), transparent 34%),
+    linear-gradient(245deg, rgba(56, 189, 248, 0.05), transparent 30%);
 }
 
 ::selection {

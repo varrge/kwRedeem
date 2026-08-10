@@ -40,12 +40,12 @@ All provider calls live behind server-side modules with fixed origins and strict
 
 ### 3.1 SpaceX Card GPT adapter
 
-Use the existing encrypted SpaceX Card GPT user token only for these fixed endpoints:
+Use the existing encrypted SpaceX Card GPT user token only for the Cookie converter and checkout endpoints. Subscription status and cancellation use the separate Session-based contracts shown below and do not send that API token:
 
 ```text
 POST https://spacexcard.com/api/v1/gpt/session-to-cookie
-POST https://spacexcard.com/api/v1/gpt/check
-POST https://spacexcard.com/api/v1/gpt/cancel-renewal
+POST https://gptserve.freespaces.app/api/subscription/info
+POST https://gptserve.freespaces.app/api/subscription/cancel
 POST https://spacexcard.com/api/v1/gpt/checkout
 ```
 

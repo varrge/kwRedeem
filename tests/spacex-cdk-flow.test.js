@@ -272,18 +272,15 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
   const service = createSpaceXCdkService({
     db,
     clientFactory: () => fakeClient,
-    renewalTokenProvider: async () => "renewal-api-token",
     renewalProvider: {
-      async check(session, token) {
+      async check(session) {
         renewalCalls.push("check");
         assert.equal(session.sessionToken, "RAW-SESSION-SECRET");
-        assert.equal(token, "renewal-api-token");
         return { willRenew: renewalEnabled, isDelinquent: false };
       },
-      async cancel(session, token) {
+      async cancel(session) {
         renewalCalls.push("cancel");
         assert.equal(session.sessionToken, "RAW-SESSION-SECRET");
-        assert.equal(token, "renewal-api-token");
         renewalEnabled = false;
         return { requested: true, providerConfirmed: true };
       }
@@ -355,7 +352,6 @@ test("an uncertain renewal cancellation blocks the claim and resumes only after 
   const service = createSpaceXCdkService({
     db,
     clientFactory: () => fakeClient,
-    renewalTokenProvider: async () => "renewal-token",
     renewalProvider: {
       async check() { return { willRenew: renewalEnabled, isDelinquent: false }; },
       async cancel() {
@@ -415,7 +411,6 @@ test("an unknown renewal state fails closed before claiming or redeeming the wra
       async preflight() { return { preflightToken: "unknown-preflight", account_id: "unknown-account" }; },
       async redeem() { redeemCalls += 1; return { status: "queued" }; }
     }),
-    renewalTokenProvider: async () => "renewal-token",
     renewalProvider: {
       async check() { return { willRenew: null, isDelinquent: false }; },
       async cancel() { cancelCalls += 1; }

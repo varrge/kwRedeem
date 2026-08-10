@@ -40,21 +40,22 @@ globalThis.fetch = async (url, options = {}) => {
     return response({ preflight_token: "preflight-token", account_id: "account-1" });
   }
   if (parsed.pathname === "/api/v1/cdk/redeem") return response({ order_id: "upstream-order-1", status: "queued", stage: "queued" });
-  if (parsed.pathname === "/api/v1/gpt/check") {
-    assert.equal(options.headers.Authorization, "Bearer renewal-api-token");
-    const tokenInput = JSON.parse(JSON.parse(String(options.body || "{}")).token_input);
+  if (parsed.pathname === "/api/subscription/info") {
+    const tokenInput = JSON.parse(String(options.body || "{}")).token;
     assert.equal(tokenInput.sessionToken, sessionCookieFixture);
     renewalCalls.push("check");
     return new Response(JSON.stringify({
-      code: 0,
-      data: { summary: { is_delinquent: false, will_renew: renewalEnabled } }
+      code: 200,
+      data: { account_type: "plus", is_delinquent: false, auto_renew: renewalEnabled }
     }), { status: 200, headers: { "content-type": "application/json" } });
   }
-  if (parsed.pathname === "/api/v1/gpt/cancel-renewal") {
-    assert.equal(options.headers.Authorization, "Bearer renewal-api-token");
+  if (parsed.pathname === "/api/subscription/cancel") {
+    assert.equal(options.headers.Authorization, undefined);
+    const tokenInput = JSON.parse(String(options.body || "{}")).token;
+    assert.equal(tokenInput.sessionToken, sessionCookieFixture);
     renewalCalls.push("cancel");
     renewalEnabled = false;
-    return new Response(JSON.stringify({ code: 0, data: { cancelled: true } }), {
+    return new Response(JSON.stringify({ code: 200, data: 1, message: "取消订阅成功" }), {
       status: 200,
       headers: { "content-type": "application/json" }
     });
@@ -208,11 +209,6 @@ test("public SpaceX activation never persists the raw Session and a signed Webho
         updated_at = ?, updated_by = 'test'
     WHERE id = 'default'
   `).run(encryptText("api-key"), encryptText("webhook-secret"), new Date().toISOString());
-  db.prepare(`
-    UPDATE extension_delivery_settings
-    SET spacexcard_api_token_encrypted = ?, updated_at = ?, updated_by = 'test'
-    WHERE id = 'default'
-  `).run(encryptText("renewal-api-token"), new Date().toISOString());
   seedWrapper();
   const verified = await app.inject({
     method: "POST",

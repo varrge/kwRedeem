@@ -127,6 +127,62 @@ Each inviter level may define both a lifetime invite-code application limit and 
 Expired invite codes do not count against either limit. A configured value of `0` means unlimited for that specific limit.
 _Avoid_: One global fixed quota, treating zero as no invites allowed, expired codes consuming quota
 
+**Sub2api User Tutorial**:
+A publicly readable learning unit embedded in the Sub2api experience that explains how a user calls the API or purchases a configured subscription plan.
+_Avoid_: Operator runbook, administrator manual, generic public documentation
+
+**Tutorial Center**:
+The embedded Sub2api page that organizes and presents Sub2api user tutorials; its first release covers API calling and subscription purchasing only.
+_Avoid_: Admin console, helpdesk ticket system, unrestricted documentation portal
+
+**Tutorial Track**:
+An ordered group of Sub2api User Tutorials within the Tutorial Center that leads a user through one outcome; the first tracks are API Calling and Subscription Purchase.
+_Avoid_: One long undifferentiated article, administrator workflow, subscription product catalog
+
+**Tutorial Content**:
+The explanatory material that makes up a Sub2api User Tutorial, maintained as a reviewable project artifact in the first release.
+_Avoid_: Runtime user data, administrator settings, unversioned pasted copy
+
+**Tutorial Metadata**:
+The title, slug, track, ordering, visibility, and related navigation information that describes Tutorial Content independently from its body.
+_Avoid_: Formatting markup, user completion state, hard-coded page order
+
+**Tutorial Home**:
+The public landing page shown at the Sub2api root in place of the default homepage; it introduces the API and subscription paths while deferring account-specific actions to the existing Sub2api sign-in flow.
+_Avoid_: Replacing the entire Sub2api application shell, administrator dashboard, authenticated account home
+
+**Account-Gated Tutorial Action**:
+An action reached from public tutorial content that requires Sub2api SSO before reading user-specific data or purchasing a subscription, such as “购买订阅” or “我的套餐”.
+_Avoid_: Requiring login to read tutorials, anonymous purchase, exposing the Sub2api admin token
+
+**Subscription Center**:
+The authenticated Sub2api experience that shows available subscription plans and a user's purchase records, and lets the user purchase a configured plan with their remote balance.
+_Avoid_: Tutorial article, anonymous checkout, administrator plan editor
+
+**Subscription Purchase Tutorial**:
+The Tutorial Track that explains how to compare a plan's price, validity, and quota before handing the user to the authenticated Subscription Center; it does not perform the balance deduction itself.
+_Avoid_: Embedded checkout, administrator subscription assignment, plan configuration manual
+
+**API Quickstart**:
+The first Tutorial Track outcome in which a user configures the service endpoint and credential, sends one valid API request, and verifies a successful response.
+_Avoid_: Complete API reference, theoretical overview, provider-specific setup
+
+**API Quickstart Protocol**:
+The OpenAI-compatible `/v1/chat/completions` contract used as the Tutorial Center's first-call baseline; other protocols and clients are documented as separate recipes.
+_Avoid_: Claiming every model supports one identical protocol, mixing provider-specific request bodies into the baseline
+
+**Client Integration Recipe**:
+A focused tutorial that maps the KaWang API contract to one client category—CLI, SDK, desktop application, web tool, or third-party service—and states its configuration, verification, and credential-safety boundaries.
+_Avoid_: Unverified software list, implicit official endorsement, copying secrets into unknown tools
+
+**Client Support Tier**:
+The tutorial label that distinguishes project-maintained examples, recently verified compatible clients, and unverified community options without implying equal support or endorsement.
+_Avoid_: Undifferentiated recommendation list, permanent compatibility claim, hidden support boundary
+
+**Credential-Safe Tutorial**:
+A Tutorial Center experience that teaches credential use with placeholders and links to the authenticated Sub2api console, but never reads, stores, or renders a user's real API Key.
+_Avoid_: Auto-filled secrets, temporary tutorial credentials, exposing keys in an iframe
+
 **Store Fulfillment Order**:
 A paid Dujiao store order awaiting or undergoing delivery, from which KaWang issues the buyer-facing CDK promised by the mapped product.
 _Avoid_: KaWang redeem order, activation job

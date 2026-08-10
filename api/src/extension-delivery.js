@@ -11,8 +11,8 @@ const WS_MAX_MESSAGE_BYTES = 4096;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const AUTH_TIMEOUT_MS = 5_000;
 const CONVERTER_URL = "https://spacexcard.com/api/v1/gpt/session-to-cookie";
-const SUBSCRIPTION_CHECK_URL = "https://spacexcard.com/api/v1/gpt/check";
-const SUBSCRIPTION_CANCEL_URL = "https://spacexcard.com/api/v1/gpt/cancel-renewal";
+const SUBSCRIPTION_CHECK_URL = "https://gptserve.freespaces.app/api/subscription/info";
+const SUBSCRIPTION_CANCEL_URL = "https://gptserve.freespaces.app/api/subscription/cancel";
 const SUBSCRIPTION_REQUEST_TIMEOUT_MS = 15_000;
 const SUBSCRIPTION_RESPONSE_MAX_BYTES = 128 * 1024;
 
@@ -119,18 +119,17 @@ async function readLimitedSubscriptionText(response, errorCode) {
   return text + decoder.decode();
 }
 
-async function requestSubscriptionProvider(url, sessionJson, apiToken, errorCode) {
+async function requestSubscriptionProvider(url, sessionJson, errorCode) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SUBSCRIPTION_REQUEST_TIMEOUT_MS);
   try {
     const response = await globalThis.fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiToken}`,
         "Content-Type": "application/json",
         Accept: "application/json"
       },
-      body: JSON.stringify({ token_input: JSON.stringify(sessionJson) }),
+      body: JSON.stringify({ token: sessionJson }),
       signal: controller.signal
     });
     if (response.status === 401 || response.status === 403) {
@@ -147,11 +146,10 @@ async function requestSubscriptionProvider(url, sessionJson, apiToken, errorCode
     const text = await readLimitedSubscriptionText(response, errorCode);
     let envelope;
     try { envelope = JSON.parse(text); } catch { throw subscriptionProviderError(errorCode); }
-    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
-      || envelope.code !== 0 || !envelope.data || typeof envelope.data !== "object" || Array.isArray(envelope.data)) {
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) || envelope.code !== 200) {
       throw subscriptionProviderError(errorCode);
     }
-    return envelope.data;
+    return envelope;
   } catch (error) {
     if (error?.code) throw error;
     throw subscriptionProviderError(errorCode, {
@@ -162,30 +160,45 @@ async function requestSubscriptionProvider(url, sessionJson, apiToken, errorCode
   }
 }
 
-async function runSubscriptionGuard(sessionJson, apiToken) {
-  const check = await requestSubscriptionProvider(
+async function runSubscriptionGuard(sessionJson) {
+  const checkEnvelope = await requestSubscriptionProvider(
     SUBSCRIPTION_CHECK_URL,
     sessionJson,
-    apiToken,
     "SUBSCRIPTION_CHECK_FAILED"
   );
-  const summary = check.summary;
-  if (!summary || typeof summary !== "object" || Array.isArray(summary) || typeof summary.is_delinquent !== "boolean") {
+  const subscription = checkEnvelope.data;
+  if (!subscription || typeof subscription !== "object" || Array.isArray(subscription)
+    || typeof subscription.is_delinquent !== "boolean") {
     throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED");
   }
 
-  const isDelinquent = summary.is_delinquent;
-  const queriedWillRenew = typeof summary.will_renew === "boolean" ? summary.will_renew : null;
+  const isDelinquent = subscription.is_delinquent;
+  const accountType = typeof subscription.account_type === "string"
+    ? subscription.account_type.trim().toLowerCase()
+    : "";
+  const hasNoPaidExpiry = subscription.expire_time === null && subscription.expires_at === null;
+  const queriedWillRenew = typeof subscription.auto_renew === "boolean"
+    ? subscription.auto_renew
+    : (accountType === "free" && hasNoPaidExpiry ? false : null);
+  if (typeof queriedWillRenew !== "boolean") throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED");
   let renewalCancelled = false;
   let willRenew = queriedWillRenew;
-  if (isDelinquent && queriedWillRenew !== false) {
-    const cancellation = await requestSubscriptionProvider(
+  if (queriedWillRenew === true) {
+    const cancellationEnvelope = await requestSubscriptionProvider(
       SUBSCRIPTION_CANCEL_URL,
       sessionJson,
-      apiToken,
       "SUBSCRIPTION_CANCEL_FAILED"
     );
-    if (cancellation.cancelled !== true) throw subscriptionProviderError("SUBSCRIPTION_CANCEL_FAILED");
+    if (cancellationEnvelope.data !== 1) throw subscriptionProviderError("SUBSCRIPTION_CANCEL_FAILED");
+    const recheckEnvelope = await requestSubscriptionProvider(
+      SUBSCRIPTION_CHECK_URL,
+      sessionJson,
+      "SUBSCRIPTION_CHECK_FAILED"
+    );
+    if (!recheckEnvelope.data || typeof recheckEnvelope.data !== "object"
+      || recheckEnvelope.data.auto_renew !== false) {
+      throw subscriptionProviderError("SUBSCRIPTION_CANCEL_FAILED");
+    }
     renewalCancelled = true;
     willRenew = false;
   }
@@ -649,21 +662,16 @@ export function createExtensionDeliveryService({
     const settings = getSettings();
     if (!constantTimeHashEqual(auth.requestHash, settings.extension_token_sha256)) throwDeliveryCode("EXTENSION_UNAUTHORIZED");
     if (settings.bound_installation_id !== auth.installationId) throwDeliveryCode("EXTENSION_INSTALLATION_MISMATCH");
-    if (!settings.spacexcard_api_token_encrypted) throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
-
     let sessionJson;
-    let apiToken;
     try {
       sessionJson = JSON.parse(decryptText(row.session_payload));
-      apiToken = decryptText(settings.spacexcard_api_token_encrypted);
     } catch {
       throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
     }
-    if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)
-      || typeof apiToken !== "string" || !apiToken.trim()) {
+    if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)) {
       throw subscriptionProviderError("SUBSCRIPTION_CHECK_FAILED", { statusCode: 503 });
     }
-    const guard = await runSubscriptionGuard(sessionJson, apiToken.trim());
+    const guard = await runSubscriptionGuard(sessionJson);
     const saved = db.transaction(() => {
       const currentSettings = getSettings();
       if (!constantTimeHashEqual(auth.requestHash, currentSettings.extension_token_sha256)) return { error: "EXTENSION_UNAUTHORIZED" };

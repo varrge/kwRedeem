@@ -1,5 +1,5 @@
-export const membershipRenewalCancelUrl = "https://spacexcard.com/api/v1/gpt/cancel-renewal";
-export const membershipRenewalCheckUrl = "https://spacexcard.com/api/v1/gpt/check";
+export const membershipRenewalCancelUrl = "https://gptserve.freespaces.app/api/subscription/cancel";
+export const membershipRenewalCheckUrl = "https://gptserve.freespaces.app/api/subscription/info";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
@@ -13,13 +13,9 @@ function renewalError(code, message, statusCode = 502) {
   return error;
 }
 
-export async function checkMembershipRenewal(sessionJson, apiToken, options = {}) {
+export async function checkMembershipRenewal(sessionJson, options = {}) {
   if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)) {
     throw renewalError("SESSION_INVALID", "Session JSON 无效", 422);
-  }
-  const token = String(apiToken || "").trim();
-  if (!token || token.length > 8192) {
-    throw renewalError("RENEWAL_CHECK_NOT_CONFIGURED", "续费检查服务凭据未配置", 503);
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -27,11 +23,10 @@ export async function checkMembershipRenewal(sessionJson, apiToken, options = {}
     const response = await (options.fetchImpl || globalThis.fetch)(membershipRenewalCheckUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         Accept: "application/json"
       },
-      body: JSON.stringify({ token_input: JSON.stringify(sessionJson) }),
+      body: JSON.stringify({ token: sessionJson }),
       signal: controller.signal
     });
     if ([401, 403].includes(response.status)) {
@@ -53,14 +48,18 @@ export async function checkMembershipRenewal(sessionJson, apiToken, options = {}
     try { envelope = JSON.parse(new TextDecoder().decode(bytes)); } catch {
       throw renewalError("RENEWAL_CHECK_RESPONSE_INVALID", "续费检查响应不是合法 JSON");
     }
-    const summary = envelope?.code === 0 && envelope.data?.summary && typeof envelope.data.summary === "object"
-      ? envelope.data.summary
+    const data = envelope?.code === 200 && envelope.data && typeof envelope.data === "object"
+      ? envelope.data
       : null;
-    if (!summary || Array.isArray(summary)) {
+    if (!data || Array.isArray(data)) {
       throw renewalError("RENEWAL_CHECK_RESPONSE_INVALID", "续费检查结果无法确认");
     }
-    const isDelinquent = typeof summary.is_delinquent === "boolean" ? summary.is_delinquent : null;
-    const willRenew = typeof summary.will_renew === "boolean" ? summary.will_renew : null;
+    const isDelinquent = typeof data.is_delinquent === "boolean" ? data.is_delinquent : null;
+    const accountType = typeof data.account_type === "string" ? data.account_type.trim().toLowerCase() : "";
+    const hasNoPaidExpiry = data.expire_time === null && data.expires_at === null;
+    const willRenew = typeof data.auto_renew === "boolean"
+      ? data.auto_renew
+      : (accountType === "free" && hasNoPaidExpiry ? false : null);
     return Object.freeze({ isDelinquent, willRenew });
   } catch (error) {
     if (error?.code) throw error;
@@ -76,13 +75,9 @@ export async function checkMembershipRenewal(sessionJson, apiToken, options = {}
   }
 }
 
-export async function cancelMembershipRenewal(sessionJson, apiToken, options = {}) {
+export async function cancelMembershipRenewal(sessionJson, options = {}) {
   if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)) {
     throw renewalError("SESSION_INVALID", "Session JSON 无效", 422);
-  }
-  const token = String(apiToken || "").trim();
-  if (!token || token.length > 8192) {
-    throw renewalError("RENEWAL_CANCEL_NOT_CONFIGURED", "续费取消服务凭据未配置", 503);
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -90,11 +85,10 @@ export async function cancelMembershipRenewal(sessionJson, apiToken, options = {
     const response = await (options.fetchImpl || globalThis.fetch)(membershipRenewalCancelUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         Accept: "application/json"
       },
-      body: JSON.stringify({ token_input: JSON.stringify(sessionJson) }),
+      body: JSON.stringify({ token: sessionJson }),
       signal: controller.signal
     });
     if ([401, 403].includes(response.status)) {
@@ -116,13 +110,10 @@ export async function cancelMembershipRenewal(sessionJson, apiToken, options = {
     try { envelope = JSON.parse(new TextDecoder().decode(bytes)); } catch {
       throw renewalError("RENEWAL_CANCEL_RESPONSE_INVALID", "续费取消响应不是合法 JSON");
     }
-    const data = envelope?.code === 0 && envelope.data && typeof envelope.data === "object"
-      ? envelope.data
-      : null;
-    if (!data || (data.cancelled !== true && data.will_renew !== false && data.auto_renew !== false)) {
+    if (envelope?.code !== 200 || envelope.data !== 1) {
       throw renewalError("RENEWAL_CANCEL_RESPONSE_INVALID", "续费取消结果无法确认");
     }
-    return Object.freeze({ requested: true, providerConfirmed: true });
+    return Object.freeze({ requested: true, providerConfirmed: true, message: envelope.message || null });
   } catch (error) {
     if (error?.code) throw error;
     throw renewalError(

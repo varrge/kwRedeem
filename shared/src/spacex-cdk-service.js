@@ -263,7 +263,6 @@ export function createSpaceXCdkService({
   db,
   clientFactory = null,
   renewalProvider = null,
-  renewalTokenProvider = null,
   logger = console
 } = {}) {
   let cachedClient = null;
@@ -290,33 +289,6 @@ export function createSpaceXCdkService({
       cachedVersion = version;
     }
     return cachedClient;
-  }
-
-  async function renewalApiToken() {
-    if (typeof renewalTokenProvider === "function") {
-      const provided = await renewalTokenProvider();
-      const token = String(provided || "").trim();
-      if (token) return token;
-    } else {
-      const row = db.prepare(`
-        SELECT spacexcard_api_token_encrypted
-        FROM extension_delivery_settings
-        WHERE id = 'default'
-      `).get();
-      if (row?.spacexcard_api_token_encrypted) {
-        try {
-          const token = decryptText(row.spacexcard_api_token_encrypted).trim();
-          if (token) return token;
-        } catch {
-          // Treat an unreadable token as an unavailable guard dependency.
-        }
-      }
-    }
-    throw errorWithCode("自动化续费保护暂未配置", "SPACEX_CDK_RENEWAL_GUARD_NOT_CONFIGURED", {
-      statusCode: 503,
-      retryable: true,
-      retryScope: "global"
-    });
   }
 
   function renewalGuardAudit(action, guard, detail = {}) {
@@ -554,16 +526,9 @@ export function createSpaceXCdkService({
     const leaseToken = acquired.leaseToken;
     if (!leaseToken) throw renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_BUSY", "自动化续费保护状态无有效占用");
 
-    let token;
-    try {
-      token = await renewalApiToken();
-    } catch (error) {
-      failRenewalGuard(guard, leaseToken, error);
-    }
-
     let observation;
     try {
-      observation = await configuredRenewalProvider.check(session, token);
+      observation = await configuredRenewalProvider.check(session);
     } catch (error) {
       failRenewalGuard(guard, leaseToken, error);
     }
@@ -603,14 +568,14 @@ export function createSpaceXCdkService({
       cancellationAttempt
     });
     try {
-      await configuredRenewalProvider.cancel(session, token);
+      await configuredRenewalProvider.cancel(session);
     } catch (error) {
       failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, { willRenew: true });
     }
 
     let rechecked;
     try {
-      rechecked = await configuredRenewalProvider.check(session, token);
+      rechecked = await configuredRenewalProvider.check(session);
     } catch (error) {
       failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, { willRenew: null });
     }

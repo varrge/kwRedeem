@@ -187,6 +187,10 @@ _Avoid_: Upstream provider credential, hidden local proxy, assuming every client
 A Client Integration Recipe in which a graphical workspace such as Codeg or CCGUI launches an already configured Claude Code, Codex CLI, or Gemini CLI runtime that connects to Sub2api.
 _Avoid_: Duplicating a Key into both layers without need, describing the GUI as the API caller, mixing runtime-specific protocols
 
+**CC Switch Recipe**:
+A Client Integration Recipe for adding a Sub2api user API Key to CC Switch as an application or unified provider, with explicit Base URL path handling and a local-route warning for Codex protocol conversion.
+_Avoid_: Using a Sub2api admin token, duplicating `/v1`, treating CC Switch OAuth as an API Key, claiming every CC Switch preset supports the same protocol
+
 **Client Support Tier**:
 The tutorial label that distinguishes project-maintained examples, recently verified compatible clients, and unverified community options without implying equal support or endorsement.
 _Avoid_: Undifferentiated recommendation list, permanent compatibility claim, hidden support boundary

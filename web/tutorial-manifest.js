@@ -35,6 +35,13 @@ window.TUTORIAL_MANIFEST = Object.freeze({
       note: "适合把 Claude Code、Codex CLI、Gemini CLI 和 OpenCode 放在一个桌面工作区。"
     },
     {
+      name: "CC Switch",
+      kind: "桌面供应商管理 / 本地路由",
+      mode: "统一供应商 + 本地 CLI",
+      status: "candidate",
+      note: "在供应商或统一供应商中填写 Sub2api Key、端点和模型；Codex 的 Chat Completions 接入需要本地路由映射。"
+    },
+    {
       name: "Cherry Studio",
       kind: "桌面聊天客户端",
       mode: "直接 OpenAI 兼容 API",

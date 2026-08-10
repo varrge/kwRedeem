@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Sub2api 教程中心：API 调用、客户端接入与订阅购买" />
+    <title>教程中心 · Sub2api</title>
+    <link rel="stylesheet" href="./apple-design.css" />
+    <link rel="stylesheet" href="./tutorial.css" />
+  </head>
+  <body data-tutorial-page="center">
+    <main class="tutorial-page">
+      <header data-tutorial-header></header>
+      <section class="tutorial-title">
+        <p class="tutorial-kicker">Tutorial Center</p>
+        <h1>把第一次接入做对</h1>
+        <p>教程中心只有一个公开网页，API 调用、客户端配方和订阅购买都在这里完成阅读；真正的 Key、余额和套餐操作会跳回 Sub2api 登录后的页面。</p>
+        <div class="tutorial-meta"><span class="tutorial-pill accent">公开阅读</span><span class="tutorial-pill">不记录学习进度</span><span class="tutorial-pill">不读取 API Key</span></div>
+      </section>
+
+      <section class="tutorial-grid" data-tutorial-catalog aria-label="教程目录"></section>
+
+      <div class="tutorial-layout tutorial-section">
+        <article class="tutorial-main">
+          <section class="tutorial-step" id="api-quickstart">
+            <div class="tutorial-step-number">Track 1 · API Calling</div>
+            <h2>5 分钟完成第一次 API 调用</h2>
+            <p>先用 OpenAI 兼容的 <span class="tutorial-inline-code">/v1/chat/completions</span> 验证通路，再选择 CLI、桌面客户端或 AI 编程 GUI。</p>
+
+            <h3 id="prepare">1. 在 Sub2api 创建自己的 API Key</h3>
+            <ol>
+              <li>登录 Sub2api，打开 API Key / 密钥管理页面。</li>
+              <li>创建一个只给自己使用的 Key；完整密钥通常只在创建完成时展示一次。</li>
+              <li>把 Key 只复制到你即将使用的客户端，不要粘贴进教程页面、截图或工单。</li>
+            </ol>
+            <div class="tutorial-callout warning"><strong>教程不会自动填 Key</strong><p>教程是公开网页，不能接触你的真实凭据。怀疑泄露时，回到 Sub2api 控制台撤销并重新生成。</p></div>
+
+            <h3 id="request">2. 用一条 curl 请求验证通路</h3>
+            <p>把三个占位符换成你的值。模型名以你的 Key 可访问的模型为准。</p>
+            <pre class="tutorial-code"><code>curl <span data-api-base></span>/chat/completions \
+  -H "Authorization: Bearer &lt;YOUR_API_KEY&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;MODEL_ID&gt;",
+    "messages": [
+      {"role": "user", "content": "请用一句话介绍你自己。"}
+    ],
+    "temperature": 0.2
+  }'</code></pre>
+            <p class="tutorial-muted">复制按钮只复制代码文本，不会收集你粘贴进去的 Key。</p>
+            <div class="tutorial-callout"><strong>API Base URL</strong><p><span class="tutorial-inline-code" data-api-base></span>。如果你从不同域名打开教程，以 Sub2api 管理员提供的 API 源站地址为准。</p></div>
+
+            <h3 id="verify">3. 成功与常见报错</h3>
+            <p>成功响应通常包含 <span class="tutorial-inline-code">choices</span> 数组和模型生成的文本。先确认 HTTP 状态码为 2xx，再检查响应是否包含可读内容。</p>
+            <div class="tutorial-table-wrap"><table class="tutorial-table"><thead><tr><th>现象</th><th>先检查什么</th></tr></thead><tbody>
+              <tr><td><span class="tutorial-inline-code">401</span> / 鉴权失败</td><td>Authorization 是否为 <span class="tutorial-inline-code">Bearer &lt;Key&gt;</span>，Key 是否被撤销或带多余空格。</td></tr>
+              <tr><td>模型不可用</td><td>先调用 <span class="tutorial-inline-code">/v1/models</span>，确认模型 ID 和 Key 的可用范围。</td></tr>
+              <tr><td>余额不足 / 额度不足</td><td>登录 Sub2api 查看余额或套餐，不要靠重复重试解决。</td></tr>
+              <tr><td>请求超时</td><td>先减少上下文和输出长度，再检查客户端代理、网络和服务状态。</td></tr>
+            </tbody></table></div>
+
+            <h3 id="models">4. 先查模型，再复制到客户端</h3>
+            <pre class="tutorial-code"><code>curl <span data-api-base></span>/models \
+  -H "Authorization: Bearer &lt;YOUR_API_KEY&gt;"</code></pre>
+            <p>从返回结果中复制完整模型 ID，填入下一步客户端的 Model 字段。不要在教程里写死会变化的模型列表。</p>
+
+            <h3 id="clients">5. 客户端配方</h3>
+            <p>所有客户端先遵循同一组信息：API Key、Base URL、模型 ID。不同工具的字段名和 URL 拼接规则可能不同。</p>
+            <div class="tutorial-table-wrap"><table class="tutorial-table"><thead><tr><th>客户端</th><th>类型</th><th>接入方式</th><th>状态</th><th>配置提示</th></tr></thead><tbody data-client-catalog></tbody></table></div>
+            <div class="tutorial-callout warning"><strong>GUI 能打开不等于 API 已接通</strong><p>只有 runtime 真实完成一次请求，才算客户端配方验证通过。排错时先确认到底是哪一层保存了配置。</p></div>
+
+            <h3 id="cli">6. Claude Code、Codex CLI、Gemini CLI</h3>
+            <ul>
+              <li>把 Sub2api Key 只写入本机 CLI 配置或环境变量。</li>
+              <li>Base URL 必须按该 CLI 的协议要求填写，可能不是同一个路径。</li>
+              <li>先用一个低成本模型和最短请求验证，再开始长任务或代码修改。</li>
+              <li>Codeg/CCGUI 托管 CLI 时，不要为了“看起来完整”再复制一份 Key 到 GUI。</li>
+            </ul>
+          </section>
+
+          <section class="tutorial-step" id="subscription-guide">
+            <div class="tutorial-step-number">Track 2 · Subscription Purchase</div>
+            <h2>看懂套餐，再安全购买</h2>
+            <p>教程公开说明套餐字段；真实余额扣款、订单记录和账号数据只在 Sub2api 登录后的页面处理。</p>
+
+            <h3 id="compare">1. 购买前先看三件事</h3>
+            <div class="tutorial-table-wrap"><table class="tutorial-table"><thead><tr><th>字段</th><th>你要确认什么</th><th>为什么重要</th></tr></thead><tbody>
+              <tr><td>价格</td><td>本次会扣除多少余额</td><td>购买前确认余额足够，避免扣款失败。</td></tr>
+              <tr><td>有效期</td><td>套餐从购买成功起生效多少天</td><td>决定什么时候需要再次购买。</td></tr>
+              <tr><td>额度 / 限额</td><td>每日限额或模型访问范围</td><td>避免把有效期误认为无限使用。</td></tr>
+            </tbody></table></div>
+            <div class="tutorial-callout"><strong>价格和套餐以 Sub2api 当前页面为准</strong><p>教程不写死价格、有效期和模型列表；这些内容可能由管理员调整。</p></div>
+
+            <h3 id="login">2. 登录 Sub2api</h3>
+            <p>点击“购买订阅”会进入 Sub2api 的登录页；登录成功后回到购买页面。已登录用户会直接进入，不需要重复认证。</p>
+
+            <h3 id="purchase">3. 确认余额扣款</h3>
+            <ol>
+              <li>选择当前可购买的套餐，核对价格、有效期和额度。</li>
+              <li>点击余额购买后，确认弹窗中的金额和套餐名称。</li>
+              <li>等待页面返回购买结果，不要连续点击多个套餐。</li>
+              <li>在购买记录或我的套餐页面确认结果。</li>
+            </ol>
+            <div class="tutorial-callout warning"><strong>不要把重复点击当成重试</strong><p>金额已经扣除但订单没有结果时，先保留订单号和页面状态，停止继续点击。</p></div>
+
+            <h3 id="after-purchase">4. 购买后确认</h3>
+            <ul>
+              <li>购买记录出现对应订单，状态为成功或明确显示等待处理。</li>
+              <li>我的套餐页面中的生效时间和额度符合购买前说明。</li>
+              <li>API 使用仍然使用自己的 API Key；购买不会自动把 Key 填进客户端。</li>
+            </ul>
+            <div class="tutorial-actions">
+              <a class="tutorial-button small" data-subscription-link href="/purchase">购买订阅</a>
+              <a class="tutorial-button small secondary" data-my-subscriptions-link href="/subscriptions">查看我的套餐</a>
+            </div>
+          </section>
+
+          <section class="tutorial-note">
+            <h2>安全底线</h2>
+            <p>教程不接收 API Key、不代替你发请求，也不要求把 Key 发到聊天、截图、Issue 或未知网页。第一版不记录学习进度。</p>
+            <div class="tutorial-actions">
+              <a class="tutorial-button small" data-subscription-link href="/purchase">购买订阅</a>
+              <a class="tutorial-button small secondary" data-my-subscriptions-link href="/subscriptions">查看我的套餐</a>
+            </div>
+          </section>
+        </article>
+
+        <aside class="tutorial-aside">
+          <div class="tutorial-panel tutorial-aside-card"><strong>本页目录</strong><nav class="tutorial-aside-nav">
+            <a data-public-link href="#api-quickstart">API 调用</a><a data-public-link href="#request">第一条请求</a><a data-public-link href="#clients">客户端配方</a><a data-public-link href="#subscription-guide">订阅购买</a><a data-public-link href="#compare">比较套餐</a><a data-public-link href="#purchase">确认扣款</a>
+          </nav></div>
+          <div class="tutorial-panel tutorial-aside-card"><strong>账号操作</strong><p>需要真实余额或套餐数据时，回到 Sub2api 登录后的页面。</p><div class="tutorial-actions"><a class="tutorial-button small" data-subscription-link href="/purchase">购买订阅</a></div></div>
+        </aside>
+      </div>
+
+      <footer class="tutorial-footer"><span>教程内容公开可读；账号操作由 Sub2api 登录态保护。</span><a class="tutorial-link" data-public-link href="/home">返回 Sub2api 首页 →</a></footer>
+    </main>
+    <script src="./tutorial-manifest.js"></script>
+    <script src="./tutorial.js"></script>
+  </body>
+</html>

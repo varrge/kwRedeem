@@ -1460,6 +1460,15 @@
                 世界杯竞猜嵌入页地址：<code>/sub2api-worldcup.html?connectionId=&lt;连接ID&gt;</code>。下注会使用 Sub2api 用户余额做小额扣款，结算命中后按后台赔率返还余额；仅建议用于平台内不可提现余额/积分。
               </p>
               <p class="hint">
+                Sub2api 首页不使用 iframe：把项目中的 <code>docs/sub2api-home-content.html</code> 内容直接粘贴到 Sub2api 的“首页内容”设置。不要填写 URL，否则 Sub2api 会把它当成 iframe 地址。
+              </p>
+              <p class="hint">
+                教程只有一个公开页面。公共导航添加同源反代地址 <code>https://sub.vsakura.top/_kwredeem/tutorial-center.html</code>；API 调用、客户端接入和订阅购买说明都在这一个页面内。教程公开可读，不读取用户 API Key。
+              </p>
+              <p class="hint">
+                登录后菜单直接使用 Sub2api 原生页面：购买订阅 <code>/purchase</code>，我的套餐 <code>/subscriptions</code>。教程中的账号动作未登录时会先进入 <code>/login?redirect=/purchase</code> 或 <code>/login?redirect=/subscriptions</code>，登录后返回对应页面。
+              </p>
+              <p class="hint">
                 报错指南嵌入页地址：<code>/sub2api-error-guide.html</code>。该页不需要用户登录态，可直接配置为 Sub2api 自定义 iframe 页面；建议同样反代到 Sub2api 同源路径，例如 <code>https://sub.vsakura.top/_kwredeem/sub2api-error-guide.html</code>。
               </p>
               <p class="hint">

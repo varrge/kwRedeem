@@ -148,7 +148,7 @@ The title, slug, track, ordering, visibility, and related navigation information
 _Avoid_: Formatting markup, user completion state, hard-coded page order
 
 **Tutorial Home**:
-The public landing page shown at the Sub2api root in place of the default homepage; it introduces the API and subscription paths while deferring account-specific actions to the existing Sub2api sign-in flow.
+The public landing content rendered directly by Sub2api at its root in place of the default homepage; it introduces the service while deferring account-specific actions to the existing Sub2api sign-in flow.
 _Avoid_: Replacing the entire Sub2api application shell, administrator dashboard, authenticated account home
 
 **Account-Gated Tutorial Action**:
@@ -171,13 +171,29 @@ _Avoid_: Complete API reference, theoretical overview, provider-specific setup
 The OpenAI-compatible `/v1/chat/completions` contract used as the Tutorial Center's first-call baseline; other protocols and clients are documented as separate recipes.
 _Avoid_: Claiming every model supports one identical protocol, mixing provider-specific request bodies into the baseline
 
+**Unified API Access**:
+The user-facing capability of using one Sub2api-issued API Key and endpoint configuration across the compatible clients and model routes documented by the Tutorial Center.
+_Avoid_: Promising every client or model is interchangeable, exposing upstream provider credentials, treating subscription purchase as API access itself
+
 **Client Integration Recipe**:
 A focused tutorial that maps the KaWang API contract to one client category—CLI, SDK, desktop application, web tool, or third-party service—and states its configuration, verification, and credential-safety boundaries.
 _Avoid_: Unverified software list, implicit official endorsement, copying secrets into unknown tools
 
+**Direct Client Connection**:
+A Client Integration Recipe in which a compatible application such as Codeg or CCGUI receives the Sub2api Base URL, API Key, and model name and calls the OpenAI-compatible API itself.
+_Avoid_: Upstream provider credential, hidden local proxy, assuming every client field uses the same URL shape
+
+**Managed CLI Connection**:
+A Client Integration Recipe in which a graphical workspace such as Codeg or CCGUI launches an already configured Claude Code, Codex CLI, or Gemini CLI runtime that connects to Sub2api.
+_Avoid_: Duplicating a Key into both layers without need, describing the GUI as the API caller, mixing runtime-specific protocols
+
 **Client Support Tier**:
 The tutorial label that distinguishes project-maintained examples, recently verified compatible clients, and unverified community options without implying equal support or endorsement.
 _Avoid_: Undifferentiated recommendation list, permanent compatibility claim, hidden support boundary
+
+**Client Verification Record**:
+The evidence attached to an “已验证兼容” Client Support Tier, including the tested client version, protocol/configuration, verification date, and known limitations.
+_Avoid_: Vendor claim as proof, timeless compatibility, verification with an administrator credential
 
 **Credential-Safe Tutorial**:
 A Tutorial Center experience that teaches credential use with placeholders and links to the authenticated Sub2api console, but never reads, stores, or renders a user's real API Key.

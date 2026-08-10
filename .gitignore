@@ -21,6 +21,7 @@ admin/runtime-config.js
 .vscode
 docs/*
 !docs/adr/
+!docs/sub2api-home-content.html
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 tests/*
 !tests/store-fulfillment.test.js

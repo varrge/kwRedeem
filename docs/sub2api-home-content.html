@@ -1,0 +1,124 @@
+<style>
+  .s2-home {
+    --s2-ink: #102030;
+    --s2-muted: #637083;
+    --s2-line: rgba(16, 32, 48, 0.1);
+    --s2-accent: #5b5cf0;
+    --s2-accent-strong: #4546d8;
+    box-sizing: border-box;
+    width: min(1120px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: clamp(48px, 8vw, 96px) 0 56px;
+    color: var(--s2-ink);
+    font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .s2-home * { box-sizing: border-box; }
+  .s2-home-hero {
+    overflow: hidden;
+    position: relative;
+    padding: clamp(36px, 7vw, 72px);
+    border: 1px solid var(--s2-line);
+    border-radius: 32px;
+    background:
+      radial-gradient(circle at 88% 14%, rgba(91, 92, 240, 0.2), transparent 34%),
+      linear-gradient(145deg, #fff 0%, #f6f7ff 100%);
+    box-shadow: 0 24px 80px rgba(40, 47, 86, 0.1);
+  }
+  .s2-home-eyebrow {
+    margin: 0 0 16px;
+    color: var(--s2-accent);
+    font-size: 13px;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .s2-home h1 {
+    max-width: 760px;
+    margin: 0;
+    font-size: clamp(38px, 7vw, 72px);
+    font-weight: 780;
+    letter-spacing: -0.055em;
+    line-height: 1.04;
+  }
+  .s2-home-lead {
+    max-width: 680px;
+    margin: 24px 0 0;
+    color: var(--s2-muted);
+    font-size: clamp(17px, 2.4vw, 21px);
+    line-height: 1.75;
+  }
+  .s2-home-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+  .s2-home-button {
+    display: inline-flex;
+    min-height: 46px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 21px;
+    border: 1px solid var(--s2-accent);
+    border-radius: 999px;
+    background: var(--s2-accent);
+    color: #fff !important;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    text-decoration: none !important;
+    transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  }
+  .s2-home-button:hover {
+    transform: translateY(-1px);
+    background: var(--s2-accent-strong);
+    box-shadow: 0 10px 24px rgba(91, 92, 240, 0.24);
+  }
+  .s2-home-button.is-secondary {
+    border-color: var(--s2-line);
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--s2-ink) !important;
+  }
+  .s2-home-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+  }
+  .s2-home-card {
+    padding: 24px;
+    border: 1px solid var(--s2-line);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.76);
+  }
+  .s2-home-card strong { display: block; margin-bottom: 8px; font-size: 17px; }
+  .s2-home-card p { margin: 0; color: var(--s2-muted); line-height: 1.7; }
+  @media (max-width: 720px) {
+    .s2-home { width: min(100% - 22px, 1120px); padding-top: 24px; }
+    .s2-home-hero { padding: 32px 24px; border-radius: 24px; }
+    .s2-home-grid { grid-template-columns: 1fr; }
+    .s2-home-button { width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .s2-home-button { transition: none; }
+  }
+</style>
+
+<div class="s2-home">
+  <section class="s2-home-hero">
+    <p class="s2-home-eyebrow">OpenAI Compatible API</p>
+    <h1>一个 API Key，连接你的 AI 工具</h1>
+    <p class="s2-home-lead">统一管理 API Key、模型调用与订阅套餐。登录后创建自己的 Key，或选择适合当前用量的订阅。</p>
+    <div class="s2-home-actions">
+      <a class="s2-home-button" href="/keys">创建 API Key</a>
+      <a class="s2-home-button is-secondary" href="/purchase">购买订阅</a>
+      <a class="s2-home-button is-secondary" href="/subscriptions">查看我的套餐</a>
+    </div>
+  </section>
+
+  <section class="s2-home-grid" aria-label="服务特点">
+    <article class="s2-home-card"><strong>OpenAI 兼容</strong><p>用熟悉的 Base URL、API Key 和模型 ID 接入常见客户端。</p></article>
+    <article class="s2-home-card"><strong>多种工具可用</strong><p>可连接 Codeg、CCGUI、桌面客户端与常用 AI CLI。</p></article>
+    <article class="s2-home-card"><strong>套餐独立管理</strong><p>价格、有效期与额度以登录后的 Sub2api 套餐页面为准。</p></article>
+  </section>
+</div>

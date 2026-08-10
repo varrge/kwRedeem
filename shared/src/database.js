@@ -885,6 +885,28 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS spacex_cdk_renewal_guards (
+      id TEXT PRIMARY KEY,
+      wrapper_cdkey_id TEXT NOT NULL UNIQUE,
+      spacex_cdk_id TEXT NOT NULL,
+      account_key TEXT NOT NULL,
+      account_masked TEXT,
+      state TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      cancellation_attempts INTEGER NOT NULL DEFAULT 0,
+      will_renew INTEGER,
+      checked_at TEXT,
+      cancellation_requested_at TEXT,
+      cancelled_at TEXT,
+      next_retry_at TEXT,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      last_error_code TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS spacex_cdk_webhook_events (
       event_id TEXT PRIMARY KEY,
       event_type TEXT NOT NULL,
@@ -1590,6 +1612,8 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_spacex_cdk_units_task ON spacex_cdk_units(task_id, state, unit_index);
     CREATE INDEX IF NOT EXISTS idx_spacex_cdk_activations_due ON spacex_cdk_activations(state, next_reconcile_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_spacex_cdk_activations_upstream ON spacex_cdk_activations(upstream_order_id);
+    CREATE INDEX IF NOT EXISTS idx_spacex_cdk_renewal_guards_due
+      ON spacex_cdk_renewal_guards(state, next_retry_at, updated_at);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_due ON membership_fulfillments(state, retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_order ON membership_fulfillments(order_no);
     DROP INDEX IF EXISTS idx_membership_active_account_lock;

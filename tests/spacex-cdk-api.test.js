@@ -17,6 +17,8 @@ const { encryptText, decryptText } = await import("../shared/src/secure.js");
 const db = getDb();
 const sessionAccessTokenFixture = "RAW-ACCESS-TOKEN-MUST-NOT-BE-SENT";
 const sessionCookieFixture = "RAW-SESSION-COOKIE-MUST-NOT-PERSIST";
+let renewalEnabled = true;
+const renewalCalls = [];
 
 const previousFetch = globalThis.fetch;
 globalThis.fetch = async (url, options = {}) => {
@@ -38,6 +40,25 @@ globalThis.fetch = async (url, options = {}) => {
     return response({ preflight_token: "preflight-token", account_id: "account-1" });
   }
   if (parsed.pathname === "/api/v1/cdk/redeem") return response({ order_id: "upstream-order-1", status: "queued", stage: "queued" });
+  if (parsed.pathname === "/api/v1/gpt/check") {
+    assert.equal(options.headers.Authorization, "Bearer renewal-api-token");
+    const tokenInput = JSON.parse(JSON.parse(String(options.body || "{}")).token_input);
+    assert.equal(tokenInput.sessionToken, sessionCookieFixture);
+    renewalCalls.push("check");
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { summary: { is_delinquent: false, will_renew: renewalEnabled } }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (parsed.pathname === "/api/v1/gpt/cancel-renewal") {
+    assert.equal(options.headers.Authorization, "Bearer renewal-api-token");
+    renewalCalls.push("cancel");
+    renewalEnabled = false;
+    return new Response(JSON.stringify({ code: 0, data: { cancelled: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }
   if (parsed.pathname === "/openapi/v1/balance") return response({ balance: 100, currency: "USD" });
   if (parsed.pathname === "/openapi/v1/gpt-direct/cdks") {
     if (parsed.searchParams.get("q") === "snapshot-api-upstream") {
@@ -187,6 +208,11 @@ test("public SpaceX activation never persists the raw Session and a signed Webho
         updated_at = ?, updated_by = 'test'
     WHERE id = 'default'
   `).run(encryptText("api-key"), encryptText("webhook-secret"), new Date().toISOString());
+  db.prepare(`
+    UPDATE extension_delivery_settings
+    SET spacexcard_api_token_encrypted = ?, updated_at = ?, updated_by = 'test'
+    WHERE id = 'default'
+  `).run(encryptText("renewal-api-token"), new Date().toISOString());
   seedWrapper();
   const verified = await app.inject({
     method: "POST",
@@ -215,11 +241,28 @@ test("public SpaceX activation never persists the raw Session and a signed Webho
   assert.doesNotMatch(redeemed.json().message || "", /不能使用 Access Token/);
   assert.equal(redeemed.statusCode, 200);
   assert.equal(redeemed.json().processingMode, "spacex_cdk");
+  assert.deepEqual(renewalCalls, ["check", "cancel", "check"]);
   const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
   assert.deepEqual(JSON.parse(decryptText(order.session_payload)), { ephemeral: true });
   const persistedOrder = JSON.stringify(db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(order.id));
   assert.doesNotMatch(persistedOrder, new RegExp(sessionAccessTokenFixture));
   assert.doesNotMatch(persistedOrder, new RegExp(sessionCookieFixture));
+  const guard = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = 'api-wrapper'").get();
+  assert.equal(guard.state, "passed");
+  assert.equal(guard.will_renew, 0);
+  assert.equal(guard.cancellation_attempts, 1);
+  assert.doesNotMatch(JSON.stringify(guard), /RAW-|renewal-api-token/);
+  const adminToken = await login();
+  const activations = await app.inject({
+    method: "GET",
+    url: "/api/admin/spacex-cdk/activations",
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(activations.statusCode, 200);
+  const adminActivation = activations.json().items.find((item) => item.publicKey === "91GPTPLUS-API1234567");
+  assert.equal(adminActivation.renewalGuardState, "passed");
+  assert.equal(adminActivation.renewalWillRenew, false);
+  assert.equal(adminActivation.renewalCancellationAttempts, 1);
 
   const event = JSON.stringify({
     event_id: "event-1",

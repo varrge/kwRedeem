@@ -288,8 +288,16 @@ A SpaceX Card payment card whose upstream identity and operational metadata are 
 _Avoid_: Stored card credentials, disposable checkout payload
 
 **Session Activation Delivery**:
-The existing extension process that installs an order's ChatGPT authentication cookies into the incognito store, verifies identity, and completes the starting subscription-protection check. Its success does not mean that a membership was purchased.
+The existing extension process that installs an order's ChatGPT authentication cookies into the incognito store, verifies identity, and completes the starting subscription-protection check before activating the already-issued CDK. Its success does not mean that a membership was purchased.
 _Avoid_: Membership fulfillment, payment completion
+
+**Session Activation Renewal Guard**:
+The one-time protection prerequisite evaluated from the player's submitted Session during CDK activation: observe whether the account is set to renew automatically and, when it is enabled, disable and recheck that renewal before the activation continues. An unconfirmed cancellation blocks activation and moves to bounded recovery or human handling; this guard belongs to Session Activation Delivery and is separate from the final renewal protection owned by Membership Fulfillment.
+_Avoid_: Go checkout renewal guard, recurring subscription management, browser-side renewal toggle, continuing after an ambiguous cancellation
+
+**Session Activation Renewal Recovery**:
+The evidence-based operator path for a renewal guard that cannot confirm the disabled state automatically. It may re-query or perform a bounded retry for the same preflight-verified account, but it cannot assert success, bypass the guard, or restore automatic renewal through KaWang.
+_Avoid_: Force-complete, manual success flag, automatic renewal rollback
 
 **Membership Fulfillment**:
 The independent, durable order process that establishes purchase eligibility, reserves and funds a card, completes the required payment stages, confirms the target membership, and disables renewal. It alone owns card, payment, upgrade, and renewal-safe completion state.

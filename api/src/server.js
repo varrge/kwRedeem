@@ -7030,31 +7030,151 @@ app.post("/api/admin/spacex-cdk/inventory/:id/snapshot-recover", { preHandler: r
   return { recovered };
 });
 
-app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async () => ({
-  items: db.prepare(`
+app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async () => {
+  const guards = db.prepare(`
+    SELECT g.*, c.public_key, sx.plan, a.id AS activation_id
+    FROM spacex_cdk_renewal_guards g
+    JOIN cdkeys c ON c.id = g.wrapper_cdkey_id
+    JOIN spacex_cdks sx ON sx.id = g.spacex_cdk_id
+    LEFT JOIN spacex_cdk_activations a ON a.wrapper_cdkey_id = g.wrapper_cdkey_id
+    ORDER BY g.updated_at DESC LIMIT 500
+  `).all();
+  const guardByWrapper = new Map(guards.map((item) => [item.wrapper_cdkey_id, item]));
+  const activationItems = db.prepare(`
     SELECT a.*, o.order_no, c.public_key, sx.plan
     FROM spacex_cdk_activations a
     JOIN redeem_orders o ON o.id = a.redeem_order_id
     JOIN cdkeys c ON c.id = a.wrapper_cdkey_id
     JOIN spacex_cdks sx ON sx.id = a.spacex_cdk_id
     ORDER BY a.created_at DESC LIMIT 500
-  `).all().map((item) => ({
-    id: item.id,
-    orderNo: item.order_no,
-    publicKey: item.public_key,
-    plan: item.plan,
-    accountMasked: item.account_masked,
-    state: item.state,
-    upstreamStatus: item.upstream_status || null,
-    stage: item.stage || null,
-    message: item.public_message || null,
-    lastError: item.last_error || null,
-    createdAt: item.created_at,
-    updatedAt: item.updated_at,
-    completedAt: item.completed_at || null,
-    failedAt: item.failed_at || null
-  }))
-}));
+  `).all().map((item) => {
+    const guard = guardByWrapper.get(item.wrapper_cdkey_id);
+    return {
+      id: item.id,
+      kind: "activation",
+      orderNo: item.order_no,
+      publicKey: item.public_key,
+      plan: item.plan,
+      accountMasked: item.account_masked,
+      state: item.state,
+      upstreamStatus: item.upstream_status || null,
+      stage: item.stage || null,
+      message: item.public_message || null,
+      lastError: item.last_error || null,
+      renewalGuardState: guard?.state || null,
+      renewalWillRenew: guard?.will_renew === null || guard?.will_renew === undefined
+        ? null
+        : guard.will_renew === 1,
+      renewalAttempts: Number(guard?.attempts || 0),
+      renewalCancellationAttempts: Number(guard?.cancellation_attempts || 0),
+      renewalNextRetryAt: guard?.next_retry_at || null,
+      renewalLastErrorCode: guard?.last_error_code || null,
+      renewalCheckedAt: guard?.checked_at || null,
+      renewalCancelledAt: guard?.cancelled_at || null,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      completedAt: item.completed_at || null,
+      failedAt: item.failed_at || null
+    };
+  });
+  const pendingGuardItems = guards
+    .filter((item) => !item.activation_id)
+    .map((item) => ({
+      id: item.id,
+      kind: "renewal_guard",
+      orderNo: null,
+      publicKey: item.public_key,
+      plan: item.plan,
+      accountMasked: item.account_masked,
+      state: item.state,
+      upstreamStatus: null,
+      stage: "renewal_guard",
+      message: item.state === "human_review"
+        ? "续费保护需要人工确认"
+        : (item.state === "retry_wait" ? "续费保护等待重新核验" : "自动化准备中"),
+      lastError: item.last_error || null,
+      renewalGuardState: item.state,
+      renewalWillRenew: item.will_renew === null || item.will_renew === undefined
+        ? null
+        : item.will_renew === 1,
+      renewalAttempts: Number(item.attempts || 0),
+      renewalCancellationAttempts: Number(item.cancellation_attempts || 0),
+      renewalNextRetryAt: item.next_retry_at || null,
+      renewalLastErrorCode: item.last_error_code || null,
+      renewalCheckedAt: item.checked_at || null,
+      renewalCancelledAt: item.cancelled_at || null,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      completedAt: null,
+      failedAt: null
+    }));
+  return {
+    items: [...pendingGuardItems, ...activationItems]
+      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+      .slice(0, 500)
+  };
+});
+
+app.post("/api/admin/spacex-cdk/renewal-guards/:wrapperId/recover", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    adminUsername: z.string().min(1),
+    adminPassword: z.string().min(1),
+    sessionPayload: z.string().min(2).max(256 * 1024)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "请重新验证管理员并提交完整 Session" });
+  try {
+    verifyFreshAdminCredentials(
+      { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+      { username: env.adminUsername, password: env.adminPassword }
+    );
+  } catch {
+    return reply.code(401).send({ message: "管理员账号或密码错误" });
+  }
+  const wrapper = db.prepare(`
+    SELECT id, public_key FROM cdkeys WHERE id = ? AND processing_mode = 'spacex_cdk'
+  `).get(String(request.params.wrapperId || "").trim());
+  if (!wrapper) return reply.code(404).send({ message: "自动化卡密不存在" });
+  const guard = db.prepare(`
+    SELECT state FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = ?
+  `).get(wrapper.id);
+  if (!guard) return reply.code(404).send({ message: "该卡密没有续费保护记录" });
+
+  let session;
+  try {
+    session = parseSessionPayload(parsed.data.sessionPayload).parsed;
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+  try {
+    const result = await spaceXCdkService.activate({
+      publicKey: wrapper.public_key,
+      session,
+      customerIp: request.ip,
+      renewalRecovery: true
+    });
+    createAuditLog({
+      action: "spacex_cdk.renewal_guard.recovery",
+      actor: request.admin.username,
+      resourceType: "spacex_cdk_renewal_guard",
+      resourceId: wrapper.id,
+      detail: { publicKey: wrapper.public_key, priorState: guard.state, outcome: "resumed" }
+    });
+    return result;
+  } catch (error) {
+    createAuditLog({
+      action: "spacex_cdk.renewal_guard.recovery",
+      actor: request.admin.username,
+      resourceType: "spacex_cdk_renewal_guard",
+      resourceId: wrapper.id,
+      detail: { publicKey: wrapper.public_key, priorState: guard.state, outcome: "blocked", code: error?.code || null }
+    });
+    return reply.code(error?.statusCode || 409).send({
+      message: error?.message || "自动化续费保护恢复未完成",
+      code: error?.code || null,
+      ...(Number.isInteger(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {})
+    });
+  }
+});
 
 app.get("/api/admin/store-fulfillment/settings", { preHandler: requireAdmin }, async () => ({
   settings: serializeStoreFulfillmentSettings(getStoreFulfillmentSettings())

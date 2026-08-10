@@ -1568,6 +1568,14 @@ test("voiding a CDK is rejected after its membership fulfillment crosses the mon
   assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = ?").get(created.json().id).status, "locked");
   assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(order.id).status, "pending");
   assert.equal(db.prepare("SELECT state FROM membership_fulfillments WHERE order_id = ?").get(order.id).state, "FUNDING");
+
+  const lockedSession = await app.inject({
+    method: "GET",
+    url: `/api/admin/cdkeys/${encodeURIComponent(created.json().id)}/session`,
+    headers
+  });
+  assert.equal(lockedSession.statusCode, 200);
+  assert.deepEqual(JSON.parse(lockedSession.json().sessionJson), { user: { email: "void-money@example.com" } });
 });
 
 test("admin UI exposes locked membership credentials without money-operation controls", async () => {

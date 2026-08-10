@@ -103,6 +103,17 @@ test("admin script boots with the phase 4-7 DOM without an authenticated session
   dom.window.close();
 });
 
+test("cdkey detail list exposes Session copy for locked cards", () => {
+  assert.match(
+    app,
+    /item\.status === "used" \|\| item\.status === "locked"[\s\S]*复制 Session/
+  );
+  assert.doesNotMatch(
+    app,
+    /item\.status === "used" \|\| \(item\.processing_mode === "manual" && item\.status === "locked"\)/
+  );
+});
+
 test("a consumed blocked SpaceX CDK exposes the audited manual-close action", async () => {
   const dom = new JSDOM(html, {
     url: "http://127.0.0.1:4174/",

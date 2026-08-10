@@ -95,6 +95,24 @@ function addSnapshottedTask({ taskId, itemId, plan = "plus" }) {
   return db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(taskId);
 }
 
+function seedStandaloneWrapper({ wrapperId, assetId, upstreamId, publicKey, sourceCode = "SXC-TEST-FULL" }) {
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_currency, fee_amount_minor, current_wrapper_cdkey_id,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, 'SXC-TEST', 'plus', 'allocated', 'unused', 2500, 'USD', 100, ?, ?, ?)
+  `).run(assetId, upstreamId, encryptText(sourceCode), wrapperId, createdAt, createdAt);
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix,
+      status, metadata, processing_mode, manual_type, origin, created_at, updated_at
+    ) VALUES (?, '', 'prod_demo', 'endpoint_demo', 'site_demo', ?, ?, '91GPTPLUS', 'active', '{}',
+              'spacex_cdk', 'PLUS', 'store_order', ?, ?)
+  `).run(wrapperId, encryptText(`spacex-cdk-asset:${assetId}`), publicKey, createdAt, createdAt);
+}
+
 function dujiaoEnvelope(data, extra = {}) {
   return new Response(JSON.stringify({ status_code: 0, msg: "success", data, ...extra }), {
     status: 200,
@@ -249,16 +267,45 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
     async redeem() { return { status: "queued", stage: "opening_card", upstreamOrderId: "sx-order-1", message: "queued" }; },
     async result() { return { status: "completed", stage: "done", upstreamOrderId: "sx-order-1", message: "completed" }; }
   };
-  const service = createSpaceXCdkService({ db, clientFactory: () => fakeClient });
+  let renewalEnabled = true;
+  const renewalCalls = [];
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => fakeClient,
+    renewalTokenProvider: async () => "renewal-api-token",
+    renewalProvider: {
+      async check(session, token) {
+        renewalCalls.push("check");
+        assert.equal(session.sessionToken, "RAW-SESSION-SECRET");
+        assert.equal(token, "renewal-api-token");
+        return { willRenew: renewalEnabled, isDelinquent: false };
+      },
+      async cancel(session, token) {
+        renewalCalls.push("cancel");
+        assert.equal(session.sessionToken, "RAW-SESSION-SECRET");
+        assert.equal(token, "renewal-api-token");
+        renewalEnabled = false;
+        return { requested: true, providerConfirmed: true };
+      }
+    }
+  });
   const response = await service.activate({
     publicKey: wrapper.public_key,
     session: { sessionToken: "RAW-SESSION-SECRET", user: { id: "acct-123", email: "player@example.com" } },
     customerIp: "127.0.0.1"
   });
   assert.equal(response.processingMode, "spacex_cdk");
+  assert.deepEqual(renewalCalls, ["check", "cancel", "check"]);
   const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(response.orderNo);
   assert.deepEqual(JSON.parse(decryptText(order.session_payload)), { ephemeral: true });
   assert.doesNotMatch(JSON.stringify(db.prepare("SELECT * FROM redeem_orders WHERE id = ?").get(order.id)), /RAW-SESSION-SECRET/);
+  const guard = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = ?").get(wrapper.id);
+  assert.equal(guard.state, "passed");
+  assert.equal(guard.will_renew, 0);
+  assert.equal(guard.attempts, 1);
+  assert.equal(guard.cancellation_attempts, 1);
+  assert.ok(guard.cancelled_at);
+  assert.doesNotMatch(JSON.stringify(guard), /RAW-SESSION-SECRET|renewal-api-token/);
   const activation = db.prepare("SELECT * FROM spacex_cdk_activations WHERE redeem_order_id = ?").get(order.id);
   assert.equal(activation.state, "queued");
   db.prepare("UPDATE spacex_cdk_activations SET next_reconcile_at = ? WHERE id = ?")
@@ -269,6 +316,127 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
   assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = ?").get(wrapper.id).status, "used");
   assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = ?").get(asset.id).state, "consumed");
   assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(order.id).status, "succeeded");
+});
+
+test("an uncertain renewal cancellation blocks the claim and resumes only after a fresh same-account preflight", async () => {
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_currency, fee_amount_minor, current_wrapper_cdkey_id,
+      created_at, updated_at
+    ) VALUES ('renewal-retry-asset', 'renewal-retry-upstream', ?, 'SXC-RENEWAL', 'plus',
+              'allocated', 'unused', 2500, 'USD', 100, 'renewal-retry-wrapper', ?, ?)
+  `).run(encryptText("SXC-RENEWAL-FULL"), createdAt, createdAt);
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix,
+      status, metadata, processing_mode, manual_type, origin, created_at, updated_at
+    ) VALUES ('renewal-retry-wrapper', '', 'prod_demo', 'endpoint_demo', 'site_demo', ?,
+              '91GPTPLUS-RENEWAL', '91GPTPLUS', 'active', '{}', 'spacex_cdk', 'PLUS',
+              'store_order', ?, ?)
+  `).run(encryptText("spacex-cdk-asset:renewal-retry-asset"), createdAt, createdAt);
+
+  let preflightCalls = 0;
+  let redeemCalls = 0;
+  let renewalEnabled = true;
+  let cancellationCalls = 0;
+  const fakeClient = {
+    async preview() { return { redemptionToken: `redemption-${preflightCalls + 1}`, plan: "plus" }; },
+    async preflight() {
+      preflightCalls += 1;
+      return { preflightToken: `preflight-${preflightCalls}`, account_id: "renewal-account" };
+    },
+    async redeem() {
+      redeemCalls += 1;
+      return { status: "queued", upstreamOrderId: "renewal-order" };
+    }
+  };
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => fakeClient,
+    renewalTokenProvider: async () => "renewal-token",
+    renewalProvider: {
+      async check() { return { willRenew: renewalEnabled, isDelinquent: false }; },
+      async cancel() {
+        cancellationCalls += 1;
+        renewalEnabled = false;
+        const error = new Error("timeout after provider accepted the request");
+        error.code = "RENEWAL_CANCEL_TIMEOUT";
+        throw error;
+      }
+    }
+  });
+  const session = { sessionToken: "RETRY-SESSION-SECRET", user: { id: "renewal-account", email: "retry@example.com" } };
+
+  await assert.rejects(
+    service.activate({ publicKey: "91GPTPLUS-RENEWAL", session }),
+    (error) => error.code === "SPACEX_CDK_RENEWAL_CANCEL_TIMEOUT"
+  );
+  assert.equal(preflightCalls, 1);
+  assert.equal(redeemCalls, 0);
+  assert.equal(cancellationCalls, 1);
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'renewal-retry-wrapper'").get().status, "active");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = 'renewal-retry-asset'").get().state, "allocated");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spacex_cdk_activations WHERE wrapper_cdkey_id = 'renewal-retry-wrapper'").get().count, 0);
+  const waiting = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = 'renewal-retry-wrapper'").get();
+  assert.equal(waiting.state, "retry_wait");
+  assert.equal(waiting.attempts, 1);
+  assert.equal(waiting.cancellation_attempts, 1);
+  assert.doesNotMatch(JSON.stringify(waiting), /RETRY-SESSION-SECRET|renewal-token/);
+
+  db.prepare("UPDATE spacex_cdk_renewal_guards SET next_retry_at = ? WHERE id = ?")
+    .run(new Date(Date.now() - 1000).toISOString(), waiting.id);
+  const resumed = await service.activate({ publicKey: "91GPTPLUS-RENEWAL", session });
+  assert.equal(resumed.activationState, "queued");
+  assert.equal(preflightCalls, 2);
+  assert.equal(redeemCalls, 1);
+  assert.equal(cancellationCalls, 1);
+  const passed = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE id = ?").get(waiting.id);
+  assert.equal(passed.state, "passed");
+  assert.equal(passed.attempts, 2);
+  assert.equal(passed.will_renew, 0);
+  assert.ok(passed.cancelled_at);
+});
+
+test("an unknown renewal state fails closed before claiming or redeeming the wrapper", async () => {
+  seedStandaloneWrapper({
+    wrapperId: "renewal-unknown-wrapper",
+    assetId: "renewal-unknown-asset",
+    upstreamId: "renewal-unknown-upstream",
+    publicKey: "91GPTPLUS-UNKNOWN"
+  });
+  let cancelCalls = 0;
+  let redeemCalls = 0;
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async preview() { return { redemptionToken: "unknown-redemption", plan: "plus" }; },
+      async preflight() { return { preflightToken: "unknown-preflight", account_id: "unknown-account" }; },
+      async redeem() { redeemCalls += 1; return { status: "queued" }; }
+    }),
+    renewalTokenProvider: async () => "renewal-token",
+    renewalProvider: {
+      async check() { return { willRenew: null, isDelinquent: false }; },
+      async cancel() { cancelCalls += 1; }
+    }
+  });
+
+  await assert.rejects(
+    service.activate({
+      publicKey: "91GPTPLUS-UNKNOWN",
+      session: { sessionToken: "UNKNOWN-SESSION", user: { id: "unknown-account" } }
+    }),
+    (error) => error.code === "SPACEX_CDK_RENEWAL_STATE_UNKNOWN"
+  );
+  assert.equal(cancelCalls, 0);
+  assert.equal(redeemCalls, 0);
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'renewal-unknown-wrapper'").get().status, "active");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = 'renewal-unknown-asset'").get().state, "allocated");
+  const guard = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = 'renewal-unknown-wrapper'").get();
+  assert.equal(guard.state, "retry_wait");
+  assert.equal(guard.will_renew, null);
+  assert.doesNotMatch(JSON.stringify(guard), /UNKNOWN-SESSION/);
 });
 
 test("a pre-activation refund is resumable and returns only authoritative unused inventory", async () => {

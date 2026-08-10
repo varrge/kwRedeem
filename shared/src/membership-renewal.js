@@ -1,4 +1,5 @@
 export const membershipRenewalCancelUrl = "https://spacexcard.com/api/v1/gpt/cancel-renewal";
+export const membershipRenewalCheckUrl = "https://spacexcard.com/api/v1/gpt/check";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
@@ -10,6 +11,69 @@ function renewalError(code, message, statusCode = 502) {
   error.retryable = true;
   error.retryScope = "global";
   return error;
+}
+
+export async function checkMembershipRenewal(sessionJson, apiToken, options = {}) {
+  if (!sessionJson || typeof sessionJson !== "object" || Array.isArray(sessionJson)) {
+    throw renewalError("SESSION_INVALID", "Session JSON 无效", 422);
+  }
+  const token = String(apiToken || "").trim();
+  if (!token || token.length > 8192) {
+    throw renewalError("RENEWAL_CHECK_NOT_CONFIGURED", "续费检查服务凭据未配置", 503);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await (options.fetchImpl || globalThis.fetch)(membershipRenewalCheckUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({ token_input: JSON.stringify(sessionJson) }),
+      signal: controller.signal
+    });
+    if ([401, 403].includes(response.status)) {
+      throw renewalError("RENEWAL_CHECK_AUTH_FAILED", "续费检查服务鉴权失败", 503);
+    }
+    if (response.status === 429) {
+      throw renewalError("RENEWAL_CHECK_RATE_LIMITED", "续费检查服务请求过于频繁", 503);
+    }
+    if (!response.ok) throw renewalError("RENEWAL_CHECK_FAILED", "续费检查服务暂时不可用");
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+      throw renewalError("RENEWAL_CHECK_RESPONSE_TOO_LARGE", "续费检查响应过大");
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_RESPONSE_BYTES) {
+      throw renewalError("RENEWAL_CHECK_RESPONSE_TOO_LARGE", "续费检查响应过大");
+    }
+    let envelope;
+    try { envelope = JSON.parse(new TextDecoder().decode(bytes)); } catch {
+      throw renewalError("RENEWAL_CHECK_RESPONSE_INVALID", "续费检查响应不是合法 JSON");
+    }
+    const summary = envelope?.code === 0 && envelope.data?.summary && typeof envelope.data.summary === "object"
+      ? envelope.data.summary
+      : null;
+    if (!summary || Array.isArray(summary)) {
+      throw renewalError("RENEWAL_CHECK_RESPONSE_INVALID", "续费检查结果无法确认");
+    }
+    const isDelinquent = typeof summary.is_delinquent === "boolean" ? summary.is_delinquent : null;
+    const willRenew = typeof summary.will_renew === "boolean" ? summary.will_renew : null;
+    return Object.freeze({ isDelinquent, willRenew });
+  } catch (error) {
+    if (error?.code) throw error;
+    throw renewalError(
+      error?.name === "AbortError" || controller.signal.aborted
+        ? "RENEWAL_CHECK_TIMEOUT"
+        : "RENEWAL_CHECK_FAILED",
+      "续费检查请求失败",
+      error?.name === "AbortError" || controller.signal.aborted ? 504 : 502
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function cancelMembershipRenewal(sessionJson, apiToken, options = {}) {

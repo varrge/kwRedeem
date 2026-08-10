@@ -634,7 +634,12 @@ const STATUS_LABELS = {
   cancelled: "已取消",
   payout_pending: "待派奖",
   payout_failed: "派奖失败",
-  payout_succeeded: "派奖成功"
+  payout_succeeded: "派奖成功",
+  checking: "检查中",
+  cancelling: "关闭中",
+  retry_wait: "等待重试",
+  human_review: "待人工确认",
+  passed: "续费已保护"
 };
 
 const EXTENSION_DELIVERY_ERROR_LABELS = {
@@ -1468,7 +1473,7 @@ async function refreshCdkeys() {
     { label: "状态", render: (item) => `
       <div style="display:grid;gap:8px;justify-items:start;">
         ${renderStatus(item.status)}
-        ${item.status === "used" || (item.processing_mode === "manual" && item.status === "locked")
+        ${item.status === "used" || item.status === "locked"
           ? `<button class="ghost-btn small" type="button" onclick='copyCdkeySession(${JSON.stringify(item.id)}, ${JSON.stringify(item.public_key)})'>复制 Session</button>`
           : ""}
       </div>
@@ -1695,9 +1700,23 @@ async function refreshSpaceXCdkInventory() {
 async function refreshSpaceXCdkActivations() {
   const payload = await api("/api/admin/spacex-cdk/activations");
   renderTable(refs.spaceXCdkActivationList, [
-    { label: "订单 / CDK", render: (item) => `<code>${escapeHtml(item.orderNo)}</code><br/><code>${escapeHtml(item.publicKey)}</code>` },
+    { label: "订单 / CDK", render: (item) => `${item.orderNo ? `<code>${escapeHtml(item.orderNo)}</code><br/>` : '<span class="hint">尚未生成兑换订单</span><br/>'}<code>${escapeHtml(item.publicKey)}</code>` },
     { label: "套餐 / 账号", render: (item) => `${escapeHtml(item.plan)}<br/><span class="hint">${escapeHtml(item.accountMasked || "-")}</span>` },
     { label: "状态", render: (item) => `${renderStatus(item.state)}<br/><span class="hint">${escapeHtml(item.message || "-")}</span>` },
+    { label: "续费保护", render: (item) => {
+      const state = item.renewalGuardState || "-";
+      const label = {
+        passed: "已确认关闭",
+        checking: "检查中",
+        cancelling: "关闭中",
+        retry_wait: "等待重试",
+        human_review: "待人工确认"
+      }[state] || state;
+      const evidence = item.renewalWillRenew === false
+        ? "续费已关闭"
+        : (item.renewalWillRenew === true ? "仍开启" : "状态未知");
+      return `${escapeHtml(label)}<br/><span class="hint">${escapeHtml(evidence)}；尝试 ${escapeHtml(item.renewalAttempts || 0)}/${escapeHtml(Math.max(3, item.renewalAttempts || 0))}<br/>关闭调用 ${escapeHtml(item.renewalCancellationAttempts || 0)} 次${item.renewalLastErrorCode ? `<br/>${escapeHtml(item.renewalLastErrorCode)}` : ""}</span>`;
+    } },
     { label: "时间", render: (item) => `<span class="hint">创建 ${escapeHtml(item.createdAt)}<br/>更新 ${escapeHtml(item.updatedAt)}</span>` }
   ], payload.items || [], "暂无 SpaceX 激活记录");
 }

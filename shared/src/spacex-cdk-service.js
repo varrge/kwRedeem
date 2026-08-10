@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { cdkeyStatuses, orderStatuses } from "./constants.js";
+import { cancelMembershipRenewal, checkMembershipRenewal } from "./membership-renewal.js";
 import { decryptText, encryptText } from "./secure.js";
 import {
   SPACEX_CDK_ACTIVATION_STATES,
@@ -39,6 +40,16 @@ const MANUALLY_CLOSEABLE_UNIT_STATES = new Set([
   SPACEX_CDK_UNIT_STATES.contractBlocked,
   SPACEX_CDK_UNIT_STATES.fundingBlocked
 ]);
+const RENEWAL_GUARD_MAX_ATTEMPTS = 3;
+const RENEWAL_GUARD_LEASE_SECONDS = 90;
+const RENEWAL_GUARD_RETRY_SECONDS = [300, 900];
+const RENEWAL_GUARD_STATES = Object.freeze({
+  checking: "checking",
+  cancelling: "cancelling",
+  retryWait: "retry_wait",
+  humanReview: "human_review",
+  passed: "passed"
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -248,9 +259,19 @@ function applyFundingPolicy(issued, currentSettings, expectedPlan) {
   };
 }
 
-export function createSpaceXCdkService({ db, clientFactory = null, logger = console } = {}) {
+export function createSpaceXCdkService({
+  db,
+  clientFactory = null,
+  renewalProvider = null,
+  renewalTokenProvider = null,
+  logger = console
+} = {}) {
   let cachedClient = null;
   let cachedVersion = "";
+  const configuredRenewalProvider = renewalProvider || Object.freeze({
+    check: checkMembershipRenewal,
+    cancel: cancelMembershipRenewal
+  });
 
   function settings() {
     return db.prepare("SELECT * FROM spacex_cdk_settings WHERE id = 'default'").get();
@@ -269,6 +290,340 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
       cachedVersion = version;
     }
     return cachedClient;
+  }
+
+  async function renewalApiToken() {
+    if (typeof renewalTokenProvider === "function") {
+      const provided = await renewalTokenProvider();
+      const token = String(provided || "").trim();
+      if (token) return token;
+    } else {
+      const row = db.prepare(`
+        SELECT spacexcard_api_token_encrypted
+        FROM extension_delivery_settings
+        WHERE id = 'default'
+      `).get();
+      if (row?.spacexcard_api_token_encrypted) {
+        try {
+          const token = decryptText(row.spacexcard_api_token_encrypted).trim();
+          if (token) return token;
+        } catch {
+          // Treat an unreadable token as an unavailable guard dependency.
+        }
+      }
+    }
+    throw errorWithCode("自动化续费保护暂未配置", "SPACEX_CDK_RENEWAL_GUARD_NOT_CONFIGURED", {
+      statusCode: 503,
+      retryable: true,
+      retryScope: "global"
+    });
+  }
+
+  function renewalGuardAudit(action, guard, detail = {}) {
+    try {
+      db.prepare(`
+        INSERT INTO admin_audit_logs (id, action, actor, resource_type, resource_id, detail, created_at)
+        VALUES (?, ?, 'system', 'spacex_cdk_renewal_guard', ?, ?, ?)
+      `).run(
+        nanoid(18),
+        action,
+        guard?.wrapper_cdkey_id || null,
+        JSON.stringify({
+          state: guard?.state || null,
+          account: guard?.account_masked || null,
+          attempts: Number(guard?.attempts || 0),
+          cancellationAttempts: Number(guard?.cancellation_attempts || 0),
+          willRenew: guard?.will_renew === null || guard?.will_renew === undefined
+            ? null
+            : guard.will_renew === 1,
+          ...detail
+        }),
+        nowIso()
+      );
+    } catch (error) {
+      logger.warn?.(`[spacex renewal guard] audit failed: ${error?.code || "AUDIT_FAILED"}`);
+    }
+  }
+
+  function renewalGuardError(code, message, options = {}) {
+    return errorWithCode(message, code, {
+      statusCode: options.statusCode || 409,
+      retryable: options.retryable ?? true,
+      retryScope: options.retryScope || "order",
+      ...(Number.isInteger(options.retryAfterMs) ? { retryAfterMs: options.retryAfterMs } : {})
+    });
+  }
+
+  function retryDelaySeconds(attempts) {
+    return RENEWAL_GUARD_RETRY_SECONDS[Math.max(0, Math.min(RENEWAL_GUARD_RETRY_SECONDS.length - 1, attempts - 1))]
+      || RENEWAL_GUARD_RETRY_SECONDS[RENEWAL_GUARD_RETRY_SECONDS.length - 1];
+  }
+
+  function guardFailureCode(error, fallback = "SPACEX_CDK_RENEWAL_GUARD_FAILED") {
+    const code = String(error?.code || "").trim();
+    if (code.startsWith("SPACEX_CDK_RENEWAL_")) return code;
+    return code.startsWith("RENEWAL_") ? `SPACEX_CDK_${code}` : fallback;
+  }
+
+  function guardFailureMessage(error) {
+    const code = String(error?.code || "").trim();
+    if (code === "SPACEX_CDK_RENEWAL_GUARD_NOT_CONFIGURED") return "自动化续费保护暂未配置";
+    if (code === "SPACEX_CDK_RENEWAL_STATE_UNKNOWN") return "自动化续费状态暂时无法确认";
+    return "自动化续费保护暂时未完成，请稍后重试";
+  }
+
+  function loadRenewalGuard(wrapperId) {
+    return db.prepare(`
+      SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = ?
+    `).get(wrapperId);
+  }
+
+  function acquireRenewalGuard({ wrapper, asset, accountKey: identityKey, accountMasked, allowRecovery = false }) {
+    const at = nowIso();
+    const leaseToken = nanoid(24);
+    const leaseExpiresAt = addSeconds(at, RENEWAL_GUARD_LEASE_SECONDS);
+    const result = db.transaction(() => {
+      const existing = db.prepare(`
+        SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = ?
+      `).get(wrapper.id);
+      if (existing && existing.account_key !== identityKey) {
+        throw renewalGuardError(
+          "SPACEX_CDK_RENEWAL_GUARD_ACCOUNT_MISMATCH",
+          "该自动化任务已绑定其他账号，无法继续处理"
+        );
+      }
+      if (existing?.state === RENEWAL_GUARD_STATES.passed) {
+        return { guard: existing, leaseToken: null, resumed: true };
+      }
+      let recoveryOnly = false;
+      if (existing?.state === RENEWAL_GUARD_STATES.humanReview && !allowRecovery) {
+        throw renewalGuardError(
+          "SPACEX_CDK_RENEWAL_GUARD_HUMAN_REVIEW",
+          "自动化续费保护需要人工确认"
+        );
+      }
+      if (existing?.next_retry_at && existing.next_retry_at > at) {
+        if (!allowRecovery) {
+          const retryAfterMs = Math.max(0, new Date(existing.next_retry_at).getTime() - Date.now());
+          throw renewalGuardError(
+            "SPACEX_CDK_RENEWAL_GUARD_RETRY_WAIT",
+            "自动化续费保护正在等待下一次核验",
+            { retryAfterMs }
+          );
+        }
+      }
+      if (existing?.lease_expires_at && existing.lease_expires_at > at) {
+        throw renewalGuardError(
+          "SPACEX_CDK_RENEWAL_GUARD_BUSY",
+          "自动化续费保护正在处理中"
+        );
+      }
+      if (existing && Number(existing.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS && !allowRecovery) {
+        db.prepare(`
+          UPDATE spacex_cdk_renewal_guards
+          SET state = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+          WHERE id = ?
+        `).run(RENEWAL_GUARD_STATES.humanReview, at, existing.id);
+        throw renewalGuardError(
+          "SPACEX_CDK_RENEWAL_GUARD_HUMAN_REVIEW",
+          "自动化续费保护需要人工确认"
+        );
+      }
+      if (existing?.state === RENEWAL_GUARD_STATES.humanReview
+        || Number(existing?.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS) {
+        recoveryOnly = true;
+      }
+      if (!existing) {
+        const id = nanoid(18);
+        db.prepare(`
+          INSERT INTO spacex_cdk_renewal_guards (
+            id, wrapper_cdkey_id, spacex_cdk_id, account_key, account_masked,
+            state, attempts, lease_token, lease_expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        `).run(
+          id,
+          wrapper.id,
+          asset.id,
+          identityKey,
+          accountMasked,
+          RENEWAL_GUARD_STATES.checking,
+          leaseToken,
+          leaseExpiresAt,
+          at,
+          at
+        );
+        return { guard: loadRenewalGuard(wrapper.id), leaseToken, resumed: false, recoveryOnly: false };
+      }
+      db.prepare(`
+        UPDATE spacex_cdk_renewal_guards
+        SET state = ?, attempts = attempts + ?, lease_token = ?, lease_expires_at = ?,
+            next_retry_at = NULL, last_error_code = NULL, last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(
+        RENEWAL_GUARD_STATES.checking,
+        recoveryOnly ? 0 : 1,
+        leaseToken,
+        leaseExpiresAt,
+        at,
+        existing.id
+      );
+      return { guard: loadRenewalGuard(wrapper.id), leaseToken, resumed: true, recoveryOnly };
+    })();
+    renewalGuardAudit(result.resumed ? "spacex_cdk.renewal_guard.resumed" : "spacex_cdk.renewal_guard.started", result.guard);
+    return result;
+  }
+
+  function updateGuardWithLease(guardId, leaseToken, fields) {
+    const entries = Object.entries(fields);
+    const set = entries.map(([key]) => `${key} = ?`).join(", ");
+    const values = entries.map(([, value]) => value);
+    values.push(nowIso(), guardId, leaseToken);
+    const changed = db.prepare(`
+      UPDATE spacex_cdk_renewal_guards
+      SET ${set}, updated_at = ?
+      WHERE id = ? AND lease_token = ?
+    `).run(...values).changes;
+    if (!changed) {
+      throw renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_BUSY", "自动化续费保护状态已被其他请求接管");
+    }
+  }
+
+  function failRenewalGuard(guard, leaseToken, error, { willRenew = null } = {}) {
+    const current = loadRenewalGuard(guard.wrapper_cdkey_id);
+    if (!current || current.lease_token !== leaseToken) {
+      throw renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_BUSY", "自动化续费保护状态已被其他请求接管");
+    }
+    const attempts = Number(current.attempts || 0);
+    const terminal = attempts >= RENEWAL_GUARD_MAX_ATTEMPTS;
+    const retryAfterMs = terminal ? undefined : retryDelaySeconds(attempts) * 1000;
+    const nextRetryAt = terminal ? null : addSeconds(nowIso(), retryDelaySeconds(attempts));
+    const code = guardFailureCode(error);
+    const safeMessage = guardFailureMessage(error);
+    db.prepare(`
+      UPDATE spacex_cdk_renewal_guards
+      SET state = ?, will_renew = ?, next_retry_at = ?, lease_token = NULL,
+          lease_expires_at = NULL, last_error_code = ?, last_error = ?, updated_at = ?
+      WHERE id = ? AND lease_token = ?
+    `).run(
+      terminal ? RENEWAL_GUARD_STATES.humanReview : RENEWAL_GUARD_STATES.retryWait,
+      willRenew === null ? null : (willRenew ? 1 : 0),
+      nextRetryAt,
+      code,
+      safeMessage,
+      nowIso(),
+      current.id,
+      leaseToken
+    );
+    const updated = loadRenewalGuard(guard.wrapper_cdkey_id);
+    renewalGuardAudit(
+      terminal ? "spacex_cdk.renewal_guard.human_review" : "spacex_cdk.renewal_guard.retry_wait",
+      updated,
+      { reasonCode: code, retryAfterMs: retryAfterMs ?? null }
+    );
+    throw renewalGuardError(
+      terminal ? "SPACEX_CDK_RENEWAL_GUARD_HUMAN_REVIEW" : code,
+      terminal ? "自动化续费保护需要人工确认" : "自动化续费保护暂时未完成，请稍后重试",
+      { retryAfterMs }
+    );
+  }
+
+  function passRenewalGuard(guard, leaseToken, { willRenew, cancelled = false } = {}) {
+    updateGuardWithLease(guard.id, leaseToken, {
+      state: RENEWAL_GUARD_STATES.passed,
+      will_renew: 0,
+      checked_at: nowIso(),
+      cancelled_at: cancelled ? nowIso() : guard.cancelled_at,
+      next_retry_at: null,
+      lease_token: null,
+      lease_expires_at: null,
+      last_error_code: null,
+      last_error: null
+    });
+    const updated = loadRenewalGuard(guard.wrapper_cdkey_id);
+    renewalGuardAudit("spacex_cdk.renewal_guard.passed", updated, { cancelled, observedWillRenew: willRenew });
+    return updated;
+  }
+
+  async function protectSessionRenewal({ wrapper, asset, session, preflight, allowRecovery = false }) {
+    const identity = accountIdentity(session, preflight);
+    const identityKey = accountKey(identity);
+    const accountMasked = maskAccount(identity);
+    const acquired = acquireRenewalGuard({ wrapper, asset, accountKey: identityKey, accountMasked, allowRecovery });
+    if (acquired.guard.state === RENEWAL_GUARD_STATES.passed) return acquired.guard;
+    const guard = acquired.guard;
+    const leaseToken = acquired.leaseToken;
+    if (!leaseToken) throw renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_BUSY", "自动化续费保护状态无有效占用");
+
+    let token;
+    try {
+      token = await renewalApiToken();
+    } catch (error) {
+      failRenewalGuard(guard, leaseToken, error);
+    }
+
+    let observation;
+    try {
+      observation = await configuredRenewalProvider.check(session, token);
+    } catch (error) {
+      failRenewalGuard(guard, leaseToken, error);
+    }
+    if (!observation || typeof observation.willRenew !== "boolean") {
+      const error = renewalGuardError("SPACEX_CDK_RENEWAL_STATE_UNKNOWN", "自动化续费状态暂时无法确认");
+      failRenewalGuard(guard, leaseToken, error, { willRenew: null });
+    }
+    updateGuardWithLease(guard.id, leaseToken, {
+      will_renew: observation.willRenew ? 1 : 0,
+      checked_at: nowIso(),
+      last_error_code: null,
+      last_error: null
+    });
+    if (observation.willRenew === false) {
+      const current = loadRenewalGuard(wrapper.id);
+      return passRenewalGuard(current, leaseToken, {
+        willRenew: false,
+        cancelled: Number(current.cancellation_attempts || 0) > 0
+      });
+    }
+
+    const current = loadRenewalGuard(wrapper.id);
+    if (acquired.recoveryOnly) {
+      failRenewalGuard(current, leaseToken, renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_HUMAN_REVIEW", "自动化续费保护仍未确认关闭"), { willRenew: true });
+    }
+    if (Number(current.cancellation_attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS) {
+      failRenewalGuard(current, leaseToken, renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_HUMAN_REVIEW", "自动化续费保护需要人工确认"), { willRenew: true });
+    }
+    updateGuardWithLease(current.id, leaseToken, {
+      state: RENEWAL_GUARD_STATES.cancelling,
+      cancellation_attempts: Number(current.cancellation_attempts || 0) + 1,
+      cancellation_requested_at: nowIso(),
+      will_renew: 1
+    });
+    const cancellationAttempt = Number(current.cancellation_attempts || 0) + 1;
+    renewalGuardAudit("spacex_cdk.renewal_guard.cancellation_requested", loadRenewalGuard(wrapper.id), {
+      cancellationAttempt
+    });
+    try {
+      await configuredRenewalProvider.cancel(session, token);
+    } catch (error) {
+      failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, { willRenew: true });
+    }
+
+    let rechecked;
+    try {
+      rechecked = await configuredRenewalProvider.check(session, token);
+    } catch (error) {
+      failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, { willRenew: null });
+    }
+    if (!rechecked || rechecked.willRenew !== false) {
+      const error = renewalGuardError(
+        rechecked?.willRenew === true ? "SPACEX_CDK_RENEWAL_STILL_ENABLED" : "SPACEX_CDK_RENEWAL_STATE_UNKNOWN",
+        rechecked?.willRenew === true ? "自动化续费仍处于开启状态" : "自动化续费状态暂时无法确认"
+      );
+      failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, {
+        willRenew: rechecked?.willRenew === true ? true : null
+      });
+    }
+    return passRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, { willRenew: false, cancelled: true });
   }
 
   function assertIssuanceAllowed(plan) {
@@ -766,7 +1121,7 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
     })();
   }
 
-  async function activate({ publicKey, session, customerIp = "" }) {
+  async function activate({ publicKey, session, customerIp = "", renewalRecovery = false }) {
     const wrapper = db.prepare("SELECT * FROM cdkeys WHERE public_key = ?").get(String(publicKey).trim().toUpperCase());
     if (!wrapper || wrapper.processing_mode !== "spacex_cdk") throw new Error("SpaceX 激活卡密不存在");
     const asset = db.prepare("SELECT * FROM spacex_cdks WHERE current_wrapper_cdkey_id = ?").get(wrapper.id);
@@ -790,6 +1145,20 @@ export function createSpaceXCdkService({ db, clientFactory = null, logger = cons
       session: credential,
       deviceId
     });
+    const racedActivation = db.prepare("SELECT * FROM spacex_cdk_activations WHERE wrapper_cdkey_id = ?").get(wrapper.id);
+    if (racedActivation) {
+      if (racedActivation.account_key !== accountKey(accountIdentity(session, preflight))) {
+        throw new Error("该 CDK 已绑定其他 ChatGPT 账号");
+      }
+      const racedOrder = db.prepare("SELECT order_no FROM redeem_orders WHERE id = ?").get(racedActivation.redeem_order_id);
+      return {
+        orderNo: racedOrder?.order_no,
+        processingMode: "spacex_cdk",
+        spacexPlan: asset.plan,
+        activationState: racedActivation.state
+      };
+    }
+    await protectSessionRenewal({ wrapper, asset, session, preflight, allowRecovery: renewalRecovery });
     const claimed = claimActivation({
       wrapper,
       asset,

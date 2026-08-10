@@ -287,20 +287,46 @@ input:focus, textarea:focus {
 /* Buttons */
 
 .primary-btn {
-  background: linear-gradient(135deg, #5f8cff, #7550ff);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 28px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, #a855f7 0%, #6366f1 50%, #ec4899 100%);
+  background-clip: padding-box;
   color: white;
   font-weight: 700;
-  padding: 16px;
-  border-radius: 16px;
-  border: none;
+  font-size: 15px;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  box-shadow: 0 12px 24px rgba(60, 92, 211, 0.3);
-  transition: all 0.2s;
+  box-shadow:
+    0 12px 30px -6px rgba(168, 85, 247, 0.45),
+    0 0 20px rgba(99, 102, 241, 0.25),
+    inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.stack > .primary-btn,
+form > .primary-btn {
+  width: 100%;
+  max-width: 440px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .primary-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #b86eef 0%, #4f46e5 50%, #f43f5e 100%);
+  border-color: rgba(255, 255, 255, 0.35);
   transform: translateY(-2px);
-  box-shadow: 0 16px 30px rgba(60, 92, 211, 0.4);
+  box-shadow:
+    0 16px 36px -6px rgba(168, 85, 247, 0.6),
+    0 0 30px rgba(236, 72, 153, 0.35),
+    inset 0 1px 1px rgba(255, 255, 255, 0.5);
 }
 
 .primary-btn:disabled {

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kwRedeem - 玻璃高级简约幻彩风格预览 (Glassmorphism Preview)</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-dark: #070913;
+      --glass-bg: rgba(255, 255, 255, 0.035);
+      --glass-bg-hover: rgba(255, 255, 255, 0.06);
+      --glass-blur: blur(24px) saturate(190%);
+      --text-main: #f3f5f9;
+      --text-muted: #8e9bb0;
+      --iri-pill: linear-gradient(135deg, #a855f7, #6366f1 50%, #ec4899);
+      --radius-xl: 24px;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      padding: 40px 20px;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Ambient Glow Orbs */
+    .bg-orb {
+      position: fixed; border-radius: 50%; filter: blur(100px); z-index: -1; opacity: 0.55;
+      animation: floatOrb 12s ease-in-out infinite alternate;
+    }
+    .bg-orb-1 { width: 500px; height: 500px; top: -100px; left: -100px; background: radial-gradient(circle, rgba(168, 85, 247, 0.4), rgba(59, 130, 246, 0.1)); }
+    .bg-orb-2 { width: 450px; height: 450px; top: 30%; right: -100px; background: radial-gradient(circle, rgba(236, 72, 153, 0.35), rgba(99, 102, 241, 0.1)); animation-delay: -4s; }
+    .bg-orb-3 { width: 600px; height: 600px; bottom: -150px; left: 20%; background: radial-gradient(circle, rgba(56, 189, 248, 0.3), rgba(168, 85, 247, 0.15)); animation-delay: -8s; }
+
+    @keyframes floatOrb {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(40px, 30px) scale(1.1); }
+    }
+
+    .bg-grid {
+      position: fixed; inset: 0;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 40px 40px; z-index: -1;
+      mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, black 20%, transparent 100%);
+    }
+
+    .container { max-width: 1040px; margin: 0 auto; }
+
+    .nav-header {
+      display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; margin-bottom: 40px;
+      border-radius: var(--radius-xl); background: rgba(255, 255, 255, 0.03); backdrop-filter: var(--glass-blur);
+      border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+    }
+
+    .brand-logo { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 20px; letter-spacing: -0.5px; }
+
+    .logo-icon {
+      width: 40px; height: 40px; border-radius: 12px; background: var(--iri-pill);
+      display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800;
+      box-shadow: 0 8px 20px rgba(168, 85, 247, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.6);
+    }
+
+    .logo-text span {
+      background: linear-gradient(135deg, #fff 30%, #a855f7 70%, #ec4899 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+
+    .nav-menu { display: flex; gap: 8px; }
+    .nav-link { padding: 8px 16px; border-radius: var(--radius-md); color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.25s ease; }
+    .nav-link:hover, .nav-link.active { color: #fff; background: rgba(255, 255, 255, 0.08); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15); }
+
+    .hero-banner { text-align: center; margin-bottom: 48px; }
+    .badge-tag {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 20px;
+      background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; font-size: 13px; font-weight: 600; margin-bottom: 16px; backdrop-filter: blur(10px);
+    }
+    .hero-title {
+      font-size: 42px; font-weight: 800; letter-spacing: -1.2px; margin-bottom: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.75) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .hero-subtitle { color: var(--text-muted); font-size: 17px; max-width: 600px; margin: 0 auto; line-height: 1.6; }
+
+    .glass-card {
+      position: relative; background: rgba(255, 255, 255, 0.025); backdrop-filter: var(--glass-blur);
+      border-radius: var(--radius-xl); padding: 32px; margin-bottom: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.15); transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .glass-card::before {
+      content: ""; position: absolute; inset: 0; border-radius: var(--radius-xl); padding: 1px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.35) 0%, rgba(168, 85, 247, 0.25) 30%, rgba(56, 189, 248, 0.2) 60%, rgba(236, 72, 153, 0.25) 100%);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+    }
+    .glass-card:hover { transform: translateY(-2px); box-shadow: 0 40px 80px -15px rgba(0, 0, 0, 0.6), 0 0 40px rgba(168, 85, 247, 0.15), inset 0 1px 1px rgba(255, 255, 255, 0.25); }
+
+    .card-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+
+    .stat-card { background: rgba(255, 255, 255, 0.02); border-radius: var(--radius-lg); padding: 20px; border: 1px solid rgba(255, 255, 255, 0.06); position: relative; overflow: hidden; }
+    .stat-card::after { content: ""; position: absolute; top: 0; right: 0; width: 60px; height: 60px; background: radial-gradient(circle, rgba(168, 85, 247, 0.15), transparent 70%); pointer-events: none; }
+    .stat-label { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
+    .stat-value { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #fff, #cbd5e1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+    .input-group { margin-bottom: 20px; }
+    .input-label { display: block; font-size: 14px; font-weight: 600; color: #d1d5db; margin-bottom: 8px; }
+    .glass-input {
+      width: 100%; padding: 14px 18px; background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-lg); color: #fff; font-size: 15px; outline: none; backdrop-filter: blur(12px); transition: all 0.25s ease; box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+    .glass-input:focus { border-color: rgba(168, 85, 247, 0.6); box-shadow: 0 0 20px rgba(168, 85, 247, 0.25), inset 0 2px 4px rgba(0, 0, 0, 0.3); }
+
+    .btn-iri {
+      position: relative; display: inline-flex; align-items: center; justify-content: center; padding: 14px 28px; font-size: 15px; font-weight: 700; color: #fff; border: none; border-radius: var(--radius-lg); cursor: pointer; background: var(--iri-pill); box-shadow: 0 10px 30px rgba(168, 85, 247, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.4); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden;
+    }
+    .btn-iri:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 15px 35px rgba(168, 85, 247, 0.5), 0 0 25px rgba(236, 72, 153, 0.4); }
+
+    .btn-glass {
+      display: inline-flex; align-items: center; justify-content: center; padding: 14px 24px; font-size: 15px; font-weight: 600; color: #e2e8f0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: var(--radius-lg); cursor: pointer; backdrop-filter: blur(10px); transition: all 0.25s ease;
+    }
+    .btn-glass:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.3); color: #fff; transform: translateY(-1px); }
+
+    .glass-table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 12px; }
+    .glass-table th { text-align: left; padding: 12px 16px; font-size: 13px; color: var(--text-muted); border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-weight: 600; }
+    .glass-table td { padding: 16px; font-size: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: #e2e8f0; }
+    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-active { background: rgba(34, 197, 94, 0.12); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.25); }
+    .status-pending { background: rgba(234, 179, 8, 0.12); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.25); }
+
+    .section-desc { background: rgba(168, 85, 247, 0.08); border-left: 4px solid #a855f7; padding: 16px 20px; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin-bottom: 24px; font-size: 14px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="bg-orb bg-orb-1"></div>
+  <div class="bg-orb bg-orb-2"></div>
+  <div class="bg-orb bg-orb-3"></div>
+  <div class="bg-grid"></div>
+
+  <div class="container">
+    <header class="nav-header">
+      <div class="brand-logo">
+        <div class="logo-icon">KW</div>
+        <div class="logo-text"><span>kwRedeem</span></div>
+      </div>
+      <nav class="nav-menu">
+        <a href="#" class="nav-link active">会员兑换中心</a>
+        <a href="#" class="nav-link">教程中心</a>
+        <a href="#" class="nav-link">配额查询</a>
+        <a href="#" class="nav-link">管理后台</a>
+      </nav>
+    </header>
+
+    <div class="hero-banner">
+      <div class="badge-tag"> ✨ Glassmorphism & Iridescent Design Concept</div>
+      <h1 class="hero-title">玻璃高级简约 · 微光幻彩 UI 风格</h1>
+      <p class="hero-subtitle">包含高阶毛玻璃质感 (Backdrop Glass)、幻彩微光渐变边框 (Iridescent Prism Edge)、沉浸式光影卡片与流畅交互。</p>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-title">
+        <span>快捷兑换中心 (Fulfillment Hub)</span>
+        <span class="status-badge status-active">● 系统运行正常</span>
+      </div>
+
+      <div class="grid-3" style="margin-bottom: 28px;">
+        <div class="stat-card">
+          <div class="stat-label">可用激活码 (CDK Stock)</div>
+          <div class="stat-value">1,280</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">今日已兑换</div>
+          <div class="stat-value">342</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">响应延迟</div>
+          <div class="stat-value" style="color: #4ade80;">18 ms</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="input-group">
+          <label class="input-label">兑换卡密 (CDK Key)</label>
+          <input type="text" class="glass-input" placeholder="输入 SPACEX-XXXX-XXXX-XXXX..." value="SPACEX-8890-VIP-2026">
+        </div>
+        <div class="input-group">
+          <label class="input-label">接收账号 (Target Account)</label>
+          <input type="text" class="glass-input" placeholder="user@example.com">
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 16px; margin-top: 12px;">
+        <button class="btn-iri">立即兑换会员 ✨</button>
+        <button class="btn-glass">查询历史记录</button>
+      </div>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-title">
+        <span>最新兑换队列 (Recent Activity)</span>
+        <button class="btn-glass" style="padding: 6px 14px; font-size: 13px;">刷新列表</button>
+      </div>
+
+      <div class="section-desc">
+        💡 <strong>设计语言解析：</strong> 结合高透明度 <code>backdrop-filter: blur(24px)</code> 毛玻璃与流动的深紫/天空蓝/珍珠粉三色微晕，在保持轻奢高品质视觉的同时，绝对不遮挡排版文字逻辑。
+      </div>
+
+      <table class="glass-table">
+        <thead>
+          <tr>
+            <th>订单编号</th>
+            <th>服务套餐</th>
+            <th>时间</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#ORD-2026-0810</td>
+            <td>ChatGPT Plus 订阅 (30天)</td>
+            <td>10 分钟前</td>
+            <td><span class="status-badge status-active">兑换成功</span></td>
+            <td><a href="#" style="color: #38bdf8; text-decoration: none; font-size: 13px;">查看凭证</a></td>
+          </tr>
+          <tr>
+            <td>#ORD-2026-0809</td>
+            <td>SpaceX Unlimited 节点</td>
+            <td>1 小时前</td>
+            <td><span class="status-badge status-active">兑换成功</span></td>
+            <td><a href="#" style="color: #38bdf8; text-decoration: none; font-size: 13px;">查看凭证</a></td>
+          </tr>
+          <tr>
+            <td>#ORD-2026-0808</td>
+            <td>API 试用配额额度</td>
+            <td>3 小时前</td>
+            <td><span class="status-badge status-pending">处理中...</span></td>
+            <td><a href="#" style="color: #38bdf8; text-decoration: none; font-size: 13px;">重试交付</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</body>
+</html>

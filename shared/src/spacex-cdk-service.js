@@ -43,6 +43,8 @@ const MANUALLY_CLOSEABLE_UNIT_STATES = new Set([
 const RENEWAL_GUARD_MAX_ATTEMPTS = 3;
 const RENEWAL_GUARD_LEASE_SECONDS = 90;
 const RENEWAL_GUARD_RETRY_SECONDS = [300, 900];
+const REDEEM_HTTP_400_MAX_RETRIES = 3;
+const REDEEM_HTTP_400_RETRY_DELAY_MS = 5000;
 const RENEWAL_GUARD_STATES = Object.freeze({
   checking: "checking",
   cancelling: "cancelling",
@@ -263,7 +265,8 @@ export function createSpaceXCdkService({
   db,
   clientFactory = null,
   renewalProvider = null,
-  logger = console
+  logger = console,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 } = {}) {
   let cachedClient = null;
   let cachedVersion = "";
@@ -289,6 +292,26 @@ export function createSpaceXCdkService({
       cachedVersion = version;
     }
     return cachedClient;
+  }
+
+  async function redeemWithHttp400Retries(request) {
+    let retries = 0;
+    while (true) {
+      try {
+        return await client().redeem(request);
+      } catch (error) {
+        const retryable = error instanceof SpaceXCdkApiError
+          && error.code === "SPACEX_CDK_UPSTREAM_REJECTED"
+          && error.status === 400
+          && !error.uncertain;
+        if (!retryable || retries >= REDEEM_HTTP_400_MAX_RETRIES) throw error;
+        retries += 1;
+        logger.warn?.(
+          `[spacex cdk] redeem rejected with HTTP 400; retry ${retries}/${REDEEM_HTTP_400_MAX_RETRIES} in ${REDEEM_HTTP_400_RETRY_DELAY_MS}ms`
+        );
+        await sleep(REDEEM_HTTP_400_RETRY_DELAY_MS);
+      }
+    }
   }
 
   function renewalGuardAudit(action, guard, detail = {}) {
@@ -1138,7 +1161,7 @@ export function createSpaceXCdkService({
       return { orderNo: order?.order_no, processingMode: "spacex_cdk", spacexPlan: asset.plan, activationState: claimed.activation.state };
     }
     try {
-      const result = await client().redeem({
+      const result = await redeemWithHttp400Retries({
         redemptionToken: preview.redemptionToken,
         preflightToken: preflight.preflightToken,
         clientRequestId: claimed.activation.client_request_id,

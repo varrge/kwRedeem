@@ -315,6 +315,101 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
   assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(order.id).status, "succeeded");
 });
 
+test("SpaceX activation retries an HTTP 400 three times with the same idempotent request before succeeding", async () => {
+  seedStandaloneWrapper({
+    wrapperId: "redeem-retry-wrapper",
+    assetId: "redeem-retry-asset",
+    upstreamId: "redeem-retry-upstream",
+    publicKey: "91GPTPLUS-REDEEM-RETRY"
+  });
+  const redeemRequests = [];
+  const delays = [];
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async preview() { return { redemptionToken: "redeem-retry-token", plan: "plus" }; },
+      async preflight() { return { preflightToken: "redeem-retry-preflight", account_id: "redeem-retry-account" }; },
+      async redeem(request) {
+        redeemRequests.push({ ...request });
+        if (redeemRequests.length <= 3) {
+          throw new SpaceXCdkApiError("temporary rejection", {
+            code: "SPACEX_CDK_UPSTREAM_REJECTED",
+            status: 400
+          });
+        }
+        return { status: "queued", upstreamOrderId: "redeem-retry-order" };
+      }
+    }),
+    renewalProvider: {
+      async check() { return { willRenew: false, isDelinquent: false }; },
+      async cancel() { throw new Error("cancel should not be called"); }
+    },
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    logger: { warn() {} }
+  });
+
+  const response = await service.activate({
+    publicKey: "91GPTPLUS-REDEEM-RETRY",
+    session: { sessionToken: "REDEEM-RETRY-SESSION", user: { id: "redeem-retry-account" } }
+  });
+
+  assert.equal(response.activationState, "queued");
+  assert.equal(redeemRequests.length, 4);
+  assert.deepEqual(delays, [5000, 5000, 5000]);
+  assert.equal(new Set(redeemRequests.map((request) => request.clientRequestId)).size, 1);
+  assert.ok(redeemRequests.every((request) => request.redemptionToken === "redeem-retry-token"));
+  assert.ok(redeemRequests.every((request) => request.preflightToken === "redeem-retry-preflight"));
+  assert.ok(redeemRequests.every((request) => request.deviceId === redeemRequests[0].deviceId));
+});
+
+test("SpaceX activation enters manual resolution after three HTTP 400 retries", async () => {
+  seedStandaloneWrapper({
+    wrapperId: "redeem-rejected-wrapper",
+    assetId: "redeem-rejected-asset",
+    upstreamId: "redeem-rejected-upstream",
+    publicKey: "91GPTPLUS-REDEEM-REJECTED"
+  });
+  let redeemCalls = 0;
+  const delays = [];
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async preview() { return { redemptionToken: "redeem-rejected-token", plan: "plus" }; },
+      async preflight() { return { preflightToken: "redeem-rejected-preflight", account_id: "redeem-rejected-account" }; },
+      async redeem() {
+        redeemCalls += 1;
+        throw new SpaceXCdkApiError("permanent rejection", {
+          code: "SPACEX_CDK_UPSTREAM_REJECTED",
+          status: 400
+        });
+      }
+    }),
+    renewalProvider: {
+      async check() { return { willRenew: false, isDelinquent: false }; },
+      async cancel() { throw new Error("cancel should not be called"); }
+    },
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    logger: { warn() {} }
+  });
+
+  await assert.rejects(
+    service.activate({
+      publicKey: "91GPTPLUS-REDEEM-REJECTED",
+      session: { sessionToken: "REDEEM-REJECTED-SESSION", user: { id: "redeem-rejected-account" } }
+    }),
+    /已转人工处理/
+  );
+
+  assert.equal(redeemCalls, 4);
+  assert.deepEqual(delays, [5000, 5000, 5000]);
+  const activation = db.prepare("SELECT * FROM spacex_cdk_activations WHERE wrapper_cdkey_id = 'redeem-rejected-wrapper'").get();
+  assert.equal(activation.state, "failed_resolution");
+  assert.match(activation.last_error, /HTTP 400/);
+  assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(activation.redeem_order_id).status, "failed");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = 'redeem-rejected-asset'").get().state, "held");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'redeem-rejected-wrapper'").get().status, "locked");
+});
+
 test("an uncertain renewal cancellation blocks the claim and resumes only after a fresh same-account preflight", async () => {
   const createdAt = nowIso();
   db.prepare(`

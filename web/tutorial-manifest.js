@@ -21,25 +21,25 @@ window.TUTORIAL_MANIFEST = Object.freeze({
   ],
   clients: [
     {
-      name: "Codeg",
+      name: "CodexG",
       kind: "AI 编程 GUI",
-      mode: "直接 API + 托管 CLI",
+      mode: "CC Switch 本地路由 + 托管 CLI",
       status: "user-confirmed",
-      note: "可直接配置 OpenAI 兼容服务，也可调用本机 Claude Code、Codex 或 Gemini CLI。"
+      note: "通过 CC Switch 选择供应商并接管本地 CLI，客户端只连接 CC Switch 提供的本地端点。"
     },
     {
       name: "CCGUI",
       kind: "AI 编程 GUI",
-      mode: "直接 API + 托管 CLI",
+      mode: "CC Switch 本地路由 + 托管 CLI",
       status: "user-confirmed",
-      note: "适合把 Claude Code、Codex CLI、Gemini CLI 和 OpenCode 放在一个桌面工作区。"
+      note: "通过 CC Switch 的本地路由使用 Sub2api，不必把同一份 Key 重复粘贴到多个运行层。"
     },
     {
-      name: "CC Switch",
+      name: "CC Switch（路由层）",
       kind: "桌面供应商管理 / 本地路由",
-      mode: "统一供应商 + 本地 CLI",
+      mode: "配合 CCGUI / CodexG",
       status: "candidate",
-      note: "在供应商或统一供应商中填写 Sub2api Key、端点和模型；Codex 的 Chat Completions 接入需要本地路由映射。"
+      note: "CC Switch 保存 Sub2api Key 并提供本地端点，客户端通过它选择供应商、切换模型和发送请求。"
     },
     {
       name: "Cherry Studio",

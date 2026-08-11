@@ -180,15 +180,15 @@ A focused tutorial that maps the KaWang API contract to one client category—CL
 _Avoid_: Unverified software list, implicit official endorsement, copying secrets into unknown tools
 
 **Direct Client Connection**:
-A Client Integration Recipe in which a compatible application such as Codeg or CCGUI receives the Sub2api Base URL, API Key, and model name and calls the OpenAI-compatible API itself.
+A Client Integration Recipe in which a compatible application such as CodexG or CCGUI receives the Sub2api Base URL, API Key, and model name and calls the OpenAI-compatible API itself.
 _Avoid_: Upstream provider credential, hidden local proxy, assuming every client field uses the same URL shape
 
 **Managed CLI Connection**:
-A Client Integration Recipe in which a graphical workspace such as Codeg or CCGUI launches an already configured Claude Code, Codex CLI, or Gemini CLI runtime that connects to Sub2api.
+A Client Integration Recipe in which a graphical workspace such as CodexG or CCGUI launches an already configured Claude Code, Codex CLI, or Gemini CLI runtime that connects to Sub2api.
 _Avoid_: Duplicating a Key into both layers without need, describing the GUI as the API caller, mixing runtime-specific protocols
 
 **CC Switch Recipe**:
-A Client Integration Recipe for adding a Sub2api user API Key to CC Switch as an application or unified provider, with explicit Base URL path handling and a local-route warning for Codex protocol conversion.
+A Client Integration Recipe in which CC Switch stores a Sub2api user API Key and exposes a local route consumed by a client such as CCGUI or CodexG, with explicit Base URL path handling and a Codex protocol-conversion warning.
 _Avoid_: Using a Sub2api admin token, duplicating `/v1`, treating CC Switch OAuth as an API Key, claiming every CC Switch preset supports the same protocol
 
 **Client Support Tier**:

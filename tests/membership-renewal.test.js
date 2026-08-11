@@ -68,3 +68,14 @@ test("renewal check preserves an explicit will_renew boolean and treats missing 
   });
   assert.deepEqual(free, { isDelinquent: false, willRenew: false });
 });
+
+test("renewal check treats the provider no-subscription response as free", async () => {
+  const result = await checkMembershipRenewal({ sessionToken: "session" }, {
+    fetchImpl: async () => new Response(JSON.stringify({
+      code: 200,
+      data: { token: { sessionToken: "provider-echo" } },
+      message: "您还没有订阅,允许您生成订阅链接"
+    }), { status: 200 })
+  });
+  assert.deepEqual(result, { isDelinquent: false, willRenew: false });
+});

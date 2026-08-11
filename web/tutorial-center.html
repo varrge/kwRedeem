@@ -69,21 +69,39 @@
             <div class="tutorial-table-wrap"><table class="tutorial-table"><thead><tr><th>客户端</th><th>类型</th><th>接入方式</th><th>状态</th><th>配置提示</th></tr></thead><tbody data-client-catalog></tbody></table></div>
             <div class="tutorial-callout warning"><strong>GUI 能打开不等于 API 已接通</strong><p>只有 runtime 真实完成一次请求，才算客户端配方验证通过。排错时先确认到底是哪一层保存了配置。</p></div>
 
-            <h3 id="ccswitch">6. 用 CC Switch 配置 Sub2api API Key</h3>
-            <p>CC Switch 是本地的供应商管理和路由工具。这里配置的是 Sub2api 的用户 API Key，不是 Sub2api 管理员令牌，也不是 CC Switch 控制台账号。</p>
+            <h3 id="ccswitch">6. 用 CC Switch 配合 CCGUI / CodexG</h3>
+            <p>CC Switch 负责保存 Sub2api 用户 API Key、选择供应商并提供本地路由；CCGUI 或 CodexG 才是你实际使用的客户端。这里配置的是用户 Key，不是 Sub2api 管理员令牌，也不是 CC Switch 控制台账号。</p>
             <p class="tutorial-muted">还没有安装？请从 <a class="tutorial-link" href="https://ccswitch.co/zh/" target="_blank" rel="noopener noreferrer">CC Switch 官方网站</a> 下载对应系统版本；本节按当前「添加供应商 / 统一供应商」流程编写。</p>
+            <h4>共同准备：先在 CC Switch 添加 Sub2api 供应商</h4>
             <ol>
-              <li>打开 CC Switch，在目标应用中点击右上角 <span class="tutorial-inline-code">+</span>；如果希望多个工具共用配置，切换到「统一供应商」Tab。</li>
+              <li>打开 CC Switch，点击目标应用右上角 <span class="tutorial-inline-code">+</span>；希望 CCGUI 和 CodexG 共用时，切换到「统一供应商」Tab。</li>
               <li>名称填写 <span class="tutorial-inline-code">Sub2api</span>，API Key 填你在 Sub2api「API Keys」页面创建的用户 Key。</li>
               <li>在「端点地址 / Base URL」填写 <span class="tutorial-inline-code" data-api-base></span>，模型填写 <span class="tutorial-inline-code">&lt;MODEL_ID&gt;</span>。</li>
-              <li>点击「获取模型」或保存后测速；能返回模型列表，再启用该供应商。</li>
+              <li>点击「获取模型」或保存后测速；能返回模型列表后保存供应商。记下 CC Switch「本地路由」页面显示的本地端点。</li>
             </ol>
             <pre class="tutorial-code"><code>名称：Sub2api
 API Key：&lt;YOUR_API_KEY&gt;
 Base URL：<span data-api-base></span>
 模型：&lt;MODEL_ID&gt;</code></pre>
             <div class="tutorial-callout warning"><strong>避免重复拼接 /v1</strong><p>如果你的 CC Switch 版本把端点当作前缀，并自动追加 <span class="tutorial-inline-code">/v1</span>，就把上面地址末尾的 <span class="tutorial-inline-code">/v1</span> 去掉。最终请求必须是 <span class="tutorial-inline-code">/v1/models</span> 或 <span class="tutorial-inline-code">/v1/chat/completions</span>，不能出现 <span class="tutorial-inline-code">/v1/v1/</span>。</p></div>
-            <div class="tutorial-callout"><strong>Codex 特别说明</strong><p>Sub2api 首发教程以 Chat Completions 为基线；如果 CC Switch 的 Codex 供应商提示协议不匹配，打开「需要本地路由映射」并保持本地路由服务运行，让 CC Switch 负责 Responses 与 Chat Completions 的转换。</p></div>
+            <h4 id="ccswitch-ccgui">方案 A：CC Switch + CCGUI</h4>
+            <ol>
+              <li>在 CC Switch 启用刚才的 Sub2api 供应商，并启动本地路由服务。</li>
+              <li>打开 CCGUI 的 Provider / 模型设置，选择「本地路由」或「OpenAI Compatible」接入方式。</li>
+              <li>API 地址填 CC Switch 显示的本地端点，模型填 Sub2api 返回的 <span class="tutorial-inline-code">&lt;MODEL_ID&gt;</span>；如果 CCGUI 只是托管本地 CLI，就在 CCGUI 里选择对应的 CC Switch runtime，不要再复制一份 Key。</li>
+              <li>用最短消息发送一次请求，确认 CCGUI 日志和 CC Switch 路由日志都出现成功请求。</li>
+            </ol>
+            <pre class="tutorial-code"><code>CC Switch Provider：Sub2api
+CCGUI API 地址：&lt;CC_SWITCH_LOCAL_BASE_URL&gt;
+模型：&lt;MODEL_ID&gt;</code></pre>
+            <h4 id="ccswitch-codexg">方案 B：CC Switch + CodexG</h4>
+            <ol>
+              <li>在 CC Switch 启用 Sub2api 供应商和本地路由；Codex 类供应商如果提示协议不匹配，打开「需要本地路由映射」。</li>
+              <li>打开 CodexG，选择托管本地 Codex / CLI 或自定义本地 Provider。</li>
+              <li>把 CC Switch 显示的本地端点和模型填入 CodexG；Key 继续由 CC Switch 管理，除非该版本明确要求在 CLI runtime 中单独配置。</li>
+              <li>先执行一次短任务，再检查 CodexG 的请求是否经过 CC Switch 本地路由。</li>
+            </ol>
+            <div class="tutorial-callout"><strong>Codex 协议说明</strong><p>Sub2api 首发教程以 Chat Completions 为基线。CC Switch 的本地路由映射负责把 Codex 的 Responses 请求转换为 Chat Completions；使用过程中必须保持本地路由运行。</p></div>
             <p class="tutorial-muted">模型下拉框为空时，先用本页的 <span class="tutorial-inline-code">/v1/models</span> curl 请求验证 Key 和端点，再手动填写模型 ID。不要把 Key 粘贴到截图、教程页面或公共配置文件。界面字段变化时，以 <a class="tutorial-link" href="https://ccswitch.co/zh/docs/providers-add.html" target="_blank" rel="noopener noreferrer">CC Switch 添加供应商文档</a> 为准。</p>
 
             <h3 id="cli">7. Claude Code、Codex CLI、Gemini CLI</h3>
@@ -91,7 +109,7 @@ Base URL：<span data-api-base></span>
               <li>把 Sub2api Key 只写入本机 CLI 配置或环境变量。</li>
               <li>Base URL 必须按该 CLI 的协议要求填写，可能不是同一个路径。</li>
               <li>先用一个低成本模型和最短请求验证，再开始长任务或代码修改。</li>
-              <li>Codeg/CCGUI 托管 CLI 时，不要为了“看起来完整”再复制一份 Key 到 GUI。</li>
+              <li>CodexG/CCGUI 托管 CLI 时，不要为了“看起来完整”再复制一份 Key 到 GUI。</li>
             </ul>
           </section>
 
@@ -144,7 +162,7 @@ Base URL：<span data-api-base></span>
 
         <aside class="tutorial-aside">
           <div class="tutorial-panel tutorial-aside-card"><strong>本页目录</strong><nav class="tutorial-aside-nav">
-            <a data-public-link href="#api-quickstart">API 调用</a><a data-public-link href="#request">第一条请求</a><a data-public-link href="#clients">客户端配方</a><a data-public-link href="#ccswitch">CC Switch 配置</a><a data-public-link href="#subscription-guide">订阅购买</a><a data-public-link href="#compare">比较套餐</a><a data-public-link href="#purchase">确认扣款</a>
+            <a data-public-link href="#api-quickstart">API 调用</a><a data-public-link href="#request">第一条请求</a><a data-public-link href="#clients">客户端配方</a><a data-public-link href="#ccswitch">CC Switch 配合客户端</a><a data-public-link href="#ccswitch-ccgui">CCGUI 配置</a><a data-public-link href="#ccswitch-codexg">CodexG 配置</a><a data-public-link href="#subscription-guide">订阅购买</a><a data-public-link href="#compare">比较套餐</a><a data-public-link href="#purchase">确认扣款</a>
           </nav></div>
           <div class="tutorial-panel tutorial-aside-card"><strong>账号操作</strong><p>需要真实余额或套餐数据时，回到 Sub2api 登录后的页面。</p><div class="tutorial-actions"><a class="tutorial-button small" data-subscription-link href="/purchase">购买订阅</a></div></div>
         </aside>

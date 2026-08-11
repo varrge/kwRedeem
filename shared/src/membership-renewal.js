@@ -3,6 +3,14 @@ export const membershipRenewalCheckUrl = "https://gptserve.freespaces.app/api/su
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
+const NO_SUBSCRIPTION_MESSAGE = "您还没有订阅允许您生成订阅链接";
+
+function isNoSubscriptionResponseMessage(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[，,]/g, "")
+    .replace(/\s+/g, "") === NO_SUBSCRIPTION_MESSAGE;
+}
 
 function renewalError(code, message, statusCode = 502) {
   const error = new Error(message);
@@ -54,12 +62,13 @@ export async function checkMembershipRenewal(sessionJson, options = {}) {
     if (!data || Array.isArray(data)) {
       throw renewalError("RENEWAL_CHECK_RESPONSE_INVALID", "续费检查结果无法确认");
     }
-    const isDelinquent = typeof data.is_delinquent === "boolean" ? data.is_delinquent : null;
+    const noSubscription = isNoSubscriptionResponseMessage(envelope?.message);
+    const isDelinquent = typeof data.is_delinquent === "boolean" ? data.is_delinquent : (noSubscription ? false : null);
     const accountType = typeof data.account_type === "string" ? data.account_type.trim().toLowerCase() : "";
     const hasNoPaidExpiry = data.expire_time === null && data.expires_at === null;
     const willRenew = typeof data.auto_renew === "boolean"
       ? data.auto_renew
-      : (accountType === "free" && hasNoPaidExpiry ? false : null);
+      : (noSubscription || (accountType === "free" && hasNoPaidExpiry) ? false : null);
     return Object.freeze({ isDelinquent, willRenew });
   } catch (error) {
     if (error?.code) throw error;

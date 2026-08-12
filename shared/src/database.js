@@ -671,6 +671,7 @@ function createSchema(db) {
       id TEXT PRIMARY KEY,
       config_version_id TEXT NOT NULL,
       source TEXT NOT NULL,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       threshold REAL NOT NULL,
       created_at TEXT NOT NULL,
       UNIQUE(config_version_id, source)
@@ -683,6 +684,9 @@ function createSchema(db) {
       type TEXT NOT NULL,
       amount REAL,
       weight REAL NOT NULL,
+      low_weight REAL,
+      medium_weight REAL,
+      high_weight REAL,
       rarity TEXT NOT NULL,
       display_text TEXT,
       icon TEXT,
@@ -700,6 +704,7 @@ function createSchema(db) {
       sub2api_user_id TEXT NOT NULL,
       email TEXT,
       source TEXT NOT NULL,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       source_id TEXT NOT NULL,
       amount REAL NOT NULL,
       cards_granted INTEGER NOT NULL DEFAULT 0,
@@ -713,6 +718,7 @@ function createSchema(db) {
       campaign_id TEXT NOT NULL,
       sub2api_user_id TEXT NOT NULL,
       source TEXT NOT NULL,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       amount REAL NOT NULL DEFAULT 0,
       cards_earned INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL,
@@ -725,6 +731,7 @@ function createSchema(db) {
       connection_id TEXT NOT NULL,
       sub2api_user_id TEXT NOT NULL,
       source TEXT NOT NULL,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       source_record_id TEXT,
       status TEXT NOT NULL DEFAULT 'available',
       granted_at TEXT NOT NULL,
@@ -742,6 +749,7 @@ function createSchema(db) {
       card_id TEXT NOT NULL UNIQUE,
       sub2api_user_id TEXT NOT NULL,
       email TEXT,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       prize_id TEXT NOT NULL,
       prize_name TEXT NOT NULL,
       prize_type TEXT NOT NULL,
@@ -784,6 +792,7 @@ function createSchema(db) {
       connection_id TEXT NOT NULL,
       sub2api_user_id TEXT NOT NULL,
       email TEXT,
+      card_tier TEXT NOT NULL DEFAULT 'low',
       quantity INTEGER NOT NULL,
       reason TEXT NOT NULL,
       granted_by TEXT NOT NULL,
@@ -1673,6 +1682,15 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "final_result_checked_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
+  ensureColumn(db, "sub2api_shake_eligibility_rules", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_prizes", "low_weight", "REAL");
+  ensureColumn(db, "sub2api_shake_prizes", "medium_weight", "REAL");
+  ensureColumn(db, "sub2api_shake_prizes", "high_weight", "REAL");
+  ensureColumn(db, "sub2api_shake_consumptions", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_progress", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_cards", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_draws", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_manual_grants", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
   ensureColumn(db, "sub2api_shake_draws", "disposition_reason", "TEXT");
   ensureColumn(db, "sub2api_shake_draws", "disposition_by", "TEXT");
   ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");
@@ -1688,6 +1706,13 @@ function createSchema(db) {
   ensureColumn(db, "api_football_settings", "updated_at", "TEXT");
   ensureColumn(db, "api_football_settings", "updated_by", "TEXT");
   ensureColumn(db, "sub2api_invites", "used_by_user_id", "TEXT");
+  db.exec(`
+    UPDATE sub2api_shake_prizes
+    SET low_weight = COALESCE(low_weight, weight),
+        medium_weight = COALESCE(medium_weight, weight),
+        high_weight = COALESCE(high_weight, weight)
+    WHERE low_weight IS NULL OR medium_weight IS NULL OR high_weight IS NULL
+  `);
   ensureColumn(db, "sub2api_invites", "used_by_email", "TEXT");
   ensureColumn(db, "sub2api_invites", "used_by_username", "TEXT");
   ensureColumn(db, "sub2api_invites", "used_at", "TEXT");

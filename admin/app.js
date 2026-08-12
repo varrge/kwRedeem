@@ -372,7 +372,9 @@ const refs = {
   shakeCampaignStart: document.querySelector("#shake-campaign-start"),
   shakeCampaignEnd: document.querySelector("#shake-campaign-end"),
   shakeSubscriptionThreshold: document.querySelector("#shake-subscription-threshold"),
+  shakeSubscriptionTier: document.querySelector("#shake-subscription-tier"),
   shakeBalanceThreshold: document.querySelector("#shake-balance-threshold"),
+  shakeBalanceTier: document.querySelector("#shake-balance-tier"),
   shakePrizeEditor: document.querySelector("#shake-prize-editor"),
   shakeAddPrizeBtn: document.querySelector("#shake-add-prize-btn"),
   shakeCampaignSubmitBtn: document.querySelector("#shake-campaign-submit-btn"),
@@ -392,6 +394,7 @@ const refs = {
   shakeGrantCampaign: document.querySelector("#shake-grant-campaign"),
   shakeGrantUser: document.querySelector("#shake-grant-user"),
   shakeGrantQuantity: document.querySelector("#shake-grant-quantity"),
+  shakeGrantTier: document.querySelector("#shake-grant-tier"),
   shakeGrantEmail: document.querySelector("#shake-grant-email"),
   shakeGrantReason: document.querySelector("#shake-grant-reason"),
   shakeGrantResult: document.querySelector("#shake-grant-result"),
@@ -3925,6 +3928,11 @@ const SHAKE_RARITY_LABELS = {
   epic: "史诗",
   legendary: "传说"
 };
+const SHAKE_CARD_TIER_LABELS = {
+  low: "低级抽奖卡",
+  medium: "中级抽奖卡",
+  high: "高级抽奖卡"
+};
 
 function toDateTimeLocal(value) {
   if (!value) return "";
@@ -3942,7 +3950,11 @@ function collectShakePrizes() {
       name: row.querySelector("[data-field=name]").value.trim(),
       type,
       amount: type === "balance" ? Number(row.querySelector("[data-field=amount]").value) : undefined,
-      weight: Number(row.querySelector("[data-field=weight]").value),
+      weights: {
+        low: Number(row.querySelector("[data-field=lowWeight]").value),
+        medium: Number(row.querySelector("[data-field=mediumWeight]").value),
+        high: Number(row.querySelector("[data-field=highWeight]").value)
+      },
       rarity: row.querySelector("[data-field=rarity]").value,
       displayText: row.querySelector("[data-field=displayText]").value.trim(),
       icon: row.querySelector("[data-field=icon]").value.trim(),
@@ -3954,7 +3966,8 @@ function collectShakePrizes() {
 function renderShakePrizeEditor(prizes = []) {
   if (!refs.shakePrizeEditor) return;
   const items = prizes.length ? prizes : [{
-    name: "谢谢参与", type: "empty", amount: null, weight: 1,
+    name: "谢谢参与", type: "empty", amount: null,
+    weights: { low: 1, medium: 1, high: 1 },
     rarity: "common", displayText: "", icon: ""
   }];
   refs.shakePrizeEditor.innerHTML = items.map((prize, index) => `
@@ -3963,8 +3976,10 @@ function renderShakePrizeEditor(prizes = []) {
       <label class="field"><span>类型</span><select data-field="type">
         ${Object.entries(SHAKE_PRIZE_TYPE_LABELS).map(([value, label]) => `<option value="${value}" ${prize.type === value ? "selected" : ""}>${label}</option>`).join("")}
       </select></label>
-      <label class="field"><span>金额</span><input data-field="amount" type="number" min="0.00000001" step="0.01" value="${prize.amount ?? ""}" ${prize.type === "balance" ? "" : "disabled"} /></label>
-      <label class="field"><span>权重</span><input data-field="weight" type="number" min="0.00000001" step="0.01" value="${prize.weight ?? 1}" required /></label>
+      <label class="field"><span>金额</span><input data-field="amount" type="number" min="0.01" step="0.01" value="${prize.amount ?? ""}" ${prize.type === "balance" ? "" : "disabled"} /></label>
+      <label class="field"><span>低级卡权重</span><input data-field="lowWeight" type="number" min="0" step="0.01" value="${prize.weights?.low ?? prize.weight ?? 1}" required /></label>
+      <label class="field"><span>中级卡权重</span><input data-field="mediumWeight" type="number" min="0" step="0.01" value="${prize.weights?.medium ?? prize.weight ?? 1}" required /></label>
+      <label class="field"><span>高级卡权重</span><input data-field="highWeight" type="number" min="0" step="0.01" value="${prize.weights?.high ?? prize.weight ?? 1}" required /></label>
       <label class="field"><span>稀有度</span><select data-field="rarity">
         ${Object.entries(SHAKE_RARITY_LABELS).map(([value, label]) => `<option value="${value}" ${prize.rarity === value ? "selected" : ""}>${label}</option>`).join("")}
       </select></label>
@@ -3979,8 +3994,12 @@ function collectShakeConfig() {
   const eligibilityRules = [];
   const subscriptionThreshold = Number(refs.shakeSubscriptionThreshold?.value);
   const balanceThreshold = Number(refs.shakeBalanceThreshold?.value);
-  if (subscriptionThreshold > 0) eligibilityRules.push({ source: "subscription_purchase", threshold: subscriptionThreshold });
-  if (balanceThreshold > 0) eligibilityRules.push({ source: "balance_consumption", threshold: balanceThreshold });
+  if (subscriptionThreshold > 0) eligibilityRules.push({
+    source: "subscription_purchase", cardTier: refs.shakeSubscriptionTier.value, threshold: subscriptionThreshold
+  });
+  if (balanceThreshold > 0) eligibilityRules.push({
+    source: "balance_consumption", cardTier: refs.shakeBalanceTier.value, threshold: balanceThreshold
+  });
   if (!eligibilityRules.length) throw new Error("至少启用一条摇摇卡获取规则");
   const prizes = collectShakePrizes();
   if (!prizes.length) throw new Error("至少配置一个奖品");
@@ -4030,7 +4049,9 @@ function editShakeCampaign(id) {
   refs.shakeCampaignEnd.value = toDateTimeLocal(campaign.endAt);
   for (const element of [refs.shakeCampaignConnection, refs.shakeCampaignName, refs.shakeCampaignStart, refs.shakeCampaignEnd]) element.disabled = true;
   refs.shakeSubscriptionThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "subscription_purchase")?.threshold || "";
+  refs.shakeSubscriptionTier.value = campaign.eligibilityRules.find((rule) => rule.source === "subscription_purchase")?.cardTier || "low";
   refs.shakeBalanceThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "balance_consumption")?.threshold || "";
+  refs.shakeBalanceTier.value = campaign.eligibilityRules.find((rule) => rule.source === "balance_consumption")?.cardTier || "low";
   renderShakePrizeEditor(campaign.prizes);
   refs.shakeCampaignFormTitle.textContent = `更新配置：${campaign.name}`;
   refs.shakeCampaignSubmitBtn.textContent = "发布新配置版本";
@@ -4068,9 +4089,12 @@ function renderShakeCampaigns() {
     { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.id)}</code>` },
     { label: "状态", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">配置 v${item.configVersion}</span>` },
     { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.startAt))}<br/>${escapeHtml(formatWorldCupTime(item.endAt))}</span>` },
-    { label: "获取条件", render: (item) => item.eligibilityRules.map((rule) => `${escapeHtml(SHAKE_SOURCE_LABELS[rule.source] || rule.source)}：${escapeHtml(rule.threshold)}`).join("<br/>") },
-    { label: "奖池", render: (item) => item.prizes.map((prize) => `${escapeHtml(prize.name)} <span class="hint">${escapeHtml(prize.probability)}%</span>`).join("<br/>") },
-    { label: "卡片", render: (item) => `可用 ${item.cardTotals.available}<br/><span class="hint">已用 ${item.cardTotals.consumed} · 预留 ${item.cardTotals.reserved} · 过期 ${item.cardTotals.expired}</span>` },
+    { label: "获取条件", render: (item) => item.eligibilityRules.map((rule) => `${escapeHtml(SHAKE_SOURCE_LABELS[rule.source] || rule.source)}：${escapeHtml(rule.threshold)} → ${escapeHtml(SHAKE_CARD_TIER_LABELS[rule.cardTier] || rule.cardTier)}`).join("<br/>") },
+    { label: "奖池", render: (item) => item.prizes.map((prize) => `${escapeHtml(prize.name)} <span class="hint">低 ${escapeHtml(prize.probabilities.low)}% · 中 ${escapeHtml(prize.probabilities.medium)}% · 高 ${escapeHtml(prize.probabilities.high)}%</span>`).join("<br/>") },
+    { label: "卡片", render: (item) => Object.entries(SHAKE_CARD_TIER_LABELS).map(([tier, label]) => {
+      const totals = item.cardTotalsByTier?.[tier] || { available: 0, consumed: 0 };
+      return `${escapeHtml(label)}：可用 ${escapeHtml(totals.available)} <span class="hint">· 已用 ${escapeHtml(totals.consumed)}</span>`;
+    }).join("<br/>") },
     { label: "操作", render: (item) => `
       ${item.status !== "ended" ? `<button class="ghost-btn small" type="button" onclick="editShakeCampaign('${escapeHtml(item.id)}')">配置</button>` : ""}
       ${["draft", "scheduled"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick="activateShakeCampaign('${escapeHtml(item.id)}')">启用</button>` : ""}
@@ -4141,11 +4165,12 @@ async function grantShakeCards() {
         campaignId: refs.shakeGrantCampaign.value,
         userId: refs.shakeGrantUser.value.trim(),
         email: refs.shakeGrantEmail.value.trim() || undefined,
+        cardTier: refs.shakeGrantTier.value,
         quantity: Number(refs.shakeGrantQuantity.value),
         reason: refs.shakeGrantReason.value.trim()
       })
     });
-    setHint(refs.shakeGrantResult, `已补发 ${payload.granted} 张摇摇卡`);
+    setHint(refs.shakeGrantResult, `已补发 ${payload.granted} 张${SHAKE_CARD_TIER_LABELS[payload.cardTier] || "抽奖卡"}`);
     refs.shakeManualGrantForm.reset();
     refs.shakeGrantQuantity.value = "1";
     await refreshShakeCampaigns();
@@ -4163,7 +4188,7 @@ async function refreshShakeDraws() {
   renderTable(refs.shakeDrawList, [
     { label: "时间", render: (item) => escapeHtml(formatWorldCupTime(item.createdAt)) },
     { label: "用户", render: (item) => `<code>${escapeHtml(item.userId)}</code>${item.email ? `<br/><span class="hint">${escapeHtml(item.email)}</span>` : ""}` },
-    { label: "奖品", render: (item) => `<strong>${escapeHtml(item.prize.name)}</strong><br/><span class="hint">${escapeHtml(SHAKE_RARITY_LABELS[item.prize.rarity] || item.prize.rarity)}</span>` },
+    { label: "奖品", render: (item) => `<strong>${escapeHtml(item.prize.name)}</strong><br/><span class="hint">${escapeHtml(SHAKE_CARD_TIER_LABELS[item.cardTier] || item.cardTier)} · ${escapeHtml(SHAKE_RARITY_LABELS[item.prize.rarity] || item.prize.rarity)}</span>` },
     { label: "状态", render: (item) => `${renderStatus(item.status)}${item.errorMessage ? `<br/><span class="hint">${escapeHtml(item.errorMessage)}</span>` : ""}` },
     { label: "操作", render: (item) => item.status === "delivery_failed" ? `
       <button class="primary-btn small" type="button" onclick="dispositionShakeDraw('${escapeHtml(item.id)}','retry')">重试</button>
@@ -5609,7 +5634,7 @@ if (refs.shakePrizeEditor) {
 
 refs.shakeAddPrizeBtn?.addEventListener("click", () => {
   renderShakePrizeEditor(collectShakePrizes().concat({
-    name: "", type: "empty", amount: null, weight: 1,
+    name: "", type: "empty", amount: null, weights: { low: 1, medium: 1, high: 1 },
     rarity: "common", displayText: "", icon: ""
   }));
 });

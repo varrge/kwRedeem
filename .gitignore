@@ -46,6 +46,7 @@ tests/*
 !tests/sub2api-shake.test.js
 !tests/sub2api-shake-api.test.js
 !tests/sub2api-shake-page.test.js
+!tests/sub2api-shake-tier-migration.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

@@ -131,6 +131,10 @@ _Avoid_: One global fixed quota, treating zero as no invites allowed, expired co
 A single-use entitlement to participate in one Shake & Win draw. It is granted when a player satisfies an eligibility rule and remains valid independently of later changes to that rule.
 _Avoid_: Rechecking eligibility when the player draws, treating qualification progress itself as a draw attempt
 
+**Shake Card Tier**:
+The configured grade of a Shake Card: low, medium, or high. An eligibility rule or manual grant issues one explicit tier, a draw consumes the tier selected by the player, and an extra-draw prize returns the same tier that was consumed. Legacy untyped cards and configuration are treated as low tier.
+_Avoid_: Deriving tier from prize rarity, silently consuming a different available tier, upgrading legacy cards during migration
+
 **Shake Card Earning Source**:
 The configured category of qualifying consumption that can grant Shake Cards. The first release supports purchases made through the KaWang Subscription Center and actual Sub2api balance consumption.
 _Avoid_: Balance recharge, balance-code redemption, invite rebate, World Cup balance change
@@ -176,8 +180,8 @@ The set of enabled, unlimited-inventory Shake Prizes available for selection in 
 _Avoid_: Finite prize stock, remaining-award counter
 
 **Shake Prize Weight**:
-An administrator-defined positive relative weight used to select among enabled Shake Prizes, with the resulting percentage shown as guidance in the admin UI. Each draw records the complete prize-pool and weight snapshot used for selection so later configuration changes do not alter its history.
-_Avoid_: Requiring weights to total 100, hard-coded frontend odds, recalculating historical odds
+An administrator-defined nonnegative relative weight set independently for low, medium, and high Shake Cards. Every tier must have at least one enabled prize with positive weight; the resulting percentage is shown for the selected tier, and each draw records its card tier and complete prize-pool weight snapshot so later changes do not alter history.
+_Avoid_: Requiring weights to total 100, sharing one forced probability across all tiers, hard-coded frontend odds, recalculating historical odds
 
 **Shake Configuration Version**:
 An immutable snapshot of a campaign's eligibility or prize configuration that takes effect for future consumption or draws. Administrators may change an active campaign by creating a new version, while historical grants and draws retain their original version.
@@ -443,6 +447,10 @@ _Avoid_: Endless automatic retry, silent skip
 A SpaceX Card payment card whose upstream identity and operational metadata are tracked by KaWang for ChatGPT membership fulfillment. Full payment credentials are not part of KaWang's card inventory.
 _Avoid_: Stored card credentials, disposable checkout payload
 
+**Card Platform Adaptation**:
+The future mapping of a new payment-card platform's card, funding, credential-release, and transaction capabilities into Membership Fulfillment. It changes the card capability source without changing the player submission flow, payment authorization rules, or fulfillment completion criteria.
+_Avoid_: Card-platform-specific membership workflow, recorded end-to-end click script, card platform owning fulfillment state
+
 **Session Activation Delivery**:
 The existing extension process that installs an order's ChatGPT authentication cookies into the incognito store, verifies identity, and completes the starting subscription-protection check before activating the already-issued CDK. Its success does not mean that a membership was purchased.
 _Avoid_: Membership fulfillment, payment completion
@@ -456,8 +464,8 @@ The evidence-based operator path for a renewal guard that cannot confirm the dis
 _Avoid_: Force-complete, manual success flag, automatic renewal rollback
 
 **Membership Fulfillment**:
-The independent, durable order process that establishes purchase eligibility, reserves and funds a card, completes the required payment stages, confirms the target membership, and disables renewal. It alone owns card, payment, upgrade, and renewal-safe completion state.
-_Avoid_: Overloading session activation status, using the redeem order's generic status as payment state
+The independent, durable order process started after a player's card code is accepted and its protected ChatGPT Session is submitted. It establishes purchase eligibility, reserves and funds a card, completes the purchased membership's payment stages, confirms the target membership, and disables renewal; it alone owns card, payment, upgrade, and renewal-safe completion state.
+_Avoid_: Automation Protocol, card-platform workflow, overloading session activation status, using the redeem order's generic status as payment state
 
 **Fulfillment Attempt**:
 An append-only execution record for one pass through a membership-fulfillment stage. Retrying or operator-resuming creates another attempt without replacing the fulfillment, its prior evidence, reservation, or funding intent.

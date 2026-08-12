@@ -14,9 +14,6 @@
         --rare: #38bdf8;
         --epic: #a855f7;
         --legendary: #f59e0b;
-        --glass-bg: rgba(255, 255, 255, 0.05);
-        --glass-border: rgba(255, 255, 255, 0.12);
-        --glass-blur: blur(20px);
       }
 
       * { box-sizing: border-box; }
@@ -31,10 +28,10 @@
         min-width: 320px;
         min-height: 100vh;
         background:
-          radial-gradient(circle at 10% -5%, rgba(168, 85, 247, 0.18), transparent 36rem),
-          radial-gradient(circle at 90% 15%, rgba(236, 72, 153, 0.14), transparent 32rem),
-          radial-gradient(circle at 50% 105%, rgba(56, 189, 248, 0.14), transparent 38rem),
-          rgba(15, 19, 36, 0.85);
+          radial-gradient(circle at 15% 10%, rgba(168, 85, 247, 0.22), transparent 36rem),
+          radial-gradient(circle at 85% 20%, rgba(236, 72, 153, 0.18), transparent 32rem),
+          radial-gradient(circle at 50% 90%, rgba(56, 189, 248, 0.18), transparent 38rem),
+          #0b0f19;
         color: var(--text, #f3f5f9);
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
         letter-spacing: 0;
@@ -54,19 +51,23 @@
         padding: 20px 0 44px;
       }
 
+      /* Fixed topbar and toolbar override to remove square background box */
       .topbar {
-        min-height: 64px;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 20px;
-        align-items: center;
-        padding: 16px 24px;
-        border-radius: 24px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
-        box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.3);
+        position: relative !important;
+        top: 0 !important;
+        min-height: 64px !important;
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        gap: 20px !important;
+        align-items: center !important;
+        padding: 16px 24px !important;
+        border-radius: 24px !important;
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.3) !important;
+        margin-bottom: 0 !important;
       }
 
       .brand { min-width: 0; }
@@ -104,76 +105,81 @@
         line-height: 1.15;
       }
 
+      /* Clean transparent toolbar without square dark background cutout */
       .toolbar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        background: transparent;
-        border: none;
-        box-shadow: none;
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
       }
 
       .icon-btn, .ghost-btn, .primary-btn {
-        border-radius: 16px;
-        min-height: 44px;
-        cursor: pointer;
-        font-weight: 700;
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        border-radius: 14px !important;
+        min-height: 44px !important;
+        cursor: pointer !important;
+        font-weight: 700 !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
       }
 
       .icon-btn {
-        width: 44px;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        background: rgba(255, 255, 255, 0.08);
-        color: var(--text, #f3f5f9);
-        display: grid;
-        place-items: center;
-        font-size: 17px;
-        border-radius: 16px;
+        width: 44px !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+        color: var(--text, #f3f5f9) !important;
+        display: grid !important;
+        place-items: center !important;
+        font-size: 17px !important;
+        border-radius: 14px !important;
       }
 
       .icon-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
-        border-color: rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.14) !important;
+        border-color: rgba(255, 255, 255, 0.28) !important;
       }
 
       .icon-btn[aria-pressed="true"] {
-        border-color: rgba(168, 85, 247, 0.7);
-        background: rgba(168, 85, 247, 0.22);
-        color: #c084fc;
-        box-shadow: 0 0 18px rgba(168, 85, 247, 0.35);
+        border-color: rgba(168, 85, 247, 0.7) !important;
+        background: rgba(168, 85, 247, 0.22) !important;
+        color: #c084fc !important;
+        box-shadow: 0 0 16px rgba(168, 85, 247, 0.35) !important;
       }
 
       .ghost-btn {
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        padding: 0 20px;
-        background: rgba(255, 255, 255, 0.08);
-        color: var(--text, #f3f5f9);
-        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        padding: 0 20px !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+        color: var(--text, #f3f5f9) !important;
+        border-radius: 14px !important;
       }
 
       .ghost-btn:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.15);
-        border-color: rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.14) !important;
+        border-color: rgba(255, 255, 255, 0.28) !important;
       }
 
       .primary-btn {
-        border: 0;
-        padding: 0 32px;
-        background: linear-gradient(135deg, #a855f7, #6366f1 50%, #ec4899);
-        color: #ffffff;
-        font-size: 15px;
-        border-radius: 16px;
-        box-shadow: 0 8px 25px -4px rgba(168, 85, 247, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+        border: 0 !important;
+        padding: 0 32px !important;
+        background: linear-gradient(135deg, #a855f7, #6366f1 50%, #ec4899) !important;
+        color: #ffffff !important;
+        font-size: 15px !important;
+        border-radius: 14px !important;
+        box-shadow: 0 8px 25px -4px rgba(168, 85, 247, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.3) !important;
       }
 
       .primary-btn:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow: 0 12px 30px -4px rgba(168, 85, 247, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+        transform: translateY(-2px) !important;
+        box-shadow: 0 12px 30px -4px rgba(168, 85, 247, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.4) !important;
       }
 
       .primary-btn:active:not(:disabled) {
-        transform: translateY(1px);
+        transform: translateY(1px) !important;
       }
 
       .primary-btn.ready-pulse {
@@ -198,8 +204,8 @@
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 20px;
         padding: 18px 22px;
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         transition: transform 0.2s ease, border-color 0.2s ease;
       }
 
@@ -228,6 +234,7 @@
         white-space: nowrap;
       }
 
+      /* Cyber aperture opening stage with glowing glass container */
       .opening-stage {
         position: relative;
         margin: 24px 0 0;
@@ -235,13 +242,13 @@
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 28px;
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         display: grid;
         place-items: center;
         gap: 28px;
         overflow: hidden;
-        box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.35);
       }
 
       .stage-label {
@@ -267,14 +274,14 @@
         width: 100%;
         height: 236px;
         overflow: hidden;
-        border-radius: 24px;
-        border: 1px solid rgba(168, 85, 247, 0.35);
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
+        border-radius: 20px;
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        background: rgba(18, 24, 43, 0.65);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         box-shadow:
-          inset 0 0 40px rgba(0, 0, 0, 0.4),
-          0 0 35px rgba(168, 85, 247, 0.15);
+          inset 0 0 40px rgba(0, 0, 0, 0.5),
+          0 0 35px rgba(168, 85, 247, 0.2);
       }
 
       .case-window::before, .case-window::after {
@@ -287,8 +294,8 @@
         pointer-events: none;
       }
 
-      .case-window::before { left: 0; background: linear-gradient(90deg, rgba(15, 19, 36, 0.92), transparent); }
-      .case-window::after { right: 0; background: linear-gradient(270deg, rgba(15, 19, 36, 0.92), transparent); }
+      .case-window::before { left: 0; background: linear-gradient(90deg, rgba(18, 24, 43, 0.95), transparent); }
+      .case-window::after { right: 0; background: linear-gradient(270deg, rgba(18, 24, 43, 0.95), transparent); }
 
       #case-marker {
         position: absolute;
@@ -333,6 +340,7 @@
 
       #case-track.spinning { transition: transform 5.4s cubic-bezier(0.12, 0.72, 0.1, 1); }
 
+      /* Sleek glass prize cards inside reel */
       .prize-item {
         position: relative;
         flex: 0 0 var(--item-width);
@@ -341,14 +349,14 @@
         display: grid;
         grid-template-rows: 1fr auto;
         overflow: hidden;
-        border-radius: 18px;
-        border: 1px solid color-mix(in srgb, var(--rarity-color, var(--common)) 45%, rgba(255, 255, 255, 0.15));
-        background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+        border-radius: 16px;
+        border: 1px solid color-mix(in srgb, var(--rarity-color, var(--common)) 50%, rgba(255, 255, 255, 0.2));
+        background: linear-gradient(145deg, color-mix(in srgb, var(--rarity-color, var(--common)) 16%, rgba(255, 255, 255, 0.06)), rgba(255, 255, 255, 0.02));
         padding: 16px;
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         box-shadow: 
-          0 8px 24px rgba(0, 0, 0, 0.25),
+          0 8px 24px rgba(0, 0, 0, 0.3),
           inset 0 1px 1px rgba(255, 255, 255, 0.2);
         transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
       }
@@ -357,7 +365,7 @@
         position: absolute;
         inset: 0;
         content: "";
-        background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--rarity-color) 30%, transparent), transparent 65%);
+        background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--rarity-color) 35%, transparent), transparent 65%);
         pointer-events: none;
       }
 
@@ -373,8 +381,8 @@
         z-index: 2;
         padding: 2px 8px;
         border-radius: 8px;
-        background: color-mix(in srgb, var(--rarity-color) 25%, rgba(0,0,0,0.4));
-        border: 1px solid color-mix(in srgb, var(--rarity-color) 50%, transparent);
+        background: color-mix(in srgb, var(--rarity-color) 30%, rgba(0,0,0,0.4));
+        border: 1px solid color-mix(in srgb, var(--rarity-color) 60%, transparent);
         color: var(--rarity-color);
         font-size: 10px;
         font-weight: 800;
@@ -400,10 +408,38 @@
       .prize-copy span { display: block; margin-top: 4px; color: var(--rarity-color); font-size: 11px; font-weight: 800; text-transform: uppercase; }
 
       .opening-actions { min-height: 86px; display: grid; justify-items: center; gap: 12px; }
-      .opening-actions .primary-btn { min-width: 220px; min-height: 52px; font-size: 16px; border-radius: 16px; }
+      .opening-actions .primary-btn { min-width: 220px; min-height: 52px; font-size: 16px; border-radius: 14px !important; }
       .opening-status { min-height: 20px; margin: 0; color: var(--muted, #8e9bb0); font-size: 14px; text-align: center; }
       .opening-status.error { color: #f43f5e; }
       .opening-status.success { color: #4ade80; }
+
+      .card-tier-selector {
+        width: min(100%, 620px);
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 16px;
+        background: rgba(5, 8, 18, 0.48);
+      }
+
+      .card-tier-option {
+        min-width: 0;
+        min-height: 46px;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--muted, #8e9bb0);
+        cursor: pointer;
+        font-weight: 750;
+      }
+
+      .card-tier-option strong { display: block; color: inherit; font-size: 14px; }
+      .card-tier-option span { display: block; margin-top: 2px; color: inherit; font-size: 12px; }
+      .card-tier-option[aria-pressed="true"] { color: #fff; background: rgba(168, 85, 247, 0.26); box-shadow: inset 0 0 0 1px rgba(192, 132, 252, 0.48); }
+      .card-tier-option[data-card-tier="medium"][aria-pressed="true"] { background: rgba(56, 189, 248, 0.22); box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.48); }
+      .card-tier-option[data-card-tier="high"][aria-pressed="true"] { background: rgba(245, 158, 11, 0.22); box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.52); }
 
       .result-reveal {
         min-height: 30px;
@@ -431,8 +467,8 @@
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 24px;
         padding: 22px 24px;
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
       }
 
       .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 16px; }
@@ -463,8 +499,8 @@
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 24px;
         padding: 22px 24px;
-        backdrop-filter: var(--glass-blur);
-        -webkit-backdrop-filter: var(--glass-blur);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         overflow-x: auto;
       }
 
@@ -670,7 +706,7 @@
         width: 100%;
         min-height: 52px;
         border: 0;
-        border-radius: 16px;
+        border-radius: 14px !important;
         background: linear-gradient(135deg, var(--modal-color), color-mix(in srgb, var(--modal-color) 70%, #ffffff));
         color: #070913;
         font-size: 16px;
@@ -699,7 +735,7 @@
       @media (max-width: 820px) {
         :root { --item-width: 144px; --item-gap: 10px; }
         .shell { width: min(100% - 24px, 720px); padding-top: 14px; }
-        .topbar { padding: 14px 18px; border-radius: 20px; }
+        .topbar { padding: 14px 18px !important; border-radius: 20px !important; }
         .brand h1 { font-size: 24px; }
         .summary { grid-template-columns: 1fr; gap: 10px; }
         .metric { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-radius: 16px; }
@@ -741,6 +777,11 @@
 
       <section class="opening-stage">
         <div class="stage-label">限定开箱</div>
+        <div id="card-tier-selector" class="card-tier-selector" aria-label="选择抽奖卡种类">
+          <button class="card-tier-option" data-card-tier="low" type="button" aria-pressed="true"><strong>低级抽奖卡</strong><span data-tier-count="low">0 张</span></button>
+          <button class="card-tier-option" data-card-tier="medium" type="button" aria-pressed="false"><strong>中级抽奖卡</strong><span data-tier-count="medium">0 张</span></button>
+          <button class="card-tier-option" data-card-tier="high" type="button" aria-pressed="false"><strong>高级抽奖卡</strong><span data-tier-count="high">0 张</span></button>
+        </div>
         <div class="case-window" aria-live="off">
           <div id="case-marker" aria-hidden="true"></div>
           <div id="case-track"></div>
@@ -802,6 +843,7 @@
         refreshBtn: document.querySelector("#refresh-btn"),
         caseTrack: document.querySelector("#case-track"),
         openCaseBtn: document.querySelector("#open-case-btn"),
+        cardTierSelector: document.querySelector("#card-tier-selector"),
         openingStatus: document.querySelector("#opening-status"),
         resultReveal: document.querySelector("#result-reveal"),
         progressSummary: document.querySelector("#progress-summary"),
@@ -825,6 +867,8 @@
         sessionToken: "",
         campaign: null,
         availableCards: 0,
+        availableCardsByTier: { low: 0, medium: 0, high: 0 },
+        selectedCardTier: "low",
         prizes: [],
         draws: [],
         spinning: false,
@@ -835,6 +879,7 @@
       const SOURCE_LABELS = { subscription_purchase: "本站套餐购买", balance_consumption: "余额实际消耗" };
       const RARITY_LABELS = { common: "普通", rare: "稀有", epic: "史诗", legendary: "传说" };
       const STATUS_LABELS = { selected: "待发放", delivered: "已发放", delivery_failed: "发放失败", voided: "已作废" };
+      const CARD_TIER_LABELS = { low: "低级抽奖卡", medium: "中级抽奖卡", high: "高级抽奖卡" };
 
       function escapeHtml(value) {
         return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -910,7 +955,7 @@
         refs.progressList.innerHTML = progress.length ? progress.map((item) => {
           const ratio = Math.max(0, Math.min(100, Number(item.amount) / Number(item.threshold) * 100));
           return `<div class="progress-row">
-            <strong>${escapeHtml(SOURCE_LABELS[item.source] || item.source)}</strong>
+              <strong>${escapeHtml(SOURCE_LABELS[item.source] || item.source)} · ${escapeHtml(CARD_TIER_LABELS[item.cardTier] || item.cardTier)}</strong>
             <div class="progress-bar"><i style="width:${ratio}%"></i></div>
             <span>${escapeHtml(item.amount)} / ${escapeHtml(item.threshold)}</span>
           </div>`;
@@ -921,8 +966,8 @@
         refs.probabilityList.innerHTML = state.prizes.length ? state.prizes.map((prize) => `
           <div class="probability-row">
             <strong>${escapeHtml(prize.name)}</strong>
-            <div class="progress-bar"><i style="width:${Math.max(0, Math.min(100, Number(prize.probability)))}%;background:var(--${escapeHtml(prize.rarity)})"></i></div>
-            <span>${escapeHtml(prize.probability)}%</span>
+            <div class="progress-bar"><i style="width:${Math.max(0, Math.min(100, Number(prize.probabilities?.[state.selectedCardTier] ?? prize.probability ?? 0)))}%;background:var(--${escapeHtml(prize.rarity)})"></i></div>
+            <span>${escapeHtml(prize.probabilities?.[state.selectedCardTier] ?? prize.probability ?? 0)}%</span>
           </div>
         `).join("") : `<div class="empty">暂无奖品</div>`;
       }
@@ -933,13 +978,14 @@
           refs.historyList.innerHTML = `<div class="empty">暂无开箱记录</div>`;
           return;
         }
-        refs.historyList.innerHTML = `<table><thead><tr><th>时间</th><th>奖品</th><th>稀有度</th><th>状态</th><th>操作</th></tr></thead><tbody>${state.draws.map((draw) => `
+        refs.historyList.innerHTML = `<table><thead><tr><th>时间</th><th>卡种</th><th>奖品</th><th>稀有度</th><th>状态</th><th>操作</th></tr></thead><tbody>${state.draws.map((draw) => `
           <tr>
             <td>${escapeHtml(formatTime(draw.createdAt))}</td>
+            <td>${escapeHtml(CARD_TIER_LABELS[draw.cardTier] || draw.cardTier)}</td>
             <td><strong>${escapeHtml(draw.prize.name)}</strong></td>
             <td>${escapeHtml(RARITY_LABELS[draw.prize.rarity] || draw.prize.rarity)}</td>
             <td><span class="status status-${escapeHtml(draw.status)}">${escapeHtml(STATUS_LABELS[draw.status] || draw.status)}</span></td>
-            <td>${draw.status === "delivery_failed" ? `<button class="ghost-btn retry-btn" data-retry-request="${escapeHtml(draw.requestId)}">重试发放</button>` : "-"}</td>
+            <td>${draw.status === "delivery_failed" ? `<button class="ghost-btn retry-btn" data-retry-request="${escapeHtml(draw.requestId)}" data-retry-tier="${escapeHtml(draw.cardTier)}">重试发放</button>` : "-"}</td>
           </tr>`).join("")}</tbody></table>`;
       }
 
@@ -948,6 +994,9 @@
         if (payload.sessionToken) state.sessionToken = payload.sessionToken;
         state.campaign = payload.campaign || null;
         state.availableCards = Number(payload.availableCards || 0);
+        state.availableCardsByTier = payload.availableCardsByTier
+          ? { low: 0, medium: 0, high: 0, ...payload.availableCardsByTier }
+          : { low: state.availableCards, medium: 0, high: 0 };
         state.prizes = payload.prizes || [];
         state.draws = payload.draws || [];
         refs.campaignName.textContent = state.campaign?.name || "摇摇乐开箱";
@@ -957,19 +1006,30 @@
         refs.campaignEnd.textContent = state.campaign ? formatTime(state.campaign.endAt, true) : "暂无活动";
         updateButtonState();
         renderProgress(payload.progress || []);
+        renderCardTierSelector();
         renderProbabilities();
         renderHistory();
         buildIdleTrack();
       }
 
       function updateButtonState() {
-        const canOpen = state.sessionToken && state.campaign && state.availableCards >= 1 && !state.spinning;
+        const canOpen = state.sessionToken && state.campaign && Number(state.availableCardsByTier[state.selectedCardTier]) >= 1 && !state.spinning;
         refs.openCaseBtn.disabled = !canOpen;
         if (canOpen) {
           refs.openCaseBtn.classList.add("ready-pulse");
         } else {
           refs.openCaseBtn.classList.remove("ready-pulse");
         }
+      }
+
+      function renderCardTierSelector() {
+        refs.cardTierSelector.querySelectorAll("[data-card-tier]").forEach((button) => {
+          const tier = button.dataset.cardTier;
+          button.setAttribute("aria-pressed", String(tier === state.selectedCardTier));
+          const count = button.querySelector(`[data-tier-count="${tier}"]`);
+          if (count) count.textContent = `${Number(state.availableCardsByTier[tier] || 0)} 张`;
+        });
+        refs.openCaseBtn.textContent = `使用${CARD_TIER_LABELS[state.selectedCardTier]}开启`;
       }
 
       function audioTick(frequency = 520, duration = 0.035) {
@@ -1027,7 +1087,7 @@
         
         let desc = "恭喜在摇摇乐开箱中斩获奖励！";
         if (prize.type === "balance") desc = `已向您的账户增加 ￥${prize.value || 0} 余额。`;
-        else if (prize.type === "extra_draw") desc = `额外获得 1 张摇摇卡，可继续抽奖！`;
+        else if (prize.type === "extra_draw") desc = `额外获得 1 张${CARD_TIER_LABELS[draw.cardTier] || "同级抽奖卡"}，可继续抽奖！`;
         refs.modalPrizeDesc.textContent = desc;
 
         if (draw.status === "delivery_failed") {
@@ -1080,7 +1140,7 @@
         });
       }
 
-      async function openCase(requestId = "") {
+      async function openCase(requestId = "", cardTier = state.selectedCardTier) {
         if (state.spinning || !state.sessionToken) return;
         state.spinning = true;
         updateButtonState();
@@ -1089,11 +1149,13 @@
         const drawRequestId = requestId || `opening-${crypto.randomUUID()}`;
         try {
           const payload = await request("/api/public/sub2api/shake/draws", {
-            method: "POST", body: JSON.stringify({ requestId: drawRequestId })
+            method: "POST", body: JSON.stringify({ requestId: drawRequestId, cardTier })
           });
           await animateResult(payload.draw);
           state.availableCards = Number(payload.availableCards || 0);
+          state.availableCardsByTier = { ...state.availableCardsByTier, ...(payload.availableCardsByTier || {}) };
           refs.availableCards.textContent = state.availableCards;
+          renderCardTierSelector();
           refs.resultReveal.textContent = payload.draw.prize.name;
           refs.resultReveal.dataset.rarity = payload.draw.prize.rarity;
           if (payload.draw.status === "delivery_failed") {
@@ -1162,10 +1224,18 @@
         if (state.soundEnabled) audioTick();
       });
       refs.openCaseBtn.addEventListener("click", () => openCase());
+      refs.cardTierSelector.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-card-tier]");
+        if (!button || state.spinning) return;
+        state.selectedCardTier = button.dataset.cardTier;
+        renderCardTierSelector();
+        renderProbabilities();
+        updateButtonState();
+      });
       refs.refreshBtn.addEventListener("click", refresh);
       refs.historyList.addEventListener("click", (event) => {
         const button = event.target.closest("[data-retry-request]");
-        if (button) openCase(button.dataset.retryRequest);
+        if (button) openCase(button.dataset.retryRequest, button.dataset.retryTier);
       });
       refs.modalClaimBtn.addEventListener("click", hidePrizeModal);
       refs.modalBackdrop.addEventListener("click", hidePrizeModal);

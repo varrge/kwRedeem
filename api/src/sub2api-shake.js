@@ -3,17 +3,27 @@ import { z } from "zod";
 const SOURCES = ["subscription_purchase", "balance_consumption"];
 const PRIZE_TYPES = ["balance", "extra_draw", "empty"];
 const RARITIES = ["common", "rare", "epic", "legendary"];
+const CARD_TIERS = ["low", "medium", "high"];
+const DEFAULT_CARD_TIER = "low";
 
 const eligibilityRulesSchema = z.array(z.object({
   source: z.enum(SOURCES),
+  cardTier: z.enum(CARD_TIERS).optional().default(DEFAULT_CARD_TIER),
   threshold: z.number().finite().positive()
 })).min(1);
+
+const prizeWeightsSchema = z.object({
+  low: z.number().finite().nonnegative(),
+  medium: z.number().finite().nonnegative(),
+  high: z.number().finite().nonnegative()
+});
 
 const prizesSchema = z.array(z.object({
   name: z.string().trim().min(1).max(100),
   type: z.enum(PRIZE_TYPES),
   amount: z.number().finite().nonnegative().optional(),
-  weight: z.number().finite().positive(),
+  weight: z.number().finite().positive().optional(),
+  weights: prizeWeightsSchema.optional(),
   rarity: z.enum(RARITIES),
   displayText: z.string().trim().max(200).optional().default(""),
   icon: z.string().trim().max(500).optional().default(""),
@@ -28,7 +38,16 @@ function validateConfig(value, context) {
     if (prize.type === "balance" && !(Number(prize.amount) > 0)) {
       context.addIssue({ code: "custom", path: ["prizes", index, "amount"], message: "余额奖品金额必须大于 0" });
     }
+    if (!prize.weights && !prize.weight) {
+      context.addIssue({ code: "custom", path: ["prizes", index, "weights"], message: "请设置奖品概率权重" });
+    }
   });
+  for (const cardTier of CARD_TIERS) {
+    const total = value.prizes.reduce((sum, prize) => sum + getPrizeWeights(prize)[cardTier], 0);
+    if (!(total > 0)) {
+      context.addIssue({ code: "custom", path: ["prizes"], message: `${cardTier} 抽奖卡至少需要一个权重大于 0 的奖品` });
+    }
+  }
 }
 
 const campaignSchema = z.object({
@@ -51,13 +70,15 @@ const configSchema = z.object({
 }).superRefine(validateConfig);
 
 const drawSchema = z.object({
-  requestId: z.string().trim().min(8).max(100)
+  requestId: z.string().trim().min(8).max(100),
+  cardTier: z.enum(CARD_TIERS).optional()
 });
 
 const manualGrantSchema = z.object({
   campaignId: z.string().trim().min(1),
   userId: z.union([z.string(), z.number()]).transform((value) => String(value).trim()).pipe(z.string().min(1)),
   email: z.string().trim().email().optional().default(""),
+  cardTier: z.enum(CARD_TIERS).optional().default(DEFAULT_CARD_TIER),
   quantity: z.number().int().min(1).max(100),
   reason: z.string().trim().min(2).max(500)
 });
@@ -73,6 +94,27 @@ const endCampaignSchema = z.object({
 
 function roundAmount(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100_000_000) / 100_000_000;
+}
+
+function getPrizeWeights(prize) {
+  const fallback = Number(prize.weight || 0);
+  return {
+    low: Number(prize.weights?.low ?? prize.low_weight ?? fallback),
+    medium: Number(prize.weights?.medium ?? prize.medium_weight ?? fallback),
+    high: Number(prize.weights?.high ?? prize.high_weight ?? fallback)
+  };
+}
+
+function getPrizeWeightTotals(prizes) {
+  return prizes.reduce((totals, prize) => {
+    const weights = getPrizeWeights(prize);
+    for (const tier of CARD_TIERS) totals[tier] += weights[tier];
+    return totals;
+  }, { low: 0, medium: 0, high: 0 });
+}
+
+function emptyCardTierCounts() {
+  return { low: 0, medium: 0, high: 0 };
 }
 
 function parseBody(request) {
@@ -107,16 +149,21 @@ export function createSub2ApiShakeService({
     } : null;
   }
 
-  function serializePrize(row, totalWeight = 0) {
+  function serializePrize(row, totalWeights = emptyCardTierCounts()) {
+    const weights = getPrizeWeights(row);
+    const probabilities = Object.fromEntries(CARD_TIERS.map((tier) => [
+      tier,
+      totalWeights[tier] > 0 ? roundAmount((weights[tier] / totalWeights[tier]) * 100) : 0
+    ]));
     return {
       id: row.id,
       name: row.name,
       type: row.type,
       amount: row.amount === null ? null : Number(row.amount),
-      weight: Number(row.weight),
-      probability: totalWeight > 0
-        ? roundAmount((Number(row.weight) / totalWeight) * 100)
-        : 0,
+      weight: weights.low,
+      probability: probabilities.low,
+      weights,
+      probabilities,
       rarity: row.rarity,
       displayText: row.display_text || "",
       icon: row.icon || "",
@@ -146,7 +193,7 @@ export function createSub2ApiShakeService({
         SELECT version FROM sub2api_shake_config_versions WHERE id = ?
       `).get(campaign.active_config_version_id);
       const rules = db.prepare(`
-        SELECT source, threshold FROM sub2api_shake_eligibility_rules
+        SELECT source, card_tier, threshold FROM sub2api_shake_eligibility_rules
         WHERE config_version_id = ? ORDER BY rowid ASC
       `).all(campaign.active_config_version_id);
       const prizes = db.prepare(`
@@ -154,24 +201,32 @@ export function createSub2ApiShakeService({
         WHERE config_version_id = ? AND status = 'active'
         ORDER BY sort_order ASC, created_at ASC
       `).all(campaign.active_config_version_id);
-      const totalWeight = prizes.reduce((sum, prize) => sum + Number(prize.weight), 0);
+      const totalWeights = getPrizeWeightTotals(prizes);
       const cardRows = db.prepare(`
-        SELECT status, COUNT(*) AS count FROM sub2api_shake_cards
-        WHERE campaign_id = ? GROUP BY status
+        SELECT status, card_tier, COUNT(*) AS count FROM sub2api_shake_cards
+        WHERE campaign_id = ? GROUP BY status, card_tier
       `).all(campaign.id);
       const cardTotals = { available: 0, reserved: 0, consumed: 0, expired: 0 };
+      const cardTotalsByTier = Object.fromEntries(CARD_TIERS.map((tier) => [tier, {
+        available: 0, reserved: 0, consumed: 0, expired: 0
+      }]));
       for (const row of cardRows) {
-        if (Object.hasOwn(cardTotals, row.status)) cardTotals[row.status] = Number(row.count);
+        if (!Object.hasOwn(cardTotals, row.status)) continue;
+        const tier = CARD_TIERS.includes(row.card_tier) ? row.card_tier : DEFAULT_CARD_TIER;
+        cardTotals[row.status] += Number(row.count);
+        cardTotalsByTier[tier][row.status] += Number(row.count);
       }
       return {
         ...serializeCampaign(campaign),
         configVersion: Number(version?.version || 0),
         eligibilityRules: rules.map((rule) => ({
           source: rule.source,
+          cardTier: rule.card_tier || DEFAULT_CARD_TIER,
           threshold: Number(rule.threshold)
         })),
-        prizes: prizes.map((prize) => serializePrize(prize, totalWeight)),
-        cardTotals
+        prizes: prizes.map((prize) => serializePrize(prize, totalWeights)),
+        cardTotals,
+        cardTotalsByTier
       };
     });
   }
@@ -215,23 +270,26 @@ export function createSub2ApiShakeService({
         VALUES (?, ?, 1, ?, ?)
       `).run(configVersionId, campaignId, actor, createdAt);
       const insertRule = db.prepare(`
-        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, threshold, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, card_tier, threshold, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
       for (const rule of data.eligibilityRules) {
-        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.threshold, createdAt);
+        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.cardTier, rule.threshold, createdAt);
       }
       const insertPrize = db.prepare(`
         INSERT INTO sub2api_shake_prizes (
-          id, config_version_id, name, type, amount, weight, rarity,
+          id, config_version_id, name, type, amount, weight,
+          low_weight, medium_weight, high_weight, rarity,
           display_text, icon, sort_order, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
       `);
       for (const prize of data.prizes) {
+        const weights = getPrizeWeights(prize);
         insertPrize.run(
           id("shake-prize"), configVersionId, prize.name, prize.type,
           prize.type === "balance" ? prize.amount : null,
-          prize.weight, prize.rarity, prize.displayText || null, prize.icon || null,
+          weights.low, weights.low, weights.medium, weights.high,
+          prize.rarity, prize.displayText || null, prize.icon || null,
           prize.sortOrder, createdAt
         );
       }
@@ -306,23 +364,26 @@ export function createSub2ApiShakeService({
         VALUES (?, ?, ?, ?, ?)
       `).run(configVersionId, campaign.id, version, actor, createdAt);
       const insertRule = db.prepare(`
-        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, threshold, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, card_tier, threshold, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
       for (const rule of parsed.data.eligibilityRules) {
-        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.threshold, createdAt);
+        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.cardTier, rule.threshold, createdAt);
       }
       const insertPrize = db.prepare(`
         INSERT INTO sub2api_shake_prizes (
-          id, config_version_id, name, type, amount, weight, rarity,
+          id, config_version_id, name, type, amount, weight,
+          low_weight, medium_weight, high_weight, rarity,
           display_text, icon, sort_order, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
       `);
       for (const prize of parsed.data.prizes) {
+        const weights = getPrizeWeights(prize);
         insertPrize.run(
           id("shake-prize"), configVersionId, prize.name, prize.type,
           prize.type === "balance" ? prize.amount : null,
-          prize.weight, prize.rarity, prize.displayText || null, prize.icon || null,
+          weights.low, weights.low, weights.medium, weights.high,
+          prize.rarity, prize.displayText || null, prize.icon || null,
           prize.sortOrder, createdAt
         );
       }
@@ -405,6 +466,7 @@ export function createSub2ApiShakeService({
     if (!rule) return { cardsGranted: 0, accepted: false };
 
     const userId = String(input.userId);
+    const cardTier = CARD_TIERS.includes(rule.card_tier) ? rule.card_tier : DEFAULT_CARD_TIER;
     const progress = db.prepare(`
       SELECT * FROM sub2api_shake_progress
       WHERE campaign_id = ? AND sub2api_user_id = ? AND source = ?
@@ -417,46 +479,56 @@ export function createSub2ApiShakeService({
     db.prepare(`
       INSERT INTO sub2api_shake_consumptions (
         id, connection_id, campaign_id, config_version_id, rule_id,
-        sub2api_user_id, email, source, source_id, amount, cards_granted,
+        sub2api_user_id, email, source, card_tier, source_id, amount, cards_granted,
         occurred_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       consumptionId, input.connectionId, campaign.id, campaign.active_config_version_id,
-      rule.id, userId, input.email || null, source, input.sourceId, amount,
+      rule.id, userId, input.email || null, source, cardTier, input.sourceId, amount,
       cardsGranted, occurredAt, createdAt
     );
     if (progress) {
       db.prepare(`
         UPDATE sub2api_shake_progress
-        SET amount = ?, cards_earned = cards_earned + ?, updated_at = ?
+        SET card_tier = ?, amount = ?, cards_earned = cards_earned + ?, updated_at = ?
         WHERE id = ?
-      `).run(remainder, cardsGranted, createdAt, progress.id);
+      `).run(cardTier, remainder, cardsGranted, createdAt, progress.id);
     } else {
       db.prepare(`
         INSERT INTO sub2api_shake_progress (
-          id, campaign_id, sub2api_user_id, source, amount, cards_earned, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(id("shake-progress"), campaign.id, userId, source, remainder, cardsGranted, createdAt);
+          id, campaign_id, sub2api_user_id, source, card_tier, amount, cards_earned, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id("shake-progress"), campaign.id, userId, source, cardTier, remainder, cardsGranted, createdAt);
     }
     const insertCard = db.prepare(`
       INSERT INTO sub2api_shake_cards (
-        id, campaign_id, connection_id, sub2api_user_id, source,
+        id, campaign_id, connection_id, sub2api_user_id, source, card_tier,
         source_record_id, status, granted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'available', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?)
     `);
     for (let index = 0; index < cardsGranted; index += 1) {
-      insertCard.run(id("shake-card"), campaign.id, input.connectionId, userId, source, consumptionId, createdAt);
+      insertCard.run(id("shake-card"), campaign.id, input.connectionId, userId, source, cardTier, consumptionId, createdAt);
     }
-    return { cardsGranted, duplicate: false };
+    return { cardsGranted, cardTier, duplicate: false };
   });
 
   function buildBootstrap(identity) {
     const campaign = findActiveCampaign(identity.connectionId);
-    if (!campaign) return { campaign: null, availableCards: 0, progress: [], prizes: [], draws: [] };
-    const availableCards = Number(db.prepare(`
-      SELECT COUNT(*) AS count FROM sub2api_shake_cards
+    if (!campaign) return {
+      campaign: null, availableCards: 0, availableCardsByTier: emptyCardTierCounts(),
+      progress: [], prizes: [], draws: []
+    };
+    const availableCardRows = db.prepare(`
+      SELECT card_tier, COUNT(*) AS count FROM sub2api_shake_cards
       WHERE campaign_id = ? AND sub2api_user_id = ? AND status = 'available'
-    `).get(campaign.id, String(identity.userId)).count);
+      GROUP BY card_tier
+    `).all(campaign.id, String(identity.userId));
+    const availableCardsByTier = emptyCardTierCounts();
+    for (const row of availableCardRows) {
+      const tier = CARD_TIERS.includes(row.card_tier) ? row.card_tier : DEFAULT_CARD_TIER;
+      availableCardsByTier[tier] += Number(row.count);
+    }
+    const availableCards = Object.values(availableCardsByTier).reduce((sum, count) => sum + count, 0);
     const rules = db.prepare(`
       SELECT * FROM sub2api_shake_eligibility_rules
       WHERE config_version_id = ? ORDER BY rowid ASC
@@ -469,7 +541,7 @@ export function createSub2ApiShakeService({
       WHERE config_version_id = ? AND status = 'active'
       ORDER BY sort_order ASC, created_at ASC
     `).all(campaign.active_config_version_id);
-    const totalWeight = prizes.reduce((sum, prize) => sum + Number(prize.weight), 0);
+    const totalWeights = getPrizeWeightTotals(prizes);
     const draws = db.prepare(`
       SELECT * FROM sub2api_shake_draws
       WHERE campaign_id = ? AND sub2api_user_id = ?
@@ -479,18 +551,20 @@ export function createSub2ApiShakeService({
     return {
       campaign: serializeCampaign(campaign),
       availableCards,
+      availableCardsByTier,
       progress: rules.map((rule) => {
         const progress = progressBySource.get(rule.source);
         const amount = Number(progress?.amount || 0);
         return {
           source: rule.source,
+          cardTier: rule.card_tier || DEFAULT_CARD_TIER,
           threshold: Number(rule.threshold),
           amount,
           remaining: roundAmount(Math.max(0, Number(rule.threshold) - amount)),
           cardsEarned: Number(progress?.cards_earned || 0)
         };
       }),
-      prizes: prizes.map((prize) => serializePrize(prize, totalWeight)),
+      prizes: prizes.map((prize) => serializePrize(prize, totalWeights)),
       draws: draws.map(serializeDraw)
     };
   }
@@ -503,6 +577,7 @@ export function createSub2ApiShakeService({
       connectionId: row.connection_id,
       userId: row.sub2api_user_id,
       email: row.email || "",
+      cardTier: row.card_tier || DEFAULT_CARD_TIER,
       status: row.status,
       prize: {
         id: row.prize_id,
@@ -519,17 +594,17 @@ export function createSub2ApiShakeService({
     } : null;
   }
 
-  function selectPrize(prizes) {
-    const totalWeight = prizes.reduce((sum, prize) => sum + Number(prize.weight), 0);
+  function selectPrize(prizes, cardTier) {
+    const totalWeight = prizes.reduce((sum, prize) => sum + getPrizeWeights(prize)[cardTier], 0);
     let cursor = Math.min(Math.max(Number(random()), 0), 0.999999999999) * totalWeight;
     for (const prize of prizes) {
-      cursor -= Number(prize.weight);
+      cursor -= getPrizeWeights(prize)[cardTier];
       if (cursor < 0) return prize;
     }
     return prizes.at(-1);
   }
 
-  function reserveDraw(identity, requestId) {
+  function reserveDraw(identity, requestId, requestedCardTier) {
     const duplicate = db.prepare(`
       SELECT * FROM sub2api_shake_draws
       WHERE connection_id = ? AND sub2api_user_id = ? AND request_id = ?
@@ -545,11 +620,12 @@ export function createSub2ApiShakeService({
     const card = db.prepare(`
       SELECT * FROM sub2api_shake_cards
       WHERE campaign_id = ? AND sub2api_user_id = ? AND status = 'available'
+        AND card_tier = ?
       ORDER BY granted_at ASC, rowid ASC
       LIMIT 1
-    `).get(campaign.id, String(identity.userId));
+    `).get(campaign.id, String(identity.userId), requestedCardTier || DEFAULT_CARD_TIER);
     if (!card) {
-      const error = new Error("没有可用摇摇卡");
+      const error = new Error("没有可用的该级抽奖卡");
       error.statusCode = 409;
       throw error;
     }
@@ -563,7 +639,8 @@ export function createSub2ApiShakeService({
       error.statusCode = 409;
       throw error;
     }
-    const prize = selectPrize(prizes);
+    const cardTier = CARD_TIERS.includes(card.card_tier) ? card.card_tier : DEFAULT_CARD_TIER;
+    const prize = selectPrize(prizes, cardTier);
     const drawId = id("shake-draw");
     const createdAt = now();
     db.prepare(`
@@ -574,18 +651,20 @@ export function createSub2ApiShakeService({
     db.prepare(`
       INSERT INTO sub2api_shake_draws (
         id, request_id, campaign_id, connection_id, config_version_id, card_id,
-        sub2api_user_id, email, prize_id, prize_name, prize_type, prize_amount,
+        sub2api_user_id, email, card_tier, prize_id, prize_name, prize_type, prize_amount,
         prize_rarity, prize_pool_snapshot, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'selected', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'selected', ?, ?)
     `).run(
       drawId, requestId, campaign.id, identity.connectionId, campaign.active_config_version_id,
-      card.id, String(identity.userId), identity.email || null, prize.id, prize.name, prize.type,
+      card.id, String(identity.userId), identity.email || null, cardTier, prize.id, prize.name, prize.type,
       prize.amount, prize.rarity, JSON.stringify(prizes.map((item) => ({
         id: item.id,
         name: item.name,
         type: item.type,
         amount: item.amount === null ? null : Number(item.amount),
-        weight: Number(item.weight),
+        weight: getPrizeWeights(item)[cardTier],
+        weights: getPrizeWeights(item),
+        cardTier,
         rarity: item.rarity
       }))), createdAt, createdAt
     );
@@ -620,10 +699,13 @@ export function createSub2ApiShakeService({
         if (!existingExtraCard) {
           db.prepare(`
             INSERT INTO sub2api_shake_cards (
-              id, campaign_id, connection_id, sub2api_user_id, source,
+              id, campaign_id, connection_id, sub2api_user_id, source, card_tier,
               source_record_id, status, granted_at
-            ) VALUES (?, ?, ?, ?, 'extra_draw', ?, 'available', ?)
-          `).run(id("shake-card"), row.campaign_id, row.connection_id, row.sub2api_user_id, row.id, deliveredAt);
+            ) VALUES (?, ?, ?, ?, 'extra_draw', ?, ?, 'available', ?)
+          `).run(
+            id("shake-card"), row.campaign_id, row.connection_id, row.sub2api_user_id,
+            row.card_tier || DEFAULT_CARD_TIER, row.id, deliveredAt
+          );
         }
       }
       db.prepare(`
@@ -656,6 +738,20 @@ export function createSub2ApiShakeService({
       SELECT COUNT(*) AS count FROM sub2api_shake_cards
       WHERE campaign_id = ? AND sub2api_user_id = ? AND status = 'available'
     `).get(campaignId, String(userId)).count);
+  }
+
+  function countAvailableCardsByTier(campaignId, userId) {
+    const counts = emptyCardTierCounts();
+    const rows = db.prepare(`
+      SELECT card_tier, COUNT(*) AS count FROM sub2api_shake_cards
+      WHERE campaign_id = ? AND sub2api_user_id = ? AND status = 'available'
+      GROUP BY card_tier
+    `).all(campaignId, String(userId));
+    for (const row of rows) {
+      const tier = CARD_TIERS.includes(row.card_tier) ? row.card_tier : DEFAULT_CARD_TIER;
+      counts[tier] += Number(row.count);
+    }
+    return counts;
   }
 
   async function syncUsage(connectionId) {
@@ -824,22 +920,23 @@ export function createSub2ApiShakeService({
       db.prepare(`
         INSERT INTO sub2api_shake_manual_grants (
           id, campaign_id, connection_id, sub2api_user_id, email,
-          quantity, reason, granted_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          card_tier, quantity, reason, granted_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         grantId, campaign.id, campaign.connection_id, parsed.data.userId,
-        parsed.data.email || null, parsed.data.quantity, parsed.data.reason, actor, createdAt
+        parsed.data.email || null, parsed.data.cardTier, parsed.data.quantity,
+        parsed.data.reason, actor, createdAt
       );
       const insertCard = db.prepare(`
         INSERT INTO sub2api_shake_cards (
-          id, campaign_id, connection_id, sub2api_user_id, source,
+          id, campaign_id, connection_id, sub2api_user_id, source, card_tier,
           source_record_id, status, granted_at
-        ) VALUES (?, ?, ?, ?, 'manual_grant', ?, 'available', ?)
+        ) VALUES (?, ?, ?, ?, 'manual_grant', ?, ?, 'available', ?)
       `);
       for (let index = 0; index < parsed.data.quantity; index += 1) {
         insertCard.run(
           id("shake-card"), campaign.id, campaign.connection_id,
-          parsed.data.userId, grantId, createdAt
+          parsed.data.userId, parsed.data.cardTier, grantId, createdAt
         );
       }
     })();
@@ -853,10 +950,11 @@ export function createSub2ApiShakeService({
         connectionId: campaign.connection_id,
         userId: parsed.data.userId,
         quantity: parsed.data.quantity,
+        cardTier: parsed.data.cardTier,
         reason: parsed.data.reason
       }
     });
-    return { id: grantId, granted: parsed.data.quantity };
+    return { id: grantId, granted: parsed.data.quantity, cardTier: parsed.data.cardTier };
   }
 
   function listDraws(query = {}) {
@@ -999,7 +1097,11 @@ export function createSub2ApiShakeService({
     const parsed = drawSchema.safeParse(parseBody(request));
     if (!parsed.success) return reply.code(400).send({ message: "抽奖请求 ID 无效" });
     try {
-      const reserved = reserveDrawTransaction(request.sub2apiShake, parsed.data.requestId);
+      const reserved = reserveDrawTransaction(
+        request.sub2apiShake,
+        parsed.data.requestId,
+        parsed.data.cardTier || DEFAULT_CARD_TIER
+      );
       const campaign = reserved.campaign || getCampaign(reserved.row.campaign_id);
       let draw = reserved.row;
       if (draw.status !== "delivered") {
@@ -1014,7 +1116,8 @@ export function createSub2ApiShakeService({
         : (reserved.duplicate ? 200 : 201);
       return reply.code(statusCode).send({
         draw: serializeDraw(draw),
-        availableCards: countAvailableCards(draw.campaign_id, draw.sub2api_user_id)
+        availableCards: countAvailableCards(draw.campaign_id, draw.sub2api_user_id),
+        availableCardsByTier: countAvailableCardsByTier(draw.campaign_id, draw.sub2api_user_id)
       });
     } catch (error) {
       return reply.code(error.statusCode || 502).send({ message: error.message || "抽奖失败" });

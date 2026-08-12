@@ -142,6 +142,7 @@ test("subscription purchase consumption grants every crossed Shake Card threshol
     userId: "42",
     email: "player@example.com",
     source: "subscription_purchase",
+    cardTier: "low",
     sourceId: "subscription-order-1001",
     amount: 4500,
     occurredAt: now
@@ -161,6 +162,7 @@ test("subscription purchase consumption grants every crossed Shake Card threshol
   assert.equal(bootstrap.body.availableCards, 2);
   assert.deepEqual(bootstrap.body.progress, [{
     source: "subscription_purchase",
+    cardTier: "low",
     threshold: 2000,
     amount: 500,
     remaining: 1500,
@@ -235,6 +237,7 @@ test("changing an active eligibility rule applies on the next consumption withou
   assert.equal(bootstrap.body.availableCards, 1);
   assert.deepEqual(bootstrap.body.progress, [{
     source: "subscription_purchase",
+    cardTier: "low",
     threshold: 1000,
     amount: 0,
     remaining: 1000,
@@ -376,6 +379,7 @@ test("usage sync grants cards from remote actual_cost once per stable usage ID",
   assert.equal(bootstrap.body.availableCards, 1);
   assert.deepEqual(bootstrap.body.progress.find((item) => item.source === "balance_consumption"), {
     source: "balance_consumption",
+    cardTier: "low",
     threshold: 2,
     amount: 0,
     remaining: 2,
@@ -468,7 +472,7 @@ test("the admin campaign list returns the current rules, prize pool, and card to
   assert.equal(listed.body.items.length, 1);
   assert.equal(listed.body.items[0].configVersion, 5);
   assert.deepEqual(listed.body.items[0].eligibilityRules, [
-    { source: "subscription_purchase", threshold: 1000 }
+    { source: "subscription_purchase", cardTier: "low", threshold: 1000 }
   ]);
   assert.deepEqual(listed.body.items[0].prizes.map((prize) => ({
     name: prize.name,
@@ -546,4 +550,107 @@ test("scheduled campaigns activate and expire automatically during maintenance",
   });
   assert.equal(bootstrap.body.campaign, null);
   assert.equal(bootstrap.body.availableCards, 0);
+});
+
+test("card tiers use independently configured prize probabilities", async () => {
+  currentNow = "2026-10-01T00:00:00.000Z";
+  const created = await app.injectRoute("POST", "/api/admin/sub2api/shake/campaigns", {
+    body: {
+      connectionId: "sub-main",
+      name: "分级抽奖卡活动",
+      startAt: "2026-10-01T00:00:00.000Z",
+      endAt: "2026-10-31T23:59:59.000Z",
+      eligibilityRules: [{ source: "subscription_purchase", cardTier: "high", threshold: 100 }],
+      prizes: [
+        {
+          name: "普通奖励", type: "empty", rarity: "common", sortOrder: 10,
+          weights: { low: 9, medium: 5, high: 1 }
+        },
+        {
+          name: "高级奖励", type: "balance", amount: 100, rarity: "legendary", sortOrder: 20,
+          weights: { low: 1, medium: 5, high: 9 }
+        }
+      ]
+    }
+  });
+  assert.equal(created.statusCode, 201);
+  await app.injectRoute("POST", "/api/admin/sub2api/shake/campaigns/:id/activate", {
+    params: { id: created.body.campaign.id }
+  });
+
+  const earned = shake.recordConsumption({
+    connectionId: "sub-main",
+    userId: "tier-user",
+    source: "subscription_purchase",
+    sourceId: "tier-order-1",
+    amount: 100,
+    occurredAt: currentNow
+  });
+  assert.deepEqual(earned, { cardsGranted: 1, cardTier: "high", duplicate: false });
+
+  const bootstrap = await app.injectRoute("GET", "/api/public/sub2api/shake/bootstrap", {
+    sub2apiShake: { connectionId: "sub-main", userId: "tier-user" }
+  });
+  assert.deepEqual(bootstrap.body.availableCardsByTier, { low: 0, medium: 0, high: 1 });
+  assert.deepEqual(bootstrap.body.prizes.map((prize) => ({
+    name: prize.name,
+    weights: prize.weights,
+    probabilities: prize.probabilities
+  })), [
+    {
+      name: "普通奖励",
+      weights: { low: 9, medium: 5, high: 1 },
+      probabilities: { low: 90, medium: 50, high: 10 }
+    },
+    {
+      name: "高级奖励",
+      weights: { low: 1, medium: 5, high: 9 },
+      probabilities: { low: 10, medium: 50, high: 90 }
+    }
+  ]);
+
+  randomValue = 0.15;
+  const drawn = await app.injectRoute("POST", "/api/public/sub2api/shake/draws", {
+    sub2apiShake: { connectionId: "sub-main", userId: "tier-user" },
+    body: { requestId: "opening-high-tier-1", cardTier: "high" }
+  });
+  randomValue = 0.05;
+  assert.equal(drawn.statusCode, 201);
+  assert.equal(drawn.body.draw.cardTier, "high");
+  assert.equal(drawn.body.draw.prize.name, "高级奖励");
+  assert.deepEqual(drawn.body.availableCardsByTier, { low: 0, medium: 0, high: 0 });
+});
+
+test("an extra draw returns a card of the tier that was consumed", async () => {
+  const changed = await app.injectRoute("POST", "/api/admin/sub2api/shake/campaigns/:id/config", {
+    params: { id: db.prepare("SELECT id FROM sub2api_shake_campaigns WHERE name = ?").get("分级抽奖卡活动").id },
+    body: {
+      eligibilityRules: [{ source: "subscription_purchase", cardTier: "high", threshold: 100 }],
+      prizes: [{
+        name: "同级再抽一次", type: "extra_draw", rarity: "epic",
+        weights: { low: 1, medium: 1, high: 1 }
+      }]
+    }
+  });
+  assert.equal(changed.statusCode, 201);
+  const campaignId = db.prepare("SELECT id FROM sub2api_shake_campaigns WHERE name = ?").get("分级抽奖卡活动").id;
+  const granted = await app.injectRoute("POST", "/api/admin/sub2api/shake/cards/grant", {
+    body: {
+      campaignId,
+      userId: "extra-tier-user",
+      cardTier: "medium",
+      quantity: 1,
+      reason: "分级卡测试补发"
+    }
+  });
+  assert.equal(granted.statusCode, 201);
+  assert.equal(granted.body.cardTier, "medium");
+
+  const drawn = await app.injectRoute("POST", "/api/public/sub2api/shake/draws", {
+    sub2apiShake: { connectionId: "sub-main", userId: "extra-tier-user" },
+    body: { requestId: "opening-medium-tier-1", cardTier: "medium" }
+  });
+  assert.equal(drawn.body.draw.cardTier, "medium");
+  assert.equal(drawn.body.draw.prize.type, "extra_draw");
+  assert.deepEqual(drawn.body.availableCardsByTier, { low: 0, medium: 1, high: 0 });
 });

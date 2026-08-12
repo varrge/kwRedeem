@@ -179,6 +179,61 @@ test("a consumed blocked SpaceX CDK exposes the audited manual-close action", as
   dom.window.close();
 });
 
+test("a blocked store fulfillment exposes an authenticated cancel action", async () => {
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:4174/",
+    runScripts: "outside-only"
+  });
+  const requests = [];
+  dom.window.fetch = async (url, options = {}) => {
+    const pathname = new URL(String(url)).pathname;
+    requests.push({ pathname, method: options.method || "GET", body: options.body || null });
+    let payload = {};
+    if (pathname === "/api/admin/store-fulfillment/tasks") {
+      payload = {
+        items: [{
+          id: "blocked-task",
+          parentOrderNo: "DJ-BLOCKED",
+          remoteOrderNo: "DJ-BLOCKED-1",
+          items: [],
+          mappingSnapshot: [],
+          cdkeys: [],
+          status: "blocked",
+          attemptCount: 3,
+          lastError: "余额不足",
+          canCancel: true,
+          createdAt: "2026-08-12T00:00:00.000Z"
+        }]
+      };
+    } else if (pathname === "/api/admin/store-fulfillment/tasks/blocked-task/cancel") {
+      payload = { canceled: { remoteOrderNo: "DJ-BLOCKED-1", recycled: 0 } };
+    }
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  dom.window.confirm = () => true;
+  dom.window.prompt = () => "客户申请取消自动交付";
+  dom.window.eval(app);
+
+  await dom.window.refreshStoreTasks();
+  assert.match(dom.window.document.querySelector("#store-task-list")?.textContent || "", /取消交付/);
+  dom.window.document.querySelector("#spacex-cdk-admin-username").value = "admin";
+  dom.window.document.querySelector("#spacex-cdk-admin-password").value = "test-password";
+  await dom.window.cancelStoreTask("blocked-task");
+
+  const request = requests.find((item) => item.pathname.endsWith("/blocked-task/cancel"));
+  assert.deepEqual(request, {
+    pathname: "/api/admin/store-fulfillment/tasks/blocked-task/cancel",
+    method: "POST",
+    body: JSON.stringify({
+      adminUsername: "admin",
+      adminPassword: "test-password",
+      reason: "客户申请取消自动交付"
+    })
+  });
+  assert.equal(dom.window.document.querySelector("#spacex-cdk-admin-password").value, "");
+  dom.window.close();
+});
+
 test("membership fulfillment states are displayed in Chinese", () => {
   const dom = new JSDOM(html, {
     url: "http://127.0.0.1:4174/",

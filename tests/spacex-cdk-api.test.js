@@ -46,7 +46,21 @@ globalThis.fetch = async (url, options = {}) => {
     renewalCalls.push("check");
     return new Response(JSON.stringify({
       code: 200,
-      data: { account_type: "plus", is_delinquent: false, auto_renew: renewalEnabled }
+      data: renewalEnabled
+        ? {
+          account_type: "plus",
+          is_delinquent: false,
+          auto_renew: true,
+          expire_time: "2099-08-15 16:25:00",
+          expires_at: null
+        }
+        : {
+          account_type: "free",
+          is_delinquent: false,
+          auto_renew: false,
+          expire_time: null,
+          expires_at: null
+        }
     }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (parsed.pathname === "/api/subscription/cancel") {

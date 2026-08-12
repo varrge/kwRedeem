@@ -66,10 +66,15 @@ export async function checkMembershipRenewal(sessionJson, options = {}) {
     const isDelinquent = typeof data.is_delinquent === "boolean" ? data.is_delinquent : (noSubscription ? false : null);
     const accountType = typeof data.account_type === "string" ? data.account_type.trim().toLowerCase() : "";
     const hasNoPaidExpiry = data.expire_time === null && data.expires_at === null;
+    const hasPaidExpiry = (data.expire_time !== null && data.expire_time !== undefined)
+      || (data.expires_at !== null && data.expires_at !== undefined);
+    const hasActiveSubscription = noSubscription || hasNoPaidExpiry
+      ? false
+      : (hasPaidExpiry || (accountType && accountType !== "free") ? true : null);
     const willRenew = typeof data.auto_renew === "boolean"
       ? data.auto_renew
       : (noSubscription || (accountType === "free" && hasNoPaidExpiry) ? false : null);
-    return Object.freeze({ isDelinquent, willRenew });
+    return Object.freeze({ isDelinquent, willRenew, hasActiveSubscription });
   } catch (error) {
     if (error?.code) throw error;
     throw renewalError(

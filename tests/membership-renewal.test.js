@@ -37,14 +37,20 @@ test("renewal check preserves an explicit will_renew boolean and treats missing 
       calls.push({ url, body: JSON.parse(options.body) });
       return new Response(JSON.stringify({
         code: 200,
-        data: { account_type: "plus", is_delinquent: false, auto_renew: true }
+        data: {
+          account_type: "plus",
+          is_delinquent: false,
+          auto_renew: true,
+          expire_time: "2099-08-15 16:25:00",
+          expires_at: null
+        }
       }), { status: 200 });
     }
   });
   assert.equal(calls[0].url, membershipRenewalCheckUrl);
   assert.equal(calls[0].body.token.sessionToken, "session");
   assert.equal(calls[0].body.token_input, undefined);
-  assert.deepEqual(enabled, { isDelinquent: false, willRenew: true });
+  assert.deepEqual(enabled, { isDelinquent: false, willRenew: true, hasActiveSubscription: true });
 
   const unknown = await checkMembershipRenewal({ sessionToken: "session" }, {
     fetchImpl: async () => new Response(JSON.stringify({
@@ -52,7 +58,7 @@ test("renewal check preserves an explicit will_renew boolean and treats missing 
       data: { account_type: "plus", is_delinquent: false }
     }), { status: 200 })
   });
-  assert.deepEqual(unknown, { isDelinquent: false, willRenew: null });
+  assert.deepEqual(unknown, { isDelinquent: false, willRenew: null, hasActiveSubscription: true });
 
   const free = await checkMembershipRenewal({ sessionToken: "session" }, {
     fetchImpl: async () => new Response(JSON.stringify({
@@ -66,7 +72,7 @@ test("renewal check preserves an explicit will_renew boolean and treats missing 
       }
     }), { status: 200 })
   });
-  assert.deepEqual(free, { isDelinquent: false, willRenew: false });
+  assert.deepEqual(free, { isDelinquent: false, willRenew: false, hasActiveSubscription: false });
 });
 
 test("renewal check treats the provider no-subscription response as free", async () => {
@@ -77,5 +83,5 @@ test("renewal check treats the provider no-subscription response as free", async
       message: "您还没有订阅,允许您生成订阅链接"
     }), { status: 200 })
   });
-  assert.deepEqual(result, { isDelinquent: false, willRenew: false });
+  assert.deepEqual(result, { isDelinquent: false, willRenew: false, hasActiveSubscription: false });
 });

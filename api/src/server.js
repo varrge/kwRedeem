@@ -2349,7 +2349,12 @@ function serializeStoreFulfillmentTask(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at || null,
-    canceledAt: row.canceled_at || null
+    canceledAt: row.canceled_at || null,
+    canCancel: ![
+      STORE_FULFILLMENT_STATUSES.succeeded,
+      STORE_FULFILLMENT_STATUSES.canceled,
+      STORE_FULFILLMENT_STATUSES.issuanceUncertain
+    ].includes(row.status) && !row.locked_at && !row.locked_by
   };
 }
 
@@ -7091,7 +7096,9 @@ app.get("/api/admin/spacex-cdk/activations", { preHandler: requireAdmin }, async
       stage: "renewal_guard",
       message: item.state === "human_review"
         ? "续费保护需要人工确认"
-        : (item.state === "retry_wait" ? "续费保护等待重新核验" : "自动化准备中"),
+        : (item.state === "retry_wait"
+          ? "续费保护等待重新核验"
+          : (item.state === "account_wait" ? "账号会员仍在有效期内，等待到期后重新提交" : "自动化准备中")),
       lastError: item.last_error || null,
       renewalGuardState: item.state,
       renewalWillRenew: item.will_renew === null || item.will_renew === undefined
@@ -7402,6 +7409,45 @@ app.get("/api/admin/store-fulfillment/tasks", { preHandler: requireAdmin }, asyn
   }
   sql += " ORDER BY created_at DESC LIMIT 500";
   return { items: db.prepare(sql).all(...params).map(serializeStoreFulfillmentTask) };
+});
+
+app.post("/api/admin/store-fulfillment/tasks/:id/cancel", { preHandler: requireAdmin }, async (request, reply) => {
+  const parsed = z.object({
+    adminUsername: z.string().min(1),
+    adminPassword: z.string().min(1),
+    reason: z.string().trim().min(3).max(300)
+  }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "请重新验证管理员并填写取消原因" });
+  try {
+    verifyFreshAdminCredentials(
+      { username: parsed.data.adminUsername, password: parsed.data.adminPassword },
+      { username: env.adminUsername, password: env.adminPassword }
+    );
+  } catch {
+    return reply.code(401).send({ message: "管理员账号或密码错误" });
+  }
+  let canceled;
+  try {
+    canceled = await spaceXCdkService.cancelTaskByOperator(request.params.id);
+  } catch (error) {
+    const statusCode = error?.code === "SPACEX_CDK_CANCEL_TASK_NOT_FOUND" ? 404 : 409;
+    return reply.code(statusCode).send({
+      message: error?.message || "取消自动交付失败",
+      code: error?.code || null
+    });
+  }
+  createAuditLog({
+    action: "store_fulfillment.task.cancel",
+    actor: request.admin.username,
+    resourceType: "store_fulfillment_task",
+    resourceId: canceled.taskId,
+    detail: {
+      reason: parsed.data.reason,
+      remoteOrderNo: canceled.remoteOrderNo,
+      recycledAssets: canceled.recycled
+    }
+  });
+  return { canceled };
 });
 
 app.post("/api/admin/store-fulfillment/tasks/:id/:action", { preHandler: requireAdmin }, async (request, reply) => {

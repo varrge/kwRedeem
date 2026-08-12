@@ -368,8 +368,8 @@ The existing extension process that installs an order's ChatGPT authentication c
 _Avoid_: Membership fulfillment, payment completion
 
 **Session Activation Renewal Guard**:
-The one-time protection prerequisite evaluated from the player's submitted Session during CDK activation: observe whether the account is set to renew automatically and, when it is enabled, disable and recheck that renewal before the activation continues. An unconfirmed cancellation blocks activation and moves to bounded recovery or human handling; this guard belongs to Session Activation Delivery and is separate from the final renewal protection owned by Membership Fulfillment.
-_Avoid_: Go checkout renewal guard, recurring subscription management, browser-side renewal toggle, continuing after an ambiguous cancellation
+The one-time protection and eligibility prerequisite evaluated from the player's submitted Session during CDK activation: confirm that no paid subscription remains active and observe whether the account is set to renew automatically. When renewal is enabled, disable and recheck it; when a paid subscription remains active after renewal is disabled, keep the wrapper unclaimed and let the same account submit again after expiry. An unconfirmed status or cancellation blocks activation and moves to bounded recovery or human handling; this guard belongs to Session Activation Delivery and is separate from the final renewal protection owned by Membership Fulfillment.
+_Avoid_: Go checkout renewal guard, recurring subscription management, browser-side renewal toggle, treating auto-renew-off as an expired subscription, continuing after an ambiguous cancellation
 
 **Session Activation Renewal Recovery**:
 The evidence-based operator path for a renewal guard that cannot confirm the disabled state automatically. It may re-query or perform a bounded retry for the same preflight-verified account, but it cannot assert success, bypass the guard, or restore automatic renewal through KaWang.

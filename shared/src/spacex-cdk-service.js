@@ -48,6 +48,7 @@ const REDEEM_HTTP_400_RETRY_DELAY_MS = 5000;
 const RENEWAL_GUARD_STATES = Object.freeze({
   checking: "checking",
   cancelling: "cancelling",
+  accountWait: "account_wait",
   retryWait: "retry_wait",
   humanReview: "human_review",
   passed: "passed"
@@ -387,9 +388,10 @@ export function createSpaceXCdkService({
           "该自动化任务已绑定其他账号，无法继续处理"
         );
       }
-      if (existing?.state === RENEWAL_GUARD_STATES.passed) {
-        return { guard: existing, leaseToken: null, resumed: true };
-      }
+      const eligibilityRecheck = [
+        RENEWAL_GUARD_STATES.accountWait,
+        RENEWAL_GUARD_STATES.passed
+      ].includes(existing?.state);
       let recoveryOnly = false;
       if (existing?.state === RENEWAL_GUARD_STATES.humanReview && !allowRecovery) {
         throw renewalGuardError(
@@ -413,7 +415,8 @@ export function createSpaceXCdkService({
           "自动化续费保护正在处理中"
         );
       }
-      if (existing && Number(existing.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS && !allowRecovery) {
+      if (existing && Number(existing.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS
+        && !allowRecovery && !eligibilityRecheck) {
         db.prepare(`
           UPDATE spacex_cdk_renewal_guards
           SET state = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
@@ -424,8 +427,8 @@ export function createSpaceXCdkService({
           "自动化续费保护需要人工确认"
         );
       }
-      if (existing?.state === RENEWAL_GUARD_STATES.humanReview
-        || Number(existing?.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS) {
+      if (!eligibilityRecheck && (existing?.state === RENEWAL_GUARD_STATES.humanReview
+        || Number(existing?.attempts || 0) >= RENEWAL_GUARD_MAX_ATTEMPTS)) {
         recoveryOnly = true;
       }
       if (!existing) {
@@ -456,7 +459,7 @@ export function createSpaceXCdkService({
         WHERE id = ?
       `).run(
         RENEWAL_GUARD_STATES.checking,
-        recoveryOnly ? 0 : 1,
+        recoveryOnly || eligibilityRecheck ? 0 : 1,
         leaseToken,
         leaseExpiresAt,
         at,
@@ -539,12 +542,33 @@ export function createSpaceXCdkService({
     return updated;
   }
 
+  function waitForSubscriptionExpiry(guard, leaseToken, { cancelled = false } = {}) {
+    const code = "SPACEX_CDK_ACCOUNT_SUBSCRIPTION_ACTIVE";
+    const message = "当前账号会员仍在有效期内，请到期后重新提交";
+    updateGuardWithLease(guard.id, leaseToken, {
+      state: RENEWAL_GUARD_STATES.accountWait,
+      will_renew: 0,
+      checked_at: nowIso(),
+      cancelled_at: cancelled ? nowIso() : guard.cancelled_at,
+      next_retry_at: null,
+      lease_token: null,
+      lease_expires_at: null,
+      last_error_code: code,
+      last_error: message
+    });
+    const updated = loadRenewalGuard(guard.wrapper_cdkey_id);
+    renewalGuardAudit("spacex_cdk.renewal_guard.account_wait", updated, {
+      reasonCode: code,
+      cancelled
+    });
+    throw renewalGuardError(code, message, { retryable: false });
+  }
+
   async function protectSessionRenewal({ wrapper, asset, session, preflight, allowRecovery = false }) {
     const identity = accountIdentity(session, preflight);
     const identityKey = accountKey(identity);
     const accountMasked = maskAccount(identity);
     const acquired = acquireRenewalGuard({ wrapper, asset, accountKey: identityKey, accountMasked, allowRecovery });
-    if (acquired.guard.state === RENEWAL_GUARD_STATES.passed) return acquired.guard;
     const guard = acquired.guard;
     const leaseToken = acquired.leaseToken;
     if (!leaseToken) throw renewalGuardError("SPACEX_CDK_RENEWAL_GUARD_BUSY", "自动化续费保护状态无有效占用");
@@ -555,7 +579,9 @@ export function createSpaceXCdkService({
     } catch (error) {
       failRenewalGuard(guard, leaseToken, error);
     }
-    if (!observation || typeof observation.willRenew !== "boolean") {
+    if (!observation
+      || typeof observation.willRenew !== "boolean"
+      || typeof observation.hasActiveSubscription !== "boolean") {
       const error = renewalGuardError("SPACEX_CDK_RENEWAL_STATE_UNKNOWN", "自动化续费状态暂时无法确认");
       failRenewalGuard(guard, leaseToken, error, { willRenew: null });
     }
@@ -567,6 +593,11 @@ export function createSpaceXCdkService({
     });
     if (observation.willRenew === false) {
       const current = loadRenewalGuard(wrapper.id);
+      if (observation.hasActiveSubscription) {
+        return waitForSubscriptionExpiry(current, leaseToken, {
+          cancelled: Number(current.cancellation_attempts || 0) > 0
+        });
+      }
       return passRenewalGuard(current, leaseToken, {
         willRenew: false,
         cancelled: Number(current.cancellation_attempts || 0) > 0
@@ -602,7 +633,9 @@ export function createSpaceXCdkService({
     } catch (error) {
       failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, { willRenew: null });
     }
-    if (!rechecked || rechecked.willRenew !== false) {
+    if (!rechecked
+      || rechecked.willRenew !== false
+      || typeof rechecked.hasActiveSubscription !== "boolean") {
       const error = renewalGuardError(
         rechecked?.willRenew === true ? "SPACEX_CDK_RENEWAL_STILL_ENABLED" : "SPACEX_CDK_RENEWAL_STATE_UNKNOWN",
         rechecked?.willRenew === true ? "自动化续费仍处于开启状态" : "自动化续费状态暂时无法确认"
@@ -610,6 +643,9 @@ export function createSpaceXCdkService({
       failRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, error, {
         willRenew: rechecked?.willRenew === true ? true : null
       });
+    }
+    if (rechecked.hasActiveSubscription) {
+      return waitForSubscriptionExpiry(loadRenewalGuard(wrapper.id), leaseToken, { cancelled: true });
     }
     return passRenewalGuard(loadRenewalGuard(wrapper.id), leaseToken, { willRenew: false, cancelled: true });
   }
@@ -1353,6 +1389,116 @@ export function createSpaceXCdkService({
     return { recycled: cards.length };
   }
 
+  async function cancelTaskByOperator(taskId) {
+    const task = db.prepare("SELECT * FROM store_fulfillment_tasks WHERE id = ?").get(taskId);
+    if (!task) throw errorWithCode("商城交付任务不存在", "SPACEX_CDK_CANCEL_TASK_NOT_FOUND");
+    if ([STORE_FULFILLMENT_STATUSES.succeeded, STORE_FULFILLMENT_STATUSES.canceled].includes(task.status)) {
+      throw errorWithCode("已完成或已取消的任务不能再次取消", "SPACEX_CDK_CANCEL_TASK_TERMINAL");
+    }
+    if (task.locked_at || task.locked_by) {
+      throw errorWithCode("交付任务正在处理中，请稍后刷新再取消", "SPACEX_CDK_CANCEL_TASK_BUSY");
+    }
+
+    const uncertainUnit = db.prepare(`
+      SELECT 1 FROM spacex_cdk_units WHERE task_id = ? AND state = ? LIMIT 1
+    `).get(task.id, SPACEX_CDK_UNIT_STATES.issuanceUncertain);
+    if (uncertainUnit) {
+      throw errorWithCode("SpaceX 发码结果仍不确定，不能取消自动交付", "SPACEX_CDK_CANCEL_ISSUANCE_UNCERTAIN");
+    }
+
+    const cards = db.prepare("SELECT * FROM cdkeys WHERE store_fulfillment_task_id = ?").all(task.id);
+    if (cards.some((card) => ![cdkeyStatuses.active, cdkeyStatuses.void].includes(card.status))) {
+      throw errorWithCode("任务包含已锁定或已使用的包装 CDK，不能取消", "SPACEX_CDK_CANCEL_WRAPPER_IN_USE");
+    }
+    if (cards.some((card) => db.prepare("SELECT 1 FROM spacex_cdk_activations WHERE wrapper_cdkey_id = ?").get(card.id))) {
+      throw errorWithCode("任务已有账号激活记录，不能取消自动交付", "SPACEX_CDK_CANCEL_ACTIVATION_EXISTS");
+    }
+
+    const assets = db.prepare(`
+      SELECT a.id AS asset_id, a.upstream_id, a.plan, a.state AS asset_state,
+             u.id AS unit_id, u.state AS unit_state, u.wrapper_cdkey_id
+      FROM spacex_cdk_units u
+      LEFT JOIN spacex_cdks a ON a.id = u.spacex_cdk_id
+      WHERE u.task_id = ?
+    `).all(task.id).filter((item) => item.asset_id);
+    for (const asset of assets) {
+      if (![SPACEX_CDK_ASSET_STATES.allocated, SPACEX_CDK_ASSET_STATES.refundHold].includes(asset.asset_state)) {
+        throw errorWithCode("SpaceX CDK 资产状态不允许取消", "SPACEX_CDK_CANCEL_ASSET_STATE_INVALID");
+      }
+      let upstream;
+      try {
+        upstream = await client().getCdk(asset.upstream_id);
+      } catch (error) {
+        throw errorWithCode("取消前无法核实 SpaceX CDK 状态", "SPACEX_CDK_CANCEL_VERIFY_FAILED", { cause: error });
+      }
+      if (!upstream || upstream.status !== "unused" || upstream.plan !== asset.plan) {
+        throw errorWithCode("仅能取消上游仍为 unused 的同套餐 CDK", "SPACEX_CDK_CANCEL_NOT_UNUSED");
+      }
+    }
+
+    const canceledAt = nowIso();
+    db.transaction(() => {
+      const freshTask = db.prepare("SELECT status, locked_at, locked_by FROM store_fulfillment_tasks WHERE id = ?").get(task.id);
+      if (!freshTask
+        || [STORE_FULFILLMENT_STATUSES.succeeded, STORE_FULFILLMENT_STATUSES.canceled].includes(freshTask.status)
+        || freshTask.locked_at || freshTask.locked_by) {
+        throw errorWithCode("取消前任务状态已变化，请刷新后重试", "SPACEX_CDK_CANCEL_RACE_LOST");
+      }
+      if (db.prepare(`
+        SELECT 1 FROM spacex_cdk_activations a
+        JOIN cdkeys c ON c.id = a.wrapper_cdkey_id
+        WHERE c.store_fulfillment_task_id = ? LIMIT 1
+      `).get(task.id)) {
+        throw errorWithCode("取消前出现了账号激活记录，请刷新后核对", "SPACEX_CDK_CANCEL_RACE_LOST");
+      }
+      for (const card of cards) {
+        if (card.status === cdkeyStatuses.active) {
+          db.prepare(`
+            UPDATE cdkeys
+            SET status = ?, disabled_reason = '管理员取消自动交付', locked_at = NULL,
+                locked_by_order_id = NULL, updated_at = ?
+            WHERE id = ? AND status = ?
+          `).run(cdkeyStatuses.void, canceledAt, card.id, cdkeyStatuses.active);
+        }
+      }
+      for (const asset of assets) {
+        const changed = db.prepare(`
+          UPDATE spacex_cdks
+          SET state = ?, upstream_status = 'unused', current_unit_id = NULL,
+              current_wrapper_cdkey_id = NULL, last_verified_at = ?, recycled_at = ?, updated_at = ?
+          WHERE id = ? AND state IN (?, ?)
+        `).run(
+          SPACEX_CDK_ASSET_STATES.inventory,
+          canceledAt,
+          canceledAt,
+          canceledAt,
+          asset.asset_id,
+          SPACEX_CDK_ASSET_STATES.allocated,
+          SPACEX_CDK_ASSET_STATES.refundHold
+        ).changes;
+        if (!changed) {
+          throw errorWithCode("取消时 SpaceX CDK 资产状态发生变化", "SPACEX_CDK_CANCEL_RACE_LOST");
+        }
+        db.prepare("UPDATE spacex_cdk_units SET state = ?, last_error = NULL, updated_at = ? WHERE id = ?")
+          .run(SPACEX_CDK_UNIT_STATES.refunded, canceledAt, asset.unit_id);
+      }
+      db.prepare(`
+        UPDATE store_fulfillment_tasks
+        SET status = ?, next_retry_at = NULL, last_error = NULL, locked_at = NULL, locked_by = NULL,
+            canceled_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(STORE_FULFILLMENT_STATUSES.canceled, canceledAt, canceledAt, task.id);
+    })();
+
+    return {
+      taskId: task.id,
+      remoteOrderNo: task.remote_order_no,
+      status: STORE_FULFILLMENT_STATUSES.canceled,
+      recycled: assets.length,
+      canceledAt
+    };
+  }
+
   async function manuallyCloseConsumedAsset(assetId) {
     const context = db.prepare(`
       SELECT a.*, u.id AS unit_id, u.task_id, u.state AS unit_state,
@@ -1577,6 +1723,7 @@ export function createSpaceXCdkService({
     reconcileDue,
     applyWebhookEvent,
     reclaimCanceledTask,
+    cancelTaskByOperator,
     recoverSnapshotBudgetAsset,
     manuallyCloseConsumedAsset,
     activationForOrder,

@@ -638,6 +638,7 @@ const STATUS_LABELS = {
   checking: "检查中",
   cancelling: "关闭中",
   retry_wait: "等待重试",
+  account_wait: "等待会员到期",
   human_review: "待人工确认",
   passed: "续费已保护"
 };
@@ -1613,6 +1614,7 @@ async function refreshStoreTasks() {
           <button class="ghost-btn small" type="button" onclick='runStoreTaskAction(${JSON.stringify(item.id)}, "recheck")'>重新检查</button>
           <button class="primary-btn small" type="button" onclick='runStoreTaskAction(${JSON.stringify(item.id)}, "retry")'>重试</button>
         ` : ""}
+        ${item.canCancel ? `<button class="danger-btn small" type="button" onclick='cancelStoreTask(${JSON.stringify(item.id)})'>取消交付</button>` : ""}
       </div>
     ` }
   ], storeTasksCache, "暂无商城交付任务");
@@ -1639,6 +1641,33 @@ async function runStoreTaskAction(id, action) {
     setHint(refs.storeTaskResult, action === "recheck" ? "任务已加入重新检查队列" : "任务已加入重试队列");
     await refreshStoreTasks();
   } catch (error) {
+    setHint(refs.storeTaskResult, error.message);
+  }
+}
+
+async function cancelStoreTask(id) {
+  const adminUsername = refs.spaceXCdkAdminUsername.value.trim();
+  const adminPassword = refs.spaceXCdkAdminPassword.value;
+  if (!adminUsername || !adminPassword) {
+    setHint(refs.storeTaskResult, "请先在 SpaceX 配置表单中输入管理员账号和密码，再取消交付");
+    return;
+  }
+  if (!window.confirm("确认停止这条自动交付任务？已生成但未兑换的 CDK 只有在上游核验为 unused 后才会回收到库存，供后续订单复用。")) return;
+  const reason = window.prompt("填写取消原因（至少 3 个字符）", "客户申请取消自动交付");
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/store-fulfillment/tasks/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ adminUsername, adminPassword, reason })
+    });
+    refs.spaceXCdkAdminPassword.value = "";
+    setHint(
+      refs.storeTaskResult,
+      `自动交付已取消；${payload.canceled?.recycled || 0} 张未兑换资产已回收到库存，仍会优先供下个订单复用`
+    );
+    await Promise.all([refreshStoreTasks(), refreshSpaceXCdkInventory(), refreshSpaceXCdkSettings()]);
+  } catch (error) {
+    refs.spaceXCdkAdminPassword.value = "";
     setHint(refs.storeTaskResult, error.message);
   }
 }
@@ -1709,6 +1738,7 @@ async function refreshSpaceXCdkActivations() {
         passed: "已确认关闭",
         checking: "检查中",
         cancelling: "关闭中",
+        account_wait: "等待会员到期",
         retry_wait: "等待重试",
         human_review: "待人工确认"
       }[state] || state;

@@ -276,7 +276,7 @@ test("SpaceX activation stores no raw Session and reconciles a queued order to c
       async check(session) {
         renewalCalls.push("check");
         assert.equal(session.sessionToken, "RAW-SESSION-SECRET");
-        return { willRenew: renewalEnabled, isDelinquent: false };
+        return { willRenew: renewalEnabled, hasActiveSubscription: renewalEnabled, isDelinquent: false };
       },
       async cancel(session) {
         renewalCalls.push("cancel");
@@ -341,7 +341,7 @@ test("SpaceX activation retries an HTTP 400 three times with the same idempotent
       }
     }),
     renewalProvider: {
-      async check() { return { willRenew: false, isDelinquent: false }; },
+      async check() { return { willRenew: false, hasActiveSubscription: false, isDelinquent: false }; },
       async cancel() { throw new Error("cancel should not be called"); }
     },
     sleep: async (milliseconds) => { delays.push(milliseconds); },
@@ -385,7 +385,7 @@ test("SpaceX activation enters manual resolution after three HTTP 400 retries", 
       }
     }),
     renewalProvider: {
-      async check() { return { willRenew: false, isDelinquent: false }; },
+      async check() { return { willRenew: false, hasActiveSubscription: false, isDelinquent: false }; },
       async cancel() { throw new Error("cancel should not be called"); }
     },
     sleep: async (milliseconds) => { delays.push(milliseconds); },
@@ -408,6 +408,78 @@ test("SpaceX activation enters manual resolution after three HTTP 400 retries", 
   assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id = ?").get(activation.redeem_order_id).status, "failed");
   assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = 'redeem-rejected-asset'").get().state, "held");
   assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'redeem-rejected-wrapper'").get().status, "locked");
+});
+
+test("an active paid subscription blocks redemption after auto-renew cancellation and can retry after expiry", async () => {
+  seedStandaloneWrapper({
+    wrapperId: "active-subscription-wrapper",
+    assetId: "active-subscription-asset",
+    upstreamId: "active-subscription-upstream",
+    publicKey: "91GPTPLUS-ACTIVE-SUBSCRIPTION"
+  });
+  let subscriptionActive = true;
+  let renewalEnabled = true;
+  let preflightCalls = 0;
+  let cancelCalls = 0;
+  let redeemCalls = 0;
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async preview() { return { redemptionToken: "active-subscription-token", plan: "plus" }; },
+      async preflight() {
+        preflightCalls += 1;
+        return { preflightToken: `active-subscription-preflight-${preflightCalls}`, account_id: "active-subscription-account" };
+      },
+      async redeem() {
+        redeemCalls += 1;
+        return { status: "queued", upstreamOrderId: "active-subscription-order" };
+      }
+    }),
+    renewalProvider: {
+      async check() {
+        return {
+          willRenew: renewalEnabled,
+          hasActiveSubscription: subscriptionActive,
+          isDelinquent: false
+        };
+      },
+      async cancel() {
+        cancelCalls += 1;
+        renewalEnabled = false;
+        return { requested: true, providerConfirmed: true };
+      }
+    }
+  });
+  const session = {
+    sessionToken: "ACTIVE-SUBSCRIPTION-SESSION",
+    user: { id: "active-subscription-account", email: "active@example.com" }
+  };
+
+  await assert.rejects(
+    service.activate({ publicKey: "91GPTPLUS-ACTIVE-SUBSCRIPTION", session }),
+    (error) => error.code === "SPACEX_CDK_ACCOUNT_SUBSCRIPTION_ACTIVE"
+  );
+  assert.equal(preflightCalls, 1);
+  assert.equal(cancelCalls, 1);
+  assert.equal(redeemCalls, 0);
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'active-subscription-wrapper'").get().status, "active");
+  assert.equal(db.prepare("SELECT state FROM spacex_cdks WHERE id = 'active-subscription-asset'").get().state, "allocated");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spacex_cdk_activations WHERE wrapper_cdkey_id = 'active-subscription-wrapper'").get().count, 0);
+  const waiting = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE wrapper_cdkey_id = 'active-subscription-wrapper'").get();
+  assert.equal(waiting.state, "account_wait");
+  assert.equal(waiting.attempts, 1);
+  assert.equal(waiting.cancellation_attempts, 1);
+  assert.equal(waiting.will_renew, 0);
+
+  subscriptionActive = false;
+  const resumed = await service.activate({ publicKey: "91GPTPLUS-ACTIVE-SUBSCRIPTION", session });
+  assert.equal(resumed.activationState, "queued");
+  assert.equal(preflightCalls, 2);
+  assert.equal(cancelCalls, 1);
+  assert.equal(redeemCalls, 1);
+  const passed = db.prepare("SELECT * FROM spacex_cdk_renewal_guards WHERE id = ?").get(waiting.id);
+  assert.equal(passed.state, "passed");
+  assert.equal(passed.attempts, 1);
 });
 
 test("an uncertain renewal cancellation blocks the claim and resumes only after a fresh same-account preflight", async () => {
@@ -448,7 +520,7 @@ test("an uncertain renewal cancellation blocks the claim and resumes only after 
     db,
     clientFactory: () => fakeClient,
     renewalProvider: {
-      async check() { return { willRenew: renewalEnabled, isDelinquent: false }; },
+      async check() { return { willRenew: renewalEnabled, hasActiveSubscription: renewalEnabled, isDelinquent: false }; },
       async cancel() {
         cancellationCalls += 1;
         renewalEnabled = false;
@@ -507,7 +579,7 @@ test("an unknown renewal state fails closed before claiming or redeeming the wra
       async redeem() { redeemCalls += 1; return { status: "queued" }; }
     }),
     renewalProvider: {
-      async check() { return { willRenew: null, isDelinquent: false }; },
+      async check() { return { willRenew: null, hasActiveSubscription: null, isDelinquent: false }; },
       async cancel() { cancelCalls += 1; }
     }
   });
@@ -585,6 +657,70 @@ test("a pre-activation refund is resumable and returns only authoritative unused
   assert.equal(recycled.current_unit_id, null);
   assert.equal(recycled.current_wrapper_cdkey_id, null);
   assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = 'refund-unit'").get().state, "refunded");
+});
+
+test("an operator cancellation recycles only an authoritative unused SpaceX asset", async () => {
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO store_fulfillment_tasks (
+      id, remote_order_id, remote_order_no, parent_order_no, items_json, mapping_snapshot,
+      quantity, status, cdkeys_json, created_at, updated_at
+    ) VALUES ('operator-cancel-task', 'operator-cancel-remote', 'DJ-CANCEL-1', 'DJ-CANCEL', '[]', '[]',
+              1, 'blocked', ?, ?, ?)
+  `).run(JSON.stringify([{ id: "operator-cancel-wrapper", publicKey: "91GPTPLUS-OPERATOR-CANCEL" }]), createdAt, createdAt);
+  db.prepare(`
+    INSERT INTO spacex_cdk_units (
+      id, task_id, item_id, unit_index, plan, state, idempotency_key, recovery_revision,
+      spacex_cdk_id, wrapper_cdkey_id, created_at, updated_at
+    ) VALUES ('operator-cancel-unit', 'operator-cancel-task', 'operator-cancel-item', 0, 'plus',
+              'wrapped', 'operator-cancel-idempotency', 0, 'operator-cancel-asset',
+              'operator-cancel-wrapper', ?, ?)
+  `).run(createdAt, createdAt);
+  db.prepare(`
+    INSERT INTO spacex_cdks (
+      id, upstream_id, code_encrypted, code_prefix, plan, state, upstream_status,
+      funding_cap_minor, funding_liability_minor, funding_currency, funding_contract_mode,
+      fee_amount_minor, current_unit_id, current_wrapper_cdkey_id, created_at, updated_at
+    ) VALUES ('operator-cancel-asset', 'operator-cancel-upstream', ?, 'GPTD-OPERATOR-CANCEL',
+              'plus', 'allocated', 'unused', 2100, 2100, 'USD', 'bounded', 100,
+              'operator-cancel-unit', 'operator-cancel-wrapper', ?, ?)
+  `).run(encryptText("GPTD-OPERATOR-CANCEL-FULL"), createdAt, createdAt);
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix,
+      status, metadata, processing_mode, manual_type, origin, store_order_no,
+      store_fulfillment_target_no, store_fulfillment_task_id, created_at, updated_at
+    ) VALUES ('operator-cancel-wrapper', '', 'prod_demo', 'endpoint_demo', 'site_demo', ?,
+              '91GPTPLUS-OPERATOR-CANCEL', '91GPTPLUS', 'active', '{}', 'spacex_cdk', 'PLUS',
+              'store_order', 'DJ-CANCEL', 'DJ-CANCEL-1', 'operator-cancel-task', ?, ?)
+  `).run(encryptText("spacex-cdk-asset:operator-cancel-asset"), createdAt, createdAt);
+  const service = createSpaceXCdkService({
+    db,
+    clientFactory: () => ({
+      async getCdk(id) { return { upstreamId: id, plan: "plus", status: "unused" }; }
+    })
+  });
+
+  const result = await service.cancelTaskByOperator("operator-cancel-task");
+
+  assert.equal(result.recycled, 1);
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = 'operator-cancel-task'").get().status, "canceled");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'operator-cancel-wrapper'").get().status, "void");
+  const asset = db.prepare("SELECT * FROM spacex_cdks WHERE id = 'operator-cancel-asset'").get();
+  assert.equal(asset.state, "inventory");
+  assert.equal(asset.current_unit_id, null);
+  assert.equal(asset.current_wrapper_cdkey_id, null);
+  assert.equal(db.prepare("SELECT state FROM spacex_cdk_units WHERE id = 'operator-cancel-unit'").get().state, "refunded");
+});
+
+test("an operator cancellation without issued assets stops the task locally", async () => {
+  const task = addSnapshottedTask({ taskId: "operator-cancel-empty-task", itemId: "operator-cancel-empty-item" });
+  const service = createSpaceXCdkService({ db, clientFactory: () => ({}) });
+
+  const result = await service.cancelTaskByOperator(task.id);
+
+  assert.equal(result.recycled, 0);
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = ?").get(task.id).status, "canceled");
 });
 
 test("a terminal SpaceX activation cannot regress from an out-of-order Webhook", () => {

@@ -411,6 +411,31 @@ test("admin APIs manage store settings, mappings, tasks and CDK order search", a
   assert.equal(tasks.response.statusCode, 200);
   assert.equal(tasks.json.items[0].parentOrderNo, "DJ100");
   assert.equal(tasks.json.items[0].cdkeys.length, 2);
+  db.prepare("UPDATE store_fulfillment_tasks SET status = 'blocked', locked_at = NULL, locked_by = NULL WHERE id = ?")
+    .run(tasks.json.items[0].id);
+  const cancelableTasks = await adminRequest("GET", "/api/admin/store-fulfillment/tasks?q=DJ100", token);
+  assert.equal(cancelableTasks.json.items[0].canCancel, true);
+
+  const deniedCancel = await adminRequest("POST", `/api/admin/store-fulfillment/tasks/${cancelableTasks.json.items[0].id}/cancel`, token, {
+    adminUsername: "admin",
+    adminPassword: "wrong-password",
+    reason: "客户申请取消自动交付"
+  });
+  assert.equal(deniedCancel.response.statusCode, 401);
+
+  const canceled = await adminRequest("POST", `/api/admin/store-fulfillment/tasks/${cancelableTasks.json.items[0].id}/cancel`, token, {
+    adminUsername: "admin",
+    adminPassword: "test-password",
+    reason: "客户申请取消自动交付"
+  });
+  assert.equal(canceled.response.statusCode, 200);
+  assert.equal(canceled.json.canceled.status, "canceled");
+  assert.equal(canceled.json.canceled.recycled, 0);
+  assert.equal(db.prepare("SELECT status FROM store_fulfillment_tasks WHERE id = ?").get(cancelableTasks.json.items[0].id).status, "canceled");
+  assert.ok(db.prepare(`
+    SELECT 1 FROM admin_audit_logs
+    WHERE action = 'store_fulfillment.task.cancel' AND resource_id = ?
+  `).get(cancelableTasks.json.items[0].id));
 
   const cards = await adminRequest("GET", "/api/admin/cdkeys?q=DJ100", token);
   assert.equal(cards.response.statusCode, 200);

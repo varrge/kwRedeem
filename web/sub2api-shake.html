@@ -4,26 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>摇摇乐开箱</title>
+    <link rel="stylesheet" href="./apple-design.css" />
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0d1014;
-        --surface: #161a1f;
-        --surface-2: #1d2228;
-        --line: #343b43;
-        --line-soft: #262c32;
-        --text: #f3f5f7;
-        --muted: #9ba5af;
-        --accent: #d7e458;
-        --accent-strong: #eff879;
-        --success: #57d58b;
-        --danger: #ff6978;
-        --common: #9aa4ae;
-        --rare: #43a5f5;
-        --epic: #b774ef;
-        --legendary: #f4b740;
-        --item-width: 176px;
-        --item-gap: 12px;
+        --item-width: 180px;
+        --item-gap: 14px;
+        --common: #94a3b8;
+        --rare: #38bdf8;
+        --epic: #a855f7;
+        --legendary: #f59e0b;
       }
 
       * { box-sizing: border-box; }
@@ -33,40 +23,60 @@
         min-height: 100vh;
         margin: 0;
         background:
-          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-          var(--bg);
-        background-size: 32px 32px;
-        color: var(--text);
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          radial-gradient(circle at 10% -5%, rgba(168, 85, 247, 0.2), transparent 36rem),
+          radial-gradient(circle at 90% 15%, rgba(236, 72, 153, 0.16), transparent 32rem),
+          radial-gradient(circle at 50% 105%, rgba(56, 189, 248, 0.16), transparent 38rem),
+          var(--bg, #070913);
+        color: var(--text, #f3f5f9);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
         letter-spacing: 0;
+        -webkit-font-smoothing: antialiased;
       }
 
       button { font: inherit; }
-      button:disabled { cursor: not-allowed; opacity: 0.48; }
+      button:disabled { cursor: not-allowed; opacity: 0.45; }
 
       .shell {
-        width: min(1420px, calc(100vw - 40px));
+        width: min(1360px, calc(100vw - 36px));
         margin: 0 auto;
-        padding: 24px 0 38px;
+        padding: 24px 0 48px;
       }
 
       .topbar {
-        min-height: 58px;
+        min-height: 64px;
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        gap: 18px;
+        gap: 20px;
         align-items: center;
-        border-bottom: 1px solid var(--line-soft);
-        padding-bottom: 16px;
+        padding: 16px 24px;
+        border-radius: 20px;
+        background: rgba(18, 24, 43, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.45);
       }
 
       .brand { min-width: 0; }
       .brand-kicker {
-        color: var(--accent);
-        font-size: 11px;
-        font-weight: 900;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--cyber-cyan, #38bdf8);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 1.5px;
         text-transform: uppercase;
+      }
+
+      .brand-kicker::before {
+        content: "";
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--cyber-cyan, #38bdf8);
+        box-shadow: 0 0 8px var(--cyber-cyan, #38bdf8);
       }
 
       .brand h1 {
@@ -74,96 +84,173 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: clamp(22px, 3vw, 34px);
-        line-height: 1.08;
+        font-size: clamp(22px, 3.2vw, 32px);
+        font-weight: 800;
+        background: linear-gradient(135deg, #ffffff 30%, rgba(255, 255, 255, 0.7));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        line-height: 1.15;
       }
 
-      .toolbar { display: flex; align-items: center; gap: 8px; }
+      .toolbar { display: flex; align-items: center; gap: 10px; }
 
       .icon-btn, .ghost-btn, .primary-btn {
-        border-radius: 6px;
-        min-height: 40px;
+        border-radius: 12px;
+        min-height: 42px;
         cursor: pointer;
-        font-weight: 800;
+        font-weight: 700;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
       .icon-btn {
-        width: 40px;
-        border: 1px solid var(--line);
-        background: var(--surface);
-        color: var(--text);
+        width: 42px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text, #f3f5f9);
+        display: grid;
+        place-items: center;
+        font-size: 16px;
       }
 
-      .icon-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+      .icon-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+
+      .icon-btn[aria-pressed="true"] {
+        border-color: rgba(168, 85, 247, 0.6);
+        background: rgba(168, 85, 247, 0.18);
+        color: #c084fc;
+        box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
+      }
 
       .ghost-btn {
-        border: 1px solid var(--line);
-        padding: 0 14px;
-        background: var(--surface);
-        color: var(--text);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 0 18px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text, #f3f5f9);
+      }
+
+      .ghost-btn:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.25);
       }
 
       .primary-btn {
         border: 0;
-        padding: 0 28px;
-        background: var(--accent);
-        color: #141711;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+        padding: 0 32px;
+        background: linear-gradient(135deg, #a855f7, #6366f1 50%, #ec4899);
+        color: #ffffff;
+        font-size: 15px;
+        box-shadow: 0 8px 25px -4px rgba(168, 85, 247, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.3);
       }
 
-      .primary-btn:hover:not(:disabled) { background: var(--accent-strong); }
+      .primary-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 30px -4px rgba(168, 85, 247, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+      }
+
+      .primary-btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .primary-btn.ready-pulse {
+        animation: readyGlow 2s ease-in-out infinite alternate;
+      }
+
+      @keyframes readyGlow {
+        0% { box-shadow: 0 8px 25px -4px rgba(168, 85, 247, 0.5), 0 0 0 0 rgba(168, 85, 247, 0.4); }
+        100% { box-shadow: 0 12px 35px -2px rgba(236, 72, 153, 0.7), 0 0 0 8px rgba(168, 85, 247, 0); }
+      }
 
       .summary {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 1px;
-        margin: 18px 0 0;
-        border: 1px solid var(--line-soft);
-        background: var(--line-soft);
+        gap: 16px;
+        margin: 20px 0 0;
       }
 
-      .metric { min-width: 0; background: var(--surface); padding: 13px 16px; }
-      .metric span { display: block; color: var(--muted); font-size: 11px; }
-      .metric strong { display: block; margin-top: 5px; font-size: 18px; overflow: hidden; text-overflow: ellipsis; }
+      .metric {
+        min-width: 0;
+        background: rgba(18, 24, 43, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 16px 20px;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        transition: transform 0.2s ease, border-color 0.2s ease;
+      }
+
+      .metric:hover {
+        transform: translateY(-2px);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      .metric span {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted, #8e9bb0);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--text, #f3f5f9);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
 
       .opening-stage {
         position: relative;
-        min-height: 470px;
+        margin: 24px 0 0;
+        padding: 44px 24px;
+        background: rgba(18, 24, 43, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 24px;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         display: grid;
         place-items: center;
-        align-content: center;
-        gap: 25px;
-        padding: 58px 0 44px;
+        gap: 28px;
         overflow: hidden;
-        border-bottom: 1px solid var(--line-soft);
+        box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.6);
       }
 
       .stage-label {
         display: flex;
         align-items: center;
-        gap: 10px;
-        color: var(--muted);
-        font-size: 12px;
+        gap: 12px;
+        color: var(--cyber-cyan, #38bdf8);
+        font-size: 13px;
         font-weight: 800;
+        letter-spacing: 2px;
         text-transform: uppercase;
       }
 
       .stage-label::before, .stage-label::after {
-        width: 44px;
+        width: 48px;
         height: 1px;
         content: "";
-        background: var(--line);
+        background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.5), transparent);
       }
 
       .case-window {
         position: relative;
         width: 100%;
-        height: 228px;
+        height: 236px;
         overflow: hidden;
-        border-top: 1px solid var(--line);
-        border-bottom: 1px solid var(--line);
-        background: rgba(3, 5, 7, 0.62);
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34) inset;
+        border-radius: 20px;
+        border: 1px solid rgba(168, 85, 247, 0.35);
+        background: rgba(6, 9, 18, 0.85);
+        box-shadow:
+          inset 0 0 50px rgba(0, 0, 0, 0.8),
+          0 0 30px rgba(168, 85, 247, 0.12);
       }
 
       .case-window::before, .case-window::after {
@@ -171,13 +258,13 @@
         z-index: 4;
         top: 0;
         bottom: 0;
-        width: 18%;
+        width: 22%;
         content: "";
         pointer-events: none;
       }
 
-      .case-window::before { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
-      .case-window::after { right: 0; background: linear-gradient(270deg, var(--bg), transparent); }
+      .case-window::before { left: 0; background: linear-gradient(90deg, #060912, transparent); }
+      .case-window::after { right: 0; background: linear-gradient(270deg, #060912, transparent); }
 
       #case-marker {
         position: absolute;
@@ -185,10 +272,12 @@
         top: 0;
         bottom: 0;
         left: 50%;
-        width: 2px;
-        transform: translateX(-1px);
-        background: var(--accent);
-        box-shadow: 0 0 20px rgba(215, 228, 88, 0.55);
+        width: 3px;
+        transform: translateX(-50%);
+        background: linear-gradient(180deg, #ec4899, #a855f7 50%, #38bdf8);
+        box-shadow:
+          0 0 15px rgba(168, 85, 247, 0.9),
+          0 0 30px rgba(236, 72, 153, 0.6);
         pointer-events: none;
       }
 
@@ -199,12 +288,13 @@
         height: 0;
         content: "";
         transform: translateX(-50%);
-        border-left: 8px solid transparent;
-        border-right: 8px solid transparent;
+        border-left: 9px solid transparent;
+        border-right: 9px solid transparent;
+        filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.8));
       }
 
-      #case-marker::before { top: 0; border-top: 12px solid var(--accent); }
-      #case-marker::after { bottom: 0; border-bottom: 12px solid var(--accent); }
+      #case-marker::before { top: 0; border-top: 13px solid #ec4899; }
+      #case-marker::after { bottom: 0; border-bottom: 13px solid #38bdf8; }
 
       #case-track {
         display: flex;
@@ -223,21 +313,23 @@
         position: relative;
         flex: 0 0 var(--item-width);
         width: var(--item-width);
-        height: 176px;
+        height: 184px;
         display: grid;
         grid-template-rows: 1fr auto;
         overflow: hidden;
-        border: 1px solid var(--line);
-        border-bottom: 4px solid var(--rarity-color, var(--common));
-        background: var(--surface-2);
-        padding: 15px;
+        border-radius: 16px;
+        border: 1px solid color-mix(in srgb, var(--rarity-color, var(--common)) 40%, rgba(255, 255, 255, 0.1));
+        background: rgba(18, 24, 43, 0.75);
+        padding: 16px;
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+        transition: transform 0.2s ease;
       }
 
       .prize-item::before {
         position: absolute;
         inset: 0;
         content: "";
-        background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--rarity-color) 21%, transparent), transparent 58%);
+        background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--rarity-color) 25%, transparent), transparent 65%);
         pointer-events: none;
       }
 
@@ -246,6 +338,22 @@
       .prize-item[data-rarity="epic"] { --rarity-color: var(--epic); }
       .prize-item[data-rarity="legendary"] { --rarity-color: var(--legendary); }
 
+      .prize-rarity-badge {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 2;
+        padding: 2px 8px;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--rarity-color) 20%, rgba(0,0,0,0.5));
+        border: 1px solid color-mix(in srgb, var(--rarity-color) 45%, transparent);
+        color: var(--rarity-color);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+
       .prize-icon {
         position: relative;
         z-index: 1;
@@ -253,29 +361,31 @@
         place-items: center;
         min-height: 98px;
         color: var(--rarity-color);
-        font-size: 48px;
-        font-weight: 950;
+        font-size: 52px;
+        font-weight: 900;
+        filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.4));
       }
 
-      .prize-icon img { width: 76px; height: 76px; object-fit: contain; }
+      .prize-icon img { width: 78px; height: 78px; object-fit: contain; }
       .prize-copy { position: relative; z-index: 1; min-width: 0; }
-      .prize-copy strong { display: block; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-      .prize-copy span { display: block; margin-top: 4px; color: var(--rarity-color); font-size: 10px; font-weight: 900; text-transform: uppercase; }
+      .prize-copy strong { display: block; overflow: hidden; color: var(--text, #f3f5f9); font-size: 14px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+      .prize-copy span { display: block; margin-top: 4px; color: var(--rarity-color); font-size: 11px; font-weight: 800; text-transform: uppercase; }
 
-      .opening-actions { min-height: 82px; display: grid; justify-items: center; gap: 10px; }
-      .opening-actions .primary-btn { min-width: 200px; min-height: 48px; }
-      .opening-status { min-height: 20px; margin: 0; color: var(--muted); font-size: 13px; text-align: center; }
-      .opening-status.error { color: var(--danger); }
-      .opening-status.success { color: var(--success); }
+      .opening-actions { min-height: 86px; display: grid; justify-items: center; gap: 12px; }
+      .opening-actions .primary-btn { min-width: 220px; min-height: 52px; font-size: 16px; border-radius: 14px; }
+      .opening-status { min-height: 20px; margin: 0; color: var(--muted, #8e9bb0); font-size: 14px; text-align: center; }
+      .opening-status.error { color: #f43f5e; }
+      .opening-status.success { color: #4ade80; }
 
       .result-reveal {
         min-height: 30px;
         margin: 0;
-        font-size: 17px;
-        font-weight: 850;
+        font-size: 18px;
+        font-weight: 800;
         text-align: center;
       }
 
+      .result-reveal[data-rarity="common"] { color: var(--common); }
       .result-reveal[data-rarity="rare"] { color: var(--rare); }
       .result-reveal[data-rarity="epic"] { color: var(--epic); }
       .result-reveal[data-rarity="legendary"] { color: var(--legendary); }
@@ -284,65 +394,295 @@
         display: grid;
         grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
         gap: 24px;
-        padding-top: 26px;
+        margin-top: 24px;
       }
 
-      .section { min-width: 0; }
-      .section + .section { border-left: 1px solid var(--line-soft); padding-left: 24px; }
-      .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 14px; }
-      .section-head h2 { margin: 0; font-size: 16px; }
-      .section-head span { color: var(--muted); font-size: 12px; }
+      .section {
+        min-width: 0;
+        background: rgba(18, 24, 43, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 22px 24px;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+      }
 
-      .progress-list, #probability-list { display: grid; gap: 8px; }
+      .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 16px; }
+      .section-head h2 { margin: 0; font-size: 17px; font-weight: 800; color: var(--text, #f3f5f9); }
+      .section-head span { color: var(--muted, #8e9bb0); font-size: 13px; }
+
+      .progress-list, #probability-list { display: grid; gap: 10px; }
       .progress-row, .probability-row {
         display: grid;
-        grid-template-columns: minmax(100px, 1fr) minmax(120px, 1.6fr) auto;
-        gap: 12px;
+        grid-template-columns: minmax(110px, 1fr) minmax(130px, 1.6fr) auto;
+        gap: 14px;
         align-items: center;
         min-height: 48px;
-        border-bottom: 1px solid var(--line-soft);
+        padding: 8px 12px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
       }
 
-      .progress-row strong, .probability-row strong { font-size: 13px; }
-      .progress-bar { height: 5px; overflow: hidden; background: #282e34; }
-      .progress-bar i { display: block; height: 100%; background: var(--accent); }
-      .progress-row span, .probability-row span { color: var(--muted); font-size: 12px; text-align: right; }
+      .progress-row strong, .probability-row strong { font-size: 13px; font-weight: 700; }
+      .progress-bar { height: 7px; overflow: hidden; border-radius: 4px; background: rgba(255, 255, 255, 0.08); }
+      .progress-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #a855f7, #38bdf8); }
+      .progress-row span, .probability-row span { color: var(--muted, #8e9bb0); font-size: 12px; text-align: right; font-weight: 600; }
 
       .history {
-        margin-top: 28px;
+        margin-top: 24px;
+        background: rgba(18, 24, 43, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 22px 24px;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
         overflow-x: auto;
-        border-top: 1px solid var(--line-soft);
-        padding-top: 24px;
       }
 
-      table { width: 100%; min-width: 700px; border-collapse: collapse; }
-      th, td { padding: 13px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; font-size: 13px; }
-      th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
-      .status { font-weight: 850; }
-      .status-delivered { color: var(--success); }
-      .status-delivery_failed { color: var(--danger); }
-      .retry-btn { min-height: 30px; padding: 0 10px; }
-      .empty { padding: 28px 0; color: var(--muted); text-align: center; }
+      table { width: 100%; min-width: 700px; border-collapse: separate; border-spacing: 0; }
+      th, td { padding: 14px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+      th { color: var(--muted, #8e9bb0); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+      td { color: var(--text, #f3f5f9); }
+      .status { font-weight: 800; display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 8px; font-size: 12px; }
+      .status-delivered { background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
+      .status-delivery_failed { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+      .status-selected { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+      .status-voided { background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3); }
+      .retry-btn { min-height: 32px; padding: 0 12px; font-size: 12px; border-radius: 8px; }
+      .empty { padding: 32px 0; color: var(--muted, #8e9bb0); text-align: center; font-size: 14px; }
+
+      /* High-End Close-Up Spotlight Modal (特写动画) */
+      .prize-modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .prize-modal-overlay.active {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .prize-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(4, 6, 14, 0.85);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+      }
+
+      .prize-modal-container {
+        position: relative;
+        z-index: 2;
+        width: min(440px, calc(100vw - 32px));
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .light-ray-effect {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 560px;
+        height: 560px;
+        transform: translate(-50%, -50%) scale(0.3) rotate(0deg);
+        background: radial-gradient(circle, color-mix(in srgb, var(--modal-color, #a855f7) 38%, transparent) 0%, transparent 70%);
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s ease;
+      }
+
+      .prize-modal-overlay.active .light-ray-effect {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1.25) rotate(45deg);
+        animation: rayRotate 20s linear infinite;
+      }
+
+      @keyframes rayRotate {
+        from { transform: translate(-50%, -50%) scale(1.25) rotate(0deg); }
+        to { transform: translate(-50%, -50%) scale(1.25) rotate(360deg); }
+      }
+
+      .prize-modal-card {
+        position: relative;
+        width: 100%;
+        padding: 38px 28px 28px;
+        background: rgba(18, 24, 43, 0.88);
+        border: 1px solid color-mix(in srgb, var(--modal-color, #a855f7) 55%, rgba(255, 255, 255, 0.25));
+        border-radius: 28px;
+        box-shadow: 
+          0 30px 90px -10px rgba(0, 0, 0, 0.75),
+          0 0 55px color-mix(in srgb, var(--modal-color, #a855f7) 35%, transparent),
+          inset 0 1px 1px rgba(255, 255, 255, 0.35);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        text-align: center;
+        transform: scale(0.4) translateY(40px);
+        opacity: 0;
+        transition: transform 0.55s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.35s ease;
+      }
+
+      .prize-modal-overlay.active .prize-modal-card {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+      }
+
+      .prize-modal-card[data-rarity="common"] { --modal-color: var(--common); }
+      .prize-modal-card[data-rarity="rare"] { --modal-color: var(--rare); }
+      .prize-modal-card[data-rarity="epic"] { --modal-color: var(--epic); }
+      .prize-modal-card[data-rarity="legendary"] { --modal-color: var(--legendary); }
+
+      .modal-rarity-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 18px;
+        border-radius: 20px;
+        background: color-mix(in srgb, var(--modal-color) 22%, transparent);
+        border: 1px solid color-mix(in srgb, var(--modal-color) 50%, transparent);
+        color: var(--modal-color);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-bottom: 20px;
+        box-shadow: 0 0 18px color-mix(in srgb, var(--modal-color) 30%, transparent);
+      }
+
+      .modal-prize-icon-wrapper {
+        position: relative;
+        width: 110px;
+        height: 110px;
+        margin: 0 auto 20px;
+        display: grid;
+        place-items: center;
+      }
+
+      .modal-prize-icon-glow {
+        position: absolute;
+        inset: -12px;
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--modal-color) 45%, transparent) 0%, transparent 70%);
+        animation: pulseGlow 2.5s ease-in-out infinite alternate;
+      }
+
+      @keyframes pulseGlow {
+        0% { transform: scale(0.9); opacity: 0.5; }
+        100% { transform: scale(1.3); opacity: 1; }
+      }
+
+      .modal-prize-icon {
+        position: relative;
+        z-index: 2;
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        font-size: 56px;
+        font-weight: 900;
+        color: var(--modal-color);
+        filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+      }
+
+      .modal-prize-icon img {
+        width: 86px;
+        height: 86px;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 18px color-mix(in srgb, var(--modal-color) 40%, transparent));
+      }
+
+      .modal-prize-title {
+        margin: 0 0 8px;
+        font-size: 24px;
+        font-weight: 800;
+        color: #ffffff;
+        letter-spacing: -0.5px;
+      }
+
+      .modal-prize-desc {
+        margin: 0 0 20px;
+        font-size: 14px;
+        color: var(--muted, #8e9bb0);
+        line-height: 1.5;
+      }
+
+      .modal-status-tag {
+        display: inline-block;
+        margin-bottom: 24px;
+        padding: 5px 16px;
+        border-radius: 12px;
+        font-size: 13px;
+        font-weight: 800;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted, #8e9bb0);
+      }
+
+      .modal-status-tag.success {
+        background: rgba(74, 222, 128, 0.18);
+        color: #4ade80;
+        border: 1px solid rgba(74, 222, 128, 0.35);
+      }
+
+      .modal-status-tag.error {
+        background: rgba(244, 63, 94, 0.18);
+        color: #f43f5e;
+        border: 1px solid rgba(244, 63, 94, 0.35);
+      }
+
+      .modal-claim-btn {
+        width: 100%;
+        min-height: 52px;
+        border: 0;
+        border-radius: 14px;
+        background: linear-gradient(135deg, var(--modal-color), color-mix(in srgb, var(--modal-color) 70%, #ffffff));
+        color: #070913;
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        box-shadow: 0 10px 28px -5px color-mix(in srgb, var(--modal-color) 50%, transparent);
+        transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+      }
+
+      .modal-claim-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 14px 34px -5px color-mix(in srgb, var(--modal-color) 65%, transparent);
+      }
+
+      .modal-claim-btn:active {
+        transform: translateY(1px);
+      }
 
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+        .prize-modal-card { transform: none !important; }
+        .light-ray-effect { display: none !important; }
       }
 
       @media (max-width: 820px) {
-        :root { --item-width: 138px; --item-gap: 8px; }
+        :root { --item-width: 144px; --item-gap: 10px; }
         .shell { width: min(100% - 24px, 720px); padding-top: 14px; }
-        .topbar { grid-template-columns: minmax(0, 1fr) auto; }
-        .brand h1 { font-size: 23px; }
-        .summary { grid-template-columns: 1fr; }
-        .metric { display: grid; grid-template-columns: 1fr auto; align-items: center; }
-        .metric strong { margin: 0; font-size: 15px; text-align: right; }
-        .opening-stage { min-height: 420px; padding: 40px 0 28px; }
-        .case-window { height: 196px; width: calc(100vw - 24px); }
-        .prize-item { height: 148px; padding: 11px; }
-        .prize-icon { min-height: 78px; font-size: 38px; }
-        .prize-icon img { width: 60px; height: 60px; }
-        .dashboard { grid-template-columns: 1fr; }
-        .section + .section { border-left: 0; border-top: 1px solid var(--line-soft); padding: 22px 0 0; }
+        .topbar { padding: 14px 18px; border-radius: 16px; }
+        .brand h1 { font-size: 24px; }
+        .summary { grid-template-columns: 1fr; gap: 10px; }
+        .metric { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; }
+        .metric strong { margin: 0; font-size: 17px; }
+        .opening-stage { padding: 32px 14px; border-radius: 20px; }
+        .case-window { height: 204px; width: calc(100vw - 28px); }
+        .prize-item { height: 156px; padding: 12px; }
+        .prize-icon { min-height: 80px; font-size: 42px; }
+        .prize-icon img { width: 64px; height: 64px; }
+        .dashboard { grid-template-columns: 1fr; gap: 16px; }
+        .section { padding: 18px 16px; }
       }
 
       @media (max-width: 460px) {
@@ -366,9 +706,9 @@
       </header>
 
       <section class="summary" aria-label="活动概要">
-        <div class="metric"><span>可用摇摇卡</span><strong id="available-cards">0</strong></div>
-        <div class="metric"><span>奖池奖品</span><strong id="prize-count">0</strong></div>
-        <div class="metric"><span>活动截止</span><strong id="campaign-end">-</strong></div>
+        <div class="metric"><span>🎫 可用摇摇卡</span><strong id="available-cards">0</strong></div>
+        <div class="metric"><span>🎁 奖池奖品</span><strong id="prize-count">0</strong></div>
+        <div class="metric"><span>⏳ 活动截止</span><strong id="campaign-end">-</strong></div>
       </section>
 
       <section class="opening-stage">
@@ -401,6 +741,25 @@
       </section>
     </main>
 
+    <!-- 抽中特写弹窗 (Spotlight Modal) -->
+    <div id="prize-modal" class="prize-modal-overlay" aria-hidden="true" role="dialog" aria-labelledby="modal-prize-title">
+      <div class="prize-modal-backdrop" id="modal-backdrop"></div>
+      <div class="prize-modal-container">
+        <div class="light-ray-effect"></div>
+        <div class="prize-modal-card" id="modal-card" data-rarity="legendary">
+          <div class="modal-rarity-badge" id="modal-rarity-badge">★ 传说级 奖品 ★</div>
+          <div class="modal-prize-icon-wrapper">
+            <div class="modal-prize-icon-glow"></div>
+            <div class="modal-prize-icon" id="modal-prize-icon"></div>
+          </div>
+          <h2 class="modal-prize-title" id="modal-prize-title">奖品名称</h2>
+          <p class="modal-prize-desc" id="modal-prize-desc">恭喜获得限定奖励</p>
+          <div class="modal-status-tag success" id="modal-status-tag">已发放到账号</div>
+          <button id="modal-claim-btn" class="modal-claim-btn" type="button">收 下 奖 励</button>
+        </div>
+      </div>
+    </div>
+
     <script src="./runtime-config.js"></script>
     <script>
       const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
@@ -421,7 +780,17 @@
         progressList: document.querySelector("#progress-list"),
         probabilityList: document.querySelector("#probability-list"),
         drawCount: document.querySelector("#draw-count"),
-        historyList: document.querySelector("#history-list")
+        historyList: document.querySelector("#history-list"),
+        // Modal refs
+        prizeModal: document.querySelector("#prize-modal"),
+        modalBackdrop: document.querySelector("#modal-backdrop"),
+        modalCard: document.querySelector("#modal-card"),
+        modalRarityBadge: document.querySelector("#modal-rarity-badge"),
+        modalPrizeIcon: document.querySelector("#modal-prize-icon"),
+        modalPrizeTitle: document.querySelector("#modal-prize-title"),
+        modalPrizeDesc: document.querySelector("#modal-prize-desc"),
+        modalStatusTag: document.querySelector("#modal-status-tag"),
+        modalClaimBtn: document.querySelector("#modal-claim-btn")
       };
 
       const state = {
@@ -492,9 +861,11 @@
       }
 
       function prizeItem(prize, target = false) {
+        const rarityLabel = RARITY_LABELS[prize.rarity] || prize.rarity;
         return `<article class="prize-item" data-rarity="${escapeHtml(prize.rarity)}" ${target ? "data-target-prize" : ""}>
+          <span class="prize-rarity-badge">${escapeHtml(rarityLabel)}</span>
           <div class="prize-icon">${prizeIcon(prize)}</div>
-          <div class="prize-copy"><strong>${escapeHtml(prize.name)}</strong><span>${escapeHtml(RARITY_LABELS[prize.rarity] || prize.rarity)}</span></div>
+          <div class="prize-copy"><strong>${escapeHtml(prize.name)}</strong><span>${escapeHtml(rarityLabel)}</span></div>
         </article>`;
       }
 
@@ -534,13 +905,13 @@
           refs.historyList.innerHTML = `<div class="empty">暂无开箱记录</div>`;
           return;
         }
-        refs.historyList.innerHTML = `<table><thead><tr><th>时间</th><th>奖品</th><th>稀有度</th><th>状态</th><th></th></tr></thead><tbody>${state.draws.map((draw) => `
+        refs.historyList.innerHTML = `<table><thead><tr><th>时间</th><th>奖品</th><th>稀有度</th><th>状态</th><th>操作</th></tr></thead><tbody>${state.draws.map((draw) => `
           <tr>
             <td>${escapeHtml(formatTime(draw.createdAt))}</td>
             <td><strong>${escapeHtml(draw.prize.name)}</strong></td>
             <td>${escapeHtml(RARITY_LABELS[draw.prize.rarity] || draw.prize.rarity)}</td>
-            <td class="status status-${escapeHtml(draw.status)}">${escapeHtml(STATUS_LABELS[draw.status] || draw.status)}</td>
-            <td>${draw.status === "delivery_failed" ? `<button class="ghost-btn retry-btn" data-retry-request="${escapeHtml(draw.requestId)}">重试发放</button>` : ""}</td>
+            <td><span class="status status-${escapeHtml(draw.status)}">${escapeHtml(STATUS_LABELS[draw.status] || draw.status)}</span></td>
+            <td>${draw.status === "delivery_failed" ? `<button class="ghost-btn retry-btn" data-retry-request="${escapeHtml(draw.requestId)}">重试发放</button>` : "-"}</td>
           </tr>`).join("")}</tbody></table>`;
       }
 
@@ -556,11 +927,21 @@
         refs.availableCards.textContent = state.availableCards;
         refs.prizeCount.textContent = state.prizes.length;
         refs.campaignEnd.textContent = state.campaign ? formatTime(state.campaign.endAt, true) : "暂无活动";
-        refs.openCaseBtn.disabled = !state.sessionToken || !state.campaign || state.availableCards < 1 || state.spinning;
+        updateButtonState();
         renderProgress(payload.progress || []);
         renderProbabilities();
         renderHistory();
         buildIdleTrack();
+      }
+
+      function updateButtonState() {
+        const canOpen = state.sessionToken && state.campaign && state.availableCards >= 1 && !state.spinning;
+        refs.openCaseBtn.disabled = !canOpen;
+        if (canOpen) {
+          refs.openCaseBtn.classList.add("ready-pulse");
+        } else {
+          refs.openCaseBtn.classList.remove("ready-pulse");
+        }
       }
 
       function audioTick(frequency = 520, duration = 0.035) {
@@ -577,6 +958,66 @@
         oscillator.connect(gain).connect(context.destination);
         oscillator.start();
         oscillator.stop(context.currentTime + duration);
+      }
+
+      function playVictoryChime(rarity = "common") {
+        if (!state.soundEnabled) return;
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const context = audioTick.context || (audioTick.context = new AudioContextClass());
+        
+        const frequencies = rarity === "legendary"
+          ? [523.25, 659.25, 783.99, 1046.50, 1318.51]
+          : rarity === "epic"
+          ? [523.25, 659.25, 880.00]
+          : [523.25, 659.25];
+
+        frequencies.forEach((freq, index) => {
+          const osc = context.createOscillator();
+          const gain = context.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          const startTime = context.currentTime + index * 0.08;
+          gain.gain.setValueAtTime(0, startTime);
+          gain.gain.linearRampToValueAtTime(0.08, startTime + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.35);
+          osc.connect(gain).connect(context.destination);
+          osc.start(startTime);
+          osc.stop(startTime + 0.35);
+        });
+      }
+
+      function showPrizeModal(draw) {
+        const prize = draw.prize;
+        const rarity = prize.rarity || "common";
+        const rarityText = RARITY_LABELS[rarity] || rarity;
+        
+        refs.modalCard.dataset.rarity = rarity;
+        refs.modalRarityBadge.textContent = `★ ${rarityText}级 奖品 ★`;
+        refs.modalPrizeIcon.innerHTML = prizeIcon(prize);
+        refs.modalPrizeTitle.textContent = prize.name;
+        
+        let desc = "恭喜在摇摇乐开箱中斩获奖励！";
+        if (prize.type === "balance") desc = `已向您的账户增加 ￥${prize.value || 0} 余额。`;
+        else if (prize.type === "extra_draw") desc = `额外获得 1 张摇摇卡，可继续抽奖！`;
+        refs.modalPrizeDesc.textContent = desc;
+
+        if (draw.status === "delivery_failed") {
+          refs.modalStatusTag.textContent = "奖励发放失败 (可在记录中重试)";
+          refs.modalStatusTag.className = "modal-status-tag error";
+        } else {
+          refs.modalStatusTag.textContent = "已实时存入您的账号";
+          refs.modalStatusTag.className = "modal-status-tag success";
+        }
+
+        refs.prizeModal.setAttribute("aria-hidden", "false");
+        refs.prizeModal.classList.add("active");
+        playVictoryChime(rarity);
+      }
+
+      function hidePrizeModal() {
+        refs.prizeModal.classList.remove("active");
+        refs.prizeModal.setAttribute("aria-hidden", "true");
       }
 
       function animateResult(draw) {
@@ -604,6 +1045,7 @@
             }
             window.setTimeout(() => {
               audioTick(draw.prize.rarity === "legendary" ? 980 : 720, 0.22);
+              showPrizeModal(draw);
               resolve();
             }, reducedMotion.matches ? 40 : 5500);
           }));
@@ -613,7 +1055,7 @@
       async function openCase(requestId = "") {
         if (state.spinning || !state.sessionToken) return;
         state.spinning = true;
-        refs.openCaseBtn.disabled = true;
+        updateButtonState();
         refs.resultReveal.textContent = "";
         setStatus(requestId ? "正在重试奖励发放..." : "正在锁定开箱结果...");
         const drawRequestId = requestId || `opening-${crypto.randomUUID()}`;
@@ -641,7 +1083,7 @@
           setStatus(error.message, "error");
         } finally {
           state.spinning = false;
-          refs.openCaseBtn.disabled = !state.campaign || state.availableCards < 1;
+          updateButtonState();
         }
       }
 
@@ -693,6 +1135,13 @@
       refs.historyList.addEventListener("click", (event) => {
         const button = event.target.closest("[data-retry-request]");
         if (button) openCase(button.dataset.retryRequest);
+      });
+      refs.modalClaimBtn.addEventListener("click", hidePrizeModal);
+      refs.modalBackdrop.addEventListener("click", hidePrizeModal);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && refs.prizeModal.classList.contains("active")) {
+          hidePrizeModal();
+        }
       });
 
       initialize();

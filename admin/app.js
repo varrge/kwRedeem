@@ -3990,8 +3990,14 @@ function collectShakeConfig() {
 function updateShakeEmbedUrl() {
   if (!refs.shakeEmbedUrl) return;
   const connectionId = refs.shakeCampaignConnection?.value || refs.shakeCampaignFilter?.value || sub2apiConnectionsCache[0]?.id || "";
-  const appUrl = String(globalThis.KAWANG_CONFIG?.appUrl || "").trim();
-  const url = new URL("sub2api-shake.html", appUrl ? `${appUrl.replace(/\/+$/, "")}/` : window.location.href);
+  const connection = sub2apiConnectionsCache.find((item) => item.id === connectionId);
+  let sub2ApiOrigin = "https://sub.vsakura.top";
+  try {
+    if (connection?.baseUrl) sub2ApiOrigin = new URL(connection.baseUrl).origin;
+  } catch {
+    // Keep the official Sub2api origin when an older connection has an invalid URL.
+  }
+  const url = new URL("/_kwredeem/sub2api-shake.html", sub2ApiOrigin);
   if (connectionId) url.searchParams.set("connectionId", connectionId);
   refs.shakeEmbedUrl.value = url.href;
   if (refs.shakePreviewLink) refs.shakePreviewLink.href = url.href;

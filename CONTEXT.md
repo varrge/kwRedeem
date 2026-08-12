@@ -139,6 +139,14 @@ _Avoid_: Deriving tier from prize rarity, silently consuming a different availab
 The configured category of qualifying consumption that can grant Shake Cards. The first release supports purchases made through the KaWang Subscription Center and actual Sub2api balance consumption.
 _Avoid_: Balance recharge, balance-code redemption, invite rebate, World Cup balance change
 
+**Shake Subscription Group Grant Rule**:
+An administrator-configured mapping from one Sub2api subscription group ID to a Shake Card tier and fixed quantity. A successfully completed KaWang subscription order applies the mapping to the order's stored group snapshot exactly once; an unmapped group grants no card.
+_Avoid_: Accumulating plan price, matching by plan display name, remote group lookup after purchase, granting one order more than once
+
+**Shake Subscription Group Usage Rule**:
+An administrator-configured mapping from one Sub2api subscription group ID and an Actual Sub2api Balance Consumption threshold to a Shake Card tier. Official usage rows with a `subscription_id` accumulate by user and `group_id`; non-subscription usage is handled separately by the optional unscoped balance-consumption rule.
+_Avoid_: Sharing progress between groups, treating a plain group_id as proof of subscription usage, counting one usage row in both rule types, inferring a group from the user's current subscriptions
+
 **Shake Card Consumption Classification**:
 Each qualifying consumption belongs to exactly one Shake Card earning source. A KaWang Subscription Center purchase counts only as subscription purchase consumption and is excluded from actual Sub2api balance consumption progress.
 _Avoid_: Counting one balance deduction toward both earning sources
@@ -464,8 +472,24 @@ The evidence-based operator path for a renewal guard that cannot confirm the dis
 _Avoid_: Force-complete, manual success flag, automatic renewal rollback
 
 **Membership Fulfillment**:
-The independent, durable order process started after a player's card code is accepted and its protected ChatGPT Session is submitted. It establishes purchase eligibility, reserves and funds a card, completes the purchased membership's payment stages, confirms the target membership, and disables renewal; it alone owns card, payment, upgrade, and renewal-safe completion state.
+The independent, durable order process started after a player's card code is accepted and its protected ChatGPT Session is submitted. It passes the Starting Subscription Guard before establishing the browser Session, completes the purchased membership's payment stages, confirms the target membership, and disables renewal again before completion; it alone owns card, payment, upgrade, and renewal-safe completion state.
 _Avoid_: Automation Protocol, card-platform workflow, overloading session activation status, using the redeem order's generic status as payment state
+
+**Starting Subscription Guard**:
+The initial membership-fulfillment check performed with the submitted Session before establishing its checkout browser Session. It queries the subscription, disables automatic renewal when enabled, and then requires a fresh authoritative observation showing both `plan=free` and automatic renewal disabled before checkout may begin.
+_Avoid_: Pre-payment cancellation, treating cancellation success as purchase eligibility, paying while a paid plan remains active, inferring `free` or renewal state from a missing response
+
+**Pre-Funding Session Release**:
+The recovery outcome when a submitted Session becomes unusable before any card reservation, funding, authorization, or payment action. The current order and fulfillment are terminally cancelled, the locked CDK returns to `active`, and the player's next submission creates a new order and fulfillment with no Session or account state inherited from the cancelled attempt.
+_Avoid_: Resuming the cancelled order with a replacement Session, overwriting the failed attempt, releasing a CDK after money exposure
+
+**Post-Funding Session Recovery**:
+The recovery path when a Session becomes unusable after card reservation or money exposure. The CDK and original order remain locked, and a replacement Session may resume that fulfillment only after proving the same ChatGPT identity and reconciling membership plus card transactions; another payment is allowed only when there is authoritative evidence of no membership change, no effective charge, and no pending authorization.
+_Avoid_: Resetting the CDK, creating a replacement order, accepting a different account, retrying payment before reconciliation
+
+**Membership Financial Exposure Boundary**:
+The irreversible fulfillment boundary crossed as soon as a specific payment card is reserved for the order, an open-card or funding request is submitted, full card material is released to checkout, a possibly authorizing checkout control is activated, or any related card transaction appears. After any one of these events, the original order retains the CDK and all recovery proceeds through reconciliation even when no successful charge has yet been confirmed.
+_Avoid_: Starting the boundary only at confirmed payment, releasing the CDK after a timeout or decline, treating an unknown write as no financial exposure
 
 **Fulfillment Attempt**:
 An append-only execution record for one pass through a membership-fulfillment stage. Retrying or operator-resuming creates another attempt without replacing the fulfillment, its prior evidence, reservation, or funding intent.
@@ -741,13 +765,13 @@ The allowlisted membership type reported by the membership state provider: `free
 _Avoid_: Expecting `x5` or `x20` from the provider, treating null or an unknown enum as free, using UI labels as API enums
 
 **Eligible Starting Membership**:
-A ChatGPT account state that may enter automatic card fulfillment: either free, or delinquent with renewal disabled and a recognized initial Plus checkout surface proving replacement purchase is currently available. A healthy existing paid membership and a delinquent account that cannot yet reach that checkout are not eligible starting states.
-_Avoid_: Treating delinquency alone as purchase eligibility, waiting only on a guessed expiry, replacing a healthy paid plan
+A ChatGPT account state that may enter automatic card fulfillment: an authoritative observation reports both `plan=free` and automatic renewal disabled. Every paid, delinquent, unknown, or renewal-enabled state remains in the Starting Subscription Guard and cannot reserve or fund a card or enter checkout.
+_Avoid_: Treating delinquency or checkout availability as purchase eligibility, waiting only on a guessed expiry, replacing an existing paid plan
 
 **Account Repurchase Wait**:
-The no-funding state for a renewal-protected delinquent account that cannot yet produce a recognized Plus checkout surface with the required plan, region, currency, and amount. It may be rechecked, but it cannot open or fund a card.
-_Avoid_: Assuming `is_delinquent` means purchasable, funding before checkout eligibility is proven
+The no-funding state after the Starting Subscription Guard has disabled automatic renewal but the authoritative account observation is not yet `plan=free` with renewal disabled. It may be rechecked with the submitted Session, but it cannot reserve, open, fund, or expose a payment card or enter checkout.
+_Avoid_: Assuming cancellation success means free, treating delinquency as purchasable, funding before the Free starting state is proven
 
 **Renewal-Safe Completion**:
-A confirmed final membership whose newly enabled automatic renewal has been disabled and rechecked before the redeem order completes. An x5/x20 fulfillment does not disable renewal during its intermediate Plus stage.
-_Avoid_: Completing while auto-renew remains enabled, cancelling between staged-upgrade payments
+A confirmed target membership whose newly enabled automatic renewal has been disabled and authoritatively rechecked before the redeem order completes. Neither a checkout response nor a renewal-cancellation response alone can complete the order; an x5/x20 fulfillment does not disable renewal during its intermediate Plus stage.
+_Avoid_: Completing from a checkout success page, trusting a cancellation response without re-querying, completing while auto-renew remains enabled, cancelling between staged-upgrade payments

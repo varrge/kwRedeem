@@ -332,6 +332,22 @@ body {
 }
 
 .shake-prize-editor { display: grid; gap: 12px; }
+.shake-subscription-rule-editor { display: grid; gap: 12px; }
+.shake-usage-rule-editor { display: grid; gap: 12px; }
+
+.shake-subscription-rule-row,
+.shake-usage-rule-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(140px, 0.8fr) 40px;
+  gap: 10px;
+  align-items: end;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.shake-subscription-rule-row .field, .shake-usage-rule-row .field { min-width: 0; }
+.shake-subscription-rule-row input, .shake-subscription-rule-row select,
+.shake-usage-rule-row input, .shake-usage-rule-row select { width: 100%; min-width: 0; }
 
 .shake-prize-row {
   display: grid;
@@ -788,11 +804,15 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
     align-items: flex-start;
   }
   .shake-prize-row { grid-template-columns: 1fr; }
+  .shake-subscription-rule-row { grid-template-columns: 1fr; }
+  .shake-usage-rule-row { grid-template-columns: 1fr; }
   .shake-remove-prize { justify-self: end; }
 }
 
 @media (min-width: 721px) and (max-width: 1400px) {
   .shake-prize-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shake-subscription-rule-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shake-usage-rule-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shake-remove-prize { justify-self: end; }
 }
 

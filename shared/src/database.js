@@ -23,6 +23,81 @@ function ensureColumn(db, tableName, columnName, definition) {
   }
 }
 
+function migrateShakeEligibilityRuleUniqueness(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'sub2api_shake_eligibility_rules'
+  `).get();
+  if (!/UNIQUE\s*\(\s*config_version_id\s*,\s*source\s*\)/i.test(table?.sql || "")) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE sub2api_shake_eligibility_rules
+      RENAME TO sub2api_shake_eligibility_rules_legacy;
+
+      CREATE TABLE sub2api_shake_eligibility_rules (
+        id TEXT PRIMARY KEY,
+        config_version_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        card_tier TEXT NOT NULL DEFAULT 'low',
+        threshold REAL,
+        subscription_group_id INTEGER,
+        card_quantity INTEGER,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO sub2api_shake_eligibility_rules (
+        id, config_version_id, source, card_tier, threshold,
+        subscription_group_id, card_quantity, created_at
+      )
+      SELECT
+        id, config_version_id, source, card_tier, threshold,
+        subscription_group_id, card_quantity, created_at
+      FROM sub2api_shake_eligibility_rules_legacy;
+
+      DROP TABLE sub2api_shake_eligibility_rules_legacy;
+    `);
+  })();
+}
+
+function migrateShakeProgressUniqueness(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'sub2api_shake_progress'
+  `).get();
+  if (!/UNIQUE\s*\(\s*campaign_id\s*,\s*sub2api_user_id\s*,\s*source\s*\)/i.test(table?.sql || "")) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE sub2api_shake_progress
+      RENAME TO sub2api_shake_progress_legacy;
+
+      CREATE TABLE sub2api_shake_progress (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        sub2api_user_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        card_tier TEXT NOT NULL DEFAULT 'low',
+        subscription_group_id INTEGER,
+        amount REAL NOT NULL DEFAULT 0,
+        cards_earned INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO sub2api_shake_progress (
+        id, campaign_id, sub2api_user_id, source, card_tier,
+        subscription_group_id, amount, cards_earned, updated_at
+      )
+      SELECT
+        id, campaign_id, sub2api_user_id, source, card_tier,
+        subscription_group_id, amount, cards_earned, updated_at
+      FROM sub2api_shake_progress_legacy;
+
+      DROP TABLE sub2api_shake_progress_legacy;
+    `);
+  })();
+}
+
 function upsertSite(db, site, options = {}) {
   const existingSite = db.prepare("SELECT id, status FROM sites WHERE slug = ?").get(site.slug);
   if (existingSite) {
@@ -672,9 +747,10 @@ function createSchema(db) {
       config_version_id TEXT NOT NULL,
       source TEXT NOT NULL,
       card_tier TEXT NOT NULL DEFAULT 'low',
-      threshold REAL NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE(config_version_id, source)
+      threshold REAL,
+      subscription_group_id INTEGER,
+      card_quantity INTEGER,
+      created_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sub2api_shake_prizes (
@@ -705,6 +781,7 @@ function createSchema(db) {
       email TEXT,
       source TEXT NOT NULL,
       card_tier TEXT NOT NULL DEFAULT 'low',
+      subscription_group_id INTEGER,
       source_id TEXT NOT NULL,
       amount REAL NOT NULL,
       cards_granted INTEGER NOT NULL DEFAULT 0,
@@ -719,10 +796,10 @@ function createSchema(db) {
       sub2api_user_id TEXT NOT NULL,
       source TEXT NOT NULL,
       card_tier TEXT NOT NULL DEFAULT 'low',
+      subscription_group_id INTEGER,
       amount REAL NOT NULL DEFAULT 0,
       cards_earned INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL,
-      UNIQUE(campaign_id, sub2api_user_id, source)
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sub2api_shake_cards (
@@ -780,6 +857,7 @@ function createSchema(db) {
       connection_id TEXT NOT NULL,
       remote_usage_id TEXT NOT NULL,
       sub2api_user_id TEXT NOT NULL,
+      subscription_group_id INTEGER,
       actual_cost REAL NOT NULL,
       occurred_at TEXT NOT NULL,
       imported_at TEXT NOT NULL,
@@ -1683,11 +1761,18 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
   ensureColumn(db, "sub2api_shake_eligibility_rules", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_eligibility_rules", "subscription_group_id", "INTEGER");
+  ensureColumn(db, "sub2api_shake_eligibility_rules", "card_quantity", "INTEGER");
+  migrateShakeEligibilityRuleUniqueness(db);
   ensureColumn(db, "sub2api_shake_prizes", "low_weight", "REAL");
   ensureColumn(db, "sub2api_shake_prizes", "medium_weight", "REAL");
   ensureColumn(db, "sub2api_shake_prizes", "high_weight", "REAL");
   ensureColumn(db, "sub2api_shake_consumptions", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_consumptions", "subscription_group_id", "INTEGER");
   ensureColumn(db, "sub2api_shake_progress", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn(db, "sub2api_shake_progress", "subscription_group_id", "INTEGER");
+  migrateShakeProgressUniqueness(db);
+  ensureColumn(db, "sub2api_shake_usage_records", "subscription_group_id", "INTEGER");
   ensureColumn(db, "sub2api_shake_cards", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
   ensureColumn(db, "sub2api_shake_draws", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
   ensureColumn(db, "sub2api_shake_manual_grants", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
@@ -1764,6 +1849,19 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_status ON sub2api_subscription_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_campaigns_connection ON sub2api_shake_campaigns(connection_id, status, start_at, end_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_rules_version ON sub2api_shake_eligibility_rules(config_version_id, source);
+    DROP INDEX IF EXISTS idx_sub2api_shake_rules_group;
+    CREATE UNIQUE INDEX idx_sub2api_shake_rules_group
+      ON sub2api_shake_eligibility_rules(config_version_id, source, subscription_group_id)
+      WHERE subscription_group_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sub2api_shake_rules_single_source
+      ON sub2api_shake_eligibility_rules(config_version_id, source)
+      WHERE subscription_group_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sub2api_shake_progress_group
+      ON sub2api_shake_progress(campaign_id, sub2api_user_id, source, subscription_group_id)
+      WHERE subscription_group_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sub2api_shake_progress_single_source
+      ON sub2api_shake_progress(campaign_id, sub2api_user_id, source)
+      WHERE subscription_group_id IS NULL;
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_prizes_version ON sub2api_shake_prizes(config_version_id, status, sort_order);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_consumptions_user ON sub2api_shake_consumptions(campaign_id, sub2api_user_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_cards_user ON sub2api_shake_cards(campaign_id, sub2api_user_id, status, granted_at);

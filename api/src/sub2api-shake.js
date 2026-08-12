@@ -6,11 +6,31 @@ const RARITIES = ["common", "rare", "epic", "legendary"];
 const CARD_TIERS = ["low", "medium", "high"];
 const DEFAULT_CARD_TIER = "low";
 
-const eligibilityRulesSchema = z.array(z.object({
-  source: z.enum(SOURCES),
-  cardTier: z.enum(CARD_TIERS).optional().default(DEFAULT_CARD_TIER),
-  threshold: z.number().finite().positive()
-})).min(1);
+const cardTierSchema = z.enum(CARD_TIERS).optional().default(DEFAULT_CARD_TIER);
+const eligibilityRulesSchema = z.array(z.union([
+  z.object({
+    source: z.literal("subscription_purchase"),
+    subscriptionGroupId: z.number().int().positive(),
+    cardTier: cardTierSchema,
+    cardQuantity: z.number().int().min(1).max(100)
+  }),
+  z.object({
+    source: z.literal("subscription_purchase"),
+    cardTier: cardTierSchema,
+    threshold: z.number().finite().positive()
+  }),
+  z.object({
+    source: z.literal("balance_consumption"),
+    subscriptionGroupId: z.number().int().positive(),
+    cardTier: cardTierSchema,
+    threshold: z.number().finite().positive()
+  }),
+  z.object({
+    source: z.literal("balance_consumption"),
+    cardTier: cardTierSchema,
+    threshold: z.number().finite().positive()
+  })
+])).min(1);
 
 const prizeWeightsSchema = z.object({
   low: z.number().finite().nonnegative(),
@@ -31,8 +51,22 @@ const prizesSchema = z.array(z.object({
 })).min(1);
 
 function validateConfig(value, context) {
-  if (new Set(value.eligibilityRules.map((rule) => rule.source)).size !== value.eligibilityRules.length) {
-    context.addIssue({ code: "custom", path: ["eligibilityRules"], message: "同一消费来源只能配置一条规则" });
+  const subscriptionRules = value.eligibilityRules.filter((rule) => rule.source === "subscription_purchase");
+  const groupRules = subscriptionRules.filter((rule) => Number.isInteger(rule.subscriptionGroupId));
+  const legacyRules = subscriptionRules.filter((rule) => !Number.isInteger(rule.subscriptionGroupId));
+  if (new Set(groupRules.map((rule) => rule.subscriptionGroupId)).size !== groupRules.length) {
+    context.addIssue({ code: "custom", path: ["eligibilityRules"], message: "同一订阅分组 ID 只能配置一条发卡规则" });
+  }
+  if (legacyRules.length > 1 || (legacyRules.length && groupRules.length)) {
+    context.addIssue({ code: "custom", path: ["eligibilityRules"], message: "旧套餐金额规则不能与订阅分组发卡规则混用" });
+  }
+  const balanceRules = value.eligibilityRules.filter((rule) => rule.source === "balance_consumption");
+  const balanceGroupRules = balanceRules.filter((rule) => Number.isInteger(rule.subscriptionGroupId));
+  if (new Set(balanceGroupRules.map((rule) => rule.subscriptionGroupId)).size !== balanceGroupRules.length) {
+    context.addIssue({ code: "custom", path: ["eligibilityRules"], message: "同一订阅分组 ID 只能配置一条实际消耗规则" });
+  }
+  if (balanceRules.filter((rule) => !Number.isInteger(rule.subscriptionGroupId)).length > 1) {
+    context.addIssue({ code: "custom", path: ["eligibilityRules"], message: "全部余额实际消耗只能配置一条兜底规则" });
   }
   value.prizes.forEach((prize, index) => {
     if (prize.type === "balance" && !(Number(prize.amount) > 0)) {
@@ -94,6 +128,27 @@ const endCampaignSchema = z.object({
 
 function roundAmount(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100_000_000) / 100_000_000;
+}
+
+function serializeEligibilityRule(rule) {
+  const base = {
+    source: rule.source,
+    cardTier: rule.card_tier || DEFAULT_CARD_TIER
+  };
+  if (rule.source === "subscription_purchase" && rule.subscription_group_id !== null) {
+    return {
+      ...base,
+      subscriptionGroupId: Number(rule.subscription_group_id),
+      cardQuantity: Number(rule.card_quantity)
+    };
+  }
+  return {
+    ...base,
+    ...(rule.subscription_group_id === null
+      ? {}
+      : { subscriptionGroupId: Number(rule.subscription_group_id) }),
+    threshold: Number(rule.threshold)
+  };
 }
 
 function getPrizeWeights(prize) {
@@ -193,7 +248,8 @@ export function createSub2ApiShakeService({
         SELECT version FROM sub2api_shake_config_versions WHERE id = ?
       `).get(campaign.active_config_version_id);
       const rules = db.prepare(`
-        SELECT source, card_tier, threshold FROM sub2api_shake_eligibility_rules
+        SELECT source, card_tier, threshold, subscription_group_id, card_quantity
+        FROM sub2api_shake_eligibility_rules
         WHERE config_version_id = ? ORDER BY rowid ASC
       `).all(campaign.active_config_version_id);
       const prizes = db.prepare(`
@@ -219,11 +275,7 @@ export function createSub2ApiShakeService({
       return {
         ...serializeCampaign(campaign),
         configVersion: Number(version?.version || 0),
-        eligibilityRules: rules.map((rule) => ({
-          source: rule.source,
-          cardTier: rule.card_tier || DEFAULT_CARD_TIER,
-          threshold: Number(rule.threshold)
-        })),
+        eligibilityRules: rules.map(serializeEligibilityRule),
         prizes: prizes.map((prize) => serializePrize(prize, totalWeights)),
         cardTotals,
         cardTotalsByTier
@@ -270,11 +322,17 @@ export function createSub2ApiShakeService({
         VALUES (?, ?, 1, ?, ?)
       `).run(configVersionId, campaignId, actor, createdAt);
       const insertRule = db.prepare(`
-        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, card_tier, threshold, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO sub2api_shake_eligibility_rules (
+          id, config_version_id, source, card_tier, threshold,
+          subscription_group_id, card_quantity, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const rule of data.eligibilityRules) {
-        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.cardTier, rule.threshold, createdAt);
+        insertRule.run(
+          id("shake-rule"), configVersionId, rule.source, rule.cardTier,
+          rule.threshold ?? null, rule.subscriptionGroupId ?? null,
+          rule.cardQuantity ?? null, createdAt
+        );
       }
       const insertPrize = db.prepare(`
         INSERT INTO sub2api_shake_prizes (
@@ -364,11 +422,17 @@ export function createSub2ApiShakeService({
         VALUES (?, ?, ?, ?, ?)
       `).run(configVersionId, campaign.id, version, actor, createdAt);
       const insertRule = db.prepare(`
-        INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, card_tier, threshold, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO sub2api_shake_eligibility_rules (
+          id, config_version_id, source, card_tier, threshold,
+          subscription_group_id, card_quantity, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const rule of parsed.data.eligibilityRules) {
-        insertRule.run(id("shake-rule"), configVersionId, rule.source, rule.cardTier, rule.threshold, createdAt);
+        insertRule.run(
+          id("shake-rule"), configVersionId, rule.source, rule.cardTier,
+          rule.threshold ?? null, rule.subscriptionGroupId ?? null,
+          rule.cardQuantity ?? null, createdAt
+        );
       }
       const insertPrize = db.prepare(`
         INSERT INTO sub2api_shake_prizes (
@@ -459,35 +523,58 @@ export function createSub2ApiShakeService({
 
     const campaign = findActiveCampaign(input.connectionId, occurredAt);
     if (!campaign) return { cardsGranted: 0, accepted: false };
-    const rule = db.prepare(`
-      SELECT * FROM sub2api_shake_eligibility_rules
-      WHERE config_version_id = ? AND source = ?
-    `).get(campaign.active_config_version_id, source);
+    const subscriptionGroupId = Number(input.subscriptionGroupId);
+    let rule = null;
+    if (Number.isInteger(subscriptionGroupId) && subscriptionGroupId > 0) {
+      rule = db.prepare(`
+        SELECT * FROM sub2api_shake_eligibility_rules
+        WHERE config_version_id = ? AND source = ? AND subscription_group_id = ?
+      `).get(campaign.active_config_version_id, source, subscriptionGroupId);
+    }
+    const exactBalanceRuleRequired = source === "balance_consumption"
+      && Number.isInteger(subscriptionGroupId)
+      && subscriptionGroupId > 0;
+    if (!rule && !exactBalanceRuleRequired) {
+      rule = db.prepare(`
+        SELECT * FROM sub2api_shake_eligibility_rules
+        WHERE config_version_id = ? AND source = ? AND subscription_group_id IS NULL
+      `).get(campaign.active_config_version_id, source);
+    }
     if (!rule) return { cardsGranted: 0, accepted: false };
 
     const userId = String(input.userId);
     const cardTier = CARD_TIERS.includes(rule.card_tier) ? rule.card_tier : DEFAULT_CARD_TIER;
-    const progress = db.prepare(`
+    const directGrant = source === "subscription_purchase" && rule.subscription_group_id !== null;
+    const progress = directGrant ? null : db.prepare(`
       SELECT * FROM sub2api_shake_progress
       WHERE campaign_id = ? AND sub2api_user_id = ? AND source = ?
-    `).get(campaign.id, userId, source);
-    const accumulated = roundAmount(Number(progress?.amount || 0) + amount);
-    const cardsGranted = Math.floor((accumulated + 1e-9) / Number(rule.threshold));
-    const remainder = roundAmount(accumulated - (cardsGranted * Number(rule.threshold)));
+        AND subscription_group_id IS ?
+    `).get(campaign.id, userId, source, rule.subscription_group_id);
+    const accumulated = directGrant ? 0 : roundAmount(Number(progress?.amount || 0) + amount);
+    const cardsGranted = directGrant
+      ? Number(rule.card_quantity)
+      : Math.floor((accumulated + 1e-9) / Number(rule.threshold));
+    const remainder = directGrant
+      ? 0
+      : roundAmount(accumulated - (cardsGranted * Number(rule.threshold)));
     const consumptionId = id("shake-consumption");
     const createdAt = now();
     db.prepare(`
       INSERT INTO sub2api_shake_consumptions (
         id, connection_id, campaign_id, config_version_id, rule_id,
-        sub2api_user_id, email, source, card_tier, source_id, amount, cards_granted,
+        sub2api_user_id, email, source, card_tier, subscription_group_id,
+        source_id, amount, cards_granted,
         occurred_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       consumptionId, input.connectionId, campaign.id, campaign.active_config_version_id,
-      rule.id, userId, input.email || null, source, cardTier, input.sourceId, amount,
+      rule.id, userId, input.email || null, source, cardTier,
+      rule.subscription_group_id, input.sourceId, amount,
       cardsGranted, occurredAt, createdAt
     );
-    if (progress) {
+    if (directGrant) {
+      // Per-purchase group rules grant a fixed quantity and do not accumulate spend progress.
+    } else if (progress) {
       db.prepare(`
         UPDATE sub2api_shake_progress
         SET card_tier = ?, amount = ?, cards_earned = cards_earned + ?, updated_at = ?
@@ -496,9 +583,13 @@ export function createSub2ApiShakeService({
     } else {
       db.prepare(`
         INSERT INTO sub2api_shake_progress (
-          id, campaign_id, sub2api_user_id, source, card_tier, amount, cards_earned, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id("shake-progress"), campaign.id, userId, source, cardTier, remainder, cardsGranted, createdAt);
+          id, campaign_id, sub2api_user_id, source, card_tier,
+          subscription_group_id, amount, cards_earned, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id("shake-progress"), campaign.id, userId, source, cardTier,
+        rule.subscription_group_id, remainder, cardsGranted, createdAt
+      );
     }
     const insertCard = db.prepare(`
       INSERT INTO sub2api_shake_cards (
@@ -547,16 +638,31 @@ export function createSub2ApiShakeService({
       WHERE campaign_id = ? AND sub2api_user_id = ?
       ORDER BY created_at DESC LIMIT 50
     `).all(campaign.id, String(identity.userId));
-    const progressBySource = new Map(progressRows.map((row) => [row.source, row]));
+    const progressByRule = new Map(progressRows.map((row) => [
+      `${row.source}:${row.subscription_group_id ?? ""}`,
+      row
+    ]));
     return {
       campaign: serializeCampaign(campaign),
       availableCards,
       availableCardsByTier,
       progress: rules.map((rule) => {
-        const progress = progressBySource.get(rule.source);
+        if (rule.source === "subscription_purchase" && rule.subscription_group_id !== null) {
+          return {
+            source: rule.source,
+            mode: "per_purchase",
+            subscriptionGroupId: Number(rule.subscription_group_id),
+            cardTier: rule.card_tier || DEFAULT_CARD_TIER,
+            cardQuantity: Number(rule.card_quantity)
+          };
+        }
+        const progress = progressByRule.get(`${rule.source}:${rule.subscription_group_id ?? ""}`);
         const amount = Number(progress?.amount || 0);
         return {
           source: rule.source,
+          ...(rule.subscription_group_id === null
+            ? {}
+            : { subscriptionGroupId: Number(rule.subscription_group_id) }),
           cardTier: rule.card_tier || DEFAULT_CARD_TIER,
           threshold: Number(rule.threshold),
           amount,
@@ -802,19 +908,30 @@ export function createSub2ApiShakeService({
         `).get(connectionId, remoteId);
         if (seen) continue;
         const actualCost = Number(item.actual_cost);
+        const subscriptionId = Number(item.subscription_id);
+        const groupId = Number(item.group_id);
+        const subscriptionGroupId = Number.isInteger(subscriptionId) && subscriptionId > 0
+          && Number.isInteger(groupId) && groupId > 0
+          ? groupId
+          : null;
         const occurredAt = item.created_at || now();
         db.prepare(`
           INSERT INTO sub2api_shake_usage_records (
             id, connection_id, remote_usage_id, sub2api_user_id,
-            actual_cost, occurred_at, imported_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(id("shake-usage"), connectionId, remoteId, userId, Number.isFinite(actualCost) ? actualCost : 0, occurredAt, now());
+            subscription_group_id, actual_cost, occurred_at, imported_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          id("shake-usage"), connectionId, remoteId, userId,
+          subscriptionGroupId,
+          Number.isFinite(actualCost) ? actualCost : 0, occurredAt, now()
+        );
         if (Number.isFinite(actualCost) && actualCost > 0 && occurredAt >= campaign.start_at) {
           const result = recordConsumption({
             connectionId,
             userId,
             source: "balance_consumption",
             sourceId: `usage:${remoteId}`,
+            subscriptionGroupId,
             amount: actualCost,
             occurredAt
           });

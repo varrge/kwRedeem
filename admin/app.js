@@ -371,8 +371,10 @@ const refs = {
   shakeCampaignName: document.querySelector("#shake-campaign-name"),
   shakeCampaignStart: document.querySelector("#shake-campaign-start"),
   shakeCampaignEnd: document.querySelector("#shake-campaign-end"),
-  shakeSubscriptionThreshold: document.querySelector("#shake-subscription-threshold"),
-  shakeSubscriptionTier: document.querySelector("#shake-subscription-tier"),
+  shakeSubscriptionRuleEditor: document.querySelector("#shake-subscription-rule-editor"),
+  shakeAddSubscriptionRuleBtn: document.querySelector("#shake-add-subscription-rule-btn"),
+  shakeUsageRuleEditor: document.querySelector("#shake-usage-rule-editor"),
+  shakeAddUsageRuleBtn: document.querySelector("#shake-add-usage-rule-btn"),
   shakeBalanceThreshold: document.querySelector("#shake-balance-threshold"),
   shakeBalanceTier: document.querySelector("#shake-balance-tier"),
   shakePrizeEditor: document.querySelector("#shake-prize-editor"),
@@ -3963,6 +3965,54 @@ function collectShakePrizes() {
   });
 }
 
+function collectShakeSubscriptionRules() {
+  if (!refs.shakeSubscriptionRuleEditor) return [];
+  return Array.from(refs.shakeSubscriptionRuleEditor.querySelectorAll("[data-shake-subscription-rule-row]")).map((row) => ({
+    source: "subscription_purchase",
+    subscriptionGroupId: row.querySelector("[data-field=subscriptionGroupId]").value.trim(),
+    cardTier: row.querySelector("[data-field=cardTier]").value,
+    cardQuantity: row.querySelector("[data-field=cardQuantity]").value.trim()
+  }));
+}
+
+function renderShakeSubscriptionRuleEditor(rules = []) {
+  if (!refs.shakeSubscriptionRuleEditor) return;
+  refs.shakeSubscriptionRuleEditor.innerHTML = rules.map((rule, index) => `
+    <div class="shake-subscription-rule-row" data-shake-subscription-rule-row>
+      <label class="field"><span>订阅分组 ID</span><input data-field="subscriptionGroupId" type="number" min="1" step="1" value="${escapeHtml(rule.subscriptionGroupId ?? "")}" placeholder="例如 38" required /></label>
+      <label class="field"><span>获得卡种</span><select data-field="cardTier">
+        ${Object.entries(SHAKE_CARD_TIER_LABELS).map(([value, label]) => `<option value="${value}" ${rule.cardTier === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></label>
+      <label class="field"><span>每次购买发放张数</span><input data-field="cardQuantity" type="number" min="1" max="100" step="1" value="${escapeHtml(rule.cardQuantity ?? 1)}" required /></label>
+      <button type="button" class="icon-btn" data-remove-subscription-rule="${index}" title="删除规则" aria-label="删除规则">×</button>
+    </div>
+  `).join("");
+}
+
+function collectShakeUsageRules() {
+  if (!refs.shakeUsageRuleEditor) return [];
+  return Array.from(refs.shakeUsageRuleEditor.querySelectorAll("[data-shake-usage-rule-row]")).map((row) => ({
+    source: "balance_consumption",
+    subscriptionGroupId: row.querySelector("[data-field=usageSubscriptionGroupId]").value.trim(),
+    threshold: row.querySelector("[data-field=usageThreshold]").value.trim(),
+    cardTier: row.querySelector("[data-field=usageCardTier]").value
+  }));
+}
+
+function renderShakeUsageRuleEditor(rules = []) {
+  if (!refs.shakeUsageRuleEditor) return;
+  refs.shakeUsageRuleEditor.innerHTML = rules.map((rule, index) => `
+    <div class="shake-usage-rule-row" data-shake-usage-rule-row>
+      <label class="field"><span>订阅分组 ID</span><input data-field="usageSubscriptionGroupId" type="number" min="1" step="1" value="${escapeHtml(rule.subscriptionGroupId ?? "")}" placeholder="例如 38" required /></label>
+      <label class="field"><span>实际消耗金额 / 张</span><input data-field="usageThreshold" type="number" min="0.01" step="0.01" value="${escapeHtml(rule.threshold ?? "")}" placeholder="例如 120" required /></label>
+      <label class="field"><span>获得卡种</span><select data-field="usageCardTier">
+        ${Object.entries(SHAKE_CARD_TIER_LABELS).map(([value, label]) => `<option value="${value}" ${rule.cardTier === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></label>
+      <button type="button" class="icon-btn" data-remove-usage-rule="${index}" title="删除规则" aria-label="删除规则">×</button>
+    </div>
+  `).join("");
+}
+
 function renderShakePrizeEditor(prizes = []) {
   if (!refs.shakePrizeEditor) return;
   const items = prizes.length ? prizes : [{
@@ -3991,12 +4041,17 @@ function renderShakePrizeEditor(prizes = []) {
 }
 
 function collectShakeConfig() {
-  const eligibilityRules = [];
-  const subscriptionThreshold = Number(refs.shakeSubscriptionThreshold?.value);
+  const eligibilityRules = collectShakeSubscriptionRules().map((rule) => ({
+    ...rule,
+    subscriptionGroupId: Number(rule.subscriptionGroupId),
+    cardQuantity: Number(rule.cardQuantity)
+  }));
+  eligibilityRules.push(...collectShakeUsageRules().map((rule) => ({
+    ...rule,
+    subscriptionGroupId: Number(rule.subscriptionGroupId),
+    threshold: Number(rule.threshold)
+  })));
   const balanceThreshold = Number(refs.shakeBalanceThreshold?.value);
-  if (subscriptionThreshold > 0) eligibilityRules.push({
-    source: "subscription_purchase", cardTier: refs.shakeSubscriptionTier.value, threshold: subscriptionThreshold
-  });
   if (balanceThreshold > 0) eligibilityRules.push({
     source: "balance_consumption", cardTier: refs.shakeBalanceTier.value, threshold: balanceThreshold
   });
@@ -4035,6 +4090,8 @@ function resetShakeCampaignForm() {
   const end = new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
   refs.shakeCampaignStart.value = toDateTimeLocal(start);
   refs.shakeCampaignEnd.value = toDateTimeLocal(end);
+  renderShakeSubscriptionRuleEditor([]);
+  renderShakeUsageRuleEditor([]);
   renderShakePrizeEditor();
   updateShakeEmbedUrl();
 }
@@ -4048,10 +4105,23 @@ function editShakeCampaign(id) {
   refs.shakeCampaignStart.value = toDateTimeLocal(campaign.startAt);
   refs.shakeCampaignEnd.value = toDateTimeLocal(campaign.endAt);
   for (const element of [refs.shakeCampaignConnection, refs.shakeCampaignName, refs.shakeCampaignStart, refs.shakeCampaignEnd]) element.disabled = true;
-  refs.shakeSubscriptionThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "subscription_purchase")?.threshold || "";
-  refs.shakeSubscriptionTier.value = campaign.eligibilityRules.find((rule) => rule.source === "subscription_purchase")?.cardTier || "low";
-  refs.shakeBalanceThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "balance_consumption")?.threshold || "";
-  refs.shakeBalanceTier.value = campaign.eligibilityRules.find((rule) => rule.source === "balance_consumption")?.cardTier || "low";
+  renderShakeSubscriptionRuleEditor(campaign.eligibilityRules.filter((rule) => (
+    rule.source === "subscription_purchase" && rule.subscriptionGroupId
+  )));
+  renderShakeUsageRuleEditor(campaign.eligibilityRules.filter((rule) => (
+    rule.source === "balance_consumption" && rule.subscriptionGroupId
+  )));
+  const hasLegacySubscriptionRule = campaign.eligibilityRules.some((rule) => (
+    rule.source === "subscription_purchase" && !rule.subscriptionGroupId
+  ));
+  setHint(refs.shakeCampaignResult, hasLegacySubscriptionRule
+    ? "当前活动仍在使用旧版套餐金额规则。请添加订阅分组发卡规则后再发布新配置。"
+    : "");
+  const fallbackBalanceRule = campaign.eligibilityRules.find((rule) => (
+    rule.source === "balance_consumption" && !rule.subscriptionGroupId
+  ));
+  refs.shakeBalanceThreshold.value = fallbackBalanceRule?.threshold || "";
+  refs.shakeBalanceTier.value = fallbackBalanceRule?.cardTier || "low";
   renderShakePrizeEditor(campaign.prizes);
   refs.shakeCampaignFormTitle.textContent = `更新配置：${campaign.name}`;
   refs.shakeCampaignSubmitBtn.textContent = "发布新配置版本";
@@ -4089,7 +4159,15 @@ function renderShakeCampaigns() {
     { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.id)}</code>` },
     { label: "状态", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">配置 v${item.configVersion}</span>` },
     { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.startAt))}<br/>${escapeHtml(formatWorldCupTime(item.endAt))}</span>` },
-    { label: "获取条件", render: (item) => item.eligibilityRules.map((rule) => `${escapeHtml(SHAKE_SOURCE_LABELS[rule.source] || rule.source)}：${escapeHtml(rule.threshold)} → ${escapeHtml(SHAKE_CARD_TIER_LABELS[rule.cardTier] || rule.cardTier)}`).join("<br/>") },
+    { label: "获取条件", render: (item) => item.eligibilityRules.map((rule) => {
+      if (rule.source === "subscription_purchase" && rule.subscriptionGroupId) {
+        return `订阅分组 ${escapeHtml(rule.subscriptionGroupId)}：${escapeHtml(SHAKE_CARD_TIER_LABELS[rule.cardTier] || rule.cardTier)} × ${escapeHtml(rule.cardQuantity)}`;
+      }
+      if (rule.source === "balance_consumption" && rule.subscriptionGroupId) {
+        return `订阅分组 ${escapeHtml(rule.subscriptionGroupId)} 实际消耗：${escapeHtml(rule.threshold)} → ${escapeHtml(SHAKE_CARD_TIER_LABELS[rule.cardTier] || rule.cardTier)}`;
+      }
+      return `${escapeHtml(SHAKE_SOURCE_LABELS[rule.source] || rule.source)}：${escapeHtml(rule.threshold)} → ${escapeHtml(SHAKE_CARD_TIER_LABELS[rule.cardTier] || rule.cardTier)}`;
+    }).join("<br/>") },
     { label: "奖池", render: (item) => item.prizes.map((prize) => `${escapeHtml(prize.name)} <span class="hint">低 ${escapeHtml(prize.probabilities.low)}% · 中 ${escapeHtml(prize.probabilities.medium)}% · 高 ${escapeHtml(prize.probabilities.high)}%</span>`).join("<br/>") },
     { label: "卡片", render: (item) => Object.entries(SHAKE_CARD_TIER_LABELS).map(([tier, label]) => {
       const totals = item.cardTotalsByTier?.[tier] || { available: 0, consumed: 0 };
@@ -5631,6 +5709,38 @@ if (refs.shakePrizeEditor) {
     renderShakePrizeEditor(prizes);
   });
 }
+
+if (refs.shakeSubscriptionRuleEditor) {
+  refs.shakeSubscriptionRuleEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-subscription-rule]");
+    if (!button) return;
+    const rules = collectShakeSubscriptionRules();
+    rules.splice(Number(button.dataset.removeSubscriptionRule), 1);
+    renderShakeSubscriptionRuleEditor(rules);
+  });
+}
+
+refs.shakeAddSubscriptionRuleBtn?.addEventListener("click", () => {
+  renderShakeSubscriptionRuleEditor(collectShakeSubscriptionRules().concat({
+    subscriptionGroupId: "", cardTier: "low", cardQuantity: 1
+  }));
+});
+
+if (refs.shakeUsageRuleEditor) {
+  refs.shakeUsageRuleEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-usage-rule]");
+    if (!button) return;
+    const rules = collectShakeUsageRules();
+    rules.splice(Number(button.dataset.removeUsageRule), 1);
+    renderShakeUsageRuleEditor(rules);
+  });
+}
+
+refs.shakeAddUsageRuleBtn?.addEventListener("click", () => {
+  renderShakeUsageRuleEditor(collectShakeUsageRules().concat({
+    subscriptionGroupId: "", threshold: "", cardTier: "low"
+  }));
+});
 
 refs.shakeAddPrizeBtn?.addEventListener("click", () => {
   renderShakePrizeEditor(collectShakePrizes().concat({

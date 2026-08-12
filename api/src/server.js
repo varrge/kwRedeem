@@ -6488,6 +6488,7 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
         email: request.sub2api.email || "",
         source: "subscription_purchase",
         sourceId: `subscription-order:${orderId}`,
+        subscriptionGroupId: Number(plan.subscription_group_id),
         amount: Number(plan.price),
         occurredAt: updatedAt
       });

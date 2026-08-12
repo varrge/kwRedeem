@@ -45,6 +45,16 @@ legacy.exec(`
     consumed_at TEXT,
     expired_at TEXT
   );
+  CREATE TABLE sub2api_shake_progress (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    sub2api_user_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    amount REAL NOT NULL DEFAULT 0,
+    cards_earned INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    UNIQUE(campaign_id, sub2api_user_id, source)
+  );
 `);
 legacy.prepare(`
   INSERT INTO sub2api_shake_eligibility_rules (id, config_version_id, source, threshold, created_at)
@@ -72,14 +82,60 @@ after(() => {
 });
 
 test("legacy Shake cards, rules, and weights migrate to the low tier without changing odds", () => {
-  const rule = db.prepare("SELECT card_tier, threshold FROM sub2api_shake_eligibility_rules WHERE id = 'legacy-rule'").get();
+  const rule = db.prepare(`
+    SELECT card_tier, threshold, subscription_group_id, card_quantity
+    FROM sub2api_shake_eligibility_rules WHERE id = 'legacy-rule'
+  `).get();
   const prize = db.prepare(`
     SELECT weight, low_weight, medium_weight, high_weight
     FROM sub2api_shake_prizes WHERE id = 'legacy-prize'
   `).get();
   const card = db.prepare("SELECT card_tier, status FROM sub2api_shake_cards WHERE id = 'legacy-card'").get();
 
-  assert.deepEqual(rule, { card_tier: "low", threshold: 120 });
+  assert.deepEqual(rule, {
+    card_tier: "low", threshold: 120, subscription_group_id: null, card_quantity: null
+  });
   assert.deepEqual(prize, { weight: 7, low_weight: 7, medium_weight: 7, high_weight: 7 });
   assert.deepEqual(card, { card_tier: "low", status: "available" });
+});
+
+test("the migrated rule table accepts multiple subscription group mappings in one config", () => {
+  const insert = db.prepare(`
+    INSERT INTO sub2api_shake_eligibility_rules (
+      id, config_version_id, source, card_tier, threshold,
+      subscription_group_id, card_quantity, created_at
+    ) VALUES (?, 'new-config', 'subscription_purchase', ?, NULL, ?, ?, '2026-08-12T00:00:00.000Z')
+  `);
+  insert.run("group-rule-101", "low", 101, 1);
+  insert.run("group-rule-202", "high", 202, 3);
+
+  const rules = db.prepare(`
+    SELECT subscription_group_id, card_tier, card_quantity
+    FROM sub2api_shake_eligibility_rules
+    WHERE config_version_id = 'new-config'
+    ORDER BY subscription_group_id
+  `).all();
+  assert.deepEqual(rules, [
+    { subscription_group_id: 101, card_tier: "low", card_quantity: 1 },
+    { subscription_group_id: 202, card_tier: "high", card_quantity: 3 }
+  ]);
+});
+
+test("the migrated progress table keeps subscription group usage balances independent", () => {
+  const insert = db.prepare(`
+    INSERT INTO sub2api_shake_progress (
+      id, campaign_id, sub2api_user_id, source, card_tier,
+      subscription_group_id, amount, cards_earned, updated_at
+    ) VALUES (?, 'campaign', 'user', 'balance_consumption', ?, ?, ?, 0, '2026-08-12T00:00:00.000Z')
+  `);
+  insert.run("progress-101", "medium", 101, 1.25);
+  insert.run("progress-202", "high", 202, 2);
+
+  assert.deepEqual(db.prepare(`
+    SELECT subscription_group_id, card_tier, amount
+    FROM sub2api_shake_progress ORDER BY subscription_group_id
+  `).all(), [
+    { subscription_group_id: 101, card_tier: "medium", amount: 1.25 },
+    { subscription_group_id: 202, card_tier: "high", amount: 2 }
+  ]);
 });

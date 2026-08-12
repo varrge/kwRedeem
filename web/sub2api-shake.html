@@ -951,11 +951,20 @@
       }
 
       function renderProgress(progress) {
-        refs.progressSummary.textContent = progress.length ? `${progress.length} 种来源` : "暂无规则";
+        refs.progressSummary.textContent = progress.length ? `${progress.length} 条规则` : "暂无规则";
         refs.progressList.innerHTML = progress.length ? progress.map((item) => {
+          if (item.mode === "per_purchase") {
+            return `<div class="progress-row">
+              <strong>订阅分组 ${escapeHtml(item.subscriptionGroupId)} · ${escapeHtml(CARD_TIER_LABELS[item.cardTier] || item.cardTier)}</strong>
+              <span>每次购买获得 ${escapeHtml(item.cardQuantity)} 张</span>
+            </div>`;
+          }
           const ratio = Math.max(0, Math.min(100, Number(item.amount) / Number(item.threshold) * 100));
+          const sourceLabel = item.source === "balance_consumption" && item.subscriptionGroupId
+            ? `订阅分组 ${item.subscriptionGroupId} 实际消耗`
+            : (SOURCE_LABELS[item.source] || item.source);
           return `<div class="progress-row">
-              <strong>${escapeHtml(SOURCE_LABELS[item.source] || item.source)} · ${escapeHtml(CARD_TIER_LABELS[item.cardTier] || item.cardTier)}</strong>
+              <strong>${escapeHtml(sourceLabel)} · ${escapeHtml(CARD_TIER_LABELS[item.cardTier] || item.cardTier)}</strong>
             <div class="progress-bar"><i style="width:${ratio}%"></i></div>
             <span>${escapeHtml(item.amount)} / ${escapeHtml(item.threshold)}</span>
           </div>`;

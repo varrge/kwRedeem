@@ -387,6 +387,79 @@ test("usage sync grants cards from remote actual_cost once per stable usage ID",
   });
 });
 
+test("subscription group usage rules stay independent from non-subscription actual-cost progress", async () => {
+  const previousConfigVersionId = db.prepare(`
+    SELECT active_config_version_id FROM sub2api_shake_campaigns WHERE id = 'shake-campaign-1'
+  `).get().active_config_version_id;
+  const changed = await app.injectRoute("POST", "/api/admin/sub2api/shake/campaigns/:id/config", {
+    params: { id: "shake-campaign-1" },
+    body: {
+      eligibilityRules: [
+        { source: "subscription_purchase", threshold: 1000 },
+        { source: "balance_consumption", subscriptionGroupId: 101, cardTier: "medium", threshold: 2 },
+        { source: "balance_consumption", subscriptionGroupId: 202, cardTier: "high", threshold: 3 },
+        { source: "balance_consumption", cardTier: "low", threshold: 5 }
+      ],
+      prizes: [{ name: "谢谢参与", type: "empty", weight: 1, rarity: "common" }]
+    }
+  });
+  assert.equal(changed.statusCode, 201);
+
+  remoteUsageItems = [
+    { id: 906, user_id: 47, group_id: 101, subscription_id: 5001, actual_cost: 1.25, created_at: "2026-08-12T04:06:00.000Z" },
+    { id: 905, user_id: 47, group_id: 202, subscription_id: 5002, actual_cost: 2, created_at: "2026-08-12T04:05:00.000Z" },
+    { id: 904, user_id: 47, group_id: 101, subscription_id: 5001, actual_cost: 0.75, created_at: "2026-08-12T04:04:00.000Z" }
+  ];
+  const first = await app.injectRoute("POST", "/api/admin/sub2api/shake/connections/:id/sync-usage", {
+    params: { id: "sub-main" }
+  });
+  assert.deepEqual(first.body, { imported: 3, cardsGranted: 1, cursor: "906" });
+
+  remoteUsageItems = [
+    { id: 909, user_id: 47, group_id: 999, subscription_id: 5003, actual_cost: 5, created_at: "2026-08-12T04:09:00.000Z" },
+    { id: 908, user_id: 47, group_id: 202, subscription_id: 5002, actual_cost: 1, created_at: "2026-08-12T04:08:00.000Z" },
+    { id: 907, user_id: 47, group_id: 101, subscription_id: null, actual_cost: 5, created_at: "2026-08-12T04:07:00.000Z" }
+  ];
+  const second = await app.injectRoute("POST", "/api/admin/sub2api/shake/connections/:id/sync-usage", {
+    params: { id: "sub-main" }
+  });
+  assert.deepEqual(second.body, { imported: 3, cardsGranted: 2, cursor: "909" });
+
+  const bootstrap = await app.injectRoute("GET", "/api/public/sub2api/shake/bootstrap", {
+    sub2apiShake: { connectionId: "sub-main", userId: "47" }
+  });
+  assert.deepEqual(bootstrap.body.availableCardsByTier, { low: 1, medium: 1, high: 1 });
+  assert.deepEqual(bootstrap.body.progress.filter((item) => item.source === "balance_consumption"), [
+    {
+      source: "balance_consumption", subscriptionGroupId: 101, cardTier: "medium",
+      threshold: 2, amount: 0, remaining: 2, cardsEarned: 1
+    },
+    {
+      source: "balance_consumption", subscriptionGroupId: 202, cardTier: "high",
+      threshold: 3, amount: 0, remaining: 3, cardsEarned: 1
+    },
+    {
+      source: "balance_consumption", cardTier: "low",
+      threshold: 5, amount: 0, remaining: 5, cardsEarned: 1
+    }
+  ]);
+
+  const testConfigVersionId = db.prepare(`
+    SELECT active_config_version_id FROM sub2api_shake_campaigns WHERE id = 'shake-campaign-1'
+  `).get().active_config_version_id;
+  db.transaction(() => {
+    db.prepare("DELETE FROM sub2api_shake_cards WHERE campaign_id = 'shake-campaign-1' AND sub2api_user_id = '47'").run();
+    db.prepare("DELETE FROM sub2api_shake_consumptions WHERE campaign_id = 'shake-campaign-1' AND sub2api_user_id = '47'").run();
+    db.prepare("DELETE FROM sub2api_shake_progress WHERE campaign_id = 'shake-campaign-1' AND sub2api_user_id = '47'").run();
+    db.prepare("DELETE FROM sub2api_shake_usage_records WHERE remote_usage_id IN ('904', '905', '906', '907', '908', '909')").run();
+    db.prepare("UPDATE sub2api_shake_usage_sync SET cursor = '903' WHERE connection_id = 'sub-main'").run();
+    db.prepare("UPDATE sub2api_shake_campaigns SET active_config_version_id = ? WHERE id = 'shake-campaign-1'").run(previousConfigVersionId);
+    db.prepare("DELETE FROM sub2api_shake_eligibility_rules WHERE config_version_id = ?").run(testConfigVersionId);
+    db.prepare("DELETE FROM sub2api_shake_prizes WHERE config_version_id = ?").run(testConfigVersionId);
+    db.prepare("DELETE FROM sub2api_shake_config_versions WHERE id = ?").run(testConfigVersionId);
+  })();
+});
+
 test("an audited manual grant adds campaign-bound Shake Cards for one player", async () => {
   const granted = await app.injectRoute("POST", "/api/admin/sub2api/shake/cards/grant", {
     body: {
@@ -653,4 +726,82 @@ test("an extra draw returns a card of the tier that was consumed", async () => {
   assert.equal(drawn.body.draw.cardTier, "medium");
   assert.equal(drawn.body.draw.prize.type, "extra_draw");
   assert.deepEqual(drawn.body.availableCardsByTier, { low: 0, medium: 1, high: 0 });
+});
+
+test("subscription group rules grant the configured card tier and quantity once per order", async () => {
+  const campaignId = db.prepare("SELECT id FROM sub2api_shake_campaigns WHERE name = ?").get("分级抽奖卡活动").id;
+  const changed = await app.injectRoute("POST", "/api/admin/sub2api/shake/campaigns/:id/config", {
+    params: { id: campaignId },
+    body: {
+      eligibilityRules: [
+        { source: "subscription_purchase", subscriptionGroupId: 101, cardTier: "low", cardQuantity: 1 },
+        { source: "subscription_purchase", subscriptionGroupId: 202, cardTier: "high", cardQuantity: 3 },
+        { source: "balance_consumption", cardTier: "medium", threshold: 10 }
+      ],
+      prizes: [{
+        name: "分组规则测试奖品", type: "empty", rarity: "common",
+        weights: { low: 1, medium: 1, high: 1 }
+      }]
+    }
+  });
+  assert.equal(changed.statusCode, 201);
+
+  const highCards = shake.recordConsumption({
+    connectionId: "sub-main",
+    userId: "group-rule-user",
+    source: "subscription_purchase",
+    sourceId: "subscription-order-group-202",
+    subscriptionGroupId: 202,
+    amount: 1,
+    occurredAt: currentNow
+  });
+  assert.deepEqual(highCards, { cardsGranted: 3, cardTier: "high", duplicate: false });
+
+  const lowCards = shake.recordConsumption({
+    connectionId: "sub-main",
+    userId: "group-rule-user",
+    source: "subscription_purchase",
+    sourceId: "subscription-order-group-101",
+    subscriptionGroupId: 101,
+    amount: 9999,
+    occurredAt: currentNow
+  });
+  assert.deepEqual(lowCards, { cardsGranted: 1, cardTier: "low", duplicate: false });
+
+  const ignored = shake.recordConsumption({
+    connectionId: "sub-main",
+    userId: "group-rule-user",
+    source: "subscription_purchase",
+    sourceId: "subscription-order-group-999",
+    subscriptionGroupId: 999,
+    amount: 9999,
+    occurredAt: currentNow
+  });
+  assert.deepEqual(ignored, { cardsGranted: 0, accepted: false });
+
+  const replayed = shake.recordConsumption({
+    connectionId: "sub-main",
+    userId: "group-rule-user",
+    source: "subscription_purchase",
+    sourceId: "subscription-order-group-202",
+    subscriptionGroupId: 202,
+    amount: 1,
+    occurredAt: currentNow
+  });
+  assert.deepEqual(replayed, { cardsGranted: 0, duplicate: true });
+
+  const bootstrap = await app.injectRoute("GET", "/api/public/sub2api/shake/bootstrap", {
+    sub2apiShake: { connectionId: "sub-main", userId: "group-rule-user" }
+  });
+  assert.deepEqual(bootstrap.body.availableCardsByTier, { low: 1, medium: 0, high: 3 });
+  assert.deepEqual(bootstrap.body.progress.slice(0, 2), [
+    {
+      source: "subscription_purchase", mode: "per_purchase", subscriptionGroupId: 101,
+      cardTier: "low", cardQuantity: 1
+    },
+    {
+      source: "subscription_purchase", mode: "per_purchase", subscriptionGroupId: 202,
+      cardTier: "high", cardQuantity: 3
+    }
+  ]);
 });

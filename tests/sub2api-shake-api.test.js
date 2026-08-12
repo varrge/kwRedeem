@@ -50,7 +50,10 @@ test("the production server exposes authenticated Shake campaign administration 
       name: "生产路由摇摇乐",
       startAt: "2026-01-01T00:00:00.000Z",
       endAt: "2026-12-31T23:59:59.000Z",
-      eligibilityRules: [{ source: "subscription_purchase", threshold: 2000 }],
+      eligibilityRules: [
+        { source: "subscription_purchase", subscriptionGroupId: 38, cardTier: "low", cardQuantity: 1 },
+        { source: "subscription_purchase", subscriptionGroupId: 88, cardTier: "high", cardQuantity: 3 }
+      ],
       prizes: [{ name: "谢谢参与", type: "empty", weight: 1, rarity: "common" }]
     }
   });
@@ -80,6 +83,16 @@ test("the production server exposes authenticated Shake campaign administration 
   assert.equal(bootstrap.statusCode, 200);
   assert.equal(bootstrap.json().campaign.name, "生产路由摇摇乐");
   assert.equal(bootstrap.json().availableCards, 0);
+  assert.deepEqual(bootstrap.json().progress, [
+    {
+      source: "subscription_purchase", mode: "per_purchase", subscriptionGroupId: 38,
+      cardTier: "low", cardQuantity: 1
+    },
+    {
+      source: "subscription_purchase", mode: "per_purchase", subscriptionGroupId: 88,
+      cardTier: "high", cardQuantity: 3
+    }
+  ]);
 
   const sso = jwt.sign({
     connectionId,

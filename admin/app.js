@@ -364,6 +364,42 @@ const refs = {
   sub2apiConnectionRefreshBtn: document.querySelector("#sub2api-connection-refresh-btn"),
   sub2apiConnectionResult: document.querySelector("#sub2api-connection-result"),
   sub2apiConnectionList: document.querySelector("#sub2api-connection-list"),
+  shakeCampaignForm: document.querySelector("#shake-campaign-form"),
+  shakeCampaignFormTitle: document.querySelector("#shake-campaign-form-title"),
+  shakeCampaignEditId: document.querySelector("#shake-campaign-edit-id"),
+  shakeCampaignConnection: document.querySelector("#shake-campaign-connection"),
+  shakeCampaignName: document.querySelector("#shake-campaign-name"),
+  shakeCampaignStart: document.querySelector("#shake-campaign-start"),
+  shakeCampaignEnd: document.querySelector("#shake-campaign-end"),
+  shakeSubscriptionThreshold: document.querySelector("#shake-subscription-threshold"),
+  shakeBalanceThreshold: document.querySelector("#shake-balance-threshold"),
+  shakePrizeEditor: document.querySelector("#shake-prize-editor"),
+  shakeAddPrizeBtn: document.querySelector("#shake-add-prize-btn"),
+  shakeCampaignSubmitBtn: document.querySelector("#shake-campaign-submit-btn"),
+  shakeCampaignResetBtn: document.querySelector("#shake-campaign-reset-btn"),
+  shakeCampaignResult: document.querySelector("#shake-campaign-result"),
+  shakeCampaignFilter: document.querySelector("#shake-campaign-filter"),
+  shakeCampaignRefreshBtn: document.querySelector("#shake-campaign-refresh-btn"),
+  shakeCampaignList: document.querySelector("#shake-campaign-list"),
+  shakeEmbedUrl: document.querySelector("#shake-embed-url"),
+  shakeCopyEmbedBtn: document.querySelector("#shake-copy-embed-btn"),
+  shakePreviewLink: document.querySelector("#shake-preview-link"),
+  shakeEmbedResult: document.querySelector("#shake-embed-result"),
+  shakeSyncConnection: document.querySelector("#shake-sync-connection"),
+  shakeSyncUsageBtn: document.querySelector("#shake-sync-usage-btn"),
+  shakeSyncResult: document.querySelector("#shake-sync-result"),
+  shakeManualGrantForm: document.querySelector("#shake-manual-grant-form"),
+  shakeGrantCampaign: document.querySelector("#shake-grant-campaign"),
+  shakeGrantUser: document.querySelector("#shake-grant-user"),
+  shakeGrantQuantity: document.querySelector("#shake-grant-quantity"),
+  shakeGrantEmail: document.querySelector("#shake-grant-email"),
+  shakeGrantReason: document.querySelector("#shake-grant-reason"),
+  shakeGrantResult: document.querySelector("#shake-grant-result"),
+  shakeDrawStatusFilter: document.querySelector("#shake-draw-status-filter"),
+  shakeDrawUserFilter: document.querySelector("#shake-draw-user-filter"),
+  shakeDrawRefreshBtn: document.querySelector("#shake-draw-refresh-btn"),
+  shakeDrawList: document.querySelector("#shake-draw-list"),
+  shakeDrawResult: document.querySelector("#shake-draw-result"),
   sub2apiUpstreamMonitorConnection: document.querySelector("#sub2api-upstream-monitor-connection"),
   sub2apiUpstreamMonitorRefreshBtn: document.querySelector("#sub2api-upstream-monitor-refresh-btn"),
   sub2apiUpstreamMonitorList: document.querySelector("#sub2api-upstream-monitor-list"),
@@ -484,6 +520,7 @@ const quotaSubCardState = {
   total: 0
 };
 let sub2apiConnectionsCache = [];
+let shakeCampaignsCache = [];
 let sub2apiInvitesCache = [];
 let sub2apiRebatesCache = [];
 let sub2apiLevelsCache = [];
@@ -590,6 +627,9 @@ function membershipAdminError(error) {
 
 const STATUS_LABELS = {
   active: "启用",
+  draft: "草稿",
+  scheduled: "待开始",
+  ended: "已结束",
   disabled: "禁用",
   deleted: "已删除",
   pending: "待处理",
@@ -597,6 +637,10 @@ const STATUS_LABELS = {
   processing: "处理中",
   succeeded: "已成功",
   failed: "失败",
+  selected: "待发放",
+  delivered: "已发放",
+  delivery_failed: "发放失败",
+  voided: "已作废",
   expired: "已过期",
   retrying: "重试中",
   refund_pending: "退款锁定中",
@@ -910,6 +954,9 @@ function switchTab(tabName) {
   }
   if (tabName === "sub2api" && getToken()) {
     refreshSub2ApiConsole().catch(() => {});
+  }
+  if (tabName === "sub2api-shake" && getToken()) {
+    refreshShakeConsole().catch((error) => setHint(refs.shakeCampaignResult, error.message));
   }
   if (tabName === "store-fulfillment" && getToken()) {
     refreshStoreFulfillmentConsole().catch((error) => setHint(refs.storeTaskResult, error.message));
@@ -3863,6 +3910,288 @@ window.viewQuotaSubCardDetail = viewQuotaSubCardDetail;
 window.cancelQuotaSubCard = cancelQuotaSubCard;
 window.unlockQuotaSubCard = unlockQuotaSubCard;
 
+const SHAKE_SOURCE_LABELS = {
+  subscription_purchase: "本站套餐购买",
+  balance_consumption: "余额实际消耗"
+};
+const SHAKE_PRIZE_TYPE_LABELS = {
+  balance: "余额",
+  extra_draw: "再抽一次",
+  empty: "谢谢参与"
+};
+const SHAKE_RARITY_LABELS = {
+  common: "普通",
+  rare: "稀有",
+  epic: "史诗",
+  legendary: "传说"
+};
+
+function toDateTimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function collectShakePrizes() {
+  if (!refs.shakePrizeEditor) return [];
+  return Array.from(refs.shakePrizeEditor.querySelectorAll("[data-shake-prize-row]")).map((row, index) => {
+    const type = row.querySelector("[data-field=type]").value;
+    return {
+      name: row.querySelector("[data-field=name]").value.trim(),
+      type,
+      amount: type === "balance" ? Number(row.querySelector("[data-field=amount]").value) : undefined,
+      weight: Number(row.querySelector("[data-field=weight]").value),
+      rarity: row.querySelector("[data-field=rarity]").value,
+      displayText: row.querySelector("[data-field=displayText]").value.trim(),
+      icon: row.querySelector("[data-field=icon]").value.trim(),
+      sortOrder: (index + 1) * 10
+    };
+  });
+}
+
+function renderShakePrizeEditor(prizes = []) {
+  if (!refs.shakePrizeEditor) return;
+  const items = prizes.length ? prizes : [{
+    name: "谢谢参与", type: "empty", amount: null, weight: 1,
+    rarity: "common", displayText: "", icon: ""
+  }];
+  refs.shakePrizeEditor.innerHTML = items.map((prize, index) => `
+    <div class="shake-prize-row" data-shake-prize-row>
+      <label class="field"><span>名称</span><input data-field="name" maxlength="100" value="${escapeHtml(prize.name || "")}" required /></label>
+      <label class="field"><span>类型</span><select data-field="type">
+        ${Object.entries(SHAKE_PRIZE_TYPE_LABELS).map(([value, label]) => `<option value="${value}" ${prize.type === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></label>
+      <label class="field"><span>金额</span><input data-field="amount" type="number" min="0.00000001" step="0.01" value="${prize.amount ?? ""}" ${prize.type === "balance" ? "" : "disabled"} /></label>
+      <label class="field"><span>权重</span><input data-field="weight" type="number" min="0.00000001" step="0.01" value="${prize.weight ?? 1}" required /></label>
+      <label class="field"><span>稀有度</span><select data-field="rarity">
+        ${Object.entries(SHAKE_RARITY_LABELS).map(([value, label]) => `<option value="${value}" ${prize.rarity === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></label>
+      <label class="field"><span>展示文案</span><input data-field="displayText" maxlength="200" value="${escapeHtml(prize.displayText || "")}" /></label>
+      <label class="field"><span>图标 URL / 字符</span><input data-field="icon" maxlength="500" value="${escapeHtml(prize.icon || "")}" /></label>
+      <button type="button" class="icon-btn shake-remove-prize" data-remove-prize="${index}" title="删除奖品" aria-label="删除奖品">×</button>
+    </div>
+  `).join("");
+}
+
+function collectShakeConfig() {
+  const eligibilityRules = [];
+  const subscriptionThreshold = Number(refs.shakeSubscriptionThreshold?.value);
+  const balanceThreshold = Number(refs.shakeBalanceThreshold?.value);
+  if (subscriptionThreshold > 0) eligibilityRules.push({ source: "subscription_purchase", threshold: subscriptionThreshold });
+  if (balanceThreshold > 0) eligibilityRules.push({ source: "balance_consumption", threshold: balanceThreshold });
+  if (!eligibilityRules.length) throw new Error("至少启用一条摇摇卡获取规则");
+  const prizes = collectShakePrizes();
+  if (!prizes.length) throw new Error("至少配置一个奖品");
+  return { eligibilityRules, prizes };
+}
+
+function updateShakeEmbedUrl() {
+  if (!refs.shakeEmbedUrl) return;
+  const connectionId = refs.shakeCampaignConnection?.value || refs.shakeCampaignFilter?.value || sub2apiConnectionsCache[0]?.id || "";
+  const appUrl = String(globalThis.KAWANG_CONFIG?.appUrl || "").trim();
+  const url = new URL("sub2api-shake.html", appUrl ? `${appUrl.replace(/\/+$/, "")}/` : window.location.href);
+  if (connectionId) url.searchParams.set("connectionId", connectionId);
+  refs.shakeEmbedUrl.value = url.href;
+  if (refs.shakePreviewLink) refs.shakePreviewLink.href = url.href;
+}
+
+function resetShakeCampaignForm() {
+  if (!refs.shakeCampaignForm) return;
+  refs.shakeCampaignForm.reset();
+  refs.shakeCampaignEditId.value = "";
+  refs.shakeCampaignFormTitle.textContent = "创建活动";
+  refs.shakeCampaignSubmitBtn.textContent = "创建活动";
+  refs.shakeCampaignResetBtn.classList.add("hidden");
+  for (const element of [refs.shakeCampaignConnection, refs.shakeCampaignName, refs.shakeCampaignStart, refs.shakeCampaignEnd]) element.disabled = false;
+  if (sub2apiConnectionsCache.length === 1) refs.shakeCampaignConnection.value = sub2apiConnectionsCache[0].id;
+  const start = new Date();
+  const end = new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
+  refs.shakeCampaignStart.value = toDateTimeLocal(start);
+  refs.shakeCampaignEnd.value = toDateTimeLocal(end);
+  renderShakePrizeEditor();
+  updateShakeEmbedUrl();
+}
+
+function editShakeCampaign(id) {
+  const campaign = shakeCampaignsCache.find((item) => item.id === id);
+  if (!campaign) return;
+  refs.shakeCampaignEditId.value = campaign.id;
+  refs.shakeCampaignConnection.value = campaign.connectionId;
+  refs.shakeCampaignName.value = campaign.name;
+  refs.shakeCampaignStart.value = toDateTimeLocal(campaign.startAt);
+  refs.shakeCampaignEnd.value = toDateTimeLocal(campaign.endAt);
+  for (const element of [refs.shakeCampaignConnection, refs.shakeCampaignName, refs.shakeCampaignStart, refs.shakeCampaignEnd]) element.disabled = true;
+  refs.shakeSubscriptionThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "subscription_purchase")?.threshold || "";
+  refs.shakeBalanceThreshold.value = campaign.eligibilityRules.find((rule) => rule.source === "balance_consumption")?.threshold || "";
+  renderShakePrizeEditor(campaign.prizes);
+  refs.shakeCampaignFormTitle.textContent = `更新配置：${campaign.name}`;
+  refs.shakeCampaignSubmitBtn.textContent = "发布新配置版本";
+  refs.shakeCampaignResetBtn.classList.remove("hidden");
+  refs.shakeCampaignForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveShakeCampaign() {
+  try {
+    const config = collectShakeConfig();
+    const editId = refs.shakeCampaignEditId.value;
+    const path = editId
+      ? `/api/admin/sub2api/shake/campaigns/${encodeURIComponent(editId)}/config`
+      : "/api/admin/sub2api/shake/campaigns";
+    const body = editId ? config : {
+      ...config,
+      connectionId: refs.shakeCampaignConnection.value,
+      name: refs.shakeCampaignName.value.trim(),
+      startAt: new Date(refs.shakeCampaignStart.value).toISOString(),
+      endAt: new Date(refs.shakeCampaignEnd.value).toISOString()
+    };
+    setHint(refs.shakeCampaignResult, editId ? "正在发布配置..." : "正在创建活动...");
+    await api(path, { method: "POST", body: JSON.stringify(body) });
+    setHint(refs.shakeCampaignResult, editId ? "新配置版本已生效" : "活动已创建，启用后对用户开放");
+    resetShakeCampaignForm();
+    await refreshShakeCampaigns();
+  } catch (error) {
+    setHint(refs.shakeCampaignResult, `保存失败：${error.message}`);
+  }
+}
+
+function renderShakeCampaigns() {
+  if (!refs.shakeCampaignList) return;
+  renderTable(refs.shakeCampaignList, [
+    { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.id)}</code>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">配置 v${item.configVersion}</span>` },
+    { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.startAt))}<br/>${escapeHtml(formatWorldCupTime(item.endAt))}</span>` },
+    { label: "获取条件", render: (item) => item.eligibilityRules.map((rule) => `${escapeHtml(SHAKE_SOURCE_LABELS[rule.source] || rule.source)}：${escapeHtml(rule.threshold)}`).join("<br/>") },
+    { label: "奖池", render: (item) => item.prizes.map((prize) => `${escapeHtml(prize.name)} <span class="hint">${escapeHtml(prize.probability)}%</span>`).join("<br/>") },
+    { label: "卡片", render: (item) => `可用 ${item.cardTotals.available}<br/><span class="hint">已用 ${item.cardTotals.consumed} · 预留 ${item.cardTotals.reserved} · 过期 ${item.cardTotals.expired}</span>` },
+    { label: "操作", render: (item) => `
+      ${item.status !== "ended" ? `<button class="ghost-btn small" type="button" onclick="editShakeCampaign('${escapeHtml(item.id)}')">配置</button>` : ""}
+      ${["draft", "scheduled"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick="activateShakeCampaign('${escapeHtml(item.id)}')">启用</button>` : ""}
+      ${item.status !== "ended" ? `<button class="ghost-btn small" type="button" style="color:var(--error)" onclick="endShakeCampaign('${escapeHtml(item.id)}')">结束</button>` : ""}
+    ` }
+  ], shakeCampaignsCache, "暂无摇摇乐活动");
+}
+
+async function refreshShakeCampaigns() {
+  const params = new URLSearchParams();
+  if (refs.shakeCampaignFilter?.value) params.set("connectionId", refs.shakeCampaignFilter.value);
+  const payload = await api(`/api/admin/sub2api/shake/campaigns${params.size ? `?${params}` : ""}`);
+  shakeCampaignsCache = payload.items || [];
+  renderShakeCampaigns();
+  if (refs.shakeGrantCampaign) {
+    const current = refs.shakeGrantCampaign.value;
+    refs.shakeGrantCampaign.innerHTML = `<option value="">选择活动</option>${shakeCampaignsCache.filter((item) => item.status !== "ended").map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}`;
+    if (shakeCampaignsCache.some((item) => item.id === current)) refs.shakeGrantCampaign.value = current;
+  }
+  updateShakeEmbedUrl();
+}
+
+async function activateShakeCampaign(id) {
+  if (!window.confirm("确认启用该活动？同一连接只能有一个进行中的活动。")) return;
+  try {
+    await api(`/api/admin/sub2api/shake/campaigns/${encodeURIComponent(id)}/activate`, { method: "POST", body: "{}" });
+    setHint(refs.shakeCampaignResult, "活动已启用");
+    await refreshShakeCampaigns();
+  } catch (error) {
+    setHint(refs.shakeCampaignResult, `启用失败：${error.message}`);
+  }
+}
+
+async function endShakeCampaign(id) {
+  const reason = window.prompt("请输入结束原因。未使用的摇摇卡会立即过期：");
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/sub2api/shake/campaigns/${encodeURIComponent(id)}/end`, {
+      method: "POST", body: JSON.stringify({ reason })
+    });
+    setHint(refs.shakeCampaignResult, `活动已结束，${payload.expiredCards} 张未使用摇摇卡已过期`);
+    await refreshShakeCampaigns();
+  } catch (error) {
+    setHint(refs.shakeCampaignResult, `结束失败：${error.message}`);
+  }
+}
+
+async function syncShakeUsage() {
+  const connectionId = refs.shakeSyncConnection.value;
+  if (!connectionId) return setHint(refs.shakeSyncResult, "请选择 Sub2api 连接");
+  setButtonBusy(refs.shakeSyncUsageBtn, true, "同步中...");
+  try {
+    const result = await api(`/api/admin/sub2api/shake/connections/${encodeURIComponent(connectionId)}/sync-usage`, { method: "POST", body: "{}" });
+    setHint(refs.shakeSyncResult, `导入 ${result.imported} 条实际消耗，新增 ${result.cardsGranted} 张摇摇卡`);
+    await refreshShakeCampaigns();
+  } catch (error) {
+    setHint(refs.shakeSyncResult, `同步失败：${error.message}`);
+  } finally {
+    setButtonBusy(refs.shakeSyncUsageBtn, false);
+  }
+}
+
+async function grantShakeCards() {
+  try {
+    const payload = await api("/api/admin/sub2api/shake/cards/grant", {
+      method: "POST",
+      body: JSON.stringify({
+        campaignId: refs.shakeGrantCampaign.value,
+        userId: refs.shakeGrantUser.value.trim(),
+        email: refs.shakeGrantEmail.value.trim() || undefined,
+        quantity: Number(refs.shakeGrantQuantity.value),
+        reason: refs.shakeGrantReason.value.trim()
+      })
+    });
+    setHint(refs.shakeGrantResult, `已补发 ${payload.granted} 张摇摇卡`);
+    refs.shakeManualGrantForm.reset();
+    refs.shakeGrantQuantity.value = "1";
+    await refreshShakeCampaigns();
+  } catch (error) {
+    setHint(refs.shakeGrantResult, `补发失败：${error.message}`);
+  }
+}
+
+async function refreshShakeDraws() {
+  if (!refs.shakeDrawList) return;
+  const params = new URLSearchParams();
+  if (refs.shakeDrawStatusFilter.value) params.set("status", refs.shakeDrawStatusFilter.value);
+  if (refs.shakeDrawUserFilter.value.trim()) params.set("userId", refs.shakeDrawUserFilter.value.trim());
+  const payload = await api(`/api/admin/sub2api/shake/draws?${params}`);
+  renderTable(refs.shakeDrawList, [
+    { label: "时间", render: (item) => escapeHtml(formatWorldCupTime(item.createdAt)) },
+    { label: "用户", render: (item) => `<code>${escapeHtml(item.userId)}</code>${item.email ? `<br/><span class="hint">${escapeHtml(item.email)}</span>` : ""}` },
+    { label: "奖品", render: (item) => `<strong>${escapeHtml(item.prize.name)}</strong><br/><span class="hint">${escapeHtml(SHAKE_RARITY_LABELS[item.prize.rarity] || item.prize.rarity)}</span>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}${item.errorMessage ? `<br/><span class="hint">${escapeHtml(item.errorMessage)}</span>` : ""}` },
+    { label: "操作", render: (item) => item.status === "delivery_failed" ? `
+      <button class="primary-btn small" type="button" onclick="dispositionShakeDraw('${escapeHtml(item.id)}','retry')">重试</button>
+      <button class="ghost-btn small" type="button" onclick="dispositionShakeDraw('${escapeHtml(item.id)}','confirm')">确认到账</button>
+      <button class="ghost-btn small" type="button" style="color:var(--error)" onclick="dispositionShakeDraw('${escapeHtml(item.id)}','void')">作废</button>
+    ` : escapeHtml(item.dispositionReason || "-") }
+  ], payload.items || [], "暂无抽奖记录");
+}
+
+async function dispositionShakeDraw(id, action) {
+  const label = { retry: "重试发放", confirm: "确认到账", void: "作废" }[action];
+  const reason = window.prompt(`请输入“${label}”的处置原因：`);
+  if (!reason) return;
+  try {
+    const payload = await api(`/api/admin/sub2api/shake/draws/${encodeURIComponent(id)}/disposition`, {
+      method: "POST", body: JSON.stringify({ action, reason })
+    });
+    setHint(refs.shakeDrawResult, `${label}完成，当前状态：${getStatusLabel(payload.draw.status)}`);
+    await Promise.all([refreshShakeDraws(), refreshShakeCampaigns()]);
+  } catch (error) {
+    setHint(refs.shakeDrawResult, `${label}失败：${error.message}`);
+  }
+}
+
+async function refreshShakeConsole() {
+  if (!sub2apiConnectionsCache.length) await refreshSub2ApiConnections();
+  await Promise.all([refreshShakeCampaigns(), refreshShakeDraws()]);
+}
+
+window.editShakeCampaign = editShakeCampaign;
+window.activateShakeCampaign = activateShakeCampaign;
+window.endShakeCampaign = endShakeCampaign;
+window.dispositionShakeDraw = dispositionShakeDraw;
+
 function resetSub2ApiConnectionForm() {
   if (!refs.sub2apiConnectionForm) return;
   refs.sub2apiConnectionForm.reset();
@@ -3962,6 +4291,23 @@ function populateSub2ApiConnectionFilter() {
       refs.sub2apiModelRouteConnection.value = sub2apiConnectionsCache[0].id;
     }
   }
+
+  for (const select of [refs.shakeCampaignConnection, refs.shakeSyncConnection]) {
+    if (!select) continue;
+    const current = select.value;
+    select.innerHTML = formOptions;
+    if (sub2apiConnectionsCache.some((item) => item.id === current)) {
+      select.value = current;
+    } else if (sub2apiConnectionsCache.length === 1) {
+      select.value = sub2apiConnectionsCache[0].id;
+    }
+  }
+  if (refs.shakeCampaignFilter) {
+    const current = refs.shakeCampaignFilter.value;
+    refs.shakeCampaignFilter.innerHTML = filterOptions;
+    if (sub2apiConnectionsCache.some((item) => item.id === current)) refs.shakeCampaignFilter.value = current;
+  }
+  updateShakeEmbedUrl();
 }
 
 async function refreshSub2ApiConnections() {
@@ -5228,6 +5574,69 @@ window.editWorldCupMatch = editWorldCupMatch;
 window.deleteWorldCupMatch = deleteWorldCupMatch;
 window.settleWorldCupMatch = settleWorldCupMatch;
 window.cancelWorldCupMatch = cancelWorldCupMatch;
+
+if (refs.shakeCampaignForm) {
+  refs.shakeCampaignForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveShakeCampaign().catch(() => {});
+  });
+  resetShakeCampaignForm();
+}
+
+if (refs.shakePrizeEditor) {
+  refs.shakePrizeEditor.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-field=type]")) return;
+    const amount = event.target.closest("[data-shake-prize-row]")?.querySelector("[data-field=amount]");
+    if (amount) {
+      amount.disabled = event.target.value !== "balance";
+      if (amount.disabled) amount.value = "";
+    }
+  });
+  refs.shakePrizeEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-prize]");
+    if (!button) return;
+    const prizes = collectShakePrizes();
+    prizes.splice(Number(button.dataset.removePrize), 1);
+    renderShakePrizeEditor(prizes);
+  });
+}
+
+refs.shakeAddPrizeBtn?.addEventListener("click", () => {
+  renderShakePrizeEditor(collectShakePrizes().concat({
+    name: "", type: "empty", amount: null, weight: 1,
+    rarity: "common", displayText: "", icon: ""
+  }));
+});
+
+refs.shakeCampaignResetBtn?.addEventListener("click", () => {
+  resetShakeCampaignForm();
+  setHint(refs.shakeCampaignResult, "");
+});
+
+refs.shakeCampaignConnection?.addEventListener("change", updateShakeEmbedUrl);
+refs.shakeCampaignFilter?.addEventListener("change", () => {
+  refreshShakeCampaigns().catch((error) => setHint(refs.shakeCampaignResult, error.message));
+});
+refs.shakeCampaignRefreshBtn?.addEventListener("click", () => {
+  refreshShakeCampaigns().catch((error) => setHint(refs.shakeCampaignResult, error.message));
+});
+refs.shakeSyncUsageBtn?.addEventListener("click", () => syncShakeUsage().catch(() => {}));
+refs.shakeManualGrantForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  grantShakeCards().catch(() => {});
+});
+refs.shakeDrawRefreshBtn?.addEventListener("click", () => {
+  refreshShakeDraws().catch((error) => setHint(refs.shakeDrawResult, error.message));
+});
+refs.shakeCopyEmbedBtn?.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(refs.shakeEmbedUrl.value);
+    setHint(refs.shakeEmbedResult, "嵌入地址已复制");
+  } catch {
+    refs.shakeEmbedUrl.select();
+    setHint(refs.shakeEmbedResult, "已选中地址，请手动复制");
+  }
+});
 
 if (refs.sub2apiConnectionForm) {
   refs.sub2apiConnectionForm.addEventListener("submit", (event) => {

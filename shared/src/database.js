@@ -644,6 +644,152 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_shake_campaigns (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      active_config_version_id TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      ended_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_config_versions (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(campaign_id, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_eligibility_rules (
+      id TEXT PRIMARY KEY,
+      config_version_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      threshold REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(config_version_id, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_prizes (
+      id TEXT PRIMARY KEY,
+      config_version_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      amount REAL,
+      weight REAL NOT NULL,
+      rarity TEXT NOT NULL,
+      display_text TEXT,
+      icon TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_consumptions (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      config_version_id TEXT NOT NULL,
+      rule_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      source TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      cards_granted INTEGER NOT NULL DEFAULT 0,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(connection_id, source, source_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_progress (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      cards_earned INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      UNIQUE(campaign_id, sub2api_user_id, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_cards (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      source_record_id TEXT,
+      status TEXT NOT NULL DEFAULT 'available',
+      granted_at TEXT NOT NULL,
+      reserved_at TEXT,
+      consumed_at TEXT,
+      expired_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_draws (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      config_version_id TEXT NOT NULL,
+      card_id TEXT NOT NULL UNIQUE,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      prize_id TEXT NOT NULL,
+      prize_name TEXT NOT NULL,
+      prize_type TEXT NOT NULL,
+      prize_amount REAL,
+      prize_rarity TEXT NOT NULL,
+      prize_pool_snapshot TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'selected',
+      reward_response TEXT,
+      error_message TEXT,
+      disposition_reason TEXT,
+      disposition_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      delivered_at TEXT,
+      UNIQUE(connection_id, sub2api_user_id, request_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_usage_sync (
+      connection_id TEXT PRIMARY KEY,
+      cursor TEXT,
+      last_synced_at TEXT,
+      last_error TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_usage_records (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      remote_usage_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      actual_cost REAL NOT NULL,
+      occurred_at TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      UNIQUE(connection_id, remote_usage_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_shake_manual_grants (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      quantity INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      granted_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS sub2api_worldcup_matches (
       id TEXT PRIMARY KEY,
       connection_id TEXT NOT NULL,
@@ -1527,6 +1673,8 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_worldcup_matches", "final_result_checked_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_matches", "auto_settle_attempted_at", "TEXT");
   ensureColumn(db, "sub2api_worldcup_bets", "phase", "TEXT NOT NULL DEFAULT 'pre_match'");
+  ensureColumn(db, "sub2api_shake_draws", "disposition_reason", "TEXT");
+  ensureColumn(db, "sub2api_shake_draws", "disposition_by", "TEXT");
   ensureColumn(db, "api_football_settings", "enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "api_football_settings", "provider", "TEXT NOT NULL DEFAULT 'zafronix'");
   ensureColumn(db, "api_football_settings", "api_key", "TEXT");
@@ -1589,6 +1737,15 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_account ON sub2api_subscription_orders(connection_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_plan ON sub2api_subscription_orders(plan_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_subscription_orders_status ON sub2api_subscription_orders(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_campaigns_connection ON sub2api_shake_campaigns(connection_id, status, start_at, end_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_rules_version ON sub2api_shake_eligibility_rules(config_version_id, source);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_prizes_version ON sub2api_shake_prizes(config_version_id, status, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_consumptions_user ON sub2api_shake_consumptions(campaign_id, sub2api_user_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_cards_user ON sub2api_shake_cards(campaign_id, sub2api_user_id, status, granted_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_user ON sub2api_shake_draws(campaign_id, sub2api_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_status ON sub2api_shake_draws(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_usage_user ON sub2api_shake_usage_records(connection_id, sub2api_user_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_shake_manual_grants_user ON sub2api_shake_manual_grants(campaign_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_wc_matches_connection ON sub2api_worldcup_matches(connection_id, status, kickoff_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_wc_matches_status ON sub2api_worldcup_matches(status, kickoff_at);
     DROP INDEX IF EXISTS idx_sub2api_wc_matches_api_fixture;

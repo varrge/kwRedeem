@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>摇摇乐开箱</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1014;
+        --surface: #161a1f;
+        --surface-2: #1d2228;
+        --line: #343b43;
+        --line-soft: #262c32;
+        --text: #f3f5f7;
+        --muted: #9ba5af;
+        --accent: #d7e458;
+        --accent-strong: #eff879;
+        --success: #57d58b;
+        --danger: #ff6978;
+        --common: #9aa4ae;
+        --rare: #43a5f5;
+        --epic: #b774ef;
+        --legendary: #f4b740;
+        --item-width: 176px;
+        --item-gap: 12px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          var(--bg);
+        background-size: 32px 32px;
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button { font: inherit; }
+      button:disabled { cursor: not-allowed; opacity: 0.48; }
+
+      .shell {
+        width: min(1420px, calc(100vw - 40px));
+        margin: 0 auto;
+        padding: 24px 0 38px;
+      }
+
+      .topbar {
+        min-height: 58px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: center;
+        border-bottom: 1px solid var(--line-soft);
+        padding-bottom: 16px;
+      }
+
+      .brand { min-width: 0; }
+      .brand-kicker {
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .brand h1 {
+        margin: 4px 0 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: clamp(22px, 3vw, 34px);
+        line-height: 1.08;
+      }
+
+      .toolbar { display: flex; align-items: center; gap: 8px; }
+
+      .icon-btn, .ghost-btn, .primary-btn {
+        border-radius: 6px;
+        min-height: 40px;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .icon-btn {
+        width: 40px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--text);
+      }
+
+      .icon-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+      .ghost-btn {
+        border: 1px solid var(--line);
+        padding: 0 14px;
+        background: var(--surface);
+        color: var(--text);
+      }
+
+      .primary-btn {
+        border: 0;
+        padding: 0 28px;
+        background: var(--accent);
+        color: #141711;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+      }
+
+      .primary-btn:hover:not(:disabled) { background: var(--accent-strong); }
+
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin: 18px 0 0;
+        border: 1px solid var(--line-soft);
+        background: var(--line-soft);
+      }
+
+      .metric { min-width: 0; background: var(--surface); padding: 13px 16px; }
+      .metric span { display: block; color: var(--muted); font-size: 11px; }
+      .metric strong { display: block; margin-top: 5px; font-size: 18px; overflow: hidden; text-overflow: ellipsis; }
+
+      .opening-stage {
+        position: relative;
+        min-height: 470px;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 25px;
+        padding: 58px 0 44px;
+        overflow: hidden;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .stage-label {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .stage-label::before, .stage-label::after {
+        width: 44px;
+        height: 1px;
+        content: "";
+        background: var(--line);
+      }
+
+      .case-window {
+        position: relative;
+        width: 100%;
+        height: 228px;
+        overflow: hidden;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: rgba(3, 5, 7, 0.62);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34) inset;
+      }
+
+      .case-window::before, .case-window::after {
+        position: absolute;
+        z-index: 4;
+        top: 0;
+        bottom: 0;
+        width: 18%;
+        content: "";
+        pointer-events: none;
+      }
+
+      .case-window::before { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
+      .case-window::after { right: 0; background: linear-gradient(270deg, var(--bg), transparent); }
+
+      #case-marker {
+        position: absolute;
+        z-index: 7;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-1px);
+        background: var(--accent);
+        box-shadow: 0 0 20px rgba(215, 228, 88, 0.55);
+        pointer-events: none;
+      }
+
+      #case-marker::before, #case-marker::after {
+        position: absolute;
+        left: 50%;
+        width: 0;
+        height: 0;
+        content: "";
+        transform: translateX(-50%);
+        border-left: 8px solid transparent;
+        border-right: 8px solid transparent;
+      }
+
+      #case-marker::before { top: 0; border-top: 12px solid var(--accent); }
+      #case-marker::after { bottom: 0; border-bottom: 12px solid var(--accent); }
+
+      #case-track {
+        display: flex;
+        gap: var(--item-gap);
+        width: max-content;
+        height: 100%;
+        align-items: center;
+        padding-left: calc(50vw - var(--item-width) / 2);
+        will-change: transform;
+        transform: translate3d(0, 0, 0);
+      }
+
+      #case-track.spinning { transition: transform 5.4s cubic-bezier(0.12, 0.72, 0.1, 1); }
+
+      .prize-item {
+        position: relative;
+        flex: 0 0 var(--item-width);
+        width: var(--item-width);
+        height: 176px;
+        display: grid;
+        grid-template-rows: 1fr auto;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-bottom: 4px solid var(--rarity-color, var(--common));
+        background: var(--surface-2);
+        padding: 15px;
+      }
+
+      .prize-item::before {
+        position: absolute;
+        inset: 0;
+        content: "";
+        background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--rarity-color) 21%, transparent), transparent 58%);
+        pointer-events: none;
+      }
+
+      .prize-item[data-rarity="common"] { --rarity-color: var(--common); }
+      .prize-item[data-rarity="rare"] { --rarity-color: var(--rare); }
+      .prize-item[data-rarity="epic"] { --rarity-color: var(--epic); }
+      .prize-item[data-rarity="legendary"] { --rarity-color: var(--legendary); }
+
+      .prize-icon {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        min-height: 98px;
+        color: var(--rarity-color);
+        font-size: 48px;
+        font-weight: 950;
+      }
+
+      .prize-icon img { width: 76px; height: 76px; object-fit: contain; }
+      .prize-copy { position: relative; z-index: 1; min-width: 0; }
+      .prize-copy strong { display: block; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+      .prize-copy span { display: block; margin-top: 4px; color: var(--rarity-color); font-size: 10px; font-weight: 900; text-transform: uppercase; }
+
+      .opening-actions { min-height: 82px; display: grid; justify-items: center; gap: 10px; }
+      .opening-actions .primary-btn { min-width: 200px; min-height: 48px; }
+      .opening-status { min-height: 20px; margin: 0; color: var(--muted); font-size: 13px; text-align: center; }
+      .opening-status.error { color: var(--danger); }
+      .opening-status.success { color: var(--success); }
+
+      .result-reveal {
+        min-height: 30px;
+        margin: 0;
+        font-size: 17px;
+        font-weight: 850;
+        text-align: center;
+      }
+
+      .result-reveal[data-rarity="rare"] { color: var(--rare); }
+      .result-reveal[data-rarity="epic"] { color: var(--epic); }
+      .result-reveal[data-rarity="legendary"] { color: var(--legendary); }
+
+      .dashboard {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+        gap: 24px;
+        padding-top: 26px;
+      }
+
+      .section { min-width: 0; }
+      .section + .section { border-left: 1px solid var(--line-soft); padding-left: 24px; }
+      .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 14px; }
+      .section-head h2 { margin: 0; font-size: 16px; }
+      .section-head span { color: var(--muted); font-size: 12px; }
+
+      .progress-list, #probability-list { display: grid; gap: 8px; }
+      .progress-row, .probability-row {
+        display: grid;
+        grid-template-columns: minmax(100px, 1fr) minmax(120px, 1.6fr) auto;
+        gap: 12px;
+        align-items: center;
+        min-height: 48px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .progress-row strong, .probability-row strong { font-size: 13px; }
+      .progress-bar { height: 5px; overflow: hidden; background: #282e34; }
+      .progress-bar i { display: block; height: 100%; background: var(--accent); }
+      .progress-row span, .probability-row span { color: var(--muted); font-size: 12px; text-align: right; }
+
+      .history {
+        margin-top: 28px;
+        overflow-x: auto;
+        border-top: 1px solid var(--line-soft);
+        padding-top: 24px;
+      }
+
+      table { width: 100%; min-width: 700px; border-collapse: collapse; }
+      th, td { padding: 13px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; font-size: 13px; }
+      th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+      .status { font-weight: 850; }
+      .status-delivered { color: var(--success); }
+      .status-delivery_failed { color: var(--danger); }
+      .retry-btn { min-height: 30px; padding: 0 10px; }
+      .empty { padding: 28px 0; color: var(--muted); text-align: center; }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+      }
+
+      @media (max-width: 820px) {
+        :root { --item-width: 138px; --item-gap: 8px; }
+        .shell { width: min(100% - 24px, 720px); padding-top: 14px; }
+        .topbar { grid-template-columns: minmax(0, 1fr) auto; }
+        .brand h1 { font-size: 23px; }
+        .summary { grid-template-columns: 1fr; }
+        .metric { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+        .metric strong { margin: 0; font-size: 15px; text-align: right; }
+        .opening-stage { min-height: 420px; padding: 40px 0 28px; }
+        .case-window { height: 196px; width: calc(100vw - 24px); }
+        .prize-item { height: 148px; padding: 11px; }
+        .prize-icon { min-height: 78px; font-size: 38px; }
+        .prize-icon img { width: 60px; height: 60px; }
+        .dashboard { grid-template-columns: 1fr; }
+        .section + .section { border-left: 0; border-top: 1px solid var(--line-soft); padding: 22px 0 0; }
+      }
+
+      @media (max-width: 460px) {
+        .toolbar .ghost-btn { display: none; }
+        .progress-row, .probability-row { grid-template-columns: minmax(0, 1fr) auto; }
+        .progress-bar { grid-row: 2; grid-column: 1 / -1; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-kicker">Shake &amp; Win</div>
+          <h1 id="campaign-name">摇摇乐开箱</h1>
+        </div>
+        <div class="toolbar">
+          <button id="sound-toggle" class="icon-btn" type="button" aria-pressed="true" title="声音" aria-label="切换声音">♪</button>
+          <button id="refresh-btn" class="ghost-btn" type="button">刷新</button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="活动概要">
+        <div class="metric"><span>可用摇摇卡</span><strong id="available-cards">0</strong></div>
+        <div class="metric"><span>奖池奖品</span><strong id="prize-count">0</strong></div>
+        <div class="metric"><span>活动截止</span><strong id="campaign-end">-</strong></div>
+      </section>
+
+      <section class="opening-stage">
+        <div class="stage-label">限定开箱</div>
+        <div class="case-window" aria-live="off">
+          <div id="case-marker" aria-hidden="true"></div>
+          <div id="case-track"></div>
+        </div>
+        <div class="opening-actions">
+          <button id="open-case-btn" class="primary-btn" type="button" disabled>开启 1 次</button>
+          <p id="opening-status" class="opening-status">正在识别账号...</p>
+          <p id="result-reveal" class="result-reveal"></p>
+        </div>
+      </section>
+
+      <section class="dashboard">
+        <div class="section">
+          <div class="section-head"><h2>摇摇卡进度</h2><span id="progress-summary"></span></div>
+          <div id="progress-list" class="progress-list"></div>
+        </div>
+        <div class="section">
+          <div class="section-head"><h2>奖池概率</h2><span>库存不限</span></div>
+          <div id="probability-list"></div>
+        </div>
+      </section>
+
+      <section class="history">
+        <div class="section-head"><h2>开箱记录</h2><span id="draw-count">0 条</span></div>
+        <div id="history-list"></div>
+      </section>
+    </main>
+
+    <script src="./runtime-config.js"></script>
+    <script>
+      const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+      const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const refs = {
+        campaignName: document.querySelector("#campaign-name"),
+        availableCards: document.querySelector("#available-cards"),
+        prizeCount: document.querySelector("#prize-count"),
+        campaignEnd: document.querySelector("#campaign-end"),
+        soundToggle: document.querySelector("#sound-toggle"),
+        refreshBtn: document.querySelector("#refresh-btn"),
+        caseTrack: document.querySelector("#case-track"),
+        openCaseBtn: document.querySelector("#open-case-btn"),
+        openingStatus: document.querySelector("#opening-status"),
+        resultReveal: document.querySelector("#result-reveal"),
+        progressSummary: document.querySelector("#progress-summary"),
+        progressList: document.querySelector("#progress-list"),
+        probabilityList: document.querySelector("#probability-list"),
+        drawCount: document.querySelector("#draw-count"),
+        historyList: document.querySelector("#history-list")
+      };
+
+      const state = {
+        sessionToken: "",
+        campaign: null,
+        availableCards: 0,
+        prizes: [],
+        draws: [],
+        spinning: false,
+        soundEnabled: localStorage.getItem("shake_sound") !== "off",
+        retryRequestId: ""
+      };
+
+      const SOURCE_LABELS = { subscription_purchase: "本站套餐购买", balance_consumption: "余额实际消耗" };
+      const RARITY_LABELS = { common: "普通", rare: "稀有", epic: "史诗", legendary: "传说" };
+      const STATUS_LABELS = { selected: "待发放", delivered: "已发放", delivery_failed: "发放失败", voided: "已作废" };
+
+      function escapeHtml(value) {
+        return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+      }
+
+      function setStatus(message, type = "info") {
+        refs.openingStatus.textContent = message || "";
+        refs.openingStatus.className = `opening-status ${type === "info" ? "" : type}`;
+      }
+
+      function formatTime(value, dateOnly = false) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return new Intl.DateTimeFormat("zh-CN", dateOnly
+          ? { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+          : { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+        ).format(date);
+      }
+
+      function request(path, options = {}) {
+        const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+        if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
+        return fetch(`${API_BASE}${path}`, { ...options, headers }).then(async (response) => {
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.message || "请求失败");
+          return payload;
+        }).catch((error) => {
+          if (error.message !== "Failed to fetch") throw error;
+          throw new Error("无法连接摇摇乐服务");
+        });
+      }
+
+      function readAccessToken() {
+        return localStorage.getItem("auth_token") || localStorage.getItem("access_token") || localStorage.getItem("token") || "";
+      }
+
+      function persistRefreshedAuth(payload) {
+        const auth = payload?.refreshedAuth;
+        if (!auth) return;
+        if (auth.accessToken) localStorage.setItem("auth_token", auth.accessToken);
+        if (auth.refreshToken) localStorage.setItem("refresh_token", auth.refreshToken);
+      }
+
+      function prizeIcon(prize) {
+        const icon = String(prize.icon || "").trim();
+        if (/^https?:\/\//i.test(icon)) return `<img src="${escapeHtml(icon)}" alt="" />`;
+        if (icon) return escapeHtml(icon);
+        if (prize.type === "balance") return "$";
+        if (prize.type === "extra_draw") return "↻";
+        return "◇";
+      }
+
+      function prizeItem(prize, target = false) {
+        return `<article class="prize-item" data-rarity="${escapeHtml(prize.rarity)}" ${target ? "data-target-prize" : ""}>
+          <div class="prize-icon">${prizeIcon(prize)}</div>
+          <div class="prize-copy"><strong>${escapeHtml(prize.name)}</strong><span>${escapeHtml(RARITY_LABELS[prize.rarity] || prize.rarity)}</span></div>
+        </article>`;
+      }
+
+      function buildIdleTrack() {
+        const prizes = state.prizes.length ? state.prizes : [{ name: "等待奖池", type: "empty", rarity: "common" }];
+        const items = Array.from({ length: 18 }, (_, index) => prizes[index % prizes.length]);
+        refs.caseTrack.classList.remove("spinning");
+        refs.caseTrack.style.transform = "translate3d(0, 0, 0)";
+        refs.caseTrack.innerHTML = items.map((prize) => prizeItem(prize)).join("");
+      }
+
+      function renderProgress(progress) {
+        refs.progressSummary.textContent = progress.length ? `${progress.length} 种来源` : "暂无规则";
+        refs.progressList.innerHTML = progress.length ? progress.map((item) => {
+          const ratio = Math.max(0, Math.min(100, Number(item.amount) / Number(item.threshold) * 100));
+          return `<div class="progress-row">
+            <strong>${escapeHtml(SOURCE_LABELS[item.source] || item.source)}</strong>
+            <div class="progress-bar"><i style="width:${ratio}%"></i></div>
+            <span>${escapeHtml(item.amount)} / ${escapeHtml(item.threshold)}</span>
+          </div>`;
+        }).join("") : `<div class="empty">暂无获取规则</div>`;
+      }
+
+      function renderProbabilities() {
+        refs.probabilityList.innerHTML = state.prizes.length ? state.prizes.map((prize) => `
+          <div class="probability-row">
+            <strong>${escapeHtml(prize.name)}</strong>
+            <div class="progress-bar"><i style="width:${Math.max(0, Math.min(100, Number(prize.probability)))}%;background:var(--${escapeHtml(prize.rarity)})"></i></div>
+            <span>${escapeHtml(prize.probability)}%</span>
+          </div>
+        `).join("") : `<div class="empty">暂无奖品</div>`;
+      }
+
+      function renderHistory() {
+        refs.drawCount.textContent = `${state.draws.length} 条`;
+        if (!state.draws.length) {
+          refs.historyList.innerHTML = `<div class="empty">暂无开箱记录</div>`;
+          return;
+        }
+        refs.historyList.innerHTML = `<table><thead><tr><th>时间</th><th>奖品</th><th>稀有度</th><th>状态</th><th></th></tr></thead><tbody>${state.draws.map((draw) => `
+          <tr>
+            <td>${escapeHtml(formatTime(draw.createdAt))}</td>
+            <td><strong>${escapeHtml(draw.prize.name)}</strong></td>
+            <td>${escapeHtml(RARITY_LABELS[draw.prize.rarity] || draw.prize.rarity)}</td>
+            <td class="status status-${escapeHtml(draw.status)}">${escapeHtml(STATUS_LABELS[draw.status] || draw.status)}</td>
+            <td>${draw.status === "delivery_failed" ? `<button class="ghost-btn retry-btn" data-retry-request="${escapeHtml(draw.requestId)}">重试发放</button>` : ""}</td>
+          </tr>`).join("")}</tbody></table>`;
+      }
+
+      function render(payload) {
+        persistRefreshedAuth(payload);
+        if (payload.sessionToken) state.sessionToken = payload.sessionToken;
+        state.campaign = payload.campaign || null;
+        state.availableCards = Number(payload.availableCards || 0);
+        state.prizes = payload.prizes || [];
+        state.draws = payload.draws || [];
+        refs.campaignName.textContent = state.campaign?.name || "摇摇乐开箱";
+        document.title = state.campaign?.name || "摇摇乐开箱";
+        refs.availableCards.textContent = state.availableCards;
+        refs.prizeCount.textContent = state.prizes.length;
+        refs.campaignEnd.textContent = state.campaign ? formatTime(state.campaign.endAt, true) : "暂无活动";
+        refs.openCaseBtn.disabled = !state.sessionToken || !state.campaign || state.availableCards < 1 || state.spinning;
+        renderProgress(payload.progress || []);
+        renderProbabilities();
+        renderHistory();
+        buildIdleTrack();
+      }
+
+      function audioTick(frequency = 520, duration = 0.035) {
+        if (!state.soundEnabled) return;
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const context = audioTick.context || (audioTick.context = new AudioContextClass());
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "triangle";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.045, context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + duration);
+        oscillator.connect(gain).connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + duration);
+      }
+
+      function animateResult(draw) {
+        return new Promise((resolve) => {
+          const targetIndex = reducedMotion.matches ? 4 : 30;
+          const fillers = Array.from({ length: targetIndex + 6 }, (_, index) => (
+            index === targetIndex ? draw.prize : state.prizes[(index * 7 + 3) % state.prizes.length]
+          ));
+          refs.caseTrack.classList.remove("spinning");
+          refs.caseTrack.style.transform = "translate3d(0, 0, 0)";
+          refs.caseTrack.innerHTML = fillers.map((prize, index) => prizeItem(prize, index === targetIndex)).join("");
+          const target = refs.caseTrack.querySelector("[data-target-prize]");
+          const viewport = refs.caseTrack.parentElement;
+          const destination = -(target.offsetLeft + target.offsetWidth / 2 - viewport.clientWidth / 2);
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (!reducedMotion.matches) refs.caseTrack.classList.add("spinning");
+            refs.caseTrack.style.transform = `translate3d(${destination}px, 0, 0)`;
+            if (!reducedMotion.matches) {
+              let ticks = 0;
+              const tickTimer = window.setInterval(() => {
+                ticks += 1;
+                audioTick(360 + ticks * 16);
+                if (ticks >= 18) window.clearInterval(tickTimer);
+              }, 220);
+            }
+            window.setTimeout(() => {
+              audioTick(draw.prize.rarity === "legendary" ? 980 : 720, 0.22);
+              resolve();
+            }, reducedMotion.matches ? 40 : 5500);
+          }));
+        });
+      }
+
+      async function openCase(requestId = "") {
+        if (state.spinning || !state.sessionToken) return;
+        state.spinning = true;
+        refs.openCaseBtn.disabled = true;
+        refs.resultReveal.textContent = "";
+        setStatus(requestId ? "正在重试奖励发放..." : "正在锁定开箱结果...");
+        const drawRequestId = requestId || `opening-${crypto.randomUUID()}`;
+        try {
+          const payload = await request("/api/public/sub2api/shake/draws", {
+            method: "POST", body: JSON.stringify({ requestId: drawRequestId })
+          });
+          await animateResult(payload.draw);
+          state.availableCards = Number(payload.availableCards || 0);
+          refs.availableCards.textContent = state.availableCards;
+          refs.resultReveal.textContent = payload.draw.prize.name;
+          refs.resultReveal.dataset.rarity = payload.draw.prize.rarity;
+          if (payload.draw.status === "delivery_failed") {
+            state.retryRequestId = payload.draw.requestId;
+            setStatus("结果已保存，奖励发放失败，可在记录中重试", "error");
+          } else {
+            state.retryRequestId = "";
+            setStatus("奖励已发放", "success");
+          }
+          const existing = state.draws.findIndex((item) => item.id === payload.draw.id);
+          if (existing >= 0) state.draws[existing] = payload.draw;
+          else state.draws.unshift(payload.draw);
+          renderHistory();
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          state.spinning = false;
+          refs.openCaseBtn.disabled = !state.campaign || state.availableCards < 1;
+        }
+      }
+
+      async function refresh() {
+        if (!state.sessionToken || state.spinning) return;
+        refs.refreshBtn.disabled = true;
+        try {
+          const payload = await request("/api/public/sub2api/shake/bootstrap");
+          render(payload);
+          setStatus("已刷新", "success");
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          refs.refreshBtn.disabled = false;
+        }
+      }
+
+      async function initialize() {
+        const params = new URLSearchParams(window.location.search);
+        const sso = params.get("sso") || "";
+        const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+        const embeddedToken = params.get("token") || "";
+        const embeddedUserId = params.get("user_id") || params.get("userId") || "";
+        if (!sso && !connectionId) return setStatus("缺少 SSO token 或 connectionId", "error");
+        try {
+          const accessToken = embeddedToken || readAccessToken();
+          const refreshToken = localStorage.getItem("refresh_token") || "";
+          const payload = sso
+            ? await request("/api/public/sub2api/shake/session", { method: "POST", body: JSON.stringify({ sso }) })
+            : await request("/api/public/sub2api/shake/session-from-token", {
+                method: "POST", body: JSON.stringify({ connectionId, accessToken, refreshToken, userId: embeddedUserId })
+              });
+          render(payload);
+          setStatus(payload.campaign ? "" : "当前没有进行中的活动");
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      }
+
+      refs.soundToggle.setAttribute("aria-pressed", String(state.soundEnabled));
+      refs.soundToggle.addEventListener("click", () => {
+        state.soundEnabled = !state.soundEnabled;
+        localStorage.setItem("shake_sound", state.soundEnabled ? "on" : "off");
+        refs.soundToggle.setAttribute("aria-pressed", String(state.soundEnabled));
+        if (state.soundEnabled) audioTick();
+      });
+      refs.openCaseBtn.addEventListener("click", () => openCase());
+      refs.refreshBtn.addEventListener("click", refresh);
+      refs.historyList.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-retry-request]");
+        if (button) openCase(button.dataset.retryRequest);
+      });
+
+      initialize();
+    </script>
+  </body>
+</html>

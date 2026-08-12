@@ -43,7 +43,9 @@ function sendFile(response, filePath) {
 
 function sendRuntimeConfig(response) {
   const config = {
-    apiUrl: env.apiUrl
+    apiUrl: env.apiUrl,
+    appUrl: env.appUrl,
+    adminUrl: env.adminUrl
   };
   const payload = JSON.stringify(config).replaceAll("<", "\\u003c");
 

@@ -88,6 +88,9 @@
           <button class="nav-item" data-tab="sub2api">
             <span class="icon">🔗</span> Sub2api 工具
           </button>
+          <button class="nav-item" data-tab="sub2api-shake">
+            <span class="icon">◆</span> 摇摇乐系统
+          </button>
           <button class="nav-item" data-tab="sub2api-rebates">
             <span class="icon">🤝</span> 邀请返利
           </button>
@@ -1837,6 +1840,137 @@
             </div>
             <div id="worldcup-bet-list" class="table-wrapper"></div>
             <div id="worldcup-bet-result" class="hint"></div>
+          </div>
+        </section>
+
+        <!-- Sub2api Shake -->
+        <section class="tab-panel hidden" data-panel="sub2api-shake">
+          <div class="content-header">
+            <h2>摇摇乐系统</h2>
+            <p>配置开箱活动、摇摇卡获取条件和服务端奖池</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header">
+                <h3 id="shake-campaign-form-title">创建活动</h3>
+                <button id="shake-campaign-reset-btn" type="button" class="ghost-btn small hidden">取消编辑</button>
+              </div>
+              <form id="shake-campaign-form" class="form-stack">
+                <input id="shake-campaign-edit-id" type="hidden" />
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>Sub2api 连接</span>
+                    <select id="shake-campaign-connection" required><option value="">选择连接</option></select>
+                  </label>
+                  <label class="field">
+                    <span>活动名称</span>
+                    <input id="shake-campaign-name" maxlength="100" placeholder="八月摇摇乐" required />
+                  </label>
+                  <label class="field">
+                    <span>开始时间</span>
+                    <input id="shake-campaign-start" type="datetime-local" required />
+                  </label>
+                  <label class="field">
+                    <span>结束时间</span>
+                    <input id="shake-campaign-end" type="datetime-local" required />
+                  </label>
+                </div>
+                <div class="grid grid-2">
+                  <label class="field">
+                    <span>本站套餐购买消费 / 张</span>
+                    <input id="shake-subscription-threshold" type="number" min="0.00000001" step="0.01" placeholder="留空则不启用" />
+                  </label>
+                  <label class="field">
+                    <span>余额实际消耗 / 张</span>
+                    <input id="shake-balance-threshold" type="number" min="0.00000001" step="0.01" placeholder="留空则不启用" />
+                  </label>
+                </div>
+                <div class="shake-editor-heading">
+                  <strong>奖品设置</strong>
+                  <button id="shake-add-prize-btn" type="button" class="ghost-btn small">添加奖品</button>
+                </div>
+                <div id="shake-prize-editor" class="shake-prize-editor"></div>
+                <div class="actions-row">
+                  <button id="shake-campaign-submit-btn" type="submit" class="primary-btn">创建活动</button>
+                </div>
+              </form>
+              <div id="shake-campaign-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>嵌入地址</h3></div>
+              <label class="field">
+                <span>活动页</span>
+                <input id="shake-embed-url" readonly value="sub2api-shake.html?connectionId=" />
+              </label>
+              <div class="actions-row mt-16">
+                <button id="shake-copy-embed-btn" type="button" class="ghost-btn">复制地址</button>
+                <a id="shake-preview-link" class="primary-btn" href="../sub2api-shake.html?connectionId=" target="_blank" rel="noopener">预览</a>
+              </div>
+              <div id="shake-embed-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>活动管理</h3>
+              <div class="header-actions">
+                <select id="shake-campaign-filter" class="small-select"><option value="">全部连接</option></select>
+                <button id="shake-campaign-refresh-btn" type="button" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="shake-campaign-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="grid grid-2 mt-24">
+            <div class="card">
+              <div class="card-header"><h3>用量同步</h3></div>
+              <label class="field">
+                <span>Sub2api 连接</span>
+                <select id="shake-sync-connection"><option value="">选择连接</option></select>
+              </label>
+              <div class="actions-row mt-16">
+                <button id="shake-sync-usage-btn" type="button" class="primary-btn">同步实际消耗</button>
+              </div>
+              <div id="shake-sync-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>人工补卡</h3></div>
+              <form id="shake-manual-grant-form" class="form-stack">
+                <label class="field">
+                  <span>活动</span>
+                  <select id="shake-grant-campaign" required><option value="">选择活动</option></select>
+                </label>
+                <div class="grid grid-2">
+                  <label class="field"><span>Sub2api 用户 ID</span><input id="shake-grant-user" required /></label>
+                  <label class="field"><span>数量</span><input id="shake-grant-quantity" type="number" min="1" max="100" value="1" required /></label>
+                </div>
+                <label class="field"><span>用户邮箱</span><input id="shake-grant-email" type="email" /></label>
+                <label class="field"><span>补发原因</span><textarea id="shake-grant-reason" rows="2" required></textarea></label>
+                <div class="actions-row"><button type="submit" class="primary-btn">确认补卡</button></div>
+              </form>
+              <div id="shake-grant-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>抽奖与奖励记录</h3>
+              <div class="header-actions">
+                <select id="shake-draw-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="delivery_failed">发放失败</option>
+                  <option value="delivered">已发放</option>
+                  <option value="voided">已作废</option>
+                </select>
+                <input id="shake-draw-user-filter" class="small-input" placeholder="用户 ID" />
+                <button id="shake-draw-refresh-btn" type="button" class="ghost-btn small">查询</button>
+              </div>
+            </div>
+            <div id="shake-draw-list" class="table-wrapper"></div>
+            <div id="shake-draw-result" class="hint"></div>
           </div>
         </section>
 

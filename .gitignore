@@ -43,6 +43,9 @@ tests/*
 !tests/spacex-cdk-flow.test.js
 !tests/spacex-cdk-api.test.js
 !tests/system-update.test.js
+!tests/sub2api-shake.test.js
+!tests/sub2api-shake-api.test.js
+!tests/sub2api-shake-page.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

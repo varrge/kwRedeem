@@ -127,6 +127,86 @@ Each inviter level may define both a lifetime invite-code application limit and 
 Expired invite codes do not count against either limit. A configured value of `0` means unlimited for that specific limit.
 _Avoid_: One global fixed quota, treating zero as no invites allowed, expired codes consuming quota
 
+**Shake Card**:
+A single-use entitlement to participate in one Shake & Win draw. It is granted when a player satisfies an eligibility rule and remains valid independently of later changes to that rule.
+_Avoid_: Rechecking eligibility when the player draws, treating qualification progress itself as a draw attempt
+
+**Shake Card Earning Source**:
+The configured category of qualifying consumption that can grant Shake Cards. The first release supports purchases made through the KaWang Subscription Center and actual Sub2api balance consumption.
+_Avoid_: Balance recharge, balance-code redemption, invite rebate, World Cup balance change
+
+**Shake Card Consumption Classification**:
+Each qualifying consumption belongs to exactly one Shake Card earning source. A KaWang Subscription Center purchase counts only as subscription purchase consumption and is excluded from actual Sub2api balance consumption progress.
+_Avoid_: Counting one balance deduction toward both earning sources
+
+**Actual Sub2api Balance Consumption**:
+A qualifying remote Sub2api consumption entry with a stable source identity, excluding KaWang subscription purchases, balance acquisition, redeem codes, invite rebates, World Cup balance changes, Shake & Win rewards, and administrator adjustments. Progress advances only from synchronized source records and is never inferred from balance differences.
+_Avoid_: Net balance delta, recharge amount, duplicated remote history entry
+
+**Shake Consumption Sync Cursor**:
+The per-connection checkpoint used to import new Actual Sub2api Balance Consumption records without duplication. Administrators can inspect sync errors and request a catch-up sync, while imported source identities make repeated synchronization idempotent.
+_Avoid_: Full untracked rescans, silently skipping failed sync windows
+
+**Shake Card Rolling Progress**:
+Qualifying consumption grants one Shake Card for every complete configured threshold crossed, including multiple cards when one increment crosses multiple thresholds. Any amount below the next threshold remains as progress toward a future card.
+_Avoid_: Granting at most one card per consumption event, discarding progress remainder, one-time lifetime milestones
+
+**Prospective Shake Card Rule**:
+A Shake Card earning rule that applies only to qualifying consumption recorded after that rule version takes effect. Existing Shake Cards and progress remainders retain the terms under which they were earned when a rule is later changed.
+_Avoid_: Retroactively rescanning consumption, recalculating issued cards after a threshold change
+
+**Manual Shake Card Grant**:
+An administrator-issued Shake Card for a specific player, used for migration, customer support, or compensation and recorded with its administrative reason.
+_Avoid_: Editing consumption progress to simulate a grant, unrecorded compensation
+
+**Shake & Win Campaign**:
+A separately scheduled activity that owns its eligibility rules, prize pool, Shake Cards, and draw records. It moves through draft, scheduled, active, and ended states, and a Sub2api connection may have at most one active campaign at a time.
+_Avoid_: One mutable global lottery configuration, overwriting a previous campaign
+
+**Campaign-Bound Shake Card**:
+A Shake Card issued for one Shake & Win Campaign and redeemable only while that campaign is active. Unused cards expire when the campaign ends and cannot be migrated to another campaign.
+_Avoid_: Cross-campaign cards, carrying cards forward, silently extending card validity
+
+**Shake Prize**:
+A campaign-configured outcome created and managed by an administrator in the Shake & Win admin system, rather than a hard-coded frontend segment. The first release supports fixed Sub2api balance rewards, an extra Shake Card draw, and a zero-value “谢谢参与” outcome; each prize has an admin-defined name, display metadata, amount where applicable, probability weight, sort order, and enabled state, with no daily or total inventory limit.
+_Avoid_: Physical fulfillment, coupon issuance, manually promised rewards without a draw outcome
+
+**Shake Prize Pool**:
+The set of enabled, unlimited-inventory Shake Prizes available for selection in a campaign. Its displayed size is the number of enabled prize types, not the number of remaining awards.
+_Avoid_: Finite prize stock, remaining-award counter
+
+**Shake Prize Weight**:
+An administrator-defined positive relative weight used to select among enabled Shake Prizes, with the resulting percentage shown as guidance in the admin UI. Each draw records the complete prize-pool and weight snapshot used for selection so later configuration changes do not alter its history.
+_Avoid_: Requiring weights to total 100, hard-coded frontend odds, recalculating historical odds
+
+**Shake Configuration Version**:
+An immutable snapshot of a campaign's eligibility or prize configuration that takes effect for future consumption or draws. Administrators may change an active campaign by creating a new version, while historical grants and draws retain their original version.
+_Avoid_: Editing historical outcomes in place, applying a new configuration retroactively
+
+**Shake Draw**:
+The server-determined, immutable result of consuming one Shake Card against a specific prize-pool version. The client animates the recorded result but never selects or rerolls it.
+_Avoid_: Client-side prize selection, changing a result after refresh or delivery failure
+
+**Case Opening Reveal**:
+The Shake & Win draw presentation in which a horizontal track of configured prize items accelerates, travels beneath a fixed center marker, decelerates, and lands on the server-recorded result. It is a visual reveal only and never determines the prize.
+_Avoid_: Prize wheel, client-selected stopping position, automatic follow-up draw
+
+**Case Opening Track**:
+The visual sequence used by the Case Opening Reveal, built by cycling through enabled prize types without repeating items in proportion to their probability weights. Actual weights are disclosed separately in the campaign rules.
+_Avoid_: Encoding probability through visible item repetition, presenting the animation as the random selector
+
+**Shake Prize Rarity**:
+An administrator-selected presentation tier for a Shake Prize: common, rare, epic, or legendary. It controls the prize card's color, reveal emphasis, lighting, and sound but has no effect on its probability weight.
+_Avoid_: Deriving probability from rarity, hard-coding rarity from reward amount
+
+**Pending Shake Reward**:
+A fixed Shake Draw result whose Sub2api balance reward has not yet been confirmed as delivered. Delivery retries use the draw identity as their idempotency identity and never consume another card or select another prize.
+_Avoid_: Refunding the draw for a reroll, issuing a different prize after timeout, duplicate balance credit
+
+**Shake Reward Disposition**:
+An audited administrator action on the delivery state of a fixed Shake Draw, such as retrying delivery, confirming externally verified delivery, or voiding an undeliverable reward with a reason. It never changes the selected prize, and voiding does not automatically reverse a balance reward already credited remotely.
+_Avoid_: Editing a winning result, unaudited manual completion, automatic clawback on void
+
 **Sub2api User Tutorial**:
 A publicly readable learning unit embedded in the Sub2api experience that explains how a user calls the API or purchases a configured subscription plan.
 _Avoid_: Operator runbook, administrator manual, generic public documentation

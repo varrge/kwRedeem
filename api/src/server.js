@@ -20,6 +20,7 @@ import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
 import { createMembershipPaymentService } from "./membership-payment.js";
+import { createSub2ApiShakeService } from "./sub2api-shake.js";
 import { buildUpdateProcessEnv } from "./system-update.js";
 import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
 import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
@@ -3157,6 +3158,37 @@ async function requireSub2ApiSession(request, reply) {
   }
 }
 
+function signSub2ApiShakeSessionToken(connection, identity) {
+  return jwt.sign({
+    scope: "sub2api_shake",
+    connectionId: connection.id,
+    sub2apiUserId: identity.userId,
+    email: identity.email || "",
+    username: identity.username || ""
+  }, env.jwtSecret, { expiresIn: "30m" });
+}
+
+async function requireSub2ApiShakeSession(request, reply) {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return reply.code(401).send({ message: "缺少摇摇乐会话 token" });
+  }
+  try {
+    const payload = jwt.verify(header.slice("Bearer ".length).trim(), env.jwtSecret);
+    if (payload?.scope !== "sub2api_shake" || !payload.connectionId || !payload.sub2apiUserId) {
+      return reply.code(401).send({ message: "摇摇乐会话无效" });
+    }
+    request.sub2apiShake = {
+      connectionId: String(payload.connectionId),
+      userId: String(payload.sub2apiUserId),
+      email: String(payload.email || ""),
+      username: String(payload.username || "")
+    };
+  } catch {
+    return reply.code(401).send({ message: "摇摇乐会话已失效" });
+  }
+}
+
 function getReadableErrorMessage(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
   if (typeof value === "string") return value.trim() || fallback;
@@ -3265,6 +3297,58 @@ async function callSub2ApiRemote(connection, pathname, { method = "GET", body = 
   assertSub2ApiRemoteEnvelopeOk(result, getSub2ApiRemoteMessage);
   return result;
 }
+
+const sub2apiShakeService = createSub2ApiShakeService({
+  app,
+  db,
+  requireAdmin,
+  requireSession: requireSub2ApiShakeSession,
+  createAuditLog,
+  now: nowIso,
+  id: (prefix) => `${prefix}-${nanoid(16)}`,
+  async creditBalance({ connectionId, userId, amount, idempotencyKey, notes }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const result = await callSub2ApiRemote(
+      connection,
+      `/api/v1/admin/users/${encodeURIComponent(String(userId))}/balance`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: { balance: Number(amount), operation: "add", notes }
+      }
+    );
+    return unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text;
+  },
+  async listUsagePage({ connectionId, page, pageSize, sortBy, sortOrder }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const query = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      exact_total: "true"
+    });
+    const result = await callSub2ApiRemote(connection, `/api/v1/admin/usage?${query.toString()}`);
+    const payload = unwrapSub2ApiRemoteData(result.json);
+    return payload && typeof payload === "object" ? payload : { items: [], pages: 1 };
+  }
+});
+
+backgroundIntervals.push(setInterval(() => {
+  sub2apiShakeService.runMaintenance().catch((error) => {
+    console.error("[sub2api-shake-maintenance]", error);
+  });
+}, 60_000));
 
 async function callSub2ApiUserRemote(connection, pathname, accessToken) {
   const response = await fetch(`${connection.base_url}${pathname}`, {
@@ -5872,6 +5956,62 @@ app.post("/api/public/sub2api/worldcup/session-from-token", async (request, repl
   }
 });
 
+app.post("/api/public/sub2api/shake/session", async (request, reply) => {
+  const parsed = z.object({ sso: z.string().min(20) }).safeParse(getBodyObject(request.body));
+  if (!parsed.success) return reply.code(400).send({ message: "缺少 SSO token" });
+  let selector;
+  try {
+    selector = decodeSub2ApiSsoSelector(parsed.data.sso);
+  } catch (error) {
+    return reply.code(400).send({ message: error.message });
+  }
+  const connection = findSub2ApiConnectionBySelector(selector);
+  if (!connection) return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+  try {
+    const adminToken = decryptSub2ApiAdminToken(connection);
+    const { identity } = verifySub2ApiSsoToken(parsed.data.sso, adminToken);
+    return {
+      sessionToken: signSub2ApiShakeSessionToken(connection, identity),
+      ...sub2apiShakeService.buildBootstrap({ connectionId: connection.id, ...identity })
+    };
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "SSO token 验证失败" });
+  }
+});
+
+app.post("/api/public/sub2api/shake/session-from-token", async (request, reply) => {
+  const parsed = z.object({
+    connectionId: z.string().trim().min(1),
+    accessToken: z.string().trim().optional().default(""),
+    refreshToken: z.string().trim().optional().default(""),
+    userId: z.string().trim().optional().default("")
+  }).refine((value) => value.accessToken || value.refreshToken).safeParse(getBodyObject(request.body));
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "缺少连接 ID 或 Sub2api 登录 token" });
+  }
+  const connection = findSub2ApiConnectionBySelector(parsed.data.connectionId);
+  if (!connection) return reply.code(404).send({ message: "Sub2api 连接不存在或已删除" });
+  if (connection.status !== sub2apiConnectionStatuses.active) {
+    return reply.code(403).send({ message: "Sub2api 连接已停用" });
+  }
+  try {
+    const session = await getSub2ApiIdentityFromBrowserTokens(connection, {
+      accessToken: parsed.data.accessToken,
+      refreshToken: parsed.data.refreshToken,
+      expectedUserId: parsed.data.userId
+    });
+    return attachSub2ApiRefreshedAuth({
+      sessionToken: signSub2ApiShakeSessionToken(connection, session.identity),
+      ...sub2apiShakeService.buildBootstrap({ connectionId: connection.id, ...session.identity })
+    }, session.refreshedAuth);
+  } catch (error) {
+    return reply.code(401).send({ message: error.message || "Sub2api 登录 token 验证失败" });
+  }
+});
+
 app.get("/api/public/sub2api/worldcup/bootstrap", { preHandler: requireSub2ApiWorldCupSession }, async (request, reply) => {
   let connection;
   try {
@@ -6340,6 +6480,26 @@ app.post("/api/public/sub2api/subscriptions/purchase", { preHandler: requireSub2
       updatedAt,
       orderId
     );
+
+    try {
+      sub2apiShakeService.recordConsumption({
+        connectionId: connection.id,
+        userId: request.sub2api.userId,
+        email: request.sub2api.email || "",
+        source: "subscription_purchase",
+        sourceId: `subscription-order:${orderId}`,
+        amount: Number(plan.price),
+        occurredAt: updatedAt
+      });
+    } catch (shakeError) {
+      createAuditLog({
+        action: "sub2api.shake.subscription_consumption.failed",
+        actor: "system",
+        resourceType: "sub2api_subscription_order",
+        resourceId: orderId,
+        detail: { message: shakeError.message || "摇摇卡资格写入失败" }
+      });
+    }
 
     createAuditLog({
       action: "sub2api.subscription.purchase",

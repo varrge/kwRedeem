@@ -28,6 +28,7 @@ test("embedded Shake page presents a horizontal case-opening reveal with accessi
   assert.match(html, /id="open-case-btn"/);
   assert.match(html, /id="sound-toggle"/);
   assert.match(html, /id="probability-list"/);
+  assert.match(html, /body\.embedded/);
   assert.match(html, /id="prize-modal"/);
   assert.match(html, /id="modal-claim-btn"/);
   assert.match(html, /showPrizeModal/);

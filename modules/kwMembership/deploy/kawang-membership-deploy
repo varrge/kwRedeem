@@ -25,7 +25,7 @@ runuser -u "$RUN_USER" -- "$PYTHON_BIN" -m pip install -r "$SOURCE_DIR/python_ex
 
 EXECUTOR_MODE="$(sed -n 's/^[[:space:]]*KWMEMBERSHIP_PYTHON_EXECUTOR_MODE[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | tr -d '\"' | tr -d "'")"
 EXECUTOR_MODE="${EXECUTOR_MODE:-fixture}"
-if [ "$EXECUTOR_MODE" = "live" ]; then
+if [ "$EXECUTOR_MODE" = "preflight" ] || [ "$EXECUTOR_MODE" = "live" ]; then
   runuser -u "$RUN_USER" -- env PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.playwright-browsers" \
     "$PYTHON_BIN" -m playwright install chromium
 fi

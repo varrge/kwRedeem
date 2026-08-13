@@ -8,7 +8,7 @@ Status: Implemented contract with live rollout still default-off. See [ADR-0020]
 
 首个版本覆盖 Plus、x5、x20，真实付款默认关闭，只允许 fixture、模拟 Provider 和无扣款浏览器验证。生产 Canary 必须另行由管理员逐单授权。
 
-当前实现状态：Go 私有 bridge、SQLite 串行命令队列、五分钟硬截止、一次性材料领取、页面事实校验、动作 Permit、Python Playwright 适配器和 fixture/合同测试已经落地。`KWMEMBERSHIP_PYTHON_EXECUTOR_MODE` 默认仍为 `fixture`，`KWMEMBERSHIP_LIVE_PAYMENT_ENABLED` 默认仍为 `false`；真实 Plus、x5、x20 Canary 尚未执行。
+当前实现状态：Go 私有 bridge、SQLite 串行命令队列、五分钟硬截止、一次性材料领取、页面事实校验、动作 Permit、Python Playwright 适配器和 fixture/合同测试已经落地。`KWMEMBERSHIP_PYTHON_EXECUTOR_MODE=preflight` 可使用真实浏览器验证付款页，同时从进程边界拒绝 payment 命令；默认仍为 `fixture`，`KWMEMBERSHIP_LIVE_PAYMENT_ENABLED` 默认仍为 `false`，真实 Plus、x5、x20 Canary 尚未执行。
 
 系统只有一个工作流所有者：现有 `kwMembership` Go Worker。它继续拥有：
 

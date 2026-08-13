@@ -46,6 +46,15 @@ class FixtureExecutor:
         )
 
 
+class PreflightExecutor:
+    """Real browser preflight that cannot execute a payment command."""
+
+    def execute(self, client: ExecutorClient, lease: ExecutorLease) -> None:
+        if lease.command_kind != "preflight":
+            raise ExecutorAPIError("PREFLIGHT_PAYMENT_DISABLED", 409)
+        LiveExecutor().execute(client, lease)
+
+
 def _fixture_page(lease: ExecutorLease) -> dict[str, Any]:
     amount = float(lease.price_contract["MinAmount"])
     plan = "plus" if lease.stage == "plus" else ("prolite" if lease.target_tier == "x5" else "pro")
@@ -71,8 +80,16 @@ def _fixture_page(lease: ExecutorLease) -> dict[str, Any]:
     }
 
 
+def executor_for_mode(mode: str) -> FixtureExecutor | PreflightExecutor | LiveExecutor:
+    if mode == "fixture":
+        return FixtureExecutor()
+    if mode == "preflight":
+        return PreflightExecutor()
+    return LiveExecutor()
+
+
 def run_forever(client: ExecutorClient, mode: str, poll_seconds: float = 1.0) -> None:
-    executor = FixtureExecutor() if mode == "fixture" else LiveExecutor()
+    executor = executor_for_mode(mode)
     while True:
         lease = client.lease()
         if lease is None:
@@ -103,8 +120,8 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     mode = os.environ.get("KWMEMBERSHIP_PYTHON_EXECUTOR_MODE", "fixture").strip()
-    if mode not in {"fixture", "live"}:
-        raise SystemExit("KWMEMBERSHIP_PYTHON_EXECUTOR_MODE must be fixture or live")
+    if mode not in {"fixture", "preflight", "live"}:
+        raise SystemExit("KWMEMBERSHIP_PYTHON_EXECUTOR_MODE must be fixture, preflight or live")
     if mode == "live" and os.environ.get("KWMEMBERSHIP_LIVE_PAYMENT_ENABLED") != "true":
         raise SystemExit("live payment remains disabled")
     client = ExecutorClient(
@@ -115,7 +132,7 @@ def main() -> None:
     if args.once:
         lease = client.lease()
         if lease is not None:
-            (FixtureExecutor() if mode == "fixture" else LiveExecutor()).execute(client, lease)
+            executor_for_mode(mode).execute(client, lease)
         return
     run_forever(client, mode)
 

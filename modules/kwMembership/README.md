@@ -116,7 +116,7 @@ bash scripts/update.sh
 https://apikey.vsakura.top/api/webhooks/spacexcard/card-transactions
 ```
 
-付款 Gate 默认关闭。新适配器版本为 `python-session-card-checkout-v1`。Go 先检查订阅；发现自动续费时取消并重新查询，只有明确的 `free + auto-renew=false` 才继续。之后 Go 选择卡片、写资金边界、签发命令和 Permit；Python 通过本机协议一次领取 Session 和卡材料并返回结构化事实。`fixture` 只处理无扣款 preflight，遇到 payment 命令会以 `FIXTURE_PAYMENT_DISABLED` 失败关闭；`live` 适配器已实现受限浏览器协议，但仍需要显式设置 live 模式和上线 Gate、安装并验证浏览器依赖，且不会绕过 Go 的付款 Gate、Permit 或未知结果对账。
+付款 Gate 默认关闭。新适配器版本为 `python-session-card-checkout-v1`。Go 先检查订阅；发现自动续费时取消并重新查询，只有明确的 `free + auto-renew=false` 才继续。之后 Go 选择卡片、写资金边界、签发命令和 Permit；Python 通过本机协议一次领取 Session 和卡材料并返回结构化事实。`fixture` 使用假页面完成无扣款合同测试；`preflight` 使用真实 Playwright 浏览器打开并验证付款页，但遇到 payment 命令会以 `PREFLIGHT_PAYMENT_DISABLED` 失败关闭，而且不需要启用 `KWMEMBERSHIP_LIVE_PAYMENT_ENABLED`；`live` 适配器才允许受控真实付款，仍需要显式设置 live 模式和上线 Gate，且不会绕过 Go 的付款 Gate、Permit 或未知结果对账。
 
 Live 执行器依赖 Playwright。只在专用执行器主机安装依赖，不要在开发机打开真实付款：
 

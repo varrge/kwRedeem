@@ -17,6 +17,7 @@ import { env, resolveProjectPath } from "../../shared/src/env.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
+import { convertSessionToCookiePayload } from "../../shared/src/session-cookie-converter.js";
 import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
 import { createMembershipPaymentService } from "./membership-payment.js";
@@ -29,9 +30,11 @@ import { membershipTiers } from "../../shared/src/membership-fulfillment.js";
 import {
   activateMembershipFulfillmentIdentity,
   createMembershipFulfillmentForOrder,
+	deriveMembershipAccountLockKey,
   projectMembershipDelivery,
   transitionMembershipFulfillment
 } from "../../shared/src/membership-orchestration.js";
+import { fetchMembershipObservation } from "../../shared/src/membership-state-provider.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { parseSmsImportContent } from "../../shared/src/sms-parser.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
@@ -6830,6 +6833,124 @@ app.post("/api/public/redeem", async (request, reply) => {
       .replaceAll("SpaceX", "自动化");
     return reply.code(400).send({ message: publicMessage });
   }
+});
+
+function consumeMembershipSessionRecoveryRateLimit(orderNo, sourceIp) {
+	const scopeKey = createHash("sha256")
+		.update(`membership-session-recovery:v1\0${orderNo}\0${sourceIp}`)
+		.digest("hex");
+	const now = new Date();
+	const nowText = now.toISOString();
+	const row = db.prepare(`SELECT window_start,request_count
+	  FROM membership_session_recovery_rate_limits WHERE scope_key=?`).get(scopeKey);
+	if (!row || Date.parse(row.window_start) <= now.getTime() - 5 * 60 * 1000) {
+		db.prepare(`INSERT INTO membership_session_recovery_rate_limits
+		  (scope_key,window_start,request_count,updated_at) VALUES (?,?,1,?)
+		  ON CONFLICT(scope_key) DO UPDATE SET window_start=excluded.window_start,
+		  request_count=1,updated_at=excluded.updated_at`).run(scopeKey, nowText, nowText);
+		return true;
+	}
+	if (row.request_count >= 5) return false;
+	db.prepare(`UPDATE membership_session_recovery_rate_limits
+	  SET request_count=request_count+1,updated_at=? WHERE scope_key=?`).run(nowText, scopeKey);
+	return true;
+}
+
+app.post("/api/public/orders/:orderNo/membership-session", async (request, reply) => {
+	const params = z.object({ orderNo: z.string().min(6).max(80) }).safeParse(request.params);
+	const body = z.object({
+		publicKey: z.string().min(6).max(256),
+		sessionPayload: z.string().min(2).max(256 * 1024)
+	}).safeParse(request.body);
+	if (!params.success || !body.success) {
+		return reply.code(400).send({ message: "参数不完整", code: "SESSION_RECOVERY_INVALID" });
+	}
+	const orderNo = params.data.orderNo.trim();
+	const publicKey = body.data.publicKey.trim().toUpperCase();
+	if (!consumeMembershipSessionRecoveryRateLimit(orderNo, request.ip || "")) {
+		return reply.code(429).send({ message: "提交过于频繁，请五分钟后重试", code: "SESSION_RECOVERY_RATE_LIMITED" });
+	}
+
+	let session;
+	try {
+		session = parseSessionPayload(body.data.sessionPayload);
+	} catch (error) {
+		return reply.code(400).send({ message: error.message, code: "SESSION_INVALID" });
+	}
+	const current = db.prepare(`
+	  SELECT f.*,o.public_key,o.session_revision,c.status AS cdkey_status,c.locked_by_order_id
+	  FROM membership_fulfillments f
+	  JOIN redeem_orders o ON o.id=f.order_id
+	  JOIN cdkeys c ON c.id=o.cdkey_id
+	  WHERE f.order_no=?`).get(orderNo);
+	if (!current || current.public_key !== publicKey) {
+		return reply.code(404).send({ message: "订单或卡密不匹配", code: "SESSION_RECOVERY_NOT_FOUND" });
+	}
+	if (current.state !== "SESSION_RECOVERY_REQUIRED" || !current.money_boundary_at ||
+		current.cdkey_status !== cdkeyStatuses.locked || current.locked_by_order_id !== current.order_id) {
+		return reply.code(409).send({ message: "当前订单不允许补交 Session", code: "SESSION_RECOVERY_NOT_ALLOWED" });
+	}
+	let verifiedEmail;
+	try {
+		const settings = db.prepare(`SELECT spacexcard_api_token_encrypted
+		  FROM extension_delivery_settings WHERE id='default'`).get();
+		if (!settings?.spacexcard_api_token_encrypted) {
+			return reply.code(503).send({ message: "Session 验证服务未配置", code: "SESSION_VALIDATION_NOT_CONFIGURED" });
+		}
+		const [converted] = await Promise.all([
+			convertSessionToCookiePayload(session.parsed, {
+				apiToken: decryptText(settings.spacexcard_api_token_encrypted)
+			}),
+			fetchMembershipObservation(session.parsed)
+		]);
+		verifiedEmail = converted.expectedEmail;
+	} catch (error) {
+		const invalid = ["SESSION_INVALID", "EXPECTED_IDENTITY_MISSING", "CONVERTER_IDENTITY_MISMATCH",
+			"COOKIE_PAYLOAD_INVALID"].includes(error?.code);
+		return reply.code(invalid ? 422 : 503).send({
+			message: invalid ? "新 Session 无效或身份无法验证" : "暂时无法验证新 Session，请稍后重试",
+			code: invalid ? "SESSION_INVALID" : "SESSION_VALIDATION_UNAVAILABLE"
+		});
+	}
+	let newLock;
+	try {
+		newLock = deriveMembershipAccountLockKey(env.jwtSecret, { email: verifiedEmail });
+	} catch {
+		return reply.code(422).send({ message: "新 Session 缺少原账号身份", code: "SESSION_IDENTITY_MISSING" });
+	}
+	if (!current.account_lock_key || newLock !== current.account_lock_key) {
+		return reply.code(409).send({ message: "新 Session 与原订单账号不一致", code: "SESSION_IDENTITY_MISMATCH" });
+	}
+
+	const updated = withTransaction(() => {
+		const locked = db.prepare(`SELECT f.*,o.public_key,c.status AS cdkey_status,c.locked_by_order_id
+		  FROM membership_fulfillments f JOIN redeem_orders o ON o.id=f.order_id
+		  JOIN cdkeys c ON c.id=o.cdkey_id WHERE f.id=?`).get(current.id);
+		if (!locked || locked.state !== "SESSION_RECOVERY_REQUIRED" || !locked.money_boundary_at ||
+			locked.public_key !== publicKey || locked.cdkey_status !== cdkeyStatuses.locked ||
+			locked.locked_by_order_id !== locked.order_id || locked.state_revision !== current.state_revision) {
+			const error = new Error("恢复状态已变化");
+			error.code = "SESSION_RECOVERY_CONFLICT";
+			throw error;
+		}
+		const at = nowIso();
+		db.prepare(`UPDATE redeem_orders SET session_payload=?,session_preview=?,
+		  session_revision=session_revision+1,updated_at=? WHERE id=?`).run(
+			encryptText(JSON.stringify(session.parsed)), JSON.stringify(session.preview), at, current.order_id
+		);
+		db.prepare(`UPDATE membership_fulfillments SET state='SESSION_RECOVERY_RECONCILING',
+		  failure_code=NULL,retry_at=?,resume_revision=resume_revision+1,
+		  state_revision=state_revision+1,updated_at=? WHERE id=?`).run(at, at, current.id);
+		createAuditLog({
+			action: "membership.session.recovered",
+			actor: "public",
+			resourceType: "membership_fulfillment",
+			resourceId: current.id,
+			detail: { orderNo, sessionRevision: Number(current.session_revision || 0) + 1 }
+		});
+		return db.prepare("SELECT * FROM membership_fulfillments WHERE id=?").get(current.id);
+	});
+	return { orderNo, accepted: true, membershipDelivery: projectMembershipDelivery(updated) };
 });
 
 app.get("/api/public/orders/:orderNo", async (request, reply) => {

@@ -476,6 +476,16 @@ form > .primary-btn {
   animation: fadeIn 0.4s ease-out;
 }
 
+.membership-session-recovery {
+	padding-top: 16px;
+	border-top: 1px solid var(--line);
+}
+
+.membership-session-recovery textarea {
+	min-height: 132px;
+	resize: vertical;
+}
+
 .result-title {
   font-size: 18px;
   font-weight: 700;

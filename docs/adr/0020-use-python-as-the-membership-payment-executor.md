@@ -1,0 +1,23 @@
+---
+status: accepted
+---
+
+# Use Python as the membership payment executor
+
+The existing membership worker remains the sole owner of order intake, CDK locking, fulfillment state, account and card exclusion, financial permits, retry decisions, and reconciliation. A Python executor communicates with it through a private local HTTP service: it exclusively leases one stage-and-attempt-bound command from a global serial payment queue, establishes an isolated ChatGPT browser Session, obtains the official checkout link, validates and fills the card checkout, asks Go to activate the matching single-use permit immediately before each possibly authorizing control, and returns only a sanitized result. Only after Go revalidates the stage, active card reservation, lease, and permit binding may Python redeem a short-lived single-use material grant containing the Session, full card details, fresh billing address, and checkout contract. Those values remain only in executor and browser memory, never enter task payloads, SQLite, browser persistence, or logs, and are discarded when the task exits; lease loss or an ambiguous response becomes an unknown outcome for reconciliation rather than an automatic resubmission.
+
+Python generates the official checkout link inside the leased order's isolated Session and network context. Go supplies the immutable target stage, region and currency, price-contract bounds, allowlisted checkout destinations, and permit binding; Python may validate and execute those facts but cannot choose or alter them.
+
+The payment queue permits exactly one active Python execution system-wide. That execution launches a new browser process with a unique temporary user-data directory and destroys the browser context and directory when the task ends; no browser, profile, tab set, Cookie store, or card material is shared between queued orders. Go's account and card locks remain authoritative in addition to the global queue. This replaces only the in-process Go Chrome execution decision in ADR-0006 and preserves its checkout and safety constraints without creating a second workflow owner.
+
+New payable stages enter the queue FIFO by the time they become payment-ready. Evidence-approved recovery after financial exposure and an x5/x20 final-upgrade stage whose Plus stage is already confirmed take precedence over new first-payment stages. An administrator may override ordering only with a recorded reason and audit event.
+
+For x5 and x20, the initial Plus purchase and final upgrade are separate leased commands, attempts, permits, Python processes, and browser profiles. Go creates the upgrade command only after authoritative membership and card-transaction evidence confirms the Plus stage; no live browser state crosses that checkpoint.
+
+The executor may pause on a pre-submit Cloudflare or CAPTCHA challenge for an explicitly allowed private operator handoff, then must independently re-recognize the allowlisted checkout surface before continuing. A post-submit 3DS, SMS, bank, or similar challenge never grants another payment click: after the handoff, Python reports only that confirmation may resume, and Go performs membership and card-transaction reconciliation. A lost browser or lease is an unknown outcome, not permission to rebuild and resubmit.
+
+Every active queue lease has one five-minute maximum, including ordinary execution and any pre- or post-submit operator challenge handoff. Expiry closes the temporary browser and releases the global queue; only evidence proving a pre-submit non-payment may requeue the stage, while activated or uncertain outcomes proceed to reconciliation.
+
+Only a failure that proves the payment control was not activated, membership did not change, and no new or pending card transaction exists may retry automatically, using the same order and stage for at most three attempts with backoff. An activated or ambiguously activated control, lost process or page after exposure, unknown outcome, or explicit decline cannot retry automatically and moves to reconciliation or human handling. Session failure follows the separate pre-exposure CDK release and post-exposure same-order recovery rules.
+
+The Python executor receives a new adapter identity and inherits no qualification or automatic scope from the Go or extension checkout adapters. Payment remains default-off: the new path must pass no-charge validation and separately complete one explicitly approved live canary for Plus, then x5, then x20, including dual-evidence confirmation, renewal-safe completion, and final settlement, before an administrator may enable its serial automatic queue.

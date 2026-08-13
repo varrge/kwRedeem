@@ -67,6 +67,7 @@ const STATUS_LABELS = {
   succeeded: "已成功",
   completed: "已成功",
   failed: "失败",
+	session_required: "需要新 Session",
   cancelled: "已取消",
   unknown: "未知"
 };
@@ -364,11 +365,14 @@ function renderRedeemSuccess(payload) {
   const liveStage = String(payload.liveStage || "").trim();
   const liveProgress = Number.isFinite(Number(payload.liveProgress)) ? Number(payload.liveProgress) : null;
   const liveErrorMessage = String(payload.liveErrorMessage || "").trim();
+	const recoveryRequired = payload.membershipDelivery?.status === "session_required";
 
   let statusHint;
   if (spacexActivation) {
     statusHint = spacexActivation.message || spacexActivation.stateText || "会员状态正在同步。";
-  } else if (manualProcessing) {
+	} else if (recoveryRequired) {
+		statusHint = "原订单已保留，请提交同一 ChatGPT 账号的新 Session。";
+	} else if (manualProcessing) {
     statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
   } else if (hasLiveTask) {
     statusHint = liveErrorMessage || payload.liveMessage || "任务状态会自动刷新。";
@@ -401,7 +405,7 @@ function renderRedeemSuccess(payload) {
         ${spacexActivation ? `<div class="result-item"><span>处理方式</span><strong>自动化激活</strong></div>` : ""}
         ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
         ${spacexActivation?.state ? `<div class="result-item"><span>激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
-        <div class="result-item"><span>实时任务状态</span><strong>${renderStatusText(liveStatus)}</strong></div>
+		<div class="result-item"><span>实时任务状态</span><strong>${recoveryRequired ? escapeHtml(payload.membershipDelivery.label) : renderStatusText(liveStatus)}</strong></div>
         ${queueHtml}
         ${progressHtml}
         ${stageHtml}
@@ -411,8 +415,19 @@ function renderRedeemSuccess(payload) {
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
       ${hasLiveTask && liveErrorMessage ? `<div class="result-item result-item-wide"><span>远端失败原因</span><strong>${escapeHtml(liveErrorMessage)}</strong></div>` : ""}
       ${!hasLiveTask && payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
+	  ${renderMembershipSessionRecovery(payload)}
     </div>
   `;
+}
+
+function renderMembershipSessionRecovery(payload) {
+	if (payload.membershipDelivery?.status !== "session_required") return "";
+	return `
+		<form class="membership-session-recovery stack" data-order-no="${escapeHtml(payload.orderNo)}" data-public-key="${escapeHtml(payload.publicKey)}">
+			<textarea name="sessionPayload" rows="5" autocomplete="off" spellcheck="false" placeholder="粘贴同一 ChatGPT 账号的新 Session JSON" required></textarea>
+			<button type="submit" class="primary-btn">提交新 Session</button>
+			<div class="membership-session-recovery-result result muted" aria-live="polite"></div>
+		</form>`;
 }
 
 function renderOrderResult(payload) {
@@ -446,6 +461,7 @@ function renderOrderResult(payload) {
       ${apiMessage ? `<div class="result-item result-item-wide"><span>接口返回消息</span><strong>${escapeHtml(apiMessage)}</strong></div>` : ""}
       ${payload.liveErrorMessage ? `<div class="result-item result-item-wide"><span>远端失败原因</span><strong>${escapeHtml(payload.liveErrorMessage)}</strong></div>` : ""}
       ${payload.errorMessage ? `<div class="result-item result-item-wide"><span>错误信息</span><strong>${escapeHtml(payload.errorMessage)}</strong></div>` : ""}
+	  ${renderMembershipSessionRecovery(payload)}
     </div>
   `;
 }
@@ -697,6 +713,36 @@ lookupForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setState(orderResult, error.message, "error");
   }
+});
+
+document.addEventListener("submit", async (event) => {
+	const form = event.target.closest?.(".membership-session-recovery");
+	if (!form) return;
+	event.preventDefault();
+	const result = form.querySelector(".membership-session-recovery-result");
+	const button = form.querySelector("button[type='submit']");
+	const field = form.elements.sessionPayload;
+	try {
+		const sessionPayload = field.value.trim();
+		parseSessionPayloadInput(sessionPayload);
+		button.disabled = true;
+		setState(result, "正在验证新 Session...");
+		await request(`/api/public/orders/${encodeURIComponent(form.dataset.orderNo)}/membership-session`, {
+			method: "POST",
+			body: JSON.stringify({ publicKey: form.dataset.publicKey, sessionPayload })
+		});
+		field.value = "";
+		const refreshed = await request(`/api/public/orders/${encodeURIComponent(form.dataset.orderNo)}`);
+		const target = form.closest(".result");
+		if (target === redeemResult || redeemResult.contains(form)) {
+			setRichState(redeemResult, renderRedeemSuccess(refreshed), "success");
+		} else {
+			setRichState(orderResult, renderOrderResult(refreshed), "success");
+		}
+	} catch (error) {
+		setState(result, error.message, "error");
+		button.disabled = false;
+	}
 });
 
 // --- SMS Query ---

@@ -479,12 +479,16 @@ _Avoid_: Automation Protocol, card-platform workflow, overloading session activa
 The initial membership-fulfillment check performed with the submitted Session before establishing its checkout browser Session. It queries the subscription, disables automatic renewal when enabled, and then requires a fresh authoritative observation showing both `plan=free` and automatic renewal disabled before checkout may begin.
 _Avoid_: Pre-payment cancellation, treating cancellation success as purchase eligibility, paying while a paid plan remains active, inferring `free` or renewal state from a missing response
 
+**Starting Subscription Dependency Wait**:
+The retry state when subscription query or renewal cancellation is temporarily unavailable during the Starting Subscription Guard while the Session has not been proven invalid. The original order retains its locked CDK, performs no card or money action, and retries with bounded backoff; exhausting automatic retries requires human handling and does not release the CDK.
+_Avoid_: Treating timeout or rate limiting as an invalid Session, releasing the CDK on an unknown result, entering checkout without authoritative subscription evidence
+
 **Pre-Funding Session Release**:
 The recovery outcome when a submitted Session becomes unusable before any card reservation, funding, authorization, or payment action. The current order and fulfillment are terminally cancelled, the locked CDK returns to `active`, and the player's next submission creates a new order and fulfillment with no Session or account state inherited from the cancelled attempt.
 _Avoid_: Resuming the cancelled order with a replacement Session, overwriting the failed attempt, releasing a CDK after money exposure
 
 **Post-Funding Session Recovery**:
-The recovery path when a Session becomes unusable after card reservation or money exposure. The CDK and original order remain locked, and a replacement Session may resume that fulfillment only after proving the same ChatGPT identity and reconciling membership plus card transactions; another payment is allowed only when there is authoritative evidence of no membership change, no effective charge, and no pending authorization.
+The recovery path when a Session becomes unusable after card reservation or money exposure. The CDK and original order remain locked; the player submits the order number, original CDK, and replacement Session through a dedicated recovery entry, and that Session may replace only the encrypted Session of the same verified ChatGPT identity. Membership tier, card, stage, and evidence remain immutable, reconciliation runs first, and another payment is allowed only when there is authoritative evidence of no membership change, no effective charge, and no pending authorization.
 _Avoid_: Resetting the CDK, creating a replacement order, accepting a different account, retrying payment before reconciliation
 
 **Membership Financial Exposure Boundary**:
@@ -496,8 +500,8 @@ An append-only execution record for one pass through a membership-fulfillment st
 _Avoid_: New fulfillment per retry, resetting history, reusing session-delivery attempt counters
 
 **Browser Fulfillment Lease**:
-The exclusive right for one membership fulfillment to use the bound extension's shared incognito context and enter card reservation or money-moving stages. Read-only inventory and price reconciliation do not require this lease.
-_Avoid_: Pre-funding queued orders, treating separate incognito windows as isolation, per-card browser concurrency
+The exclusive, system-wide right for one membership-fulfillment stage to perform checkout in an isolated temporary browser for at most five minutes. Read-only subscription, inventory, transaction, and reconciliation work does not require this lease.
+_Avoid_: Concurrent payment browsers, extending the hard deadline with heartbeats, treating separate profiles as permission for concurrency
 
 **Account Fulfillment Lock**:
 The exclusive claim allowing only one active membership fulfillment for a verified ChatGPT identity. A later order waits without card or money exposure and must re-establish purchase eligibility after the earlier fulfillment terminates.
@@ -609,15 +613,15 @@ The newly generated name and Delaware address returned by KaWang's existing US-a
 _Avoid_: Philippines address, checkout region, persistent per-card identity
 
 **Ephemeral Checkout Material**:
-The stage-bound, short-lived bundle of full card details, fresh billing record, checkout target, and validation contract released to the owning extension installation for one active checkout attempt. It exists only in server and extension memory and is never a WebSocket payload or persistent browser record.
-_Avoid_: Stored card profile, reusable checkout secret, extension-held OpenAPI credential
+The stage-bound, single-use bundle of the protected Session, full card details, fresh billing record, and validation contract released to the owning checkout execution only after its lease, card reservation, and permit binding are revalidated. It exists only in fulfillment-service, checkout-executor, and browser memory and is never a queue payload or persistent browser record.
+_Avoid_: Stored card profile, reusable checkout secret, task-embedded payment material, executor-held card-platform credential
 
 **Checkout Address Wait**:
 An order-level retry state entered before checkout when KaWang's address API is unavailable or returns an incomplete Delaware record. Automatic fulfillment does not use a third-party address site or submit an incomplete form while waiting.
 _Avoid_: Browser scraping fallback, submitting without required billing fields
 
 **Session-Driven Checkout Entry**:
-The Go checkout module locally chunks the protected order Session's `sessionToken` into allowlisted ChatGPT Cookies, verifies the authenticated account identity, reads the official current subscription, and uses the official checkout API with the extension-proven fixed `billing_details={country:PH,currency:PHP}`, hosted UI, Plus pricing-modal contract inside an isolated unattended browser. An active paid subscription stops before checkout creation; accepted responses are limited to reviewed hosted or `openai_llc/{oaics_*,cs_*}` routes, and preflight never invokes subscription renewal. It does not send the Session to a checkout-link broker or require a separately configured GPT Token.
+The checkout executor locally chunks the protected order Session's `sessionToken` into allowlisted ChatGPT Cookies, verifies the authenticated account identity, and uses the official checkout API inside the isolated payment browser with the fulfillment workflow's fixed `billing_details={country:PH,currency:PHP}`, hosted UI, and Plus pricing-modal contract. The Starting Subscription Guard must already have passed; accepted responses are limited to reviewed hosted or `openai_llc/{oaics_*,cs_*}` routes, and the executor cannot alter the target, region, currency, price contract, or destination allowlist.
 _Avoid_: Brokered Checkout Link, legacy pricing-button automation, account password automation, treating `accessToken` as a Cookie, logging Session/Cookie material, renewing during preflight
 
 **Unattended Checkout Browser**:
@@ -653,7 +657,7 @@ A sanitized description of an unsupported checkout state containing adapter iden
 _Avoid_: Raw DOM upload, automatic screenshot, form-value telemetry
 
 **Versioned Checkout Adapter**:
-The extension-bundled code contract that recognizes checkout states, fields, progression controls, and the final payment control for a known UI version. It can change only through an extension release, never through remotely supplied selectors or executable code.
+The checkout-executor release contract that recognizes checkout states, fields, progression controls, and the final payment control for a known UI version. It can change only through a reviewed executor release and new rollout qualification, never through remotely supplied selectors or executable code.
 _Avoid_: Server-configured click rules, remote JavaScript, text-only button matching
 
 **Automatic Checkout Rollout Gate**:
@@ -669,11 +673,11 @@ An administrator's freshly authenticated, explicit permission for one identified
 _Avoid_: Random canary selection, automatic scope expansion, treating deployment as approval, worker self-approval
 
 **Canary Approval Snapshot**:
-The single-use immutable facts authorized for one live-canary payment: order, target tier, selected card, funding budget, checkout price-contract version, and extension adapter version. A changed fact invalidates the approval, and final payment activation consumes it atomically.
+The single-use immutable facts authorized for one live-canary payment: order, target tier, selected card, funding budget, checkout price-contract version, and checkout-adapter version. A changed fact invalidates the approval, and final payment activation consumes it atomically.
 _Avoid_: Permanent approved flag, time-window replay, approval surviving a changed payment plan
 
 **Canary Approval Hold**:
-The maximum 15-minute browser-lease period in which a prepared live-canary stage waits for its matching approval snapshot. Expiry releases the sanitized browser context and invalidates the page snapshot without releasing card capacity, moving funds, or replaying an already completed stage.
+The maximum five-minute execution-lease period in which a prepared live-canary stage waits for its matching approval snapshot. Expiry releases the sanitized browser context and invalidates the page snapshot without releasing card capacity, moving funds, or replaying an already completed stage.
 _Avoid_: Indefinite global queue pause, approval surviving a rebuilt page, repeating Plus after an upgrade hold expires
 
 **Tier Rollout Qualification**:
@@ -709,15 +713,15 @@ The versioned ChatGPT account page on which an already-confirmed Plus membership
 _Avoid_: Direct final-tier checkout link, text-scored upgrade button, arbitrary homepage navigation
 
 **Payment Action Required**:
-A fulfillment state in which a recognized payment flow requires 3DS, CAPTCHA, bank verification, or another human action. The active browser page and card reservation are retained, the shared incognito activation queue pauses globally, and resumption performs confirmation only rather than another payment submission.
+A fulfillment state in which a recognized payment flow requires 3DS, CAPTCHA, bank verification, or another human action. The active checkout browser and card reservation retain the global serial queue for no more than its five-minute hard deadline; after a post-submit handoff, resumption performs confirmation only rather than another payment submission.
 _Avoid_: Bypassing the challenge, switching cards, resubmitting payment after handoff
 
 **Human Challenge Acknowledgement**:
-The local extension action by which an operator confirms that they finished interacting with the retained incognito challenge page. It authorizes confirmation queries only and never authorizes another checkout submission.
+The private local handoff action by which an operator confirms that they finished interacting with the retained checkout browser. For a post-submit challenge it authorizes confirmation queries only and never authorizes another checkout submission.
 _Avoid_: Remote blind resume, automatic DOM-based acknowledgement, treating acknowledgement as payment success
 
 **Lost Challenge Context**:
-A human-required checkout whose owning incognito tab, window, or browser no longer exists. Its order remains under server-side membership and transaction reconciliation while the sanitized extension queue may continue with another order.
+A human-required checkout whose owning execution, page, or browser no longer exists. Its order remains under workflow-owned membership and transaction reconciliation while the sanitized serial payment queue continues with another order.
 _Avoid_: Recreating and resubmitting checkout, releasing the card reservation, permanently blocking the browser queue
 
 **Uncertain Payment Outcome**:
@@ -757,7 +761,7 @@ A deduplicated, sanitized operations-console task and Feishu notification indica
 _Avoid_: Notification per worker retry, secrets in messages, treating acknowledgement as workflow approval
 
 **Membership State Provider**:
-The authorized `gptserve.freespaces.app` service that receives an order's protected ChatGPT Session from kwRedeem and reports the current account type for payment-stage confirmation. The extension never calls it or receives the Session used for the query.
+The authorized `gptserve.freespaces.app` service that receives an order's protected ChatGPT Session from the fulfillment workflow and reports the current account type for starting eligibility and payment-stage confirmation. The checkout executor does not use its response to decide that an order or stage is complete.
 _Avoid_: Browser-side membership query, persisting the provider's raw response
 
 **Confirmed Account Type**:

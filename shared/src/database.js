@@ -320,6 +320,7 @@ function createSchema(db) {
       site_id TEXT,
       session_payload TEXT NOT NULL,
       session_preview TEXT,
+	  session_revision INTEGER NOT NULL DEFAULT 0,
       customer_ip TEXT,
       abandon_remaining_time INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -1405,6 +1406,47 @@ function createSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS membership_checkout_commands (
+      id TEXT PRIMARY KEY,
+      fulfillment_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      command_kind TEXT NOT NULL,
+      priority_class TEXT NOT NULL,
+      target_tier TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      price_contract_id TEXT NOT NULL,
+      price_contract_version INTEGER NOT NULL,
+      fulfillment_revision INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      lease_epoch INTEGER NOT NULL DEFAULT 0,
+      lease_token_sha256 TEXT,
+      leased_by TEXT,
+      leased_at TEXT,
+      heartbeat_at TEXT,
+      lease_expires_at TEXT,
+      hard_deadline_at TEXT,
+      material_claimed_at TEXT,
+      available_at TEXT NOT NULL,
+      payment_ready_at TEXT NOT NULL,
+      outcome_code TEXT,
+      sanitized_diagnostic TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      ended_at TEXT,
+      UNIQUE(fulfillment_id, stage_key, attempt_no, command_kind)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_membership_checkout_commands_queue
+      ON membership_checkout_commands(state, priority_class, available_at, payment_ready_at, created_at);
+
+	CREATE TABLE IF NOT EXISTS membership_session_recovery_rate_limits (
+	  scope_key TEXT PRIMARY KEY,
+	  window_start TEXT NOT NULL,
+	  request_count INTEGER NOT NULL,
+	  updated_at TEXT NOT NULL
+	);
+
     CREATE TABLE IF NOT EXISTS membership_material_grants (
       id TEXT PRIMARY KEY,
       nonce_sha256 TEXT NOT NULL UNIQUE,
@@ -1623,6 +1665,7 @@ function createSchema(db) {
   `);
 
   ensureColumn(db, "products", "membership_tier", "TEXT");
+	ensureColumn(db, "redeem_orders", "session_revision", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "membership_fulfillment_settings", "last_inventory_error", "TEXT");
   ensureColumn(db, "membership_fulfillment_settings", "rollout_mode", "TEXT NOT NULL DEFAULT 'disabled'");
   ensureColumn(db, "membership_payment_stages", "attempt_no", "INTEGER");

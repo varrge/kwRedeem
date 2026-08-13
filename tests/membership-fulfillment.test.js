@@ -41,7 +41,8 @@ const {
   requestDependencyProbe
 } = await import("../shared/src/membership-circuits.js");
 const { getDb } = await import("../shared/src/database.js");
-const { encryptText } = await import("../shared/src/secure.js");
+const { decryptText, encryptText } = await import("../shared/src/secure.js");
+const { deriveMembershipAccountLockKey } = await import("../shared/src/membership-orchestration.js");
 
 const db = getDb();
 let app;
@@ -87,13 +88,18 @@ test("membership provider contract is strict and separates starting-free from pa
     data: {
       account_type: "free",
       currency: null,
-      auto_renew: null,
+		auto_renew: false,
       is_overdue: false,
       is_delinquent: false,
       expire_time: null
     }
   }, { nowMs });
   assert.equal(classifyStartingMembership(free), "free");
+	const renewalUnknown = normalizeMembershipEnvelope({
+		code: 200,
+		data: { ...free, account_type: "free", auto_renew: null, is_overdue: false, is_delinquent: false }
+	}, { nowMs });
+	assert.equal(classifyStartingMembership(renewalUnknown), "unknown");
   assert.equal(isStrictMembershipStageConfirmed(free, "plus"), false);
 
   assert.throws(() => normalizeMembershipEnvelope({
@@ -376,6 +382,7 @@ test("database initializes membership tables and safe defaults", () => {
     "card_capacity_reservations",
     "funding_intents",
     "browser_fulfillment_lease",
+    "membership_checkout_commands",
     "live_canary_authorizations",
     "automatic_checkout_scopes"
   ]) assert.equal(tables.has(name), true, `missing table ${name}`);
@@ -389,6 +396,16 @@ test("database initializes membership tables and safe defaults", () => {
   const intake = db.prepare("SELECT * FROM membership_intake_settings WHERE id = 'default'").get();
   assert.equal(Number.isFinite(Date.parse(intake.accept_orders_created_at)), true);
   assert.equal(db.prepare("SELECT state FROM browser_fulfillment_lease WHERE id = 'default'").get().state, "available");
+
+  const commandColumns = new Set(
+    db.prepare("PRAGMA table_info(membership_checkout_commands)").all().map((column) => column.name)
+  );
+  for (const forbidden of ["session", "cookie", "pan", "cvv", "checkout_url", "card_number"]) {
+    assert.equal(commandColumns.has(forbidden), false, `unsafe command column ${forbidden}`);
+  }
+  for (const required of ["hard_deadline_at", "lease_token_sha256", "fulfillment_revision", "sanitized_diagnostic"]) {
+    assert.equal(commandColumns.has(required), true, `missing command column ${required}`);
+  }
 });
 
 test("dependency circuit opens after bounded failures and recovers through one half-open probe", () => {
@@ -1576,6 +1593,119 @@ test("voiding a CDK is rejected after its membership fulfillment crosses the mon
   });
   assert.equal(lockedSession.statusCode, 200);
   assert.deepEqual(JSON.parse(lockedSession.json().sessionJson), { user: { email: "void-money@example.com" } });
+});
+
+test("post-boundary Session recovery requires the original CDK and account identity", async () => {
+	if (!app) ({ app } = await import("../api/src/server.js"));
+	const login = await app.inject({
+		method: "POST",
+		url: "/api/admin/auth/login",
+		payload: { username: "admin", password: "test-password" }
+	});
+	const headers = { authorization: `Bearer ${login.json().token}` };
+	const created = await app.inject({
+		method: "POST",
+		url: "/api/admin/cdkeys/create",
+		headers,
+		payload: {
+			sourceKey: "",
+			siteId: "site_demo",
+			prefix: "SESSION-RECOVERY",
+			processingMode: "manual",
+			manualType: "PLUS"
+		}
+	});
+	const originalEmail = "session-recovery@example.com";
+	const redeemed = await app.inject({
+		method: "POST",
+		url: "/api/public/redeem",
+		payload: {
+			publicKey: created.json().publicKey,
+			sessionPayload: JSON.stringify({ user: { email: originalEmail }, accessToken: "old-session" }),
+			abandonRemainingTime: false
+		}
+	});
+	assert.equal(redeemed.statusCode, 200);
+	const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no=?").get(redeemed.json().orderNo);
+	const lock = deriveMembershipAccountLockKey(process.env.JWT_SECRET, { email: originalEmail });
+	db.prepare(`UPDATE membership_fulfillments SET state='SESSION_RECOVERY_REQUIRED',
+	  account_lock_key=?,money_boundary_at=?,card_reservation_id='reservation-immutable',
+	  current_stage='plus',state_revision=state_revision+1,updated_at=? WHERE order_id=?`).run(
+		lock, "2026-08-13T01:00:00.000Z", "2026-08-13T01:01:00.000Z", order.id
+	);
+	db.prepare(`UPDATE extension_delivery_settings SET spacexcard_api_token_encrypted=? WHERE id='default'`).run(
+		encryptText("session-converter-token")
+	);
+
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url, options) => {
+		if (String(url).includes("session-to-cookie")) {
+			const submitted = JSON.parse(JSON.parse(options.body).token_input);
+			return new Response(JSON.stringify({
+				code: 0,
+				data: {
+					email: submitted.user.email,
+					count: 1,
+					cookies: [{
+						domain: ".chatgpt.com", hostOnly: false, httpOnly: true,
+						name: "__Secure-next-auth.session-token", path: "/", sameSite: "lax",
+						secure: true, session: true, storeId: null, value: "verified-cookie"
+					}]
+				},
+				msg: "ok"
+			}), { status: 200, headers: { "content-type": "application/json" } });
+		}
+		return new Response(JSON.stringify({
+			code: 200,
+			data: {
+				account_type: "free", currency: null, auto_renew: false,
+				is_overdue: false, is_delinquent: false, expire_time: null
+			}
+		}), { status: 200, headers: { "content-type": "application/json" } });
+	};
+	const mismatch = await app.inject({
+		method: "POST",
+		url: `/api/public/orders/${encodeURIComponent(order.order_no)}/membership-session`,
+		payload: {
+			publicKey: created.json().publicKey,
+			sessionPayload: JSON.stringify({ user: { email: "other@example.com" }, accessToken: "wrong-session" })
+		}
+	});
+	assert.equal(mismatch.statusCode, 409);
+	assert.equal(mismatch.json().code, "SESSION_IDENTITY_MISMATCH");
+
+	let recovered;
+	try {
+		recovered = await app.inject({
+			method: "POST",
+			url: `/api/public/orders/${encodeURIComponent(order.order_no)}/membership-session`,
+			payload: {
+				publicKey: created.json().publicKey,
+				sessionPayload: JSON.stringify({ user: { email: originalEmail }, accessToken: "new-session" })
+			}
+		});
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+	assert.equal(recovered.statusCode, 200);
+	assert.equal(recovered.json().accepted, true);
+	assert.equal(recovered.json().membershipDelivery.label, "正在核对付款状态");
+
+	const updatedOrder = db.prepare("SELECT * FROM redeem_orders WHERE id=?").get(order.id);
+	const updatedFulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id=?").get(order.id);
+	const updatedCdk = db.prepare("SELECT * FROM cdkeys WHERE id=?").get(created.json().id);
+	assert.deepEqual(JSON.parse(decryptText(updatedOrder.session_payload)), {
+		user: { email: originalEmail }, accessToken: "new-session"
+	});
+	assert.equal(updatedOrder.session_revision, 1);
+	assert.equal(updatedFulfillment.state, "SESSION_RECOVERY_RECONCILING");
+	assert.equal(updatedFulfillment.card_reservation_id, "reservation-immutable");
+	assert.equal(updatedCdk.status, "locked");
+	assert.equal(updatedCdk.locked_by_order_id, order.id);
+	const audit = db.prepare(`SELECT detail FROM admin_audit_logs
+	  WHERE action='membership.session.recovered' AND resource_id=? ORDER BY created_at DESC LIMIT 1`).get(updatedFulfillment.id);
+	assert.deepEqual(JSON.parse(audit.detail), { orderNo: order.order_no, sessionRevision: 1 });
+	assert.doesNotMatch(audit.detail, /session-recovery@example|new-session/i);
 });
 
 test("admin UI exposes locked membership credentials without money-operation controls", async () => {

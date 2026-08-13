@@ -207,6 +207,13 @@ export function projectMembershipDelivery(fulfillment, compensation = null) {
   if (compensated) projection = compensated;
   else if (fulfillment.state === "CANCELLED") projection = { status: "cancelled", label: "卡密已作废" };
   else if (fulfillment.state === "COMPLETED") projection = { status: "succeeded", label: "交付成功" };
+	else if (fulfillment.state === "SESSION_RECOVERY_REQUIRED") {
+		projection = { status: "session_required", label: "需要重新提交 Session" };
+	} else if (fulfillment.state === "SESSION_RECOVERY_RECONCILING") {
+		projection = { status: "processing", label: "正在核对付款状态" };
+	} else if (["SESSION_RECOVERY_EVIDENCE_HOLD", "EXECUTOR_OUTCOME_UNCERTAIN"].includes(fulfillment.state)) {
+		projection = { status: "manual_review", label: "付款状态待人工核对" };
+	}
   else if (fulfillment.state === "PARTIAL_FULFILLMENT_EXPIRED") {
     projection = { status: "after_sales", label: "售后处理中" };
   } else if ([

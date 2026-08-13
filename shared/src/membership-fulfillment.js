@@ -72,8 +72,12 @@ export const membershipFulfillmentStates = Object.freeze([
   "CHECKOUT_PRE_SUBMIT_FAILED",
   "UNEXPECTED_PREAUTH",
   "PAYMENT_ACTION_REQUIRED",
-  "ACTION_REQUIRED_CONTEXT_LOST",
+	"ACTION_REQUIRED_CONTEXT_LOST",
   "PAYMENT_OUTCOME_UNCERTAIN",
+	"EXECUTOR_OUTCOME_UNCERTAIN",
+	"SESSION_RECOVERY_REQUIRED",
+	"SESSION_RECOVERY_RECONCILING",
+	"SESSION_RECOVERY_EVIDENCE_HOLD",
   "PAYMENT_DECLINED",
   "PARTIALLY_FULFILLED",
   "PARTIAL_FULFILLMENT_EXPIRED",
@@ -147,9 +151,31 @@ function parseTime(value) {
 
 export function normalizeMembershipEnvelope(envelope, options = {}) {
   const root = requireObject(envelope, "会员状态响应不是对象");
+  if (root.code === 401) {
+    const error = new MembershipContractError("Session 已失效", "SESSION_INVALID");
+    error.retryable = false;
+    error.retryScope = "order";
+    throw error;
+  }
   if (root.code !== 200) {
     throw new MembershipContractError("会员状态响应业务码不是 200");
   }
+	if (root.data === null && String(root.message || "").trim() === "您还没有订阅,允许您生成订阅链接") {
+		const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+		return Object.freeze({
+			providerCode: 200,
+			providerAccountType: null,
+			accountType: "free",
+			currency: null,
+			autoRenew: false,
+			isOverdue: false,
+			isDelinquent: false,
+			expireTime: null,
+			expireTimeValid: false,
+			expireTimeFuture: false,
+			observedAt: new Date(nowMs).toISOString()
+		});
+	}
   const data = requireObject(root.data, "会员状态响应缺少 data");
   const providerType = nullableString(data.account_type, "account_type")?.toLowerCase() || null;
   const accountType = providerType ? MEMBERSHIP_TYPE_MAP[providerType] : null;
@@ -180,7 +206,7 @@ export function normalizeMembershipEnvelope(envelope, options = {}) {
 export function classifyStartingMembership(observation) {
   requireObject(observation, "会员状态观察无效");
   if (observation.accountType === "free") {
-    return observation.isOverdue === false && observation.isDelinquent === false
+		return observation.isOverdue === false && observation.isDelinquent === false && observation.autoRenew === false
       ? "free"
       : "unknown";
   }

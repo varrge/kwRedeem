@@ -32,6 +32,7 @@ type Config struct {
 	CheckoutExecutor      string
 	ChromePath            string
 	ChromeProxyServer     string
+	EfunCardProxyURL      string
 	VisibleBrowser        bool
 	BrowserTimeout        time.Duration
 	HumanChallengeTimeout time.Duration
@@ -107,6 +108,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	efunCardProxyURL, err := validateEfunCardProxyURL(env("KWMEMBERSHIP_EFUNCARD_PROXY_URL", ""))
+	if err != nil {
+		return Config{}, err
+	}
 	visibleBrowser, err := boolean("KWMEMBERSHIP_VISIBLE_BROWSER", false)
 	if err != nil {
 		return Config{}, err
@@ -142,6 +147,7 @@ func Load() (Config, error) {
 		CheckoutExecutor:      checkoutExecutor,
 		ChromePath:            chromePath,
 		ChromeProxyServer:     chromeProxyServer,
+		EfunCardProxyURL:      efunCardProxyURL,
 		VisibleBrowser:        visibleBrowser,
 		BrowserTimeout:        browserTimeout,
 		HumanChallengeTimeout: humanChallengeTimeout,
@@ -174,6 +180,14 @@ func validateExecutorListenAddress(value string) (string, error) {
 }
 
 func validateChromeProxyServer(value string) (string, error) {
+	return validateProxyURL("KWMEMBERSHIP_CHROME_PROXY_SERVER", value)
+}
+
+func validateEfunCardProxyURL(value string) (string, error) {
+	return validateProxyURL("KWMEMBERSHIP_EFUNCARD_PROXY_URL", value)
+}
+
+func validateProxyURL(name, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", nil
@@ -183,7 +197,7 @@ func validateChromeProxyServer(value string) (string, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "socks5") || parsed.User != nil ||
 		parsed.Hostname() == "" || portErr != nil || port < 1 || port > 65535 ||
 		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("KWMEMBERSHIP_CHROME_PROXY_SERVER must be an http:// or socks5:// host:port URL without credentials")
+		return "", fmt.Errorf("%s must be an http:// or socks5:// host:port URL without credentials", name)
 	}
 	return value, nil
 }

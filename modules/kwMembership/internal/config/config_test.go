@@ -60,6 +60,7 @@ func TestLoadUsesKawangDatabaseAndSecret(t *testing.T) {
 	t.Setenv("WORKER_POLL_MS", "5000")
 	t.Setenv("DEFAULT_REQUEST_TIMEOUT_MS", "15000")
 	t.Setenv("KWMEMBERSHIP_CHROME_PROXY_SERVER", "http://127.0.0.1:7890")
+	t.Setenv("KWMEMBERSHIP_EFUNCARD_PROXY_URL", "http://127.0.0.1:17890")
 	t.Setenv("KWMEMBERSHIP_VISIBLE_BROWSER", "true")
 	t.Setenv("KWMEMBERSHIP_HUMAN_CHALLENGE_TIMEOUT_MS", "300000")
 	t.Setenv("KWMEMBERSHIP_EXECUTOR_SECRET", "test-python-executor-secret-00000001")
@@ -75,6 +76,9 @@ func TestLoadUsesKawangDatabaseAndSecret(t *testing.T) {
 	}
 	if cfg.ChromeProxyServer != "http://127.0.0.1:7890" {
 		t.Fatalf("ChromeProxyServer = %q", cfg.ChromeProxyServer)
+	}
+	if cfg.EfunCardProxyURL != "http://127.0.0.1:17890" {
+		t.Fatalf("EfunCardProxyURL = %q", cfg.EfunCardProxyURL)
 	}
 	if !cfg.VisibleBrowser || cfg.HumanChallengeTimeout.String() != "5m0s" {
 		t.Fatalf("visible challenge config = %t/%s", cfg.VisibleBrowser, cfg.HumanChallengeTimeout)
@@ -150,6 +154,22 @@ func TestValidateChromeProxyServer(t *testing.T) {
 	}
 	if got, err := validateChromeProxyServer("socks5://127.0.0.1:7890"); err != nil || got == "" {
 		t.Fatalf("valid proxy rejected: value=%q error=%v", got, err)
+	}
+}
+
+func TestValidateEfunCardProxyURL(t *testing.T) {
+	for _, value := range []string{
+		"https://127.0.0.1:7890",
+		"socks5://user:password@127.0.0.1:7890",
+		"http://127.0.0.1:7890/path",
+		"http://127.0.0.1",
+	} {
+		if _, err := validateEfunCardProxyURL(value); err == nil || !strings.Contains(err.Error(), "KWMEMBERSHIP_EFUNCARD_PROXY_URL") {
+			t.Fatalf("validateEfunCardProxyURL(%q) error = %v", value, err)
+		}
+	}
+	if got, err := validateEfunCardProxyURL("http://127.0.0.1:17890"); err != nil || got == "" {
+		t.Fatalf("valid EfunCard proxy rejected: value=%q error=%v", got, err)
 	}
 }
 

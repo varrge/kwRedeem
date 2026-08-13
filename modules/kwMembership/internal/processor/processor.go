@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -16,16 +17,17 @@ import (
 )
 
 type Processor struct {
-	config     config.Config
-	store      *store.Store
-	lease      store.Lease
-	decrypter  *secure.Decrypter
-	httpClient *http.Client
-	membership *provider.MembershipClient
-	renewal    *provider.RenewalClient
-	address    *provider.AddressClient
-	executor   checkout.Executor
-	now        func() time.Time
+	config         config.Config
+	store          *store.Store
+	lease          store.Lease
+	decrypter      *secure.Decrypter
+	httpClient     *http.Client
+	efunHTTPClient *http.Client
+	membership     *provider.MembershipClient
+	renewal        *provider.RenewalClient
+	address        *provider.AddressClient
+	executor       checkout.Executor
+	now            func() time.Time
 	// requireLeaseFence is set by New. Package tests may deliberately construct
 	// a zero-value Processor literal around a minimal schema; production callers
 	// cannot bypass the lease fence because they enter through New and RunOnce.
@@ -47,15 +49,28 @@ func New(cfg config.Config, repository *store.Store, lease store.Lease, decrypte
 }
 
 func NewWithExecutor(cfg config.Config, repository *store.Store, lease store.Lease, decrypter *secure.Decrypter, executor checkout.Executor) *Processor {
-	client := &http.Client{
-		Timeout: cfg.HTTPTimeout,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	newClient := func(proxyURL string) *http.Client {
+		client := &http.Client{
+			Timeout: cfg.HTTPTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		if proxyURL != "" {
+			parsed, err := url.Parse(proxyURL)
+			if err == nil {
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				transport.Proxy = http.ProxyURL(parsed)
+				client.Transport = transport
+			}
+		}
+		return client
 	}
+	client := newClient("")
 	return &Processor{
 		config: cfg, store: repository, lease: lease, decrypter: decrypter,
 		httpClient:        client,
+		efunHTTPClient:    newClient(cfg.EfunCardProxyURL),
 		membership:        provider.NewMembershipClient(client),
 		renewal:           provider.NewRenewalClient(client),
 		address:           provider.NewAddressClient(client, cfg.APIURL),

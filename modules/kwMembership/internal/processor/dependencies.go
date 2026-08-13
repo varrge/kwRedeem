@@ -87,7 +87,11 @@ func (p *Processor) cardPlatform(ctx context.Context, key string) (provider.Card
 				if json.Unmarshal([]byte(plain), &credential) != nil || strings.TrimSpace(credential.APIKey) == "" {
 					return nil, coded("CARD_PLATFORM_NOT_CONFIGURED", "EfunCard credential is invalid")
 				}
-				return provider.NewEfunCardClient(p.httpClient, config.BaseURL.String, credential.APIKey)
+				client := p.efunHTTPClient
+				if client == nil {
+					client = p.httpClient
+				}
+				return provider.NewEfunCardClient(client, config.BaseURL.String, credential.APIKey)
 			default:
 				return nil, coded("CARD_PLATFORM_KIND_UNSUPPORTED", "card platform kind is unsupported")
 			}

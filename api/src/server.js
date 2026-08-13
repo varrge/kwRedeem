@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -144,6 +144,7 @@ const projectRoot = path.resolve(path.dirname(__filename), "../..");
 const logsDir = path.join(projectRoot, "logs");
 const updateLogPath = path.join(logsDir, "update.log");
 const updateStatePath = path.join(logsDir, "update-state.json");
+const updateLauncherPath = path.join(projectRoot, "scripts", "update-launcher.js");
 const maintenancePath = resolveProjectPath(env.maintenancePath);
 const migrationTmpDir = path.join(projectRoot, "tmp", "migration");
 const migrationUploads = new Map();
@@ -578,25 +579,28 @@ function startUpdateTask(actor) {
   const updateProcessEnv = buildUpdateProcessEnv();
   appendUpdateLog(`更新任务使用 Node ${process.version}：${process.execPath}`);
   ensureLogsDir();
-  const logDescriptor = fs.openSync(updateLogPath, "a");
-  const child = spawn("bash", ["scripts/update.sh"], {
-    cwd: projectRoot,
-    env: updateProcessEnv,
-    detached: true,
-    stdio: ["ignore", logDescriptor, logDescriptor]
-  });
-  fs.closeSync(logDescriptor);
-  if (Number.isInteger(child.pid)) writeUpdateState({ processId: child.pid });
-
-  child.once("error", (error) => {
+  try {
+    const processIdText = execFileSync(process.execPath, [updateLauncherPath, projectRoot, updateLogPath], {
+      cwd: projectRoot,
+      env: updateProcessEnv,
+      encoding: "utf8",
+      timeout: 5000
+    }).trim();
+    const processId = Number(processIdText);
+    if (!Number.isInteger(processId) || processId <= 1) {
+      throw new Error("更新启动器未返回有效进程 ID");
+    }
+    writeUpdateState({ processId });
+  } catch (error) {
     appendUpdateLog(`更新任务启动失败：${error.message}`);
     writeUpdateState({
       status: "failed",
       endedAt: nowIso(),
+      processId: null,
       error: error.message
     });
-  });
-  child.unref();
+    throw error;
+  }
 }
 
 function signAdminToken(payload) {

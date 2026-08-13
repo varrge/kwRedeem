@@ -102,7 +102,7 @@ test("unified update drains and backs up before pulling or installing dependenci
   assert.match(script, /run_update_runtime state succeeded/);
   assert.match(script, /MEMBERSHIP_DEPLOY_HELPER="\/usr\/local\/sbin\/kawang-membership-deploy"/);
   assert.doesNotMatch(script, /KWMEMBERSHIP_DEPLOY_HELPER:-/);
-  assert.match(script, /finish_update\(\) \{\n  local exit_code=\$\?\n  set \+e/);
+  assert.match(script, /finish_update\(\) \{\n  local exit_code=\$\?\n  trap - EXIT\n  set \+e/);
 });
 
 test("the snapshotted update runtime does not import mutable project helpers", () => {
@@ -147,13 +147,40 @@ test("git environment checks never hard-reset an existing repository", () => {
   assert.ok(initializedGuard >= 0 && initializedGuard < reset);
 });
 
-test("online update survives the API process being reloaded", () => {
+test("online update is launched through a detached intermediate process", () => {
   const server = fs.readFileSync(new URL("../api/src/server.js", import.meta.url), "utf8");
-  const spawnStart = server.indexOf('const child = spawn("bash", ["scripts/update.sh"]');
-  const detached = server.indexOf("detached: true", spawnStart);
-  const directLog = server.indexOf('stdio: ["ignore", logDescriptor, logDescriptor]', spawnStart);
-  const unref = server.indexOf("child.unref()", spawnStart);
-  assert.ok(spawnStart >= 0 && detached > spawnStart && directLog > detached && unref > directLog);
+  assert.match(server, /execFileSync\(process\.execPath, \[updateLauncherPath, projectRoot, updateLogPath\]/);
+  assert.doesNotMatch(server, /spawn\("bash", \["scripts\/update\.sh"\]/);
+});
+
+test("detached update launcher lets the update continue after the launcher exits", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "kawang-update-launcher-"));
+  const scriptsDirectory = path.join(directory, "scripts");
+  const markerPath = path.join(directory, "completed");
+  const logPath = path.join(directory, "update.log");
+  fs.mkdirSync(scriptsDirectory, { recursive: true });
+  fs.writeFileSync(path.join(scriptsDirectory, "update.sh"), [
+    "#!/usr/bin/env bash",
+    "sleep 0.1",
+    `printf 'continued' > '${markerPath}'`
+  ].join("\n"));
+
+  try {
+    const pidText = execFileSync(
+      process.execPath,
+      [new URL("../scripts/update-launcher.js", import.meta.url).pathname, directory, logPath],
+      { encoding: "utf8" }
+    ).trim();
+    assert.match(pidText, /^[1-9][0-9]*$/);
+
+    const deadline = Date.now() + 3000;
+    while (!fs.existsSync(markerPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(fs.readFileSync(markerPath, "utf8"), "continued");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("online update stashes tracked and untracked source changes", () => {
@@ -162,6 +189,20 @@ test("online update stashes tracked and untracked source changes", () => {
   const stash = script.indexOf("git stash push --include-untracked");
   const upToDateBranch = script.indexOf('if [ "$LOCAL_COMMIT" = "$REMOTE_COMMIT" ]');
   assert.ok(dirtyCheck >= 0 && dirtyCheck < stash && stash < upToDateBranch);
+});
+
+test("runtime data is ignored so online update never stashes it", () => {
+  const projectRoot = path.resolve(new URL("..", import.meta.url).pathname);
+  const ignoredPath = execFileSync("git", ["check-ignore", "data/maintenance.json"], {
+    cwd: projectRoot,
+    encoding: "utf8"
+  }).trim();
+  assert.equal(ignoredPath, "data/maintenance.json");
+});
+
+test("an interrupted update never records a successful exit code", () => {
+  const script = fs.readFileSync(new URL("../scripts/update.sh", import.meta.url), "utf8");
+  assert.match(script, /if \[ "\$UPDATE_COMPLETED" -ne 1 \] && \[ "\$exit_code" -eq 0 \]; then\n    exit_code=1/);
 });
 
 test("membership installer normalizes the managed kwRedeem root to an absolute path", () => {

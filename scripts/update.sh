@@ -25,7 +25,11 @@ cleanup_update_runtime() {
 
 finish_update() {
   local exit_code=$?
+  trap - EXIT
   set +e
+  if [ "$UPDATE_COMPLETED" -ne 1 ] && [ "$exit_code" -eq 0 ]; then
+    exit_code=1
+  fi
   if [ "$UPDATE_COMPLETED" -ne 1 ]; then
     if [ "$POST_RELEASE_VERIFY" -eq 1 ] && [ "$MAINTENANCE_ENTERED" -eq 0 ]; then
       if run_update_runtime enter-maintenance "$UPDATE_ID"; then

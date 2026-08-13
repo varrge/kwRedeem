@@ -4,8 +4,7 @@ node_modules/
 .env.*
 !.env.example
 !config/.env.example
-data/*.db
-data/*.db-*
+data/
 logs/
 tmp/
 backups/

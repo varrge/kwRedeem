@@ -31,6 +31,7 @@ export function serializeMembershipInventoryRun(row) {
   if (!row) return null;
   return {
     id: row.id,
+    providerKey: row.provider_key || "spacexcard",
     mode: row.mode,
     status: row.status,
     nextPage: row.next_page,
@@ -48,11 +49,27 @@ export function serializeMembershipInventoryRun(row) {
 export function startMembershipInventoryRun(db, options = {}) {
   const at = options.at || nowIso();
   const mode = options.mode === "refresh" ? "refresh" : "full";
+  const providerKey = options.providerKey || "spacexcard";
   const id = options.id || `mir_${nanoid(16)}`;
   return db.transaction(() => {
     const settings = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
-    if (!settings?.spacexcard_app_secret_encrypted) {
-      throw inventoryError("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "请先配置 SpaceX Card OpenAPI app_secret", 400);
+    const platform = db.prepare("SELECT * FROM membership_card_platforms WHERE key = ?").get(providerKey);
+    const legacySpaceXCredential = providerKey === "spacexcard" && settings?.spacexcard_app_secret_encrypted;
+    const migrateLegacySpaceX = Boolean(
+      legacySpaceXCredential
+      && platform
+      && platform.enabled !== 1
+      && !platform.credential_encrypted
+      && platform.updated_by === "system"
+    );
+    if (!platform || (platform.enabled !== 1 && !migrateLegacySpaceX)) {
+      throw inventoryError("CARD_PLATFORM_DISABLED", "请先启用对应卡台", 400);
+    }
+    if (!platform.credential_encrypted && !legacySpaceXCredential) {
+      throw inventoryError("CARD_PLATFORM_NOT_CONFIGURED", "请先配置对应卡台的 API 凭据", 400);
+    }
+    if (mode === "refresh" && platform.inventory_status !== "completed") {
+      throw inventoryError("INVENTORY_NOT_READY", "该卡台首次库存初始化完成前不能执行刷新");
     }
     const active = db.prepare(`
       SELECT id FROM card_inventory_runs
@@ -60,12 +77,25 @@ export function startMembershipInventoryRun(db, options = {}) {
       ORDER BY started_at ASC LIMIT 1
     `).get();
     if (active) throw inventoryError("INVENTORY_ALREADY_RUNNING", "卡片库存初始化或刷新正在运行");
+    if (migrateLegacySpaceX) {
+      db.prepare(`
+        UPDATE membership_card_platforms
+        SET enabled = 1, updated_at = ?, updated_by = ?
+        WHERE key = 'spacexcard'
+      `).run(at, options.actor || "system");
+    }
     db.prepare(`
       INSERT INTO card_inventory_runs (
-        id, mode, status, next_page, total_cards, discovered_cards, processed_cards,
+        id, provider_key, mode, status, next_page, total_cards, discovered_cards, processed_cards,
         held_cards, started_at, updated_at
-      ) VALUES (?, ?, 'discovering', 1, NULL, 0, 0, 0, ?, ?)
-    `).run(id, mode, at, at);
+      ) VALUES (?, ?, ?, 'discovering', 1, NULL, 0, 0, 0, ?, ?)
+    `).run(id, providerKey, mode, at, at);
+    db.prepare(`
+      UPDATE membership_card_platforms
+      SET inventory_status = 'running', last_inventory_error = NULL,
+          updated_at = ?, updated_by = ?
+      WHERE key = ?
+    `).run(at, options.actor || "system", providerKey);
     db.prepare(`
       UPDATE membership_fulfillment_settings
       SET inventory_status = 'running', last_inventory_error = NULL,
@@ -168,7 +198,8 @@ export function createMembershipInventoryRunner(options) {
     return db.transaction(() => {
       const candidate = db.prepare(`
         SELECT id FROM card_inventory_runs
-        WHERE status IN ('discovering', 'reconciling')
+        WHERE provider_key = 'spacexcard'
+          AND status IN ('discovering', 'reconciling')
           AND (locked_at IS NULL OR locked_at < ? OR locked_by = ?)
         ORDER BY started_at ASC LIMIT 1
       `).get(staleAt, workerId);
@@ -204,7 +235,8 @@ export function createMembershipInventoryRunner(options) {
       if (active) return null;
       const card = db.prepare(`
         SELECT upstream_card_id FROM managed_cards
-        WHERE reconciliation_state = 'PENDING'
+        WHERE provider_key = 'spacexcard'
+          AND reconciliation_state = 'PENDING'
           AND reconciliation_reason = 'WEBHOOK_RECHECK_PENDING'
         ORDER BY updated_at, upstream_card_id LIMIT 1
       `).get();
@@ -212,9 +244,9 @@ export function createMembershipInventoryRunner(options) {
       const runId = `mir_target_${nanoid(16)}`;
       db.prepare(`
         INSERT INTO card_inventory_runs (
-          id, mode, status, next_page, total_cards, discovered_cards,
+          id, provider_key, mode, status, next_page, total_cards, discovered_cards,
           processed_cards, held_cards, started_at, updated_at
-        ) VALUES (?, 'targeted', 'reconciling', 1, 1, 1, 0, 0, ?, ?)
+        ) VALUES (?, 'spacexcard', 'targeted', 'reconciling', 1, 1, 1, 0, 0, ?, ?)
       `).run(runId, at, at);
       db.prepare(`
         INSERT INTO card_inventory_run_items (
@@ -239,7 +271,7 @@ export function createMembershipInventoryRunner(options) {
     if (settings?.inventory_status !== "completed" || !settings.spacexcard_app_secret_encrypted) return null;
     const latest = db.prepare(`
       SELECT completed_at FROM card_inventory_runs
-      WHERE mode IN ('full', 'refresh') AND status = 'completed'
+      WHERE provider_key = 'spacexcard' AND mode IN ('full', 'refresh') AND status = 'completed'
       ORDER BY completed_at DESC LIMIT 1
     `).get();
     if (!latest?.completed_at || Date.parse(at) - Date.parse(latest.completed_at) < PERIODIC_REFRESH_MS) return null;
@@ -256,14 +288,14 @@ export function createMembershipInventoryRunner(options) {
     return client.listCards({ page: run.next_page, pageSize: PAGE_SIZE, sync: true }).then((page) => {
       db.transaction(() => {
         for (const card of page.cards) {
-          const localId = `mc_${card.upstreamCardId}`;
+          const localId = `mc_spacexcard_${card.upstreamCardId}`;
           db.prepare(`
             INSERT INTO managed_cards (
-              id, upstream_card_id, vm_card_id, product_code, bin, last4, upstream_status,
+              id, provider_key, upstream_card_id, vm_card_id, product_code, bin, last4, upstream_status,
               cached_available_amount, capacity_state, reconciliation_state,
               last_balance_sync_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'PENDING', ?, ?, ?)
-            ON CONFLICT(upstream_card_id) DO UPDATE SET
+            ) VALUES (?, 'spacexcard', ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'PENDING', ?, ?, ?)
+            ON CONFLICT(provider_key, upstream_card_id) DO UPDATE SET
               vm_card_id = excluded.vm_card_id,
               product_code = excluded.product_code,
               bin = excluded.bin,
@@ -315,7 +347,8 @@ export function createMembershipInventoryRunner(options) {
   }
 
   async function reconcileCard(run, item, client, at) {
-    const card = db.prepare("SELECT * FROM managed_cards WHERE upstream_card_id = ?").get(item.upstream_card_id);
+    const card = db.prepare("SELECT * FROM managed_cards WHERE provider_key=? AND upstream_card_id=?")
+      .get(run.provider_key || "spacexcard", item.upstream_card_id);
     if (!card) throw inventoryError("MANAGED_CARD_NOT_FOUND", "库存卡片记录不存在", 500);
     const transactions = await loadAllTransactions(client, item.upstream_card_id);
     const prices = await client.getOpenAiPayments(item.upstream_card_id);
@@ -425,7 +458,7 @@ export function createMembershipInventoryRunner(options) {
       WHERE id = ?
     `).run(processed, held, at, runId);
     if (pending === 0) {
-      const completedRun = db.prepare("SELECT mode FROM card_inventory_runs WHERE id = ?").get(runId);
+      const completedRun = db.prepare("SELECT mode,provider_key FROM card_inventory_runs WHERE id = ?").get(runId);
       if (["full", "refresh"].includes(completedRun?.mode)) {
         db.prepare(`
           UPDATE managed_cards
@@ -435,7 +468,8 @@ export function createMembershipInventoryRunner(options) {
             SELECT 1 FROM card_inventory_run_items item
             WHERE item.run_id = ? AND item.upstream_card_id = managed_cards.upstream_card_id
           )
-        `).run(at, runId);
+            AND provider_key = ?
+        `).run(at, runId, completedRun.provider_key || "spacexcard");
       }
       db.prepare(`
         UPDATE card_inventory_runs
@@ -449,6 +483,12 @@ export function createMembershipInventoryRunner(options) {
             last_inventory_error = NULL, updated_at = ?, updated_by = 'worker'
         WHERE id = 'default'
       `).run(at, at);
+      db.prepare(`
+        UPDATE membership_card_platforms
+        SET inventory_status='completed',inventory_initialized_at=COALESCE(inventory_initialized_at,?),
+            last_inventory_error=NULL,updated_at=?,updated_by='worker'
+        WHERE key=?
+      `).run(at, at, completedRun?.provider_key || "spacexcard");
     }
     return { processed, held, pending };
   }
@@ -475,8 +515,8 @@ export function createMembershipInventoryRunner(options) {
           UPDATE managed_cards
           SET capacity_state = 'HOLD', reconciliation_state = 'HOLD',
               reconciliation_reason = 'CARD_SYNC_REJECTED', updated_at = ?
-          WHERE upstream_card_id = ?
-        `).run(at, item.upstream_card_id);
+          WHERE provider_key=? AND upstream_card_id = ?
+        `).run(at, run.provider_key || "spacexcard", item.upstream_card_id);
       }
       db.prepare(`
         UPDATE card_inventory_runs

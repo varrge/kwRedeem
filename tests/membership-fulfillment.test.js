@@ -776,6 +776,108 @@ test("membership admin settings encrypt credentials and keep payment locked", as
     ORDER BY created_at DESC LIMIT 1
   `).get();
 	assert.doesNotMatch(audit.detail, /sk_test_redacted|whsec_test_redacted|gpt_test_redacted/);
+
+	db.prepare(`INSERT INTO card_capacity_reservations (
+	  id,fulfillment_id,provider_key,target_lane,state,reserved_at
+	) VALUES ('ccr_spacex_identity_lock','mf_spacex_identity_lock','spacexcard','plus','reserved',?)`)
+	  .run(new Date().toISOString());
+	const identityLocked = await app.inject({
+	  method: "PATCH",
+	  url: "/api/admin/membership-fulfillment/settings",
+	  headers,
+	  payload: { appSecret: "sk_replacement_must_not_apply" }
+	});
+	assert.equal(identityLocked.statusCode, 409);
+	assert.equal(identityLocked.json().code, "CARD_PLATFORM_FINANCIAL_EXPOSURE");
+	db.prepare("UPDATE card_capacity_reservations SET state='released',released_at=? WHERE id='ccr_spacex_identity_lock'")
+	  .run(new Date().toISOString());
+});
+
+test("card platform admin keeps Efun credentials secret and isolates inventory by provider", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+
+  const missing = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: { baseUrl: "https://cards.example.test/api/open/v1", enabled: true, priority: 50 }
+  });
+  assert.equal(missing.statusCode, 409);
+  assert.equal(missing.json().code, "CARD_PLATFORM_NOT_CONFIGURED");
+
+  const saved = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: {
+      baseUrl: "https://cards.example.test/api/open/v1",
+      apiKey: "efk_test_redacted",
+      enabled: true,
+      priority: 50
+    }
+  });
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.json().item.enabled, true);
+  assert.equal(saved.json().item.hasCredential, true);
+  assert.equal(saved.json().item.inventoryStatus, "not_started");
+  assert.doesNotMatch(saved.body, /efk_test_redacted/);
+  const stored = db.prepare("SELECT * FROM membership_card_platforms WHERE key='efuncard'").get();
+  assert.notEqual(stored.credential_encrypted, "efk_test_redacted");
+  assert.deepEqual(JSON.parse(decryptText(stored.credential_encrypted)), { apiKey: "efk_test_redacted" });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/admin/membership-inventory/initialize",
+    headers,
+    payload: { providerKey: "efuncard" }
+  });
+  assert.equal(started.statusCode, 200, started.body);
+  assert.equal(started.json().run.providerKey, "efuncard");
+  assert.equal(
+    db.prepare("SELECT inventory_status FROM membership_card_platforms WHERE key='efuncard'").get().inventory_status,
+    "running"
+  );
+  db.prepare("UPDATE card_inventory_runs SET status='completed',completed_at=?,locked_at=NULL,locked_by=NULL WHERE id=?")
+    .run(new Date().toISOString(), started.json().run.id);
+  db.prepare("UPDATE membership_card_platforms SET inventory_status='completed',inventory_initialized_at=? WHERE key='efuncard'")
+    .run(new Date().toISOString());
+
+  db.prepare(`INSERT INTO card_capacity_reservations (
+    id,fulfillment_id,provider_key,target_lane,state,reserved_at
+  ) VALUES ('ccr_platform_lock','mf_platform_lock','efuncard','plus','reserved',?)`).run(new Date().toISOString());
+  const reservationLocked = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: { baseUrl: "https://replacement.example.test/api/open/v1" }
+  });
+  assert.equal(reservationLocked.statusCode, 409);
+  assert.equal(reservationLocked.json().code, "CARD_PLATFORM_FINANCIAL_EXPOSURE");
+  db.prepare("UPDATE card_capacity_reservations SET state='released',released_at=? WHERE id='ccr_platform_lock'")
+    .run(new Date().toISOString());
+
+  db.prepare(`INSERT INTO funding_intents (
+    id,fulfillment_id,provider_key,operation,amount,fee,idempotency_key,
+    request_fingerprint,request_body_encrypted,state,created_at
+  ) VALUES ('mfi_platform_lock','mf_platform_lock','efuncard','recharge',10,0.1,
+    'platform-lock-key','platform-lock-fingerprint',?,'outcome_unknown',?)`)
+    .run(encryptText("{}"), new Date().toISOString());
+  const fundingLocked = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: { clearCredential: true, enabled: false }
+  });
+  assert.equal(fundingLocked.statusCode, 409);
+  assert.equal(fundingLocked.json().code, "CARD_PLATFORM_FINANCIAL_EXPOSURE");
+  db.prepare("UPDATE funding_intents SET state='failed',resolved_at=? WHERE id='mfi_platform_lock'")
+    .run(new Date().toISOString());
 });
 
 test("SpaceX Card webhook verifies raw signatures, deduplicates, redacts PAN, and keeps terminal state", async () => {
@@ -797,6 +899,14 @@ test("SpaceX Card webhook verifies raw signatures, deduplicates, redacts PAN, an
       cached_available_amount, capacity_state, reconciliation_state, created_at, updated_at
     ) VALUES (?, ?, ?, 'P5378OX', '537872', '7890', 'ACTIVE', 20, 'AVAILABLE', 'READY', ?, ?)
   `).run(managedCardId, upstreamCardId, vmCardId, at, at);
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, provider_key, upstream_card_id, vm_card_id, product_code, bin, last4,
+      upstream_status, cached_available_amount, capacity_state, reconciliation_state,
+      created_at, updated_at
+    ) VALUES ('mc_efun_webhook_collision', 'efuncard', ?, 'efun-webhook-collision',
+      '559666', '559666', '7890', 'ACTIVE', 20, 'AVAILABLE', 'READY', ?, ?)
+  `).run(upstreamCardId, at, at);
 
   const baseEvent = {
     event: "card_transaction",
@@ -826,6 +936,10 @@ test("SpaceX Card webhook verifies raw signatures, deduplicates, redacts PAN, an
   });
   assert.equal(accepted.statusCode, 202);
   assert.deepEqual(accepted.json(), { accepted: true, duplicate: false });
+  assert.equal(db.prepare(`
+    SELECT managed_card_id FROM spacexcard_webhook_events
+    WHERE auth_id = 'webhook-auth-main' AND type = 'Authorization' AND status = 'PENDING'
+  `).get().managed_card_id, managedCardId);
 
   const duplicate = await app.inject({
     method: "POST",

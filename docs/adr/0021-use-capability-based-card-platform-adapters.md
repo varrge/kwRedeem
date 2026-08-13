@@ -1,0 +1,21 @@
+---
+status: accepted
+---
+
+# Use capability-based card platform adapters
+
+Membership fulfillment selects cards through a normalized card-platform boundary rather than calling SpaceX Card directly. Go remains the sole workflow owner. Each adapter owns its provider credentials and wire contract, and exposes normalized products, USD platform balance, masked inventory, ephemeral card material, transactions, price evidence, opening, recharging, and optional freezing. The Python executor receives only the one-time material grant authorized by Go and never chooses a platform.
+
+Every platform is stored in `membership_card_platforms` with an encrypted credential, explicit enable flag, queue priority, configuration revision, and independent inventory state. Cards, inventory runs, reservations, product policies, and funding intents snapshot `provider_key`; provider card IDs and product codes are unique only within that platform. A configured platform cannot receive new payment work until its own full inventory initialization completes. Enabling a platform does not enable the global payment gate. Changing its connection identity resets only that platform's inventory and is forbidden while the platform has a reserved capacity claim or an unresolved funding intent; otherwise recovery could query or fund a different provider account than the one captured by the order.
+
+Platform choice is serial and deterministic by configured priority. Once a reservation or funding intent exists, every later material, funding, transaction, and reconciliation call stays on that same provider. A platform may be skipped before reservation when it cannot satisfy the order, but an error after provider binding never falls through to another platform.
+
+Adapters declare capabilities, including whether freezing exists, whether recharge is supported and idempotent, and any provider replay window. An unsupported capability is never simulated with a destructive operation. In particular, EfunCard has no freeze operation, so reconciliation HOLD remains local; its card-invalid/refund API is not used as a substitute. EfunCard recharge has no documented idempotency key or task-query API, so it is submitted at most once. Any ambiguous recharge result is retained for evidence-based reconciliation and is never automatically replayed. EfunCard opening uses the documented idempotency key only within its five-minute provider window; an accepted request with an invalid response, unexpected cost, interrupted activation poll, or mismatched final card is an unknown funding outcome, not proof that no write occurred.
+
+Provider currencies and fees are normalized before planning. EfunCard account balance and total debits are CNY and are converted through the same current catalog exchange rate that supplied the product fees; card balances and payment amounts remain USD. Its base opening fee is a fixed USD equivalent, while opening and recharge service fees remain percentage rates after the documented account discount. A cost mismatch after an accepted write blocks fulfillment for reconciliation.
+
+EfunCard requests are proactively constrained to its documented per-key rolling limits: 60 total requests per minute, 10 purchases per minute, and 30 balance refreshes per minute. A locally rejected request is known not to have reached the provider. An accepted recharge must return the documented task identity, USD amount, USD service fee, and CNY total cost matching the immutable plan within currency rounding tolerances; a missing or mismatched receipt is an unknown funding outcome and is never resubmitted automatically.
+
+Price evidence is provider-specific but the workflow's recognition ranges are shared. SpaceX Card may supply its dedicated OpenAI price endpoint. EfunCard derives evidence only from completed, USD, OpenAI/ChatGPT settlement records that fall inside the existing tier recognition ranges. Missing or ambiguous evidence leaves the product disabled; the adapter must not invent a quote.
+
+Future card platforms must implement the same boundary and declare capabilities, currency/fee normalization, idempotency behavior, unknown-outcome policy, and contract tests before they can be enabled. Provider-specific response fields and destructive administrative operations must not leak into the membership workflow interface.

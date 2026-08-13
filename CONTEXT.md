@@ -452,12 +452,16 @@ A store fulfillment task that requires an operator decision because its product 
 _Avoid_: Endless automatic retry, silent skip
 
 **Managed Payment Card**:
-A SpaceX Card payment card whose upstream identity and operational metadata are tracked by KaWang for ChatGPT membership fulfillment. Full payment credentials are not part of KaWang's card inventory.
+A payment card from one Card Platform whose provider-scoped identity and operational metadata are tracked by KaWang for Membership Fulfillment. Full payment credentials are not part of KaWang's card inventory.
 _Avoid_: Stored card credentials, disposable checkout payload
 
-**Card Platform Adaptation**:
-The future mapping of a new payment-card platform's card, funding, credential-release, and transaction capabilities into Membership Fulfillment. It changes the card capability source without changing the player submission flow, payment authorization rules, or fulfillment completion criteria.
-_Avoid_: Card-platform-specific membership workflow, recorded end-to-end click script, card platform owning fulfillment state
+**Card Platform**:
+An external card service adapted into Membership Fulfillment through normalized card inventory, funding, ephemeral credential-release, and transaction capabilities. A platform supplies card facts and operations but never owns fulfillment state or payment authorization.
+_Avoid_: Card-platform-specific membership workflow, card supplier owning fulfillment state, Card Platform Adaptation
+
+**Card Platform Connection Identity**:
+The credentials and endpoint that identify one configured Card Platform account. It is immutable while that platform has a reserved capacity claim or an unresolved Funding Intent, so recovery and reconciliation continue against the same external account.
+_Avoid_: Rotating platform credentials during funding, falling through to another platform after reservation
 
 **Session Activation Delivery**:
 The existing extension process that installs an order's ChatGPT authentication cookies into the incognito store, verifies identity, and completes the starting subscription-protection check before activating the already-issued CDK. Its success does not mean that a membership was purchased.

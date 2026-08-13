@@ -112,6 +112,13 @@ const refs = {
   membershipCheckoutBrokerUrl: document.querySelector("#membership-checkout-broker-url"),
   membershipFulfillmentStatus: document.querySelector("#membership-fulfillment-status"),
   membershipFulfillmentSettingsResult: document.querySelector("#membership-fulfillment-settings-result"),
+  membershipEfunCardSettingsForm: document.querySelector("#membership-efuncard-settings-form"),
+  membershipEfunCardBaseUrl: document.querySelector("#membership-efuncard-base-url"),
+  membershipEfunCardApiKey: document.querySelector("#membership-efuncard-api-key"),
+  membershipEfunCardClearApiKey: document.querySelector("#membership-efuncard-clear-api-key"),
+  membershipEfunCardPriority: document.querySelector("#membership-efuncard-priority"),
+  membershipEfunCardEnabled: document.querySelector("#membership-efuncard-enabled"),
+  membershipEfunCardSettingsResult: document.querySelector("#membership-efuncard-settings-result"),
   membershipFulfillmentRefresh: document.querySelector("#membership-fulfillment-refresh"),
   membershipFulfillmentListRefresh: document.querySelector("#membership-fulfillment-list-refresh"),
   membershipFulfillmentBackfillForm: document.querySelector("#membership-fulfillment-backfill-form"),
@@ -121,6 +128,7 @@ const refs = {
   membershipFulfillmentDetail: document.querySelector("#membership-fulfillment-detail"),
   membershipInventoryInitialize: document.querySelector("#membership-inventory-initialize"),
   membershipInventoryRefresh: document.querySelector("#membership-inventory-refresh"),
+  membershipInventoryPlatform: document.querySelector("#membership-inventory-platform"),
   membershipInventoryProgress: document.querySelector("#membership-inventory-progress"),
   membershipCardListRefresh: document.querySelector("#membership-card-list-refresh"),
   membershipCardList: document.querySelector("#membership-card-list"),
@@ -1964,6 +1972,9 @@ async function refreshMembershipFulfillmentConsole() {
   const settings = payload.settings || {};
   const dependencies = settings.dependencies || {};
   const processor = settings.processor || {};
+  const cardPlatforms = payload.cardPlatforms || [];
+  const selectedPlatformKey = refs.membershipInventoryPlatform?.value || "spacexcard";
+  const efunCard = cardPlatforms.find((item) => item.key === "efuncard") || {};
   refs.membershipOpenApiBase.value = dependencies.openApiBaseUrl || "";
   refs.membershipAppId.value = settings.appId || "";
   refs.membershipAppSecret.value = "";
@@ -1981,6 +1992,20 @@ async function refreshMembershipFulfillmentConsole() {
 	  ? "GPT Token 已加密保存；留空保持不变"
 	  : "首次配置必填";
 	refs.membershipClearGptToken.checked = false;
+  refs.membershipEfunCardBaseUrl.value = efunCard.baseUrl || "";
+  refs.membershipEfunCardApiKey.value = "";
+  refs.membershipEfunCardApiKey.placeholder = efunCard.hasCredential
+    ? "API Key 已加密保存；留空保持不变"
+    : "首次启用前必填";
+  refs.membershipEfunCardClearApiKey.checked = false;
+  refs.membershipEfunCardPriority.value = Number(efunCard.priority) || 200;
+  refs.membershipEfunCardEnabled.checked = efunCard.enabled === true;
+  refs.membershipInventoryPlatform.innerHTML = cardPlatforms.map((item) => `
+    <option value="${escapeHtml(item.key)}">${escapeHtml(item.displayName || item.key)}</option>
+  `).join("");
+  refs.membershipInventoryPlatform.value = cardPlatforms.some((item) => item.key === selectedPlatformKey)
+    ? selectedPlatformKey
+    : (cardPlatforms[0]?.key || "spacexcard");
   refs.membershipStateProviderUrl.value = dependencies.membershipStateProviderUrl || "";
   refs.membershipCheckoutBrokerUrl.value = dependencies.checkoutBrokerUrl || "";
   if (refs.membershipRolloutMode) refs.membershipRolloutMode.value = settings.rolloutMode || "disabled";
@@ -2009,7 +2034,7 @@ async function refreshMembershipFulfillmentConsole() {
   `;
   await Promise.all([
     refreshMembershipFulfillments(),
-    refreshMembershipInventoryConsole(settings),
+    refreshMembershipInventoryConsole(settings, cardPlatforms),
     refreshMembershipPriceContracts(),
     refreshMembershipProductPolicies(),
     refreshMembershipNoChargeRuns(),
@@ -2195,26 +2220,30 @@ async function viewMembershipFulfillment(id) {
   }
 }
 
-async function refreshMembershipInventoryConsole(settings = {}) {
+async function refreshMembershipInventoryConsole(settings = {}, cardPlatforms = []) {
+  const providerKey = refs.membershipInventoryPlatform?.value || "spacexcard";
+  const platform = cardPlatforms.find((item) => item.key === providerKey) || {};
+  const query = new URLSearchParams({ providerKey }).toString();
   const [runPayload, cardsPayload] = await Promise.all([
-    api("/api/admin/membership-inventory/runs/current"),
-    api("/api/admin/membership-cards?limit=200")
+    api(`/api/admin/membership-inventory/runs/current?${query}`),
+    api(`/api/admin/membership-cards?limit=200&${query}`)
   ]);
   const run = runPayload.run;
   const running = run && ["discovering", "reconciling"].includes(run.status);
-  refs.membershipInventoryInitialize.disabled = running || !settings.hasAppSecret;
-  refs.membershipInventoryRefresh.disabled = running || settings.inventoryStatus !== "completed";
+  refs.membershipInventoryInitialize.disabled = running || !platform.enabled || !platform.hasCredential;
+  refs.membershipInventoryRefresh.disabled = running || platform.inventoryStatus !== "completed";
   refs.membershipInventoryProgress.innerHTML = run ? `
+    <div>卡台：<strong>${escapeHtml(platform.displayName || providerKey)}</strong></div>
     <div>任务：<code>${escapeHtml(run.id)}</code> / ${escapeHtml(getMembershipInventoryLabel(run.mode || "full"))}</div>
     <div>状态：<strong>${escapeHtml(getMembershipInventoryLabel(run.status))}</strong></div>
     <div>发现：${Number(run.discoveredCards) || 0} / ${run.totalCards == null ? "?" : Number(run.totalCards)}</div>
     <div>处理：${Number(run.processedCards) || 0}，HOLD：${Number(run.heldCards) || 0}</div>
-    <div>最后错误：${escapeHtml(getMembershipInventoryLabel(run.lastErrorCode || settings.lastInventoryError || "-"))}</div>
+    <div>最后错误：${escapeHtml(getMembershipInventoryLabel(run.lastErrorCode || platform.lastInventoryError || "-"))}</div>
     <div>更新时间：${escapeHtml(run.updatedAt || "-")}</div>
-  ` : "暂无库存初始化记录。";
+  ` : `${escapeHtml(platform.displayName || providerKey)} 暂无库存初始化记录。`;
 
   renderTable(refs.membershipCardList, [
-    { label: "卡片", render: (item) => `<code>${escapeHtml(item.display || "-")}</code><br/><span class="hint">ID ${escapeHtml(item.upstreamCardId)}</span>` },
+    { label: "卡片", render: (item) => `<code>${escapeHtml(item.display || "-")}</code><br/><span class="hint">${escapeHtml(item.providerKey || providerKey)} / ID ${escapeHtml(item.upstreamCardId)}</span>` },
     { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode || "-")}</code>` },
     { label: "上游状态", render: (item) => renderMembershipInventoryStatus(item.upstreamStatus || "-") },
     { label: "余额", render: (item) => `$${Number(item.availableAmount || 0).toFixed(2)}` },
@@ -2240,7 +2269,7 @@ async function confirmMembershipCardPlusLane(id) {
       body: JSON.stringify({ confirmation: "legacy_plus_cdk" })
     });
     setHint(refs.membershipCardListResult, "历史卡已确认为 Plus；已按同步交易重新计算容量，没有执行上游卡片操作");
-    await refreshMembershipInventoryConsole();
+    await refreshMembershipFulfillmentConsole();
   } catch (error) {
     setHint(refs.membershipCardListResult, error.message);
   }
@@ -2262,10 +2291,10 @@ async function refreshMembershipPriceContracts() {
 async function refreshMembershipProductPolicies() {
   const payload = await api("/api/admin/card-product-policies");
   renderTable(refs.membershipProductPolicyList, [
-    { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode)}</code><br/><span class="hint">现有 ${Number(item.existingCardCount) || 0} / READY ${Number(item.readyCardCount) || 0}</span>` },
+    { label: "产品", render: (item) => `<code>${escapeHtml(item.productCode)}</code><br/><span class="hint">${escapeHtml(item.providerKey)} / 现有 ${Number(item.existingCardCount) || 0} / READY ${Number(item.readyCardCount) || 0}</span>` },
     { label: "新鲜行情证明", render: (item) => ["plus", "x5", "x20"].map((tier) => `${tier}: ${item.provenTiers?.[tier] ? "✓" : "—"}`).join("<br/>") },
     { label: "策略", render: (item) => `${item.enabled ? "已允许" : "未允许"}<br/><span class="hint">revision ${Number(item.revision) || 0}</span>` },
-    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" ${!item.enabled && !item.canEnable ? "disabled" : ""} onclick='setMembershipProductPolicy(${JSON.stringify(item.productCode)}, ${item.enabled ? "false" : "true"})'>${item.enabled ? "停用" : "允许"}</button>` }
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" ${!item.enabled && !item.canEnable ? "disabled" : ""} onclick='setMembershipProductPolicy(${JSON.stringify(item.providerKey)}, ${JSON.stringify(item.productCode)}, ${item.enabled ? "false" : "true"})'>${item.enabled ? "停用" : "允许"}</button>` }
   ], payload.items || [], "库存中尚未发现卡产品");
   setHint(refs.membershipProductPolicyResult, `已读取 ${payload.items?.length || 0} 个产品策略；该操作不会开卡或充值`);
 }
@@ -2406,11 +2435,11 @@ async function activateMembershipPriceContract(id) {
   }
 }
 
-async function setMembershipProductPolicy(productCode, enabled) {
+async function setMembershipProductPolicy(providerKey, productCode, enabled) {
   try {
     await api("/api/admin/card-product-policies", {
       method: "PUT",
-      body: JSON.stringify({ items: [{ productCode, enabled }] })
+      body: JSON.stringify({ items: [{ providerKey, productCode, enabled }] })
     });
     setHint(refs.membershipProductPolicyResult, enabled ? "产品已加入允许列表；仍不会自动开卡" : "产品已从允许列表停用");
     await refreshMembershipProductPolicies();
@@ -6247,6 +6276,30 @@ refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event)
   }
 });
 
+refs.membershipEfunCardSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "保存中...");
+  try {
+    await api("/api/admin/membership-card-platforms/efuncard", {
+      method: "PUT",
+      body: JSON.stringify({
+        baseUrl: refs.membershipEfunCardBaseUrl.value.trim(),
+        apiKey: refs.membershipEfunCardApiKey.value.trim(),
+        clearCredential: refs.membershipEfunCardClearApiKey.checked,
+        enabled: refs.membershipEfunCardEnabled.checked,
+        priority: Number(refs.membershipEfunCardPriority.value)
+      })
+    });
+    setHint(refs.membershipEfunCardSettingsResult, "EfunCard 配置已加密保存；连接身份变化后需重新初始化该卡台库存");
+    await refreshMembershipFulfillmentConsole();
+  } catch (error) {
+    setHint(refs.membershipEfunCardSettingsResult, error.message);
+  } finally {
+    setButtonBusy(submitButton, false);
+  }
+});
+
 refs.membershipFulfillmentRefresh?.addEventListener("click", () => {
   refreshMembershipFulfillmentConsole().catch((error) => setHint(refs.membershipFulfillmentSettingsResult, error.message));
 });
@@ -6291,7 +6344,10 @@ refs.membershipInventoryInitialize?.addEventListener("click", async () => {
   if (!window.confirm("确认开始完整卡片库存初始化？完成前不会启用自动选卡。")) return;
   setButtonBusy(refs.membershipInventoryInitialize, true, "启动中...");
   try {
-    await api("/api/admin/membership-inventory/initialize", { method: "POST", body: JSON.stringify({}) });
+    await api("/api/admin/membership-inventory/initialize", {
+      method: "POST",
+      body: JSON.stringify({ providerKey: refs.membershipInventoryPlatform.value })
+    });
     setHint(refs.membershipCardListResult, "库存初始化已启动，Worker 将断点处理全部卡片");
     await refreshMembershipFulfillmentConsole();
   } catch (error) {
@@ -6304,7 +6360,10 @@ refs.membershipInventoryInitialize?.addEventListener("click", async () => {
 refs.membershipInventoryRefresh?.addEventListener("click", async () => {
   setButtonBusy(refs.membershipInventoryRefresh, true, "启动中...");
   try {
-    await api("/api/admin/membership-inventory/refresh", { method: "POST", body: JSON.stringify({}) });
+    await api("/api/admin/membership-inventory/refresh", {
+      method: "POST",
+      body: JSON.stringify({ providerKey: refs.membershipInventoryPlatform.value })
+    });
     setHint(refs.membershipCardListResult, "库存、余额、交易和行情刷新已启动");
     await refreshMembershipFulfillmentConsole();
   } catch (error) {
@@ -6312,6 +6371,10 @@ refs.membershipInventoryRefresh?.addEventListener("click", async () => {
   } finally {
     setButtonBusy(refs.membershipInventoryRefresh, false);
   }
+});
+
+refs.membershipInventoryPlatform?.addEventListener("change", () => {
+  refreshMembershipFulfillmentConsole().catch((error) => setHint(refs.membershipCardListResult, error.message));
 });
 
 refs.membershipCardListRefresh?.addEventListener("click", async () => {

@@ -25,6 +25,7 @@ docs/*
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 !docs/python-membership-payment-executor-spec.md
 tests/*
+!tests/card-platform-migration.test.js
 !tests/store-fulfillment.test.js
 !tests/sub2api-image-page.test.js
 !tests/membership-fulfillment.test.js

@@ -98,6 +98,94 @@ function migrateShakeProgressUniqueness(db) {
   })();
 }
 
+function migrateManagedCardsProviderUniqueness(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'managed_cards'
+  `).get();
+  if (!/upstream_card_id\s+INTEGER\s+NOT\s+NULL\s+UNIQUE/i.test(table?.sql || "") &&
+      !/vm_card_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(table?.sql || "")) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE managed_cards RENAME TO managed_cards_legacy;
+
+      CREATE TABLE managed_cards (
+        id TEXT PRIMARY KEY,
+        provider_key TEXT NOT NULL DEFAULT 'spacexcard',
+        upstream_card_id INTEGER NOT NULL,
+        vm_card_id TEXT NOT NULL,
+        product_code TEXT NOT NULL,
+        bin TEXT,
+        last4 TEXT,
+        upstream_status TEXT NOT NULL,
+        cached_available_amount REAL NOT NULL DEFAULT 0,
+        lane TEXT,
+        consumed_slots INTEGER NOT NULL DEFAULT 0,
+        capacity_state TEXT NOT NULL DEFAULT 'AVAILABLE',
+        reconciliation_state TEXT NOT NULL DEFAULT 'PENDING',
+        reconciliation_reason TEXT,
+        last_balance_sync_at TEXT,
+        last_transaction_sync_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(provider_key, upstream_card_id),
+        UNIQUE(provider_key, vm_card_id)
+      );
+
+      INSERT INTO managed_cards (
+        id, provider_key, upstream_card_id, vm_card_id, product_code, bin, last4,
+        upstream_status, cached_available_amount, lane, consumed_slots, capacity_state,
+        reconciliation_state, reconciliation_reason, last_balance_sync_at,
+        last_transaction_sync_at, created_at, updated_at
+      )
+      SELECT
+        id, COALESCE(NULLIF(provider_key, ''), 'spacexcard'), upstream_card_id,
+        vm_card_id, product_code, bin, last4, upstream_status,
+        cached_available_amount, lane, consumed_slots, capacity_state,
+        reconciliation_state, reconciliation_reason, last_balance_sync_at,
+        last_transaction_sync_at, created_at, updated_at
+      FROM managed_cards_legacy;
+
+      DROP TABLE managed_cards_legacy;
+    `);
+  })();
+}
+
+function migrateCardProductPolicyProviderKey(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'card_product_policies'
+  `).get();
+  if (!/product_code\s+TEXT\s+PRIMARY\s+KEY/i.test(table?.sql || "")) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE card_product_policies RENAME TO card_product_policies_legacy;
+
+      CREATE TABLE card_product_policies (
+        provider_key TEXT NOT NULL DEFAULT 'spacexcard',
+        product_code TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        revision INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        PRIMARY KEY(provider_key, product_code)
+      );
+
+      INSERT INTO card_product_policies (
+        provider_key, product_code, enabled, revision, updated_at, updated_by
+      )
+      SELECT
+        COALESCE(NULLIF(provider_key, ''), 'spacexcard'), product_code,
+        enabled, revision, updated_at, updated_by
+      FROM card_product_policies_legacy;
+
+      DROP TABLE card_product_policies_legacy;
+    `);
+  })();
+}
+
 function upsertSite(db, site, options = {}) {
   const existingSite = db.prepare("SELECT id, status FROM sites WHERE slug = ?").get(site.slug);
   if (existingSite) {
@@ -1166,6 +1254,23 @@ function createSchema(db) {
       updated_by TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS membership_card_platforms (
+      key TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      base_url TEXT,
+      credential_encrypted TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 100,
+      inventory_status TEXT NOT NULL DEFAULT 'not_started',
+      inventory_initialized_at TEXT,
+      last_inventory_error TEXT,
+      config_revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS membership_processor_lease (
       id TEXT PRIMARY KEY,
       owner TEXT,
@@ -1276,8 +1381,9 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS managed_cards (
       id TEXT PRIMARY KEY,
-      upstream_card_id INTEGER NOT NULL UNIQUE,
-      vm_card_id TEXT NOT NULL UNIQUE,
+      provider_key TEXT NOT NULL DEFAULT 'spacexcard',
+      upstream_card_id INTEGER NOT NULL,
+      vm_card_id TEXT NOT NULL,
       product_code TEXT NOT NULL,
       bin TEXT,
       last4 TEXT,
@@ -1291,7 +1397,9 @@ function createSchema(db) {
       last_balance_sync_at TEXT,
       last_transaction_sync_at TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      UNIQUE(provider_key, upstream_card_id),
+      UNIQUE(provider_key, vm_card_id)
     );
 
     CREATE TABLE IF NOT EXISTS managed_card_transactions (
@@ -1329,6 +1437,7 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS card_inventory_runs (
       id TEXT PRIMARY KEY,
+      provider_key TEXT NOT NULL DEFAULT 'spacexcard',
       mode TEXT NOT NULL DEFAULT 'full',
       status TEXT NOT NULL,
       next_page INTEGER NOT NULL DEFAULT 1,
@@ -1356,16 +1465,19 @@ function createSchema(db) {
     );
 
     CREATE TABLE IF NOT EXISTS card_product_policies (
-      product_code TEXT PRIMARY KEY,
+      provider_key TEXT NOT NULL DEFAULT 'spacexcard',
+      product_code TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 0,
       revision INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL,
-      updated_by TEXT NOT NULL
+      updated_by TEXT NOT NULL,
+      PRIMARY KEY(provider_key, product_code)
     );
 
     CREATE TABLE IF NOT EXISTS card_capacity_reservations (
       id TEXT PRIMARY KEY,
       fulfillment_id TEXT NOT NULL UNIQUE,
+      provider_key TEXT NOT NULL DEFAULT 'spacexcard',
       card_id TEXT,
       planned_product_code TEXT,
       target_lane TEXT NOT NULL,
@@ -1380,6 +1492,7 @@ function createSchema(db) {
     CREATE TABLE IF NOT EXISTS funding_intents (
       id TEXT PRIMARY KEY,
       fulfillment_id TEXT NOT NULL UNIQUE,
+      provider_key TEXT NOT NULL DEFAULT 'spacexcard',
       operation TEXT NOT NULL,
       target_card_id TEXT,
       product_code TEXT,
@@ -1687,12 +1800,19 @@ function createSchema(db) {
   ensureColumn(db, "automatic_checkout_scopes", "disabled_at", "TEXT");
   ensureColumn(db, "managed_cards", "reconciliation_reason", "TEXT");
   ensureColumn(db, "managed_cards", "consumed_slots", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "managed_cards", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
   ensureColumn(db, "card_inventory_runs", "mode", "TEXT NOT NULL DEFAULT 'full'");
+  ensureColumn(db, "card_inventory_runs", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
   ensureColumn(db, "card_inventory_runs", "discovered_cards", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "card_inventory_runs", "locked_at", "TEXT");
   ensureColumn(db, "card_inventory_runs", "locked_by", "TEXT");
   ensureColumn(db, "card_inventory_run_items", "attempt_count", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "card_inventory_run_items", "next_retry_at", "TEXT");
+  ensureColumn(db, "card_product_policies", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
+  ensureColumn(db, "card_capacity_reservations", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
+  ensureColumn(db, "funding_intents", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
+  migrateManagedCardsProviderUniqueness(db);
+  migrateCardProductPolicyProviderKey(db);
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "processing_mode", "TEXT NOT NULL DEFAULT 'auto'");
@@ -1947,9 +2067,12 @@ function createSchema(db) {
         AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED', 'PARTIAL_FULFILLMENT_EXPIRED', 'CANCELLED', 'COMPLETED');
     CREATE INDEX IF NOT EXISTS idx_membership_attempts_fulfillment ON membership_fulfillment_attempts(fulfillment_id, stage, attempt_no);
     CREATE INDEX IF NOT EXISTS idx_membership_observations_fulfillment ON membership_observations(fulfillment_id, observed_at);
-    CREATE INDEX IF NOT EXISTS idx_managed_cards_selection ON managed_cards(lane, capacity_state, reconciliation_state, upstream_status);
+    CREATE INDEX IF NOT EXISTS idx_card_platforms_enabled ON membership_card_platforms(enabled, priority, key);
+    DROP INDEX IF EXISTS idx_managed_cards_selection;
+    CREATE INDEX idx_managed_cards_selection ON managed_cards(provider_key, lane, capacity_state, reconciliation_state, upstream_status);
     CREATE INDEX IF NOT EXISTS idx_managed_transactions_auth ON managed_card_transactions(auth_id, last_seen_at);
-    CREATE INDEX IF NOT EXISTS idx_inventory_runs_status ON card_inventory_runs(status, updated_at);
+    DROP INDEX IF EXISTS idx_inventory_runs_status;
+    CREATE INDEX idx_inventory_runs_status ON card_inventory_runs(provider_key, status, updated_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_one_active
       ON card_inventory_runs((1))
       WHERE status IN ('discovering', 'reconciling');
@@ -2436,6 +2559,37 @@ function seedDefaults(db) {
     )
     VALUES ('default', 0, 'not_started', 'Asia/Shanghai', 0, ?, 'system')
   `).run(new Date().toISOString());
+
+  const platformSeededAt = new Date().toISOString();
+  db.prepare(`
+    INSERT OR IGNORE INTO membership_card_platforms (
+      key, kind, display_name, base_url, enabled, priority, inventory_status,
+      config_revision, created_at, updated_at, updated_by
+    ) VALUES ('spacexcard', 'spacexcard', 'SpaceX Card', NULL, 0, 100,
+      'not_started', 1, ?, ?, 'system')
+  `).run(platformSeededAt, platformSeededAt);
+  db.prepare(`
+    INSERT OR IGNORE INTO membership_card_platforms (
+      key, kind, display_name, base_url, enabled, priority, inventory_status,
+      config_revision, created_at, updated_at, updated_by
+    ) VALUES ('efuncard', 'efuncard', 'EfunCard', NULL, 0, 200,
+      'not_started', 1, ?, ?, 'system')
+  `).run(platformSeededAt, platformSeededAt);
+  db.prepare(`
+    UPDATE membership_card_platforms
+    SET enabled = 1,
+        inventory_status = (SELECT inventory_status FROM membership_fulfillment_settings WHERE id = 'default'),
+        inventory_initialized_at = (SELECT inventory_initialized_at FROM membership_fulfillment_settings WHERE id = 'default'),
+        last_inventory_error = (SELECT last_inventory_error FROM membership_fulfillment_settings WHERE id = 'default'),
+        updated_at = ?
+    WHERE key = 'spacexcard'
+      AND credential_encrypted IS NULL
+      AND EXISTS (
+        SELECT 1 FROM membership_fulfillment_settings
+        WHERE id = 'default' AND spacexcard_app_secret_encrypted IS NOT NULL
+          AND spacexcard_app_secret_encrypted <> ''
+      )
+  `).run(platformSeededAt);
 
   db.prepare(`
     INSERT OR IGNORE INTO membership_processor_lease (

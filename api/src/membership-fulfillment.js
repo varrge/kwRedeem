@@ -151,6 +151,24 @@ function serializeProcessor(row) {
   };
 }
 
+function serializeCardPlatform(row) {
+  return {
+    key: row.key,
+    kind: row.kind,
+    displayName: row.display_name,
+    baseUrl: row.base_url || "",
+    hasCredential: Boolean(row.credential_encrypted),
+    enabled: row.enabled === 1,
+    priority: row.priority,
+    inventoryStatus: row.inventory_status,
+    inventoryInitializedAt: row.inventory_initialized_at || null,
+    lastInventoryError: row.last_inventory_error || null,
+    configRevision: row.config_revision,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by
+  };
+}
+
 function serializeSettings(row, extensionSettings, processorLease) {
   return {
     enabled: row.enabled === 1,
@@ -210,19 +228,43 @@ export function createMembershipFulfillmentService(options) {
     `).get();
   }
 
+  function listCardPlatforms() {
+    const legacySpaceXConfigured = Boolean(getSettings()?.spacexcard_app_secret_encrypted);
+    return db.prepare(`SELECT * FROM membership_card_platforms ORDER BY priority,key`).all()
+      .map((row) => ({
+        ...serializeCardPlatform(row),
+        hasCredential: Boolean(row.credential_encrypted || (row.key === "spacexcard" && legacySpaceXConfigured))
+      }));
+  }
+
+  function cardPlatformFinancialExposure(key) {
+    return db.prepare(`
+      SELECT fulfillment_id AS fulfillmentId, 'reservation' AS source
+      FROM card_capacity_reservations
+      WHERE provider_key = ? AND state = 'reserved'
+      UNION ALL
+      SELECT fulfillment_id AS fulfillmentId, 'funding_intent' AS source
+      FROM funding_intents
+      WHERE provider_key = ? AND state NOT IN ('succeeded', 'failed')
+      LIMIT 1
+    `).get(key, key) || null;
+  }
+
   function listCardProductPolicies(nowMs = Date.now()) {
     const cards = db.prepare(`
-      SELECT id, product_code, upstream_status, reconciliation_state
-      FROM managed_cards ORDER BY product_code, id
+      SELECT id, provider_key, product_code, upstream_status, reconciliation_state
+      FROM managed_cards ORDER BY provider_key, product_code, id
     `).all();
-    const policies = db.prepare("SELECT * FROM card_product_policies ORDER BY product_code").all();
+    const policies = db.prepare("SELECT * FROM card_product_policies ORDER BY provider_key, product_code").all();
     const priceStatement = db.prepare(`
       SELECT tier, found, amount, provider_time
       FROM card_price_signals WHERE card_id = ? ORDER BY tier
     `);
     const byCode = new Map();
     for (const card of cards) {
-      const item = byCode.get(card.product_code) || {
+      const key = `${card.provider_key}:${card.product_code}`;
+      const item = byCode.get(key) || {
+        providerKey: card.provider_key,
         productCode: card.product_code,
         existingCardCount: 0,
         readyCardCount: 0,
@@ -244,10 +286,12 @@ export function createMembershipFulfillmentService(options) {
           } catch {}
         }
       }
-      byCode.set(card.product_code, item);
+      byCode.set(key, item);
     }
     for (const policy of policies) {
-      const item = byCode.get(policy.product_code) || {
+      const key = `${policy.provider_key}:${policy.product_code}`;
+      const item = byCode.get(key) || {
+        providerKey: policy.provider_key,
         productCode: policy.product_code,
         existingCardCount: 0,
         readyCardCount: 0,
@@ -257,7 +301,7 @@ export function createMembershipFulfillmentService(options) {
       item.revision = policy.revision;
       item.updatedAt = policy.updated_at;
       item.updatedBy = policy.updated_by;
-      byCode.set(policy.product_code, item);
+      byCode.set(key, item);
     }
     return [...byCode.values()]
       .map((item) => ({
@@ -268,7 +312,8 @@ export function createMembershipFulfillmentService(options) {
         updatedBy: item.updatedBy || null,
         canEnable: Object.values(item.provenTiers).some(Boolean)
       }))
-      .sort((left, right) => left.productCode.localeCompare(right.productCode));
+      .sort((left, right) => left.providerKey.localeCompare(right.providerKey)
+        || left.productCode.localeCompare(right.productCode));
   }
 
   function safeFulfillmentId(value) {
@@ -1588,7 +1633,102 @@ export function createMembershipFulfillmentService(options) {
 
   app.get("/api/admin/membership-fulfillment/settings", { preHandler: requireAdmin }, async (_request, reply) => {
     setNoStore(reply);
-    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()) };
+    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()), cardPlatforms: listCardPlatforms() };
+  });
+
+  app.get("/api/admin/membership-card-platforms", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    return { items: listCardPlatforms() };
+  });
+
+  app.put("/api/admin/membership-card-platforms/:key", { preHandler: requireAdmin }, async (request, reply) => {
+    const key = String(request.params?.key || "").trim();
+    const parsed = z.object({
+      displayName: z.string().trim().min(1).max(100).optional(),
+      baseUrl: z.string().trim().url().max(2048).optional(),
+      appId: z.string().trim().max(256).optional(),
+      appSecret: z.string().trim().max(8192).optional(),
+      apiKey: z.string().trim().max(8192).optional(),
+      clearCredential: z.boolean().optional().default(false),
+      enabled: z.boolean().optional(),
+      priority: z.number().int().min(1).max(10000).optional()
+    }).safeParse(request.body || {});
+    if (!parsed.success || !["spacexcard", "efuncard"].includes(key)) {
+      return reply.code(400).send({ message: "卡台配置参数无效" });
+    }
+    const current = db.prepare("SELECT * FROM membership_card_platforms WHERE key = ?").get(key);
+    if (!current) return reply.code(404).send({ message: "卡台不存在" });
+    const active = db.prepare(`SELECT id FROM card_inventory_runs
+      WHERE provider_key=? AND status IN ('discovering','reconciling') LIMIT 1`).get(key);
+    const credentialChanged = parsed.data.clearCredential || Boolean(
+      key === "spacexcard" ? parsed.data.appSecret : parsed.data.apiKey
+    );
+    const baseChanged = Object.hasOwn(parsed.data, "baseUrl")
+      && parsed.data.baseUrl !== (current.base_url || "");
+    if (active && (credentialChanged || baseChanged || parsed.data.enabled === false)) {
+      return reply.code(409).send({ code: "INVENTORY_ALREADY_RUNNING", message: "该卡台库存任务运行中，暂不能更改连接身份或停用" });
+    }
+    const exposure = (credentialChanged || baseChanged || parsed.data.enabled === false)
+      ? cardPlatformFinancialExposure(key)
+      : null;
+    if (exposure) {
+      return reply.code(409).send({
+        code: "CARD_PLATFORM_FINANCIAL_EXPOSURE",
+        message: "该卡台仍绑定未完成的资金流程，不能更改连接身份或停用"
+      });
+    }
+    let credential = current.credential_encrypted;
+    if (parsed.data.clearCredential) credential = null;
+    if (key === "spacexcard" && parsed.data.appSecret) {
+      credential = encryptText(JSON.stringify({ appId: parsed.data.appId || "", appSecret: parsed.data.appSecret }));
+    }
+    if (key === "efuncard" && parsed.data.apiKey) {
+      credential = encryptText(JSON.stringify({ apiKey: parsed.data.apiKey }));
+    }
+    const baseUrl = key === "efuncard"
+      ? (parsed.data.baseUrl ?? current.base_url)
+      : null;
+    const enabled = Object.hasOwn(parsed.data, "enabled") ? parsed.data.enabled : current.enabled === 1;
+    if (key === "efuncard" && enabled && (!baseUrl || !credential)) {
+      return reply.code(409).send({ code: "CARD_PLATFORM_NOT_CONFIGURED", message: "启用 EfunCard 前必须配置 API Base URL 和 API Key" });
+    }
+    if (key === "spacexcard" && enabled
+        && !credential && !getSettings().spacexcard_app_secret_encrypted) {
+      return reply.code(409).send({ code: "CARD_PLATFORM_NOT_CONFIGURED", message: "启用 SpaceX Card 前必须配置 app_secret" });
+    }
+    const connectionChanged = credentialChanged || baseChanged;
+    const at = new Date().toISOString();
+    db.prepare(`UPDATE membership_card_platforms
+      SET display_name=?,base_url=?,credential_encrypted=?,enabled=?,priority=?,
+          inventory_status=?,inventory_initialized_at=?,last_inventory_error=?,
+          config_revision=?,updated_at=?,updated_by=? WHERE key=?`).run(
+      parsed.data.displayName || current.display_name,
+      baseUrl || null,
+      credential,
+      enabled ? 1 : 0,
+      parsed.data.priority ?? current.priority,
+      connectionChanged ? "not_started" : current.inventory_status,
+      connectionChanged ? null : current.inventory_initialized_at,
+      connectionChanged ? null : current.last_inventory_error,
+      connectionChanged ? current.config_revision + 1 : current.config_revision,
+      at,
+      request.admin.username,
+      key
+    );
+    createAuditLog({
+      action: "membership_card_platform.update",
+      actor: request.admin.username,
+      resourceType: "membership_card_platform",
+      resourceId: key,
+      detail: {
+        enabled: Object.hasOwn(parsed.data, "enabled") ? parsed.data.enabled : current.enabled === 1,
+        priority: parsed.data.priority ?? current.priority,
+        credentialAction: parsed.data.clearCredential ? "cleared" : (credentialChanged ? "replaced" : "unchanged"),
+        connectionChanged
+      }
+    });
+    setNoStore(reply);
+    return { item: serializeCardPlatform(db.prepare("SELECT * FROM membership_card_platforms WHERE key=?").get(key)) };
   });
 
   app.patch("/api/admin/membership-fulfillment/settings", { preHandler: requireAdmin }, async (request, reply) => {
@@ -1627,10 +1767,30 @@ export function createMembershipFulfillmentService(options) {
         message: "库存任务运行中，暂不能更改 OpenAPI 身份"
       });
     }
+    if (changesOpenApiIdentity && cardPlatformFinancialExposure("spacexcard")) {
+      return reply.code(409).send({
+        code: "CARD_PLATFORM_FINANCIAL_EXPOSURE",
+        message: "SpaceX Card 仍绑定未完成的资金流程，不能更改 OpenAPI 身份"
+      });
+    }
     const appId = Object.hasOwn(parsed.data, "appId") ? (parsed.data.appId || null) : current.spacexcard_app_id;
     const appSecret = parsed.data.clearAppSecret
       ? null
       : (parsed.data.appSecret ? encryptText(parsed.data.appSecret) : current.spacexcard_app_secret_encrypted);
+    let appSecretPlain = "";
+    if (!parsed.data.clearAppSecret) {
+      if (parsed.data.appSecret) appSecretPlain = parsed.data.appSecret;
+      else if (current.spacexcard_app_secret_encrypted) {
+        try {
+          appSecretPlain = decryptText(current.spacexcard_app_secret_encrypted);
+        } catch {
+          return reply.code(409).send({ code: "CARD_PLATFORM_CREDENTIAL_INVALID", message: "已保存的 SpaceX Card 凭据无法解密，请重新填写" });
+        }
+      }
+    }
+    const spaceXPlatformCredential = appSecretPlain
+      ? encryptText(JSON.stringify({ appId: appId || "", appSecret: appSecretPlain }))
+      : null;
     const webhookSecret = parsed.data.clearWebhookSecret
       ? null
       : (parsed.data.webhookSecret ? encryptText(parsed.data.webhookSecret) : current.spacexcard_webhook_secret_encrypted);
@@ -1647,10 +1807,42 @@ export function createMembershipFulfillmentService(options) {
             spacexcard_app_id = ?,
             spacexcard_app_secret_encrypted = ?,
             spacexcard_webhook_secret_encrypted = ?,
+            inventory_status = CASE WHEN ? THEN 'not_started' ELSE inventory_status END,
+            inventory_initialized_at = CASE WHEN ? THEN NULL ELSE inventory_initialized_at END,
+            last_inventory_error = CASE WHEN ? THEN NULL ELSE last_inventory_error END,
             updated_at = ?,
             updated_by = ?
         WHERE id = 'default'
-      `).run(appId, appSecret, webhookSecret, now, request.admin.username);
+      `).run(
+        appId,
+        appSecret,
+        webhookSecret,
+        changesOpenApiIdentity ? 1 : 0,
+        changesOpenApiIdentity ? 1 : 0,
+        changesOpenApiIdentity ? 1 : 0,
+        now,
+        request.admin.username
+      );
+	  const platform = db.prepare("SELECT * FROM membership_card_platforms WHERE key='spacexcard'").get();
+	  const platformEnabled = parsed.data.clearAppSecret
+	    ? 0
+	    : (changesOpenApiIdentity && spaceXPlatformCredential ? 1 : platform.enabled);
+	  db.prepare(`UPDATE membership_card_platforms
+	    SET credential_encrypted=?,enabled=?,
+	        inventory_status=CASE WHEN ? THEN 'not_started' ELSE inventory_status END,
+	        inventory_initialized_at=CASE WHEN ? THEN NULL ELSE inventory_initialized_at END,
+	        last_inventory_error=CASE WHEN ? THEN NULL ELSE last_inventory_error END,
+	        config_revision=CASE WHEN ? THEN config_revision + 1 ELSE config_revision END,
+	        updated_at=?,updated_by=? WHERE key='spacexcard'`).run(
+	    spaceXPlatformCredential,
+	    platformEnabled,
+	    changesOpenApiIdentity ? 1 : 0,
+	    changesOpenApiIdentity ? 1 : 0,
+	    changesOpenApiIdentity ? 1 : 0,
+	    changesOpenApiIdentity ? 1 : 0,
+	    now,
+	    request.admin.username
+	  );
 	  db.prepare(`UPDATE extension_delivery_settings
 		SET spacexcard_api_token_encrypted=?,updated_at=?,updated_by=? WHERE id='default'`)
 		.run(gptToken, now, request.admin.username);
@@ -1670,28 +1862,26 @@ export function createMembershipFulfillmentService(options) {
     })();
 
     setNoStore(reply);
-    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()) };
+    return { settings: serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus()), cardPlatforms: listCardPlatforms() };
   });
 
   function startInventory(request, reply, mode) {
-    const settings = getSettings();
-    if (mode === "refresh" && settings.inventory_status !== "completed") {
-      return reply.code(409).send({
-        code: "INVENTORY_NOT_READY",
-        message: "首次库存初始化完成前不能执行刷新"
-      });
+    const providerKey = String(request.body?.providerKey || "spacexcard").trim();
+    if (!/^[a-z0-9_-]{1,64}$/.test(providerKey)) {
+      return reply.code(400).send({ message: "卡台标识无效" });
     }
     try {
       const run = startMembershipInventoryRun(db, {
         actor: request.admin.username,
-        mode
+        mode,
+        providerKey
       });
       createAuditLog({
         action: mode === "refresh" ? "membership_inventory.refresh" : "membership_inventory.initialize",
         actor: request.admin.username,
         resourceType: "card_inventory_run",
         resourceId: run.id,
-        detail: { mode }
+        detail: { mode, providerKey }
       });
       setNoStore(reply);
       return { run: serializeMembershipInventoryRun(run) };
@@ -1711,8 +1901,13 @@ export function createMembershipFulfillmentService(options) {
     startInventory(request, reply, "refresh")
   ));
 
-  app.get("/api/admin/membership-inventory/runs/current", { preHandler: requireAdmin }, async (_request, reply) => {
-    const run = db.prepare("SELECT * FROM card_inventory_runs ORDER BY started_at DESC LIMIT 1").get();
+  app.get("/api/admin/membership-inventory/runs/current", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({ providerKey: z.string().trim().regex(/^[a-z0-9_-]{1,64}$/).optional() })
+      .safeParse(request.query || {});
+    if (!parsed.success) return reply.code(400).send({ message: "卡台筛选参数无效" });
+    const run = parsed.data.providerKey
+      ? db.prepare("SELECT * FROM card_inventory_runs WHERE provider_key=? ORDER BY started_at DESC LIMIT 1").get(parsed.data.providerKey)
+      : db.prepare("SELECT * FROM card_inventory_runs ORDER BY started_at DESC LIMIT 1").get();
     setNoStore(reply);
     return { run: serializeMembershipInventoryRun(run) };
   });
@@ -1721,11 +1916,16 @@ export function createMembershipFulfillmentService(options) {
     const parsed = z.object({
       lane: z.enum(["plus", "x5", "x20"]).optional(),
       reconciliationState: z.enum(["PENDING", "READY", "HOLD"]).optional(),
+      providerKey: z.string().trim().regex(/^[a-z0-9_-]{1,64}$/).optional(),
       limit: z.coerce.number().int().min(1).max(200).optional().default(100)
     }).safeParse(request.query || {});
     if (!parsed.success) return reply.code(400).send({ message: "卡片筛选参数无效" });
     const conditions = [];
     const params = [];
+    if (parsed.data.providerKey) {
+      conditions.push("provider_key = ?");
+      params.push(parsed.data.providerKey);
+    }
     if (parsed.data.lane) {
       conditions.push("lane = ?");
       params.push(parsed.data.lane);
@@ -1749,6 +1949,7 @@ export function createMembershipFulfillmentService(options) {
     return {
       items: cards.map((card) => ({
         id: card.id,
+        providerKey: card.provider_key,
         upstreamCardId: card.upstream_card_id,
         display: `${card.bin || "------"}••••${card.last4 || "----"}`,
         productCode: card.product_code,
@@ -1988,17 +2189,18 @@ export function createMembershipFulfillmentService(options) {
   app.put("/api/admin/card-product-policies", { preHandler: requireAdmin }, async (request, reply) => {
     const schema = z.object({
       items: z.array(z.object({
+        providerKey: z.string().trim().regex(/^[a-z0-9_-]{1,64}$/).optional().default("spacexcard"),
         productCode: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/),
         enabled: z.boolean()
       })).min(1).max(100)
     });
     const parsed = schema.safeParse(request.body);
-    if (!parsed.success || new Set(parsed.data?.items.map((item) => item.productCode)).size !== parsed.data?.items.length) {
+    if (!parsed.success || new Set(parsed.data?.items.map((item) => `${item.providerKey}:${item.productCode}`)).size !== parsed.data?.items.length) {
       return reply.code(400).send({ message: "允许卡产品参数无效" });
     }
-    const currentItems = new Map(listCardProductPolicies().map((item) => [item.productCode, item]));
+    const currentItems = new Map(listCardProductPolicies().map((item) => [`${item.providerKey}:${item.productCode}`, item]));
     for (const item of parsed.data.items) {
-      const current = currentItems.get(item.productCode);
+      const current = currentItems.get(`${item.providerKey}:${item.productCode}`);
       if (!current) return reply.code(404).send({ code: "CARD_PRODUCT_NOT_DISCOVERED", message: "卡产品尚未在库存中发现" });
       if (item.enabled && !current.canEnable) {
         return reply.code(409).send({ code: "CARD_PRODUCT_NOT_PROVEN", message: "卡产品没有可用的最新 OpenAI 行情证据" });
@@ -2008,19 +2210,20 @@ export function createMembershipFulfillmentService(options) {
     const changed = [];
     db.transaction(() => {
       for (const item of parsed.data.items) {
-        const existing = db.prepare("SELECT * FROM card_product_policies WHERE product_code = ?").get(item.productCode);
+        const existing = db.prepare("SELECT * FROM card_product_policies WHERE provider_key=? AND product_code=?")
+          .get(item.providerKey, item.productCode);
         if (existing && (existing.enabled === 1) === item.enabled) continue;
         const revision = Number(existing?.revision || 0) + 1;
         db.prepare(`
-          INSERT INTO card_product_policies (product_code, enabled, revision, updated_at, updated_by)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(product_code) DO UPDATE SET
+          INSERT INTO card_product_policies (provider_key, product_code, enabled, revision, updated_at, updated_by)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(provider_key, product_code) DO UPDATE SET
             enabled = excluded.enabled,
             revision = excluded.revision,
             updated_at = excluded.updated_at,
             updated_by = excluded.updated_by
-        `).run(item.productCode, item.enabled ? 1 : 0, revision, at, request.admin.username);
-        changed.push({ productCode: item.productCode, enabled: item.enabled, revision });
+        `).run(item.providerKey, item.productCode, item.enabled ? 1 : 0, revision, at, request.admin.username);
+        changed.push({ providerKey: item.providerKey, productCode: item.productCode, enabled: item.enabled, revision });
       }
       if (changed.length) {
         createAuditLog({
@@ -2250,7 +2453,8 @@ export function createMembershipFulfillmentService(options) {
     const result = db.transaction(() => {
       const card = db.prepare(`
         SELECT id FROM managed_cards
-        WHERE upstream_card_id = ? OR vm_card_id = ?
+        WHERE provider_key = 'spacexcard'
+          AND (upstream_card_id = ? OR vm_card_id = ?)
         ORDER BY CASE WHEN upstream_card_id = ? THEN 0 ELSE 1 END
         LIMIT 1
       `).get(event.card_id, event.vm_card_id, event.card_id);

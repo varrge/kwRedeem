@@ -605,6 +605,27 @@
             </div>
 
             <div class="card">
+              <div class="card-header"><h3>EfunCard OpenAPI</h3></div>
+              <form id="membership-efuncard-settings-form" class="stack">
+                <label class="field">
+                  <span>API Base URL</span>
+                  <input id="membership-efuncard-base-url" type="url" autocomplete="off" placeholder="https://example.com/api/open/v1" required />
+                </label>
+                <label class="field">
+                  <span>API Key</span>
+                  <input id="membership-efuncard-api-key" type="password" autocomplete="new-password" placeholder="留空保持不变" />
+                </label>
+                <label><input id="membership-efuncard-clear-api-key" type="checkbox" /> 清除已保存的 API Key</label>
+                <div class="grid grid-2">
+                  <label class="field"><span>队列优先级</span><input id="membership-efuncard-priority" type="number" min="1" max="10000" step="1" required /></label>
+                  <label><input id="membership-efuncard-enabled" type="checkbox" /> 启用该卡台</label>
+                </div>
+                <button type="submit" class="primary-btn">保存 EfunCard 配置</button>
+              </form>
+              <div id="membership-efuncard-settings-result" class="hint"></div>
+            </div>
+
+            <div class="card">
               <div class="card-header"><h3>实施状态</h3></div>
               <div id="membership-fulfillment-status" class="hint" aria-live="polite">正在读取状态…</div>
               <div class="stack mt-24">
@@ -643,6 +664,7 @@
             <div class="card-header">
               <h3>卡片库存初始化与刷新</h3>
               <div class="header-actions">
+                <select id="membership-inventory-platform" aria-label="卡台"></select>
                 <button id="membership-inventory-initialize" type="button" class="primary-btn small">初始化全部卡片</button>
                 <button id="membership-inventory-refresh" type="button" class="ghost-btn small">刷新库存与行情</button>
                 <button id="membership-card-list-refresh" type="button" class="ghost-btn small">刷新列表</button>

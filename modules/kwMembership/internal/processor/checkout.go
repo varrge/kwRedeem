@@ -62,7 +62,8 @@ func (p *Processor) tickCheckout(ctx context.Context) (bool, error) {
 func (p *Processor) checkoutDue(ctx context.Context, now time.Time) (Fulfillment, bool, error) {
 	item, err := scanFulfillment(p.store.DB().QueryRowContext(ctx, `SELECT `+fulfillmentColumns+`
     FROM membership_fulfillments
-    WHERE state IN (
+    WHERE automation_enrolled_at IS NOT NULL
+      AND state IN (
       'CHECKOUT_PREFLIGHT_READY','CHECKOUT_CHALLENGE_WAIT','CHECKOUT_LOGIN_READY','CHECKOUT_LOGIN_WAIT',
 	  'CHECKOUT_EXECUTION_WAIT','CHECKOUT_PRE_SUBMIT_FAILED',
       'PLUS_CONFIRMED','PLUS_APPROVAL_WAIT','UPGRADE_APPROVAL_WAIT'

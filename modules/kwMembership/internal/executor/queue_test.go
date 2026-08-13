@@ -29,6 +29,15 @@ func TestQueueLeasesHighestPriorityOneAtATimeAndHardExpires(t *testing.T) {
   )`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repository.DB().ExecContext(ctx, `CREATE TABLE membership_fulfillments (
+	  id TEXT PRIMARY KEY,automation_enrolled_at TEXT
+	);
+	INSERT INTO membership_fulfillments VALUES
+	  ('f-normal','2026-08-13T01:00:00.000Z'),
+	  ('f-upgrade','2026-08-13T01:00:00.000Z'),
+	  ('f-recovery','2026-08-13T01:00:00.000Z')`); err != nil {
+		t.Fatal(err)
+	}
 	queue := NewQueue(repository.DB())
 	now := time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
 	for _, item := range []CommandInput{

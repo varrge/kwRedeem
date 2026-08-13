@@ -6340,7 +6340,9 @@ refs.membershipFulfillmentBackfillForm?.addEventListener("submit", async (event)
     await refreshMembershipFulfillments();
     setHint(
       refs.membershipFulfillmentListResult,
-      payload.created ? "会员履约已补建，Worker 将继续检查订阅状态" : "该订单已经存在会员履约"
+	  payload.enrolled
+		? "会员履约已纳入，Worker 将继续检查订阅状态"
+		: "该订单已经纳入会员自动化"
     );
   } catch (error) {
     setHint(refs.membershipFulfillmentListResult, error.message);

@@ -66,7 +66,12 @@ func NewBridge(db *sql.DB, secret string) (*Bridge, error) {
 	if _, err := db.Exec(`UPDATE membership_checkout_commands
     SET state='expired',outcome_code=COALESCE(outcome_code,'EXECUTOR_CONTEXT_LOST'),
         ended_at=COALESCE(ended_at,?),updated_at=?
-	    WHERE state IN ('leased','action_required')`, now, now); err != nil {
+	    WHERE state IN ('leased','action_required')
+	      AND EXISTS (
+	        SELECT 1 FROM membership_fulfillments fulfillment
+	        WHERE fulfillment.id=membership_checkout_commands.fulfillment_id
+	          AND fulfillment.automation_enrolled_at IS NOT NULL
+	      )`, now, now); err != nil {
 		return nil, err
 	}
 	return bridge, nil

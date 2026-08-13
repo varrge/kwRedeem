@@ -30,6 +30,7 @@ tests/*
 !tests/sub2api-image-page.test.js
 !tests/sub2api-image-api.test.js
 !tests/membership-fulfillment.test.js
+!tests/membership-enrollment-migration.test.js
 !tests/membership-orchestration.test.js
 !tests/membership-funding.test.js
 !tests/membership-rollout.test.js

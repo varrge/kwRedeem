@@ -36,7 +36,8 @@ func (p *Processor) catchUpSessionActivation(ctx context.Context, limit int, now
 	    SELECT f.id, f.order_no, f.state_revision, o.session_payload
     FROM membership_fulfillments f
     JOIN redeem_orders o ON o.id = f.order_id
-    WHERE f.state IN ('WAITING_SESSION_VALIDATION','WAITING_SESSION_ACTIVATION') AND o.session_payload IS NOT NULL
+    WHERE f.automation_enrolled_at IS NOT NULL
+      AND f.state IN ('WAITING_SESSION_VALIDATION','WAITING_SESSION_ACTIVATION') AND o.session_payload IS NOT NULL
     ORDER BY f.created_at LIMIT ?`, limit)
 	if err != nil {
 		return 0, err
@@ -117,7 +118,7 @@ func (p *Processor) activateIdentity(ctx context.Context, orderNo, lock string, 
 		var id, state string
 		err := tx.QueryRowContext(ctx, `
       SELECT id, state FROM membership_fulfillments
-      WHERE order_no = ?`, orderNo).Scan(&id, &state)
+      WHERE order_no = ? AND automation_enrolled_at IS NOT NULL`, orderNo).Scan(&id, &state)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -130,7 +131,8 @@ func (p *Processor) activateIdentity(ctx context.Context, orderNo, lock string, 
 		var holder string
 		err = tx.QueryRowContext(ctx, `
       SELECT id FROM membership_fulfillments
-      WHERE account_lock_key = ? AND id <> ? AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
+      WHERE account_lock_key = ? AND id <> ? AND automation_enrolled_at IS NOT NULL
+        AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
         AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED','PAYMENT_DECLINED','PARTIAL_FULFILLMENT_EXPIRED','CANCELLED','COMPLETED')
       LIMIT 1`, lock, id).Scan(&holder)
 		next := "QUEUED"
@@ -158,7 +160,8 @@ func (p *Processor) promoteOneWaiter(ctx context.Context, now time.Time) error {
 	return p.withFencedImmediate(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
       SELECT id, account_lock_key FROM membership_fulfillments
-      WHERE state = 'ACCOUNT_FULFILLMENT_WAIT' AND account_lock_key IS NOT NULL
+      WHERE automation_enrolled_at IS NOT NULL
+        AND state = 'ACCOUNT_FULFILLMENT_WAIT' AND account_lock_key IS NOT NULL
         AND (retry_at IS NULL OR retry_at <= ?)
       ORDER BY created_at`, store.ISO(now))
 		if err != nil {
@@ -185,7 +188,8 @@ func (p *Processor) promoteOneWaiter(ctx context.Context, now time.Time) error {
 			var holder string
 			err := tx.QueryRowContext(ctx, `
         SELECT id FROM membership_fulfillments
-        WHERE account_lock_key = ? AND id <> ? AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
+        WHERE account_lock_key = ? AND id <> ? AND automation_enrolled_at IS NOT NULL
+          AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
           AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED','PAYMENT_DECLINED','PARTIAL_FULFILLMENT_EXPIRED','CANCELLED','COMPLETED') LIMIT 1`, item.lock, item.id).Scan(&holder)
 			if err == nil {
 				continue
@@ -207,7 +211,8 @@ func (p *Processor) claimEligibility(ctx context.Context, now time.Time) (Fulfil
 	found := false
 	err := p.withFencedImmediate(ctx, func(tx *sql.Tx) error {
 		candidate, err := scanFulfillment(tx.QueryRowContext(ctx, `SELECT `+fulfillmentColumns+` FROM membership_fulfillments
-      WHERE state IN ('QUEUED','ACCOUNT_CHECKING','ACCOUNT_REPURCHASE_NOT_READY','INVENTORY_NOT_READY',
+      WHERE automation_enrolled_at IS NOT NULL
+        AND state IN ('QUEUED','ACCOUNT_CHECKING','ACCOUNT_REPURCHASE_NOT_READY','INVENTORY_NOT_READY',
         'CARD_PRICE_UNAVAILABLE','CHECKOUT_PRICE_UNRECOGNIZED','CHECKOUT_PRE_SUBMIT_FAILED','MEMBERSHIP_CONTRACT_UNKNOWN')
         AND (retry_at IS NULL OR retry_at <= ?)
         AND (state <> 'CHECKOUT_PRE_SUBMIT_FAILED' OR run_mode IS NULL)

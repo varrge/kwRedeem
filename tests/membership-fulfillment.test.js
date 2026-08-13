@@ -389,6 +389,10 @@ test("database initializes membership tables and safe defaults", () => {
 
   const productColumns = new Set(db.prepare("PRAGMA table_info(products)").all().map((column) => column.name));
   assert.equal(productColumns.has("membership_tier"), true);
+  const fulfillmentColumns = new Set(
+    db.prepare("PRAGMA table_info(membership_fulfillments)").all().map((column) => column.name)
+  );
+  assert.equal(fulfillmentColumns.has("automation_enrolled_at"), true);
   const settings = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
   assert.equal(settings.enabled, 0);
   assert.equal(settings.inventory_status, "not_started");
@@ -1508,6 +1512,8 @@ test("manual membership CDKs create the target fulfillment and support one-order
   assert.equal(repaired.json().created, true);
   assert.equal(repaired.json().item.targetTier, "x20");
 	assert.equal(repaired.json().item.state, "WAITING_SESSION_VALIDATION");
+	assert.equal(Number.isFinite(Date.parse(repaired.json().item.automationEnrolledAt)), true);
+	assert.equal(repaired.json().enrolled, true);
 
   const repeated = await app.inject({
     method: "POST",
@@ -1517,10 +1523,29 @@ test("manual membership CDKs create the target fulfillment and support one-order
   });
   assert.equal(repeated.statusCode, 200);
   assert.equal(repeated.json().created, false);
+	assert.equal(repeated.json().enrolled, false);
   assert.equal(db.prepare(`
     SELECT COUNT(*) AS count FROM admin_audit_logs
     WHERE action = 'membership.fulfillment.backfill' AND resource_id = ?
   `).get(repaired.json().item.id).count, 1);
+
+	db.prepare(`
+	  UPDATE membership_fulfillments SET automation_enrolled_at = NULL WHERE id = ?
+	`).run(repaired.json().item.id);
+	const enrolledExisting = await app.inject({
+	  method: "POST",
+	  url: "/api/admin/membership-fulfillments/backfill",
+	  headers,
+	  payload: { orderNo: order.order_no }
+	});
+	assert.equal(enrolledExisting.statusCode, 200);
+	assert.equal(enrolledExisting.json().created, false);
+	assert.equal(enrolledExisting.json().enrolled, true);
+	assert.equal(Number.isFinite(Date.parse(enrolledExisting.json().item.automationEnrolledAt)), true);
+	assert.equal(db.prepare(`
+	  SELECT COUNT(*) AS count FROM admin_audit_logs
+	  WHERE action = 'membership.fulfillment.backfill' AND resource_id = ?
+	`).get(repaired.json().item.id).count, 2);
 });
 
 test("voiding a redeemed CDK cancels its queued delivery and membership fulfillment", async () => {

@@ -78,7 +78,8 @@ func (p *Processor) tickReconciliation(ctx context.Context) (bool, error) {
 func (p *Processor) rcDueFulfillment(ctx context.Context, now time.Time) (Fulfillment, bool, error) {
 	fulfillment, err := scanFulfillment(p.store.DB().QueryRowContext(ctx, `SELECT `+fulfillmentColumns+`
     FROM membership_fulfillments f
-    WHERE (
+    WHERE f.automation_enrolled_at IS NOT NULL
+      AND (
       (
         (
           f.state IN (

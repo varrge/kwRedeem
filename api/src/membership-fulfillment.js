@@ -352,7 +352,7 @@ export function createMembershipFulfillmentService(options) {
       SELECT f.*, o.site_id, o.product_id, o.session_payload
       FROM membership_fulfillments f
       JOIN redeem_orders o ON o.id = f.order_id
-      WHERE f.id = ?
+      WHERE f.id = ? AND f.automation_enrolled_at IS NOT NULL
     `).get(id);
   }
 
@@ -368,6 +368,7 @@ export function createMembershipFulfillmentService(options) {
       stateRevision: row.state_revision,
       retryAt: row.retry_at || null,
       failureCode: row.failure_code || null,
+      automationEnrolledAt: row.automation_enrolled_at || null,
       browserLeaseEpoch: row.browser_lease_epoch ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -674,9 +675,15 @@ export function createMembershipFulfillmentService(options) {
   function dispatchMembershipOutbox() {
     if (!extensionDelivery?.publishMembershipNotification) return 0;
     const rows = db.prepare(`
-      SELECT * FROM membership_outbox
-      WHERE dispatched_at IS NULL AND event_type IN ('membership.available', 'membership.resume')
-      ORDER BY created_at ASC LIMIT 50
+      SELECT outbox.* FROM membership_outbox outbox
+      WHERE outbox.dispatched_at IS NULL
+        AND outbox.event_type IN ('membership.available', 'membership.resume')
+        AND EXISTS (
+          SELECT 1 FROM membership_fulfillments fulfillment
+          WHERE fulfillment.id = outbox.fulfillment_id
+            AND fulfillment.automation_enrolled_at IS NOT NULL
+        )
+      ORDER BY outbox.created_at ASC LIMIT 50
     `).all();
     let sent = 0;
     for (const row of rows) {
@@ -705,11 +712,12 @@ export function createMembershipFulfillmentService(options) {
       FROM browser_fulfillment_lease l
       JOIN membership_fulfillments f ON f.id = l.fulfillment_id
       WHERE l.id = 'default' AND l.state = 'leased' AND l.installation_id = ?
+        AND f.automation_enrolled_at IS NOT NULL
     `).get(auth.installationId);
     const next = leased || db.prepare(`
       SELECT id, state_revision
       FROM membership_fulfillments
-      WHERE state = 'BROWSER_LEASE_WAIT'
+      WHERE automation_enrolled_at IS NOT NULL AND state = 'BROWSER_LEASE_WAIT'
       ORDER BY created_at ASC LIMIT 1
     `).get();
     return { item: next ? { fulfillmentId: next.id, revision: next.state_revision } : null };
@@ -1566,8 +1574,25 @@ export function createMembershipFulfillmentService(options) {
         if (!order) return { error: "not_found" };
 
         const existing = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
-        if (existing) return { item: existing, created: false };
+		if (existing?.automation_enrolled_at) return { item: existing, created: false, enrolled: false };
 		if (!order.session_payload) return { error: "session" };
+		if (existing) {
+		  const enrolledAt = new Date().toISOString();
+		  db.prepare(`
+		    UPDATE membership_fulfillments
+		    SET automation_enrolled_at = ?, updated_at = ?
+		    WHERE id = ? AND automation_enrolled_at IS NULL
+		  `).run(enrolledAt, enrolledAt, existing.id);
+		  const enrolled = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(existing.id);
+		  createAuditLog({
+		    action: "membership.fulfillment.backfill",
+		    actor: request.admin.username,
+		    resourceType: "membership_fulfillment",
+		    resourceId: existing.id,
+		    detail: { orderNo: parsed.data.orderNo, targetTier: existing.target_tier, enrolledExisting: true }
+		  });
+		  return { item: enrolled, created: false, enrolled: true };
+		}
 
         let metadata = {};
         try {
@@ -1589,7 +1614,7 @@ export function createMembershipFulfillmentService(options) {
           resourceId: item.id,
           detail: { orderNo: parsed.data.orderNo, targetTier: item.target_tier }
         });
-        return { item, created: true };
+		return { item, created: true, enrolled: true };
       }).immediate();
 
       if (result.error === "not_found") return reply.code(404).send({ message: "订单不存在" });
@@ -1598,7 +1623,11 @@ export function createMembershipFulfillmentService(options) {
       }
       if (result.error === "tier") return reply.code(409).send({ message: "该订单没有可识别的会员类型" });
       setNoStore(reply);
-      return { item: serializeFulfillment(result.item), created: result.created };
+	  return {
+		item: serializeFulfillment(result.item),
+		created: result.created,
+		enrolled: result.enrolled
+	  };
     } catch {
       return reply.code(409).send({ message: "该订单的会员类型无效，未补建履约" });
     }

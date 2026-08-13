@@ -83,6 +83,16 @@ func (s *Store) VerifySharedSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	var enrollmentColumn string
+	if err := s.db.QueryRowContext(ctx, `
+	  SELECT name FROM pragma_table_info('membership_fulfillments')
+	  WHERE name='automation_enrolled_at'
+	`).Scan(&enrollmentColumn); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("kwRedeem database is missing membership_fulfillments.automation_enrolled_at; run npm run db:init")
+		}
+		return err
+	}
 	return nil
 }
 

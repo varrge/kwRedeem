@@ -220,22 +220,31 @@ func (q *Queue) LeaseNext(ctx context.Context, executorID string, now time.Time)
       SET state='expired', outcome_code=COALESCE(outcome_code,'EXECUTOR_LEASE_EXPIRED'),
           ended_at=COALESCE(ended_at,?), updated_at=?
       WHERE state IN ('leased','action_required')
-        AND (hard_deadline_at<=? OR lease_expires_at<=?)`, store.ISO(now), store.ISO(now), store.ISO(now), store.ISO(now)); err != nil {
+	    AND (hard_deadline_at<=? OR lease_expires_at<=?)
+	    AND EXISTS (
+	      SELECT 1 FROM membership_fulfillments fulfillment
+	      WHERE fulfillment.id=membership_checkout_commands.fulfillment_id
+	        AND fulfillment.automation_enrolled_at IS NOT NULL
+	    )`, store.ISO(now), store.ISO(now), store.ISO(now), store.ISO(now)); err != nil {
 			return err
 		}
 		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM membership_checkout_commands
-      WHERE state IN ('leased','action_required')`).Scan(&active); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM membership_checkout_commands command
+	  JOIN membership_fulfillments fulfillment ON fulfillment.id=command.fulfillment_id
+	  WHERE fulfillment.automation_enrolled_at IS NOT NULL
+	    AND command.state IN ('leased','action_required')`).Scan(&active); err != nil {
 			return err
 		}
 		if active != 0 {
 			return ErrNoCommand
 		}
 		var id string
-		err := tx.QueryRowContext(ctx, `SELECT id FROM membership_checkout_commands
-      WHERE state='queued' AND available_at<=? ORDER BY
-        CASE priority_class WHEN 'recovery' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
-        payment_ready_at, available_at, created_at, id LIMIT 1`, store.ISO(now)).Scan(&id)
+		err := tx.QueryRowContext(ctx, `SELECT command.id FROM membership_checkout_commands command
+	  JOIN membership_fulfillments fulfillment ON fulfillment.id=command.fulfillment_id
+	  WHERE fulfillment.automation_enrolled_at IS NOT NULL
+	    AND command.state='queued' AND command.available_at<=? ORDER BY
+	    CASE command.priority_class WHEN 'recovery' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
+	    command.payment_ready_at, command.available_at, command.created_at, command.id LIMIT 1`, store.ISO(now)).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoCommand
 		}

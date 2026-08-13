@@ -97,9 +97,10 @@ export function createMembershipFulfillmentForOrder(db, input = {}) {
   db.prepare(`
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,
-      account_lock_key, resume_revision, state_revision, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_VALIDATION', NULL, ?, NULL, 0, 0, ?, ?)
-  `).run(id, input.orderId, input.orderNo, targetTier, runMode, at, at);
+      account_lock_key, resume_revision, state_revision, automation_enrolled_at,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_VALIDATION', NULL, ?, NULL, 0, 0, ?, ?, ?)
+  `).run(id, input.orderId, input.orderNo, targetTier, runMode, at, at, at);
   return db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(id);
 }
 
@@ -115,14 +116,15 @@ export function activateMembershipFulfillmentIdentity(db, input = {}) {
       SELECT f.*
       FROM membership_fulfillments f
       JOIN redeem_orders o ON o.id = f.order_id
-      WHERE f.order_no = ? AND o.extension_delivery_status = 'succeeded'
+      WHERE f.order_no = ? AND f.automation_enrolled_at IS NOT NULL
+        AND o.extension_delivery_status = 'succeeded'
     `).get(orderNo);
     if (!current) return null;
     if (!["WAITING_SESSION_VALIDATION", "WAITING_SESSION_ACTIVATION", "ACCOUNT_FULFILLMENT_WAIT"].includes(current.state)) return current;
 
     const holder = db.prepare(`
       SELECT id FROM membership_fulfillments
-      WHERE account_lock_key = ? AND id <> ?
+      WHERE account_lock_key = ? AND id <> ? AND automation_enrolled_at IS NOT NULL
         AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
         AND state NOT IN (${ACTIVE_LOCK_TERMINAL_STATES.map(() => "?").join(", ")})
       LIMIT 1
@@ -143,10 +145,11 @@ export function promoteWaitingMembershipFulfillment(db, fulfillmentId, options =
   const at = nowIso(options.at ?? Date.now());
   return db.transaction(() => {
     const current = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(id);
-    if (!current || current.state !== "ACCOUNT_FULFILLMENT_WAIT" || !current.account_lock_key) return current || null;
+    if (!current || !current.automation_enrolled_at
+      || current.state !== "ACCOUNT_FULFILLMENT_WAIT" || !current.account_lock_key) return current || null;
     const holder = db.prepare(`
       SELECT id FROM membership_fulfillments
-      WHERE account_lock_key = ? AND id <> ?
+      WHERE account_lock_key = ? AND id <> ? AND automation_enrolled_at IS NOT NULL
         AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
         AND state NOT IN (${ACTIVE_LOCK_TERMINAL_STATES.map(() => "?").join(", ")})
       LIMIT 1
@@ -247,7 +250,8 @@ export function expireBrowserFulfillmentLease(db, options = {}) {
     `).run(at, lease.epoch);
     if (lease.fulfillment_id) {
       const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(lease.fulfillment_id);
-      if (fulfillment && fulfillment.browser_lease_epoch === lease.epoch
+	  if (!fulfillment?.automation_enrolled_at) return leaseRow(db);
+      if (fulfillment.browser_lease_epoch === lease.epoch
         && fulfillment.state === "INITIAL_CHECKOUT_PREFLIGHT") {
         db.prepare(`
           UPDATE membership_fulfillment_attempts
@@ -267,7 +271,7 @@ export function expireBrowserFulfillmentLease(db, options = {}) {
         `).run(at, fulfillment.id);
         const updated = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(fulfillment.id);
         appendOutbox(db, updated, "membership.available", at);
-      } else if (fulfillment && fulfillment.browser_lease_epoch === lease.epoch) {
+      } else if (fulfillment.browser_lease_epoch === lease.epoch) {
         const stageKey = fulfillment.current_stage === "upgrade" ? "upgrade" : "plus";
         const riskyPermit = db.prepare(`
           SELECT id FROM membership_action_permits
@@ -349,6 +353,7 @@ export function acquireBrowserFulfillmentLease(db, input = {}) {
   return db.transaction(() => {
     const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(fulfillmentId);
     if (!fulfillment) return { acquired: false, reason: "not_found" };
+	if (!fulfillment.automation_enrolled_at) return { acquired: false, reason: "not_enrolled" };
     const lease = leaseRow(db);
     if (lease.state !== "available") {
       if (lease.fulfillment_id === fulfillmentId && lease.installation_id === installationId) {
@@ -423,6 +428,9 @@ export function acquirePaymentBrowserFulfillmentLease(db, input = {}) {
   expireBrowserFulfillmentLease(db, { at: atMs });
   return db.transaction(() => {
     const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE id = ?").get(fulfillmentId);
+	if (fulfillment && !fulfillment.automation_enrolled_at) {
+	  return { acquired: false, reason: "not_enrolled", state: fulfillment.state };
+	}
     const stageKey = fulfillment?.current_stage === "upgrade" ? "upgrade" : "plus";
     const stage = db.prepare(`
       SELECT stage.*, contract.version AS contract_version

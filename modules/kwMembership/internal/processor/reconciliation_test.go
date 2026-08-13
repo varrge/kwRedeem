@@ -540,7 +540,7 @@ func rcTestSchema(t *testing.T, ctx context.Context, repository *store.Store) {
       id TEXT PRIMARY KEY,order_id TEXT NOT NULL,order_no TEXT NOT NULL,target_tier TEXT NOT NULL,
       state TEXT NOT NULL,current_stage TEXT,run_mode TEXT,account_lock_key TEXT,state_revision INTEGER NOT NULL DEFAULT 0,
       retry_at TEXT,money_boundary_at TEXT,browser_lease_epoch INTEGER,card_reservation_id TEXT,failure_code TEXT,created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,completed_at TEXT)`,
+	  updated_at TEXT NOT NULL,completed_at TEXT,automation_enrolled_at TEXT)`,
 		`CREATE TABLE membership_payment_stages (
       id TEXT PRIMARY KEY,fulfillment_id TEXT NOT NULL,stage_key TEXT NOT NULL,expected_tier TEXT NOT NULL,
       state TEXT NOT NULL,attempt_no INTEGER,card_id TEXT,price_signal_min REAL,price_signal_max REAL,submit_permitted_at TEXT,
@@ -632,8 +632,9 @@ func rcTestSeedStage(t *testing.T, ctx context.Context, repository *store.Store,
 		args  []any
 	}{
 		{`INSERT INTO membership_fulfillments
-      (id,order_id,order_no,target_tier,state,current_stage,money_boundary_at,card_reservation_id,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, []any{id, "order-" + id, "ORDER-" + id, tier, state, key, at, "reservation-" + id, at, at}},
+	  (id,order_id,order_no,target_tier,state,current_stage,money_boundary_at,card_reservation_id,
+	   automation_enrolled_at,created_at,updated_at)
+	  VALUES (?,?,?,?,?,?,?,?,?,?,?)`, []any{id, "order-" + id, "ORDER-" + id, tier, state, key, at, "reservation-" + id, at, at, at}},
 		{`INSERT INTO managed_cards
       (id,upstream_card_id,vm_card_id,product_code,upstream_status,cached_available_amount,lane,
        consumed_slots,capacity_state,reconciliation_state,created_at,updated_at)

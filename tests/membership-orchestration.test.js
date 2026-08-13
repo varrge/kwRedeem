@@ -591,6 +591,94 @@ test("a blocked duplicate-account waiter does not starve an unrelated queued acc
   assert.equal(db.prepare("SELECT state FROM membership_fulfillments WHERE id = 'mf-unrelated'").get().state, "BROWSER_LEASE_WAIT");
 });
 
+test("the compatibility runner leaves unenrolled historical fulfillments untouched", async () => {
+  insertProduct("product-historical-runner", "plus");
+  insertOrder(
+    "order-historical-runner",
+    "KWHISTORICALRUNNER",
+    "product-historical-runner",
+    "historical-runner@example.com"
+  );
+  db.prepare(`
+    INSERT INTO membership_fulfillments (
+      id, order_id, order_no, target_tier, state, created_at, updated_at,
+      automation_enrolled_at
+    ) VALUES ('mf-historical-runner', 'order-historical-runner',
+      'KWHISTORICALRUNNER', 'plus', 'WAITING_SESSION_VALIDATION', ?, ?, NULL)
+  `).run(at, at);
+  const runner = createMembershipFulfillmentRunner({
+    db,
+    decryptText: () => JSON.stringify({ user: { email: "historical-runner@example.com" } }),
+    identitySecret: process.env.JWT_SECRET,
+	  membershipFetcher: async () => ({
+		providerCode: 200,
+		accountType: "free",
+		autoRenew: false,
+		isOverdue: false,
+		isDelinquent: false,
+		observedAt: new Date().toISOString()
+	  })
+  });
+
+	await runner.tick();
+	const historical = db.prepare(`
+	  SELECT state, account_lock_key, automation_enrolled_at
+	  FROM membership_fulfillments WHERE id = 'mf-historical-runner'
+	`).get();
+	assert.deepEqual(historical, {
+	  state: "WAITING_SESSION_VALIDATION",
+	  account_lock_key: null,
+	  automation_enrolled_at: null
+	});
+	assert.equal(db.prepare(`
+	  SELECT COUNT(*) AS count FROM membership_observations
+	  WHERE fulfillment_id = 'mf-historical-runner'
+	`).get().count, 0);
+});
+
+test("an expired legacy browser lease releases only the global lease", () => {
+  insertProduct("product-historical-lease", "plus");
+  insertOrder(
+    "order-historical-lease",
+    "KWHISTORICALLEASE",
+    "product-historical-lease",
+    "historical-lease@example.com"
+  );
+  const expiresAt = "2026-07-16T05:00:00.000Z";
+  db.prepare(`
+    INSERT INTO membership_fulfillments (
+      id, order_id, order_no, target_tier, state, browser_lease_epoch,
+      created_at, updated_at, automation_enrolled_at
+    ) VALUES ('mf-historical-lease', 'order-historical-lease',
+      'KWHISTORICALLEASE', 'plus', 'INITIAL_CHECKOUT_PREFLIGHT', 500,
+      ?, ?, NULL)
+  `).run(at, at);
+  db.prepare(`
+    UPDATE browser_fulfillment_lease
+    SET fulfillment_id = 'mf-historical-lease', installation_id = 'legacy-install',
+        epoch = 500, state = 'leased', heartbeat_at = ?, expires_at = ?, updated_at = ?
+    WHERE id = 'default'
+  `).run(at, expiresAt, at);
+
+  const released = expireBrowserFulfillmentLease(db, {
+    at: Date.parse("2026-07-16T05:00:01.000Z")
+  });
+  assert.equal(released.state, "available");
+  assert.deepEqual(db.prepare(`
+    SELECT state, browser_lease_epoch, automation_enrolled_at
+    FROM membership_fulfillments WHERE id = 'mf-historical-lease'
+  `).get(), {
+    state: "INITIAL_CHECKOUT_PREFLIGHT",
+    browser_lease_epoch: 500,
+    automation_enrolled_at: null
+  });
+  assert.equal(acquireBrowserFulfillmentLease(db, {
+    fulfillmentId: "mf-historical-lease",
+    installationId: "legacy-install",
+    at: Date.parse("2026-07-16T05:00:02.000Z")
+  }).reason, "not_enrolled");
+});
+
 test("checkout broker uses the fixed Plus/PH/PHP contract and rejects drift", async () => {
   assert.equal(validateChatGptCheckoutUrl("https://chatgpt.com/checkout"), "https://chatgpt.com/checkout");
   assert.equal(validateChatGptCheckoutUrl("https://chatgpt.com/not-checkout"), null);
@@ -811,11 +899,11 @@ test("funded canary waits on the exact filled-page snapshot before any permit ca
   db.prepare(`
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,
-      card_reservation_id, created_at, updated_at
+      card_reservation_id, automation_enrolled_at, created_at, updated_at
     ) VALUES ('mf-payment-protocol', 'order-payment-protocol', 'KWPAYPROTO',
       'plus', 'BROWSER_LEASE_WAIT', 'plus', 'canary',
-      'reservation-payment-protocol', ?, ?)
-  `).run(at, at);
+      'reservation-payment-protocol', ?, ?, ?)
+  `).run(at, at, at);
   db.prepare(`
     INSERT INTO card_capacity_reservations (
       id, fulfillment_id, card_id, target_lane, slot_index, state, reserved_at
@@ -992,10 +1080,10 @@ test("upgrade preflight requires a reported clear progression and a closed rollo
   db.prepare(`
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,
-      browser_lease_epoch, money_boundary_at, created_at, updated_at
+      browser_lease_epoch, money_boundary_at, automation_enrolled_at, created_at, updated_at
     ) VALUES ('mf-upgrade-guard', 'order-upgrade-guard', 'KWUPGRADEGUARD',
-      'x5', 'UPGRADE_CHECKOUT_PREFLIGHT', 'upgrade', 'canary', 7, ?, ?, ?)
-  `).run(at, at, at);
+      'x5', 'UPGRADE_CHECKOUT_PREFLIGHT', 'upgrade', 'canary', 7, ?, ?, ?, ?)
+  `).run(at, at, at, at);
   db.prepare(`
     INSERT INTO membership_payment_stages (
       id, fulfillment_id, stage_key, expected_tier, state, card_id,

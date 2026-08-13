@@ -28,7 +28,8 @@ func TestIntakeCreatesMembershipFulfillmentOnce(t *testing.T) {
       id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE, order_no TEXT NOT NULL UNIQUE,
       target_tier TEXT NOT NULL, state TEXT NOT NULL, current_stage TEXT, run_mode TEXT,
       account_lock_key TEXT, resume_revision INTEGER NOT NULL DEFAULT 0,
-      state_revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      state_revision INTEGER NOT NULL DEFAULT 0, automation_enrolled_at TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
 		CREATE TABLE automatic_checkout_scopes (
 		  id TEXT PRIMARY KEY, site_id TEXT NOT NULL, product_id TEXT NOT NULL, tier TEXT NOT NULL,
@@ -72,14 +73,15 @@ func TestIntakeCreatesMembershipFulfillmentOnce(t *testing.T) {
 	if !processed {
 		t.Fatal("membership order was not ingested")
 	}
-	var state, tier, runMode string
+	var state, tier, runMode, enrolledAt string
 	if err := db.QueryRow(`
-    SELECT state, target_tier, run_mode FROM membership_fulfillments WHERE order_id='order-1'
-  `).Scan(&state, &tier, &runMode); err != nil {
+	SELECT state, target_tier, run_mode, automation_enrolled_at
+	FROM membership_fulfillments WHERE order_id='order-1'
+	`).Scan(&state, &tier, &runMode, &enrolledAt); err != nil {
 		t.Fatal(err)
 	}
-	if state != "WAITING_SESSION_VALIDATION" || tier != "plus" || runMode != "automatic" {
-		t.Fatalf("fulfillment = state %q tier %q runMode %q", state, tier, runMode)
+	if state != "WAITING_SESSION_VALIDATION" || tier != "plus" || runMode != "automatic" || enrolledAt == "" {
+		t.Fatalf("fulfillment = state %q tier %q runMode %q enrolledAt %q", state, tier, runMode, enrolledAt)
 	}
 	var historicalCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM membership_fulfillments WHERE order_id='order-historical'").Scan(&historicalCount); err != nil {

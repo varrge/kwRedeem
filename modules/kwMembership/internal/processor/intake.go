@@ -100,9 +100,10 @@ func (p *Processor) tickIntake(ctx context.Context) (bool, error) {
 			result, err := tx.ExecContext(ctx, `
           INSERT OR IGNORE INTO membership_fulfillments (
             id, order_id, order_no, target_tier, state, current_stage, run_mode,
-            account_lock_key, resume_revision, state_revision, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_VALIDATION', NULL, ?, NULL, 0, 0, ?, ?)`,
-				id, candidate.orderID, candidate.orderNo, candidate.targetTier, runMode, candidate.createdAt, at)
+            account_lock_key, resume_revision, state_revision, automation_enrolled_at,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'WAITING_SESSION_VALIDATION', NULL, ?, NULL, 0, 0, ?, ?, ?)`,
+				id, candidate.orderID, candidate.orderNo, candidate.targetTier, runMode, at, candidate.createdAt, at)
 			if err != nil {
 				return err
 			}

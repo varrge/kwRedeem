@@ -123,6 +123,7 @@ export function createMembershipFulfillmentRunner(options = {}) {
       FROM membership_fulfillments f
       JOIN redeem_orders o ON o.id = f.order_id
 	  WHERE f.state IN ('WAITING_SESSION_VALIDATION', 'WAITING_SESSION_ACTIVATION')
+        AND f.automation_enrolled_at IS NOT NULL
         AND o.extension_delivery_status = 'succeeded'
       ORDER BY f.created_at ASC LIMIT ?
     `).all(limit);
@@ -148,7 +149,8 @@ export function createMembershipFulfillmentRunner(options = {}) {
     // ponytail: this linear waiter scan is acceptable for the single-worker queue; use an indexed anti-join if volume grows.
     const waiters = db.prepare(`
       SELECT id FROM membership_fulfillments
-      WHERE state = 'ACCOUNT_FULFILLMENT_WAIT'
+      WHERE automation_enrolled_at IS NOT NULL
+        AND state = 'ACCOUNT_FULFILLMENT_WAIT'
         AND (retry_at IS NULL OR retry_at <= ?)
       ORDER BY created_at ASC
     `).all(at);
@@ -159,7 +161,8 @@ export function createMembershipFulfillmentRunner(options = {}) {
 
     const candidate = db.prepare(`
       SELECT * FROM membership_fulfillments
-      WHERE state IN (
+      WHERE automation_enrolled_at IS NOT NULL
+        AND state IN (
         'QUEUED', 'ACCOUNT_CHECKING',
         'ACCOUNT_REPURCHASE_NOT_READY', 'INVENTORY_NOT_READY',
         'CARD_PRICE_UNAVAILABLE', 'CHECKOUT_PRICE_UNRECOGNIZED',

@@ -72,7 +72,7 @@ Go 会从该目录的 `.env` 读取：
 
 Go/Python 私有协议只监听回环 IP，并使用独立 Bearer 密钥。命令表不保存 Session、Cookie、PAN、CVV、付款链接或原始页面内容。
 
-`npm run db:init` 会在共享数据库中持久化首次启用 Go Intake 的时间水位线。Go 只自动接收水位线之后创建的新会员订单；历史订单不会在部署时批量重跑，需要时仍由 kwRedeem 后台逐单补建。
+`npm run db:init` 会在共享数据库中持久化首次启用 Go Intake 的时间水位线。每条由 Go Intake 创建或在升级后由管理员明确单笔补建的履约，还会记录 `automation_enrolled_at`。所有 Go、Python 和兼容 Node 执行队列都只领取已纳入自动化的履约；升级前已经存在的记录一律保持未纳入，不会在部署或重启时批量回放。
 
 ## 生产部署
 

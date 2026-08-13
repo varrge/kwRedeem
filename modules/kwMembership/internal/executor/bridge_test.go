@@ -30,8 +30,8 @@ func TestBridgeLeasesPreflightAndClaimsMaterialOnce(t *testing.T) {
 	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
 	at := store.ISO(now)
 	if _, err := repository.DB().Exec(`INSERT INTO membership_fulfillments
-    (id,state,run_mode,state_revision,card_reservation_id,money_boundary_at,updated_at)
-    VALUES ('mf-bridge','CHECKOUT_PREFLIGHT_READY','',3,NULL,NULL,?)`, at); err != nil {
+	(id,state,run_mode,state_revision,card_reservation_id,money_boundary_at,automation_enrolled_at,updated_at)
+	VALUES ('mf-bridge','CHECKOUT_PREFLIGHT_READY','',3,NULL,NULL,?,?)`, at, at); err != nil {
 		t.Fatal(err)
 	}
 	bridge, err := NewBridge(repository.DB(), bridgeTestSecret)
@@ -130,8 +130,8 @@ func TestBridgeRebuildsNeverLeasedQueuedContextAfterRestart(t *testing.T) {
 	now := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
 	at := store.ISO(now)
 	if _, err := repository.DB().Exec(`INSERT INTO membership_fulfillments
-	  (id,state,run_mode,state_revision,card_reservation_id,money_boundary_at,updated_at)
-	  VALUES ('mf-restart','CHECKOUT_PREFLIGHT_READY','',4,NULL,NULL,?)`, at); err != nil {
+	  (id,state,run_mode,state_revision,card_reservation_id,money_boundary_at,automation_enrolled_at,updated_at)
+	  VALUES ('mf-restart','CHECKOUT_PREFLIGHT_READY','',4,NULL,NULL,?,?)`, at, at); err != nil {
 		t.Fatal(err)
 	}
 	request := checkout.Request{
@@ -239,7 +239,7 @@ func createBridgeSchema(t *testing.T, repository *store.Store) {
     UNIQUE(fulfillment_id,stage_key,attempt_no,command_kind)
   ); CREATE TABLE membership_fulfillments (
     id TEXT PRIMARY KEY,state TEXT,run_mode TEXT,state_revision INTEGER,card_reservation_id TEXT,
-    money_boundary_at TEXT,updated_at TEXT
+	 money_boundary_at TEXT,automation_enrolled_at TEXT,updated_at TEXT
   ); CREATE TABLE membership_fulfillment_settings (id TEXT PRIMARY KEY,enabled INTEGER,rollout_mode TEXT);
   CREATE TABLE membership_payment_stages (
     fulfillment_id TEXT,stage_key TEXT,attempt_no INTEGER,adapter_version TEXT,price_contract_id TEXT,state TEXT,card_id TEXT

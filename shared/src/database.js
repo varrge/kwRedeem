@@ -1310,6 +1310,7 @@ function createSchema(db) {
       browser_lease_epoch INTEGER,
       card_reservation_id TEXT,
       failure_code TEXT,
+      automation_enrolled_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       completed_at TEXT
@@ -1777,8 +1778,25 @@ function createSchema(db) {
 
   `);
 
+  const introducedMembershipEnrollment = !hasColumn(
+    db,
+    "membership_fulfillments",
+    "automation_enrolled_at"
+  );
   ensureColumn(db, "products", "membership_tier", "TEXT");
 	ensureColumn(db, "redeem_orders", "session_revision", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "membership_fulfillments", "automation_enrolled_at", "TEXT");
+	if (introducedMembershipEnrollment) {
+	  const migratedAt = new Date().toISOString();
+	  db.prepare(`
+	    UPDATE membership_intake_settings
+	    SET accept_orders_created_at = CASE
+	      WHEN accept_orders_created_at < ? THEN ?
+	      ELSE accept_orders_created_at
+	    END
+	    WHERE id = 'default'
+	  `).run(migratedAt, migratedAt);
+	}
   ensureColumn(db, "membership_fulfillment_settings", "last_inventory_error", "TEXT");
   ensureColumn(db, "membership_fulfillment_settings", "rollout_mode", "TEXT NOT NULL DEFAULT 'disabled'");
   ensureColumn(db, "membership_payment_stages", "attempt_no", "INTEGER");
@@ -2058,11 +2076,14 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_spacex_cdk_renewal_guards_due
       ON spacex_cdk_renewal_guards(state, next_retry_at, updated_at);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_due ON membership_fulfillments(state, retry_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_automation_due
+      ON membership_fulfillments(automation_enrolled_at, state, retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_membership_fulfillments_order ON membership_fulfillments(order_no);
     DROP INDEX IF EXISTS idx_membership_active_account_lock;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_active_account_lock
       ON membership_fulfillments(account_lock_key)
-      WHERE account_lock_key IS NOT NULL
+      WHERE automation_enrolled_at IS NOT NULL
+        AND account_lock_key IS NOT NULL
         AND state <> 'ACCOUNT_FULFILLMENT_WAIT'
         AND state NOT IN ('ACCOUNT_ALREADY_SUBSCRIBED', 'PAYMENT_DECLINED', 'PARTIAL_FULFILLMENT_EXPIRED', 'CANCELLED', 'COMPLETED');
     CREATE INDEX IF NOT EXISTS idx_membership_attempts_fulfillment ON membership_fulfillment_attempts(fulfillment_id, stage, attempt_no);

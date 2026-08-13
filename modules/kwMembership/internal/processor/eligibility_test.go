@@ -24,7 +24,7 @@ func TestCatchUpSessionActivationMovesInvalidRowsOutOfFixedWindow(t *testing.T) 
     id TEXT PRIMARY KEY,order_id TEXT NOT NULL,order_no TEXT NOT NULL,target_tier TEXT NOT NULL,state TEXT NOT NULL,
     current_stage TEXT,run_mode TEXT,account_lock_key TEXT,state_revision INTEGER NOT NULL DEFAULT 0,retry_at TEXT,
     money_boundary_at TEXT,card_reservation_id TEXT,failure_code TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
-    completed_at TEXT
+	completed_at TEXT,automation_enrolled_at TEXT
   ); CREATE TABLE membership_outbox (
     id TEXT PRIMARY KEY,event_type TEXT NOT NULL,fulfillment_id TEXT,state_revision INTEGER,payload TEXT NOT NULL,created_at TEXT NOT NULL
   ); CREATE TABLE membership_checkout_commands (
@@ -54,10 +54,15 @@ func TestCatchUpSessionActivationMovesInvalidRowsOutOfFixedWindow(t *testing.T) 
 	}
 	at := "2026-07-20T00:00:00.000Z"
 	if _, err := repository.DB().Exec(`INSERT INTO membership_fulfillments
-    (id,order_id,order_no,target_tier,state,state_revision,created_at,updated_at)
-    VALUES ('mf-bad','order-bad','ORDER-BAD','plus','WAITING_SESSION_ACTIVATION',0,?,?);
+    (id,order_id,order_no,target_tier,state,state_revision,created_at,updated_at,automation_enrolled_at)
+    VALUES ('mf-bad','order-bad','ORDER-BAD','plus','WAITING_SESSION_ACTIVATION',0,?,?,?);
+    INSERT INTO membership_fulfillments
+    (id,order_id,order_no,target_tier,state,state_revision,created_at,updated_at,automation_enrolled_at)
+    VALUES ('mf-historical','order-historical','ORDER-HISTORICAL','plus','WAITING_SESSION_ACTIVATION',0,?, ?,NULL);
     INSERT INTO redeem_orders (id,extension_delivery_status,session_payload)
-    VALUES ('order-bad','succeeded','not-an-encrypted-session')`, at, at); err != nil {
+	VALUES ('order-bad','succeeded','not-an-encrypted-session');
+	INSERT INTO redeem_orders (id,extension_delivery_status,session_payload)
+	VALUES ('order-historical','succeeded','not-an-encrypted-session')`, at, at, at, at, at); err != nil {
 		t.Fatal(err)
 	}
 	crypt, err := secure.NewDecrypter("activation-test-secret")
@@ -77,6 +82,15 @@ func TestCatchUpSessionActivationMovesInvalidRowsOutOfFixedWindow(t *testing.T) 
 	}
 	if changed != 1 || state != "CANCELLED" || code != "SESSION_INVALID_PRE_BOUNDARY" || retry.Valid {
 		t.Fatalf("invalid activation projection changed=%d state=%s code=%s retry=%v", changed, state, code, retry)
+	}
+	var historicalState string
+	var historicalCode sql.NullString
+	if err := repository.DB().QueryRow(`SELECT state,failure_code FROM membership_fulfillments WHERE id='mf-historical'`).
+		Scan(&historicalState, &historicalCode); err != nil {
+		t.Fatal(err)
+	}
+	if historicalState != "WAITING_SESSION_ACTIVATION" || historicalCode.Valid {
+		t.Fatalf("historical fulfillment was processed: state=%s code=%v", historicalState, historicalCode)
 	}
 }
 

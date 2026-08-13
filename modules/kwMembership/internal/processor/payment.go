@@ -204,7 +204,8 @@ func (p *Processor) tickPayment(ctx context.Context) (bool, error) {
 	now := p.now().UTC()
 	rows, err := p.store.DB().QueryContext(ctx, `
     SELECT id FROM membership_fulfillments
-    WHERE state IN ('FUNDING_READY','FUNDING','PLATFORM_BALANCE_INSUFFICIENT')
+    WHERE automation_enrolled_at IS NOT NULL
+      AND state IN ('FUNDING_READY','FUNDING','PLATFORM_BALANCE_INSUFFICIENT')
       AND (retry_at IS NULL OR retry_at <= ?)
     ORDER BY created_at,id LIMIT 50`, store.ISO(now))
 	if err != nil {

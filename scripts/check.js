@@ -19,6 +19,8 @@ try {
   assert(fs.existsSync(resolveProjectPath("admin", "index.html")), "缺少 admin/index.html");
   assert(fs.existsSync(resolveProjectPath("api", "src", "server.js")), "缺少 API 服务入口");
   assert(fs.existsSync(resolveProjectPath("worker", "src", "worker.js")), "缺少 Worker 服务入口");
+  assert(fs.existsSync(resolveProjectPath("modules", "kwMembership", "go.mod")), "缺少 kwMembership Go Module");
+  assert(fs.existsSync(resolveProjectPath("modules", "kwMembership", "python_executor", "__main__.py")), "缺少 kwMembership Python Executor");
   assert(fs.existsSync(parentDir), "数据库目录不存在，请先执行 npm run db:init");
 
   console.log("KaWang 检查通过。");

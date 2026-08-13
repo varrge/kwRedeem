@@ -18,18 +18,47 @@ function loadImagePage() {
   return dom;
 }
 
-test("image format and background controls do not change the selected quality", () => {
+test("image page removes format and background controls and keeps quality in advanced settings", () => {
   const dom = loadImagePage();
   const { document } = dom.window;
 
-  document.querySelector('.format-btn[data-value="webp"]').click();
+  assert.equal(document.querySelector("#format-grid"), null);
+  assert.equal(document.querySelector("#background-grid"), null);
+  assert.ok(document.querySelector(".advanced-settings"));
   assert.equal(document.querySelector("#quality-grid .quality-btn.active")?.dataset.value, "auto");
-  assert.equal(document.querySelector("#format-grid .format-btn.active")?.dataset.value, "webp");
+  document.querySelector('#quality-grid .quality-btn[data-value="high"]').click();
+  assert.equal(document.querySelector("#quality-summary").textContent, "清晰度：高");
 
-  document.querySelector('.background-btn[data-value="transparent"]').click();
-  assert.equal(document.querySelector("#quality-grid .quality-btn.active")?.dataset.value, "auto");
-  assert.equal(document.querySelector("#format-grid .format-btn.active")?.dataset.value, "webp");
-  assert.equal(document.querySelector("#background-grid .background-btn.active")?.dataset.value, "transparent");
+  const source = Array.from(document.scripts)
+    .find((script) => !script.src && script.textContent.includes("const state ="))
+    ?.textContent || "";
+  const requestBody = source.match(/body: JSON\.stringify\(\{([\s\S]*?)referenceImages:/)?.[1] || "";
+  assert.doesNotMatch(requestBody, /outputFormat|background/);
+
+  dom.window.close();
+});
+
+test("creator tabs separate text, reference editing, and history views", () => {
+  const dom = loadImagePage();
+  const { document } = dom.window;
+  const model = document.querySelector("#model-select");
+
+  model.value = "gpt-image-1.5";
+  model.dispatchEvent(new dom.window.Event("change"));
+  document.querySelector('[data-mode="image"]').click();
+  assert.equal(model.value, "gpt-image-1.5");
+  assert.equal(model.selectedOptions[0].disabled, false);
+  assert.equal(document.querySelector("#reference-zone").classList.contains("active"), true);
+
+  document.querySelector('[data-mode="history"]').click();
+  assert.equal(document.querySelector("#creator-view").classList.contains("hidden"), true);
+  assert.equal(document.querySelector("#history-view").classList.contains("hidden"), false);
+  assert.equal(document.querySelector('[data-mode="history"]').getAttribute("aria-selected"), "true");
+
+  document.querySelector('[data-mode="text"]').click();
+  assert.equal(document.querySelector("#creator-view").classList.contains("hidden"), false);
+  assert.equal(document.querySelector("#history-view").classList.contains("hidden"), true);
+  assert.equal(document.querySelector("#reference-zone").classList.contains("active"), false);
 
   dom.window.close();
 });

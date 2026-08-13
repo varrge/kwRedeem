@@ -158,6 +158,8 @@ const QUOTA_AUTO_CLAIM_CLEANUP_INTERVAL_MS = 10_000;
 const SUB2API_IMAGE_SESSION_TTL_MS = 30 * 60 * 1000;
 const SUB2API_IMAGE_KEYS_TTL_MS = 2 * 60 * 1000;
 const SUB2API_IMAGE_GENERATE_TIMEOUT_MS = 180 * 1000;
+const SUB2API_IMAGE_MAX_ATTEMPTS = 3;
+const SUB2API_IMAGE_RETRY_MAX_DELAY_MS = 5000;
 const SUB2API_IMAGE_JOB_TTL_MS = 30 * 60 * 1000;
 const SUB2API_INVITE_REBATE_AUTO_APPROVE_MS = 24 * 60 * 60 * 1000;
 const SUB2API_INVITE_REBATE_AUTO_APPROVE_INTERVAL_MS = 10 * 60 * 1000;
@@ -167,7 +169,7 @@ const SUB2API_IMAGE_MAX_REFERENCE_IMAGES = 4;
 const SUB2API_IMAGE_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const SUB2API_IMAGE_BODY_LIMIT = 96 * 1024 * 1024;
 const SUB2API_IMAGE_MODELS = Object.freeze(["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]);
-const SUB2API_IMAGE_EDIT_MODELS = Object.freeze(["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1", "gpt-image-1-mini"]);
+const SUB2API_IMAGE_EDIT_MODELS = Object.freeze(["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]);
 const SUB2API_IMAGE_QUALITIES = Object.freeze(["auto", "low", "medium", "high"]);
 const SUB2API_IMAGE_FORMATS = Object.freeze(["png", "webp", "jpeg"]);
 const SUB2API_IMAGE_BACKGROUNDS = Object.freeze(["auto", "opaque", "transparent"]);
@@ -181,6 +183,14 @@ const SUB2API_WORLDCUP_DEFAULT_ODDS = Object.freeze({
   away: 1.8
 });
 
+function readPersistedUpdateState() {
+  try {
+    return JSON.parse(fs.readFileSync(updateStatePath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 const updateState = {
   status: "idle",
   startedAt: null,
@@ -189,7 +199,9 @@ const updateState = {
   remoteCommit: null,
   branch: null,
   hasUpdate: false,
-  error: null
+  error: null,
+  processId: null,
+  ...readPersistedUpdateState()
 };
 
 const quotaAutoClaimSessions = new Map();
@@ -375,7 +387,36 @@ function ensureLogsDir() {
 function writeUpdateState(patch = {}) {
   Object.assign(updateState, patch);
   ensureLogsDir();
-  fs.writeFileSync(updateStatePath, JSON.stringify(updateState, null, 2));
+  const temporaryPath = `${updateStatePath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(updateState, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporaryPath, updateStatePath);
+}
+
+function refreshUpdateState() {
+  Object.assign(updateState, readPersistedUpdateState());
+  if (updateState.status === "running") {
+    const processId = Number(updateState.processId);
+    const startedMs = new Date(updateState.startedAt || 0).getTime();
+    let running = false;
+    if (Number.isInteger(processId) && processId > 1) {
+      try {
+        process.kill(processId, 0);
+        running = true;
+      } catch {
+        running = false;
+      }
+    }
+    const missingProcessIsStale = !processId && Number.isFinite(startedMs) && Date.now() - startedMs > 2 * 60 * 60 * 1000;
+    if ((!running && processId) || missingProcessIsStale) {
+      writeUpdateState({
+        status: "failed",
+        endedAt: nowIso(),
+        processId: null,
+        error: "在线更新进程已退出；维护模式保持当前状态，请检查更新日志"
+      });
+    }
+  }
+  return updateState;
 }
 
 function appendUpdateLog(message) {
@@ -446,11 +487,85 @@ async function getGitVersionInfo(fetchRemote = false) {
     remoteCommit,
     hasUpdate: Boolean(remoteCommit && remoteCommit !== localCommit),
     hasLocalChanges: localChanges.length > 0,
-    localChanges
+    localChanges,
+    membership: await getMembershipRuntimeStatus(localCommit)
+  };
+}
+
+async function systemdUnitState(unit) {
+  try {
+    const { stdout: loadStateOutput } = await execFileAsync(
+      "systemctl",
+      ["show", unit, "--property=LoadState", "--value"],
+      { timeout: 3000 }
+    );
+    const loadState = loadStateOutput.trim();
+    if (!loadState || loadState === "not-found") return "not-installed";
+    const { stdout } = await execFileAsync("systemctl", ["is-active", unit], { timeout: 3000 });
+    return stdout.trim() || "unknown";
+  } catch (error) {
+    const output = String(error.stdout || "").trim();
+    if (output) return output;
+    return error.code === "ENOENT" ? "unavailable" : "unknown";
+  }
+}
+
+async function getMembershipRuntimeStatus(sourceVersion = null) {
+  const sourcePath = path.join(projectRoot, "modules", "kwMembership");
+  const sourcePresent = fs.existsSync(path.join(sourcePath, "go.mod"))
+    && fs.existsSync(path.join(sourcePath, "python_executor", "__main__.py"));
+  const deployHelperPath = "/usr/local/sbin/kawang-membership-deploy";
+  const environmentPath = "/etc/kwmembership.env";
+  const deployHelperPresent = fs.existsSync(deployHelperPath);
+  const environmentPresent = fs.existsSync(environmentPath);
+  let lease = null;
+  try {
+    lease = db.prepare(`
+      SELECT status,version,heartbeat_at,expires_at,last_tick_at,last_success_at,last_error_code
+      FROM membership_processor_lease WHERE id='default'
+    `).get() || null;
+  } catch {
+    lease = null;
+  }
+  const now = Date.now();
+  const heartbeatAt = lease?.heartbeat_at || null;
+  const heartbeatMs = new Date(heartbeatAt || 0).getTime();
+  const expiresMs = new Date(lease?.expires_at || 0).getTime();
+  const heartbeatFresh = lease?.status === "active"
+    && Number.isFinite(heartbeatMs)
+    && now - heartbeatMs <= 30_000
+    && Number.isFinite(expiresMs)
+    && expiresMs > now;
+  const [workerService, pythonExecutorService] = await Promise.all([
+    systemdUnitState("kwmembership-worker.service"),
+    systemdUnitState("kwmembership-python-executor.service")
+  ]);
+  const installedVersion = lease?.version || null;
+  const unitsPresent = !["unknown", "unavailable", "not-installed"].includes(workerService)
+    && !["unknown", "unavailable", "not-installed"].includes(pythonExecutorService);
+  return {
+    sourcePresent,
+    sourceVersion,
+    installedVersion,
+    versionMatches: Boolean(sourceVersion && installedVersion && sourceVersion === installedVersion),
+    deployHelperPresent,
+    environmentPresent,
+    firstInstallRequired: sourcePresent && !(deployHelperPresent && environmentPresent && unitsPresent),
+    deployHelperPath,
+    environmentPath,
+    workerService,
+    pythonExecutorService,
+    processorStatus: lease?.status || "stopped",
+    heartbeatAt,
+    heartbeatFresh,
+    lastTickAt: lease?.last_tick_at || null,
+    lastSuccessAt: lease?.last_success_at || null,
+    lastErrorCode: lease?.last_error_code || null
   };
 }
 
 function startUpdateTask(actor) {
+  refreshUpdateState();
   writeUpdateState({
     status: "running",
     startedAt: nowIso(),
@@ -462,21 +577,18 @@ function startUpdateTask(actor) {
 
   const updateProcessEnv = buildUpdateProcessEnv();
   appendUpdateLog(`更新任务使用 Node ${process.version}：${process.execPath}`);
+  ensureLogsDir();
+  const logDescriptor = fs.openSync(updateLogPath, "a");
   const child = spawn("bash", ["scripts/update.sh"], {
     cwd: projectRoot,
     env: updateProcessEnv,
-    stdio: ["ignore", "pipe", "pipe"]
+    detached: true,
+    stdio: ["ignore", logDescriptor, logDescriptor]
   });
+  fs.closeSync(logDescriptor);
+  if (Number.isInteger(child.pid)) writeUpdateState({ processId: child.pid });
 
-  child.stdout.on("data", (chunk) => {
-    appendUpdateLog(chunk.toString().trimEnd());
-  });
-
-  child.stderr.on("data", (chunk) => {
-    appendUpdateLog(chunk.toString().trimEnd());
-  });
-
-  child.on("error", (error) => {
+  child.once("error", (error) => {
     appendUpdateLog(`更新任务启动失败：${error.message}`);
     writeUpdateState({
       status: "failed",
@@ -484,28 +596,7 @@ function startUpdateTask(actor) {
       error: error.message
     });
   });
-
-  child.on("close", async (code) => {
-    const nextStatus = code === 0 ? "succeeded" : "failed";
-    appendUpdateLog(`更新任务结束，退出码：${code}`);
-
-    let versionInfo = {};
-    try {
-      versionInfo = await getGitVersionInfo(false);
-    } catch {
-      versionInfo = {};
-    }
-
-    writeUpdateState({
-      status: nextStatus,
-      endedAt: nowIso(),
-      localCommit: versionInfo.localCommit ?? updateState.localCommit,
-      remoteCommit: versionInfo.remoteCommit ?? updateState.remoteCommit,
-      branch: versionInfo.branch ?? updateState.branch,
-      hasUpdate: versionInfo.hasUpdate ?? updateState.hasUpdate,
-      error: code === 0 ? null : `更新脚本退出码：${code}`
-    });
-  });
+  child.unref();
 }
 
 function signAdminToken(payload) {
@@ -3708,6 +3799,15 @@ function pickFirstString(...values) {
   return "";
 }
 
+function pickFirstIdentifier(...values) {
+  for (const value of values) {
+    if ((typeof value === "string" || typeof value === "number") && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
 function getSub2ApiImageKeySecret(item = {}) {
   return pickFirstString(
     item.apiKey,
@@ -3790,7 +3890,9 @@ function hasExplicitImageSupport(item = {}) {
     item.supportImage,
     item.support_image,
     item.canImage,
-    item.can_image
+    item.can_image,
+    item.allowImageGeneration,
+    item.allow_image_generation
   ];
   for (const flag of flags) {
     if (typeof flag === "boolean") return flag;
@@ -3806,6 +3908,10 @@ function shouldIncludeSub2ApiImageKey(item = {}) {
   if (isDisabledSub2ApiKey(item)) return false;
   const explicit = hasExplicitImageSupport(item);
   if (explicit !== null) return explicit;
+  const groupExplicit = item.group && typeof item.group === "object"
+    ? hasExplicitImageSupport(item.group)
+    : null;
+  if (groupExplicit !== null) return groupExplicit;
   const models = Array.isArray(item.models) ? item.models : Array.isArray(item.modelList) ? item.modelList : [];
   if (!models.length) return true;
   return models.some((model) => /image|dall-e/i.test(String(model)));
@@ -3822,7 +3928,7 @@ function normalizeSub2ApiImageKeys(json) {
     if (!item || typeof item !== "object" || !shouldIncludeSub2ApiImageKey(item)) return;
     const secret = getSub2ApiImageKeySecret(item);
     if (!secret || secret.includes("***")) return;
-    const id = pickFirstString(item.id, item.keyId, item.key_id, item.uuid) || hashSub2ApiImageKeySecret(secret);
+    const id = pickFirstIdentifier(item.id, item.keyId, item.key_id, item.uuid) || hashSub2ApiImageKeySecret(secret);
     keys.push({
       id: String(id),
       label: getSub2ApiImageKeyLabel(item, index),
@@ -3911,41 +4017,46 @@ function parseSub2ApiImageDataUrl(value) {
 }
 
 async function callSub2ApiOpenAiJson(connection, apiKey, pathname, body) {
-  const response = await fetch(`${connection.base_url}${pathname}`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  return callSub2ApiImageWithRetry(async () => {
+    const response = await fetch(`${connection.base_url}${pathname}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+    });
+    return parseSub2ApiImageResponse(response);
   });
-  const text = await response.text();
-  const json = safeParseJson(text, null);
-  const result = { ok: response.ok, status: response.status, text, json };
-  if (!response.ok) {
-    const error = new Error(getSub2ApiRemoteMessage(result));
-    error.status = response.status;
-    error.responseInfo = result;
-    throw error;
-  }
-  return json;
 }
 
 async function callSub2ApiOpenAiForm(connection, apiKey, pathname, form) {
-  const response = await fetch(`${connection.base_url}${pathname}`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: form,
-    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  return callSub2ApiImageWithRetry(async () => {
+    const response = await fetch(`${connection.base_url}${pathname}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: form,
+      signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+    });
+    return parseSub2ApiImageResponse(response);
   });
+}
+
+async function parseSub2ApiImageResponse(response) {
   const text = await response.text();
   const json = safeParseJson(text, null);
-  const result = { ok: response.ok, status: response.status, text, json };
+  const result = {
+    ok: response.ok,
+    status: response.status,
+    retryAfter: response.headers.get("retry-after") || "",
+    text,
+    json
+  };
   if (!response.ok) {
     const error = new Error(getSub2ApiRemoteMessage(result));
     error.status = response.status;
@@ -3955,23 +4066,59 @@ async function callSub2ApiOpenAiForm(connection, apiKey, pathname, form) {
   return json;
 }
 
-function walkForSub2ApiImageCall(value) {
-  if (!value) return null;
+function getSub2ApiImageRetryDelay(error, attempt) {
+  const retryAfter = String(error?.responseInfo?.retryAfter || "").trim();
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(SUB2API_IMAGE_RETRY_MAX_DELAY_MS, Math.round(seconds * 1000));
+    }
+    const dateMs = Date.parse(retryAfter);
+    if (Number.isFinite(dateMs)) {
+      return Math.min(SUB2API_IMAGE_RETRY_MAX_DELAY_MS, Math.max(0, dateMs - Date.now()));
+    }
+  }
+  return Math.min(SUB2API_IMAGE_RETRY_MAX_DELAY_MS, 500 * (2 ** attempt));
+}
+
+function shouldRetrySub2ApiImageRequest(error) {
+  const status = Number(error?.status || 0);
+  if (status === 429 || status >= 500) return true;
+  return status === 0 && ["AbortError", "TimeoutError", "TypeError"].includes(String(error?.name || ""));
+}
+
+async function callSub2ApiImageWithRetry(request) {
+  for (let attempt = 0; attempt < SUB2API_IMAGE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!shouldRetrySub2ApiImageRequest(error) || attempt >= SUB2API_IMAGE_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, getSub2ApiImageRetryDelay(error, attempt)));
+    }
+  }
+  throw new Error("远程 Sub2api 图片请求失败");
+}
+
+function collectSub2ApiImageCalls(value, items = []) {
+  if (!value) return items;
   if (Array.isArray(value)) {
     for (const child of value) {
-      const found = walkForSub2ApiImageCall(child);
-      if (found) return found;
+      collectSub2ApiImageCalls(child, items);
     }
-    return null;
+    return items;
   }
   if (typeof value === "object") {
-    if (value.type === "image_generation_call" && value.result) return value;
+    if (value.type === "image_generation_call" && value.result) {
+      items.push(value);
+      return items;
+    }
     for (const child of Object.values(value)) {
-      const found = walkForSub2ApiImageCall(child);
-      if (found) return found;
+      collectSub2ApiImageCalls(child, items);
     }
   }
-  return null;
+  return items;
 }
 
 function extractSub2ApiResponsesImageItems(raw) {
@@ -3979,8 +4126,8 @@ function extractSub2ApiResponsesImageItems(raw) {
   let partialB64 = "";
   let partialPrompt = "";
   for (const line of String(raw || "").split(/\r?\n/)) {
-    if (!line.startsWith("data: ")) continue;
-    const payload = line.slice(6).trim();
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
     if (!payload || payload === "[DONE]") continue;
     const event = safeParseJson(payload, null);
     if (!event || typeof event !== "object") continue;
@@ -4003,9 +4150,12 @@ function extractSub2ApiResponsesImageItems(raw) {
   if (items.length) return items;
 
   const parsed = safeParseJson(raw, null);
-  const found = walkForSub2ApiImageCall(parsed);
-  if (found?.result) {
-    return [{ b64_json: found.result, revised_prompt: found.revised_prompt || "" }];
+  const found = collectSub2ApiImageCalls(parsed);
+  if (found.length) {
+    return found.map((item) => ({
+      b64_json: item.result,
+      revised_prompt: item.revised_prompt || ""
+    }));
   }
   if (partialB64) {
     return [{ b64_json: partialB64, revised_prompt: partialPrompt }];
@@ -4014,26 +4164,34 @@ function extractSub2ApiResponsesImageItems(raw) {
 }
 
 async function callSub2ApiResponses(connection, apiKey, body) {
-  const response = await fetch(`${connection.base_url}/v1/responses`, {
-    method: "POST",
-    headers: {
-      Accept: "text/event-stream, application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+  return callSub2ApiImageWithRetry(async () => {
+    const response = await fetch(`${connection.base_url}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Accept: "text/event-stream, application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SUB2API_IMAGE_GENERATE_TIMEOUT_MS)
+    });
+    const text = await response.text();
+    const json = safeParseJson(text, null);
+    const result = {
+      ok: response.ok,
+      status: response.status,
+      retryAfter: response.headers.get("retry-after") || "",
+      text,
+      json
+    };
+    if (!response.ok) {
+      const error = new Error(getSub2ApiRemoteMessage(result));
+      error.status = response.status;
+      error.responseInfo = result;
+      throw error;
+    }
+    return extractSub2ApiResponsesImageItems(text);
   });
-  const text = await response.text();
-  const json = safeParseJson(text, null);
-  const result = { ok: response.ok, status: response.status, text, json };
-  if (!response.ok) {
-    const error = new Error(getSub2ApiRemoteMessage(result));
-    error.status = response.status;
-    error.responseInfo = result;
-    throw error;
-  }
-  return extractSub2ApiResponsesImageItems(text);
 }
 
 function extractSub2ApiImageItems(json) {
@@ -4256,13 +4414,23 @@ function prepareSub2ApiImageGenerateRequest(body) {
 
   const model = SUB2API_IMAGE_MODELS.includes(payload.model) ? payload.model : "gpt-image-2";
   if (payload.mode === "image" && !SUB2API_IMAGE_EDIT_MODELS.includes(model)) {
-    const error = new Error("该模型不支持参考图修改，请选择 gpt-image-2、gpt-image-1 或 gpt-image-1-mini");
+    const error = new Error("该模型不支持参考图修改，请选择 GPT Image 模型");
     error.statusCode = 400;
     throw error;
   }
   const quality = SUB2API_IMAGE_QUALITIES.includes(payload.quality) ? payload.quality : "auto";
   const outputFormat = SUB2API_IMAGE_FORMATS.includes(payload.outputFormat) ? payload.outputFormat : "png";
   const background = SUB2API_IMAGE_BACKGROUNDS.includes(payload.background) ? payload.background : "auto";
+  if (model.startsWith("gpt-image-2") && background === "transparent") {
+    const error = new Error("gpt-image-2 暂不支持透明背景，请选择自动或不透明背景");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (background === "transparent" && outputFormat === "jpeg") {
+    const error = new Error("透明背景只支持 PNG 或 WebP 格式");
+    error.statusCode = 400;
+    throw error;
+  }
   const aspectRatio = SUB2API_IMAGE_ASPECT_RATIOS.includes(payload.aspectRatio) ? payload.aspectRatio : "auto";
   const size = getSub2ApiImageSize(aspectRatio);
   return { payload, model, quality, outputFormat, background, aspectRatio, size };
@@ -9076,6 +9244,7 @@ app.get("/api/admin/sub2api/worldcup/bets", { preHandler: requireAdmin }, async 
 });
 
 app.get("/api/admin/system/version", { preHandler: requireAdmin }, async () => {
+  refreshUpdateState();
   try {
     const version = await getGitVersionInfo(false);
     return {
@@ -9096,6 +9265,7 @@ app.get("/api/admin/system/version", { preHandler: requireAdmin }, async () => {
 });
 
 app.post("/api/admin/system/check-environment", { preHandler: requireAdmin }, async () => {
+  refreshUpdateState();
   if (updateState.status === "running" || updateState.status === "checking") {
     return {
       message: "已有更新任务正在执行",
@@ -9148,6 +9318,7 @@ app.post("/api/admin/system/check-environment", { preHandler: requireAdmin }, as
 });
 
 app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async () => {
+  refreshUpdateState();
   if (updateState.status === "running" || updateState.status === "checking") {
     return {
       message: "已有更新任务正在执行",
@@ -9220,6 +9391,7 @@ app.post("/api/admin/system/check-update", { preHandler: requireAdmin }, async (
 });
 
 app.post("/api/admin/system/update", { preHandler: requireAdmin }, async (request, reply) => {
+  refreshUpdateState();
   if (updateState.status === "running" || updateState.status === "checking") {
     return reply.code(409).send({
       message: "已有更新任务正在执行",
@@ -9244,14 +9416,19 @@ app.post("/api/admin/system/update", { preHandler: requireAdmin }, async (reques
   return {
     message: "更新任务已启动",
     updateState,
+    membership: await getMembershipRuntimeStatus(updateState.localCommit),
     log: readUpdateLog()
   };
 });
 
-app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async () => ({
-  updateState,
-  log: readUpdateLog()
-}));
+app.get("/api/admin/system/update-status", { preHandler: requireAdmin }, async () => {
+  refreshUpdateState();
+  return {
+    updateState,
+    membership: await getMembershipRuntimeStatus(updateState.localCommit),
+    log: readUpdateLog()
+  };
+});
 
 function getCheckCxDisabledStatus() {
   return {

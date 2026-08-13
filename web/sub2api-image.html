@@ -597,132 +597,455 @@
       }
     </style>
     <link rel="stylesheet" href="./apple-design.css" />
+    <style>
+      .image-app {
+        min-height: calc(100vh - 36px);
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-card);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(24px) saturate(160%);
+        -webkit-backdrop-filter: blur(24px) saturate(160%);
+      }
+
+      .app-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 70px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .app-head h1 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.25;
+      }
+
+      .app-identity {
+        min-width: 0;
+      }
+
+      .app-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 20px;
+      }
+
+      .app-meta .account-line,
+      .app-meta .status-line {
+        margin-top: 4px;
+      }
+
+      .app-meta .status-line:empty {
+        display: none;
+      }
+
+      .app-meta .status-line:not(:empty)::before {
+        content: "·";
+        margin-right: 10px;
+        color: var(--muted);
+      }
+
+      .app-head-actions {
+        flex: 0 0 auto;
+      }
+
+      .app-head-actions .ghost-btn {
+        min-height: 38px;
+        padding: 0 14px;
+      }
+
+      .mode-switch.app-tabs {
+        display: flex;
+        grid-template-columns: none;
+        gap: 22px;
+        margin: 0;
+        padding: 0 20px;
+        overflow-x: auto;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        background: transparent;
+        scrollbar-width: none;
+      }
+
+      .mode-switch.app-tabs::-webkit-scrollbar {
+        display: none;
+      }
+
+      .app-tabs .mode-btn {
+        position: relative;
+        flex: 0 0 auto;
+        min-height: 48px;
+        padding: 0 2px;
+        border-radius: 0;
+        white-space: nowrap;
+      }
+
+      .app-tabs .mode-btn.active {
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .app-tabs .mode-btn.active::after {
+        content: "";
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--accent);
+      }
+
+      .image-app .workspace {
+        grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
+        gap: 0;
+        min-height: calc(100vh - 155px);
+      }
+
+      .image-app .controls,
+      .image-app .stage {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+
+      .image-app .controls {
+        border-right: 1px solid var(--line);
+      }
+
+      .image-app .control-scroll {
+        max-height: calc(100vh - 155px);
+        padding: 20px;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+      }
+
+      .field-pair {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .field-pair .field {
+        margin-bottom: 8px;
+      }
+
+      .field-note {
+        margin: -1px 0 16px;
+      }
+
+      .advanced-settings {
+        margin: 2px 0 16px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .advanced-settings summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        color: var(--text);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+        list-style: none;
+      }
+
+      .advanced-settings summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .advanced-value {
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      .advanced-body {
+        padding: 0 0 14px;
+      }
+
+      .advanced-body .field {
+        margin: 0;
+      }
+
+      .generate-bar {
+        position: sticky;
+        bottom: -1px;
+        z-index: 2;
+        padding-top: 10px;
+        background: var(--panel);
+      }
+
+      .image-app .stage {
+        min-width: 0;
+      }
+
+      .image-app .stage-head {
+        min-height: 58px;
+        padding: 10px 18px;
+      }
+
+      .image-app .stage-head h2 {
+        font-size: 15px;
+      }
+
+      .image-app .stage-body {
+        min-height: 0;
+        padding: 18px;
+      }
+
+      .image-app .stage-body > .empty,
+      .image-app .stage-body > .loading,
+      .image-app .stage-body > .error-box {
+        min-height: calc(100vh - 250px);
+      }
+
+      .history-view {
+        min-height: calc(100vh - 155px);
+        padding: 20px;
+      }
+
+      .history-view-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+
+      .history-view-head h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .history-view .history-list {
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      }
+
+      .history-empty {
+        grid-column: 1 / -1;
+        min-height: 320px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      @media (max-width: 960px) {
+        .image-app {
+          min-height: auto;
+        }
+
+        .image-app .workspace {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .image-app .controls {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .image-app .control-scroll {
+          max-height: none;
+        }
+
+        .image-app .stage-body > .empty,
+        .image-app .stage-body > .loading,
+        .image-app .stage-body > .error-box {
+          min-height: 420px;
+        }
+
+        .history-view {
+          min-height: 520px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .app-head {
+          align-items: flex-start;
+          padding: 14px;
+        }
+
+        .app-meta {
+          display: block;
+        }
+
+        .app-meta .status-line:not(:empty)::before {
+          display: none;
+        }
+
+        .mode-switch.app-tabs {
+          gap: 18px;
+          padding: 0 14px;
+        }
+
+        .image-app .control-scroll,
+        .history-view {
+          padding: 14px;
+        }
+
+        .field-pair {
+          grid-template-columns: 1fr;
+          gap: 0;
+        }
+
+        .image-app .stage-body > .empty,
+        .image-app .stage-body > .loading,
+        .image-app .stage-body > .error-box {
+          min-height: 340px;
+        }
+      }
+    </style>
   </head>
   <body>
     <main class="shell">
-      <div class="workspace">
-        <aside class="controls">
-          <header class="controls-head">
+      <section class="image-app">
+        <header class="app-head">
+          <div class="app-identity">
             <h1>Sub2api 生图系统</h1>
-            <p id="account-line" class="account-line">正在识别玩家账号...</p>
-            <p id="status-line" class="status-line"></p>
-          </header>
-
-          <div class="control-scroll">
-            <div class="mode-switch" role="tablist" aria-label="生成模式">
-              <button class="mode-btn active" type="button" data-mode="text">文生图</button>
-              <button class="mode-btn" type="button" data-mode="image">参考图修改</button>
+            <div class="app-meta">
+              <p id="account-line" class="account-line">正在识别玩家账号...</p>
+              <p id="status-line" class="status-line"></p>
             </div>
-
-            <div class="field">
-              <label for="key-select">API Key</label>
-              <select id="key-select" disabled>
-                <option value="">等待加载</option>
-              </select>
-              <p class="hint">选择当前玩家在 Sub2api 已生成的 API Key，前台只显示名称和掩码。</p>
-            </div>
-
-            <div class="field">
-              <label for="model-select">模型</label>
-              <select id="model-select">
-                <option value="gpt-image-2">gpt-image-2</option>
-                <option value="gpt-image-2-2026-04-21">gpt-image-2-2026-04-21</option>
-                <option value="gpt-image-1.5">gpt-image-1.5</option>
-                <option value="gpt-image-1">gpt-image-1</option>
-                <option value="gpt-image-1-mini">gpt-image-1-mini</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <div class="field-label">清晰度</div>
-              <div id="quality-grid" class="quality-grid">
-                <button class="quality-btn active" type="button" data-value="auto">自动</button>
-                <button class="quality-btn" type="button" data-value="low">低</button>
-                <button class="quality-btn" type="button" data-value="medium">中</button>
-                <button class="quality-btn" type="button" data-value="high">高</button>
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="field-label">画面比例</div>
-              <div id="ratio-grid" class="ratio-grid">
-                <button class="ratio-btn active" type="button" data-value="auto">自动</button>
-                <button class="ratio-btn" type="button" data-value="1:1">1:1</button>
-                <button class="ratio-btn" type="button" data-value="3:2">3:2</button>
-                <button class="ratio-btn" type="button" data-value="2:3">2:3</button>
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="field-label">格式</div>
-              <div id="format-grid" class="quality-grid">
-                <button class="format-btn active quality-btn" type="button" data-value="png">PNG</button>
-                <button class="format-btn quality-btn" type="button" data-value="webp">WebP</button>
-                <button class="format-btn quality-btn" type="button" data-value="jpeg">JPEG</button>
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="field-label">背景</div>
-              <div id="background-grid" class="quality-grid">
-                <button class="background-btn active quality-btn" type="button" data-value="auto">自动</button>
-                <button class="background-btn quality-btn" type="button" data-value="opaque">不透明</button>
-                <button class="background-btn quality-btn" type="button" data-value="transparent">透明</button>
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="field-row">
-                <label for="count-range">张数</label>
-                <span id="count-value" class="count-value">1</span>
-              </div>
-              <div class="count-line">
-                <input id="count-range" type="range" min="1" max="10" step="1" value="1" />
-              </div>
-            </div>
-
-            <div id="reference-zone" class="field reference-zone">
-              <div class="field-row">
-                <span class="field-label">参考图</span>
-                <span id="reference-count" class="hint">0 / 4</span>
-              </div>
-              <label class="upload-btn" for="reference-input">添加、拖入或粘贴参考图</label>
-              <input id="reference-input" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-              <p class="hint">支持 PNG / JPG / WebP，单张最大 20MB，最多 4 张。</p>
-              <div id="reference-list" class="ref-list"></div>
-            </div>
-
-            <div class="field">
-              <label for="prompt-input">提示词</label>
-              <textarea id="prompt-input" maxlength="4000" placeholder="描述主体、风格、光线、构图和需要修改的细节。"></textarea>
-              <p id="prompt-count" class="hint">0 / 4000</p>
-            </div>
-
-            <button id="generate-btn" class="primary-btn" type="button" disabled>生成图片</button>
           </div>
-        </aside>
+          <div class="app-head-actions">
+            <button id="refresh-keys-btn" class="ghost-btn" type="button" disabled>刷新 Key</button>
+          </div>
+        </header>
 
-        <section class="stage">
-          <header class="stage-head">
-            <div>
-              <h2>生成结果</h2>
-              <p id="stage-subtitle" class="hint" hidden></p>
+        <nav class="mode-switch app-tabs" role="tablist" aria-label="生图页面">
+          <button class="mode-btn active" type="button" data-mode="text" role="tab" aria-selected="true">文生图</button>
+          <button class="mode-btn" type="button" data-mode="image" role="tab" aria-selected="false">参考图修改</button>
+          <button class="mode-btn" type="button" data-mode="history" role="tab" aria-selected="false">生成记录</button>
+        </nav>
+
+        <div id="creator-view" class="workspace">
+          <aside class="controls">
+            <div class="control-scroll">
+              <div class="field-pair">
+                <div class="field">
+                  <label for="key-select">API Key</label>
+                  <select id="key-select" disabled>
+                    <option value="">等待加载</option>
+                  </select>
+                </div>
+
+                <div class="field">
+                  <label for="model-select">模型</label>
+                  <select id="model-select">
+                    <option value="gpt-image-2">gpt-image-2</option>
+                    <option value="gpt-image-2-2026-04-21">gpt-image-2-2026-04-21</option>
+                    <option value="gpt-image-1.5">gpt-image-1.5</option>
+                    <option value="gpt-image-1">gpt-image-1</option>
+                    <option value="gpt-image-1-mini">gpt-image-1-mini</option>
+                  </select>
+                </div>
+              </div>
+              <p class="hint field-note">仅显示已开启图片生成权限的 Key。</p>
+
+              <div class="field">
+                <div class="field-label">画面比例</div>
+                <div id="ratio-grid" class="ratio-grid">
+                  <button class="ratio-btn active" type="button" data-value="auto">自动</button>
+                  <button class="ratio-btn" type="button" data-value="1:1">1:1</button>
+                  <button class="ratio-btn" type="button" data-value="3:2">3:2</button>
+                  <button class="ratio-btn" type="button" data-value="2:3">2:3</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-row">
+                  <label for="count-range">张数</label>
+                  <span id="count-value" class="count-value">1</span>
+                </div>
+                <div class="count-line">
+                  <input id="count-range" type="range" min="1" max="10" step="1" value="1" />
+                </div>
+              </div>
+
+              <div id="reference-zone" class="field reference-zone">
+                <div class="field-row">
+                  <span class="field-label">参考图</span>
+                  <span id="reference-count" class="hint">0 / 4</span>
+                </div>
+                <label class="upload-btn" for="reference-input">添加、拖入或粘贴参考图</label>
+                <input id="reference-input" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                <p class="hint">支持 PNG / JPG / WebP，单张最大 20MB，最多 4 张。</p>
+                <div id="reference-list" class="ref-list"></div>
+              </div>
+
+              <div class="field">
+                <label for="prompt-input">提示词</label>
+                <textarea id="prompt-input" maxlength="4000" placeholder="描述主体、风格、光线、构图和需要修改的细节。"></textarea>
+                <p id="prompt-count" class="hint">0 / 4000</p>
+              </div>
+
+              <details class="advanced-settings">
+                <summary>
+                  <span>高级设置</span>
+                  <span id="quality-summary" class="advanced-value">清晰度：自动</span>
+                </summary>
+                <div class="advanced-body">
+                  <div class="field">
+                    <div class="field-label">清晰度</div>
+                    <div id="quality-grid" class="quality-grid">
+                      <button class="quality-btn active" type="button" data-value="auto">自动</button>
+                      <button class="quality-btn" type="button" data-value="low">低</button>
+                      <button class="quality-btn" type="button" data-value="medium">中</button>
+                      <button class="quality-btn" type="button" data-value="high">高</button>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <div class="generate-bar">
+                <button id="generate-btn" class="primary-btn" type="button" disabled>生成图片</button>
+              </div>
             </div>
-            <div class="stage-actions">
-              <button id="refresh-keys-btn" class="ghost-btn" type="button" disabled>刷新 Key</button>
-              <button id="clear-results-btn" class="ghost-btn" type="button">清空结果</button>
-            </div>
-          </header>
-          <div id="stage-body" class="stage-body">
-            <div class="empty">
+          </aside>
+
+          <section class="stage">
+            <header class="stage-head">
               <div>
-                <h3>等待生成</h3>
-                <p>选择模型和参数，输入提示词后开始生成图片。</p>
+                <h2>生成结果</h2>
+                <p id="stage-subtitle" class="hint" hidden></p>
+              </div>
+              <div class="stage-actions">
+                <button id="clear-results-btn" class="ghost-btn" type="button">清空结果</button>
+              </div>
+            </header>
+            <div id="stage-body" class="stage-body">
+              <div class="empty">
+                <div>
+                  <h3>等待生成</h3>
+                  <p>输入提示词后开始生成图片。</p>
+                </div>
               </div>
             </div>
+          </section>
+        </div>
+
+        <section id="history-view" class="history-view hidden" aria-label="生成记录">
+          <div class="history-view-head">
+            <h2>生成记录</h2>
+            <button id="clear-history-btn" class="ghost-btn" type="button">清空记录</button>
           </div>
+          <div id="history-list" class="history-list"></div>
         </section>
-      </div>
+      </section>
     </main>
 
     <div id="lightbox" class="lightbox hidden">
@@ -748,8 +1071,12 @@
         accountLine: document.querySelector("#account-line"),
         statusLine: document.querySelector("#status-line"),
         stageSubtitle: document.querySelector("#stage-subtitle"),
+        creatorView: document.querySelector("#creator-view"),
+        historyView: document.querySelector("#history-view"),
+        historyList: document.querySelector("#history-list"),
         keySelect: document.querySelector("#key-select"),
         modelSelect: document.querySelector("#model-select"),
+        qualitySummary: document.querySelector("#quality-summary"),
         countRange: document.querySelector("#count-range"),
         countValue: document.querySelector("#count-value"),
         promptInput: document.querySelector("#prompt-input"),
@@ -761,6 +1088,7 @@
         generateBtn: document.querySelector("#generate-btn"),
         refreshKeysBtn: document.querySelector("#refresh-keys-btn"),
         clearResultsBtn: document.querySelector("#clear-results-btn"),
+        clearHistoryBtn: document.querySelector("#clear-history-btn"),
         stageBody: document.querySelector("#stage-body"),
         lightbox: document.querySelector("#lightbox"),
         lightboxImage: document.querySelector("#lightbox-image"),
@@ -770,10 +1098,9 @@
 
       const state = {
         sessionToken: "",
+        view: "creator",
         mode: "text",
         quality: "auto",
-        outputFormat: "png",
-        background: "auto",
         aspectRatio: "auto",
         references: [],
         lastImages: [],
@@ -954,16 +1281,28 @@
       }
 
       function setMode(mode) {
-        state.mode = mode === "image" ? "image" : "text";
+        const historySelected = mode === "history";
+        state.view = historySelected ? "history" : "creator";
+        if (!historySelected) {
+          state.mode = mode === "image" ? "image" : "text";
+        }
         document.querySelectorAll(".mode-btn").forEach((button) => {
-          button.classList.toggle("active", button.dataset.mode === state.mode);
+          const selected = button.dataset.mode === (historySelected ? "history" : state.mode);
+          button.classList.toggle("active", selected);
+          button.setAttribute("aria-selected", String(selected));
         });
+        refs.creatorView.classList.toggle("hidden", historySelected);
+        refs.historyView.classList.toggle("hidden", !historySelected);
+        if (historySelected) {
+          renderHistory();
+          return;
+        }
         refs.referenceZone.classList.toggle("active", state.mode === "image");
         syncModelOptions();
       }
 
       function syncModelOptions() {
-        const editModels = ["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1", "gpt-image-1-mini"];
+        const editModels = ["gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"];
         for (const option of refs.modelSelect.options) {
           option.disabled = state.mode === "image" && !editModels.includes(option.value);
         }
@@ -1160,13 +1499,6 @@
             <button class="ghost-btn" type="button" id="download-all-btn">下载全部</button>
           </div>
           <div class="result-grid">${cards}</div>
-          <section class="history">
-            <div class="history-head">
-              <h3>最近结果</h3>
-              <button class="ghost-btn" type="button" id="clear-history-btn">清空记录</button>
-            </div>
-            <div id="history-list" class="history-list"></div>
-          </section>
         `;
         saveHistory(payload);
         renderHistory();
@@ -1245,14 +1577,19 @@
       }
 
       function renderHistory() {
-        const list = document.querySelector("#history-list");
-        if (!list) return;
         const history = getHistory();
         if (!history.length) {
-          list.innerHTML = `<p class="hint">暂无历史记录。</p>`;
+          refs.historyList.innerHTML = `
+            <div class="history-empty">
+              <div>
+                <h3>暂无生成记录</h3>
+                <p>完成生图后，最近结果会保存在这里。</p>
+              </div>
+            </div>
+          `;
           return;
         }
-        list.innerHTML = history.map((item, index) => `
+        refs.historyList.innerHTML = history.map((item, index) => `
           <article class="history-card" data-history-index="${index}">
             <img src="${escapeHtml(item.image)}" alt="历史图片" />
             <div>
@@ -1288,8 +1625,6 @@
               prompt,
               model: refs.modelSelect.value,
               quality: state.quality,
-              outputFormat: state.outputFormat,
-              background: state.background,
               aspectRatio: state.aspectRatio,
               count: Number(refs.countRange.value || 1),
               referenceImages: state.mode === "image" ? state.references.map((item) => item.dataUrl) : []
@@ -1318,11 +1653,15 @@
         button.addEventListener("click", () => setMode(button.dataset.mode));
       });
 
+      refs.modelSelect.addEventListener("change", syncModelOptions);
+
       document.querySelectorAll("#quality-grid .quality-btn").forEach((button) => {
         button.addEventListener("click", () => {
           document.querySelectorAll("#quality-grid .quality-btn").forEach((item) => item.classList.remove("active"));
           button.classList.add("active");
           state.quality = getSelectedButtonValue("#quality-grid .quality-btn", "auto");
+          const labels = { auto: "自动", low: "低", medium: "中", high: "高" };
+          refs.qualitySummary.textContent = `清晰度：${labels[state.quality] || "自动"}`;
         });
       });
 
@@ -1331,22 +1670,6 @@
           document.querySelectorAll(".ratio-btn").forEach((item) => item.classList.remove("active"));
           button.classList.add("active");
           state.aspectRatio = getSelectedButtonValue(".ratio-btn", "auto");
-        });
-      });
-
-      document.querySelectorAll(".format-btn").forEach((button) => {
-        button.addEventListener("click", () => {
-          document.querySelectorAll(".format-btn").forEach((item) => item.classList.remove("active"));
-          button.classList.add("active");
-          state.outputFormat = getSelectedButtonValue(".format-btn", "png");
-        });
-      });
-
-      document.querySelectorAll(".background-btn").forEach((button) => {
-        button.addEventListener("click", () => {
-          document.querySelectorAll(".background-btn").forEach((item) => item.classList.remove("active"));
-          button.classList.add("active");
-          state.background = getSelectedButtonValue(".background-btn", "auto");
         });
       });
 
@@ -1409,14 +1732,7 @@
 
       refs.stageBody.addEventListener("click", (event) => {
         const button = event.target.closest("[data-action]");
-        if (!button) {
-          const historyCard = event.target.closest("[data-history-index]");
-          if (historyCard) {
-            const item = getHistory()[Number(historyCard.dataset.historyIndex)];
-            if (item) showLightbox({ dataUrl: item.image });
-          }
-          return;
-        }
+        if (!button) return;
         if (button.dataset.action === "continue-waiting") {
           void resumeImageJob(button.dataset.jobId || state.pendingJobId);
           return;
@@ -1442,10 +1758,18 @@
         if (event.target.id === "download-all-btn") {
           state.lastImages.forEach((image, index) => downloadImage(image, index));
         }
-        if (event.target.id === "clear-history-btn") {
-          localStorage.removeItem(HISTORY_KEY);
-          renderHistory();
-        }
+      });
+
+      refs.historyList.addEventListener("click", (event) => {
+        const historyCard = event.target.closest("[data-history-index]");
+        if (!historyCard) return;
+        const item = getHistory()[Number(historyCard.dataset.historyIndex)];
+        if (item) showLightbox({ dataUrl: item.image });
+      });
+
+      refs.clearHistoryBtn.addEventListener("click", () => {
+        localStorage.removeItem(HISTORY_KEY);
+        renderHistory();
       });
 
       refs.generateBtn.addEventListener("click", generate);
@@ -1471,6 +1795,8 @@
       });
 
       renderReferences();
+      renderHistory();
+      syncModelOptions();
       initialize();
     </script>
   </body>

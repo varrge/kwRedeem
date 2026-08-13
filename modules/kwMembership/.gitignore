@@ -1,0 +1,10 @@
+.env
+bin/
+data/
+logs/
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc

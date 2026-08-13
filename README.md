@@ -71,3 +71,23 @@ Go 在本地把订单 Session 生成 ChatGPT Cookie，在服务器私有 Xvfb �
 可以直接用它验证整条流程，也可以在后台新增自己的网站配置后再导入卡密。
 
 更多细节见 `docs/deploy.md` 与 `docs/architecture.md`。
+
+## 会员自动化 Module
+
+`modules/kwMembership` 与 Node 主项目由同一个 Git commit 管理。后台“系统更新”会统一构建 Go Worker、迁移共享 SQLite、部署 Python Executor，并在版本和心跳检查通过后解除维护模式。
+
+生产服务器首次启用时，需要由 root 安装一次 systemd、独立环境文件和受限部署权限。已有旧环境文件时执行：
+
+```bash
+cd /var/local/1panel/apps/openresty/openresty/www/sites/key/index
+sudo \
+  KWMEMBERSHIP_USER=<运行 kwRedeem 的 Unix 用户> \
+  KWMEMBERSHIP_SOURCE_ENV_FILE=/opt/kwmembership/.env \
+  bash modules/kwMembership/scripts/install-systemd.sh
+```
+
+主仓库可以位于任意绝对路径；安装器会从当前 `modules/kwMembership` 自动识别 kwRedeem 根目录。本服务器的主仓库是 `/var/local/1panel/apps/openresty/openresty/www/sites/key/index`，而 `/opt/kwmembership` 只是 systemd 使用的隔离运行副本。
+
+全新安装时，先基于 `modules/kwMembership/.env.example` 创建仅 root 和运行用户可读的临时环境文件，再通过 `KWMEMBERSHIP_SOURCE_ENV_FILE` 传给安装器。安装完成后密钥保存在 `/etc/kwmembership.env`；后续无需 root 登录，后台“在线更新”只获准调用固定的 `/usr/local/sbin/kawang-membership-deploy`。
+
+Go 和 Python 仍分别运行在 `kwmembership-worker.service` 与 `kwmembership-python-executor.service`，不进入 PM2。付款 Gate 和 `KWMEMBERSHIP_LIVE_PAYMENT_ENABLED` 不会被系统更新自动开启。

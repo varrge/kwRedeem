@@ -2709,6 +2709,7 @@ function shortCommit(value) {
 
 function renderSystemInfo(payload) {
   const state = payload.updateState || {};
+  const membership = payload.membership || state.membership || {};
   const isBusy = ["running", "checking"].includes(state.status);
   const localChanges = payload.localChanges || state.localChanges || [];
   const hasLocalChanges = payload.hasLocalChanges || state.hasLocalChanges || localChanges.length > 0;
@@ -2720,7 +2721,14 @@ function renderSystemInfo(payload) {
     ["本地版本", shortCommit(payload.localCommit || state.localCommit)],
     ["远端版本", shortCommit(payload.remoteCommit || state.remoteCommit)],
     ["更新状态", state.status || "idle"],
-    ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "无"]
+    ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "无"],
+    ["会员 Module", membership.sourcePresent
+      ? (membership.firstInstallRequired ? "待首次安装" : (membership.versionMatches ? "已纳管" : "版本不一致"))
+      : "缺失"],
+    ["会员源码版本", shortCommit(membership.sourceVersion)],
+    ["会员运行版本", shortCommit(membership.installedVersion)],
+    ["Go Worker", membership.workerService === "active" && membership.heartbeatFresh ? "运行中" : (membership.workerService || "未安装")],
+    ["Python Executor", membership.pythonExecutorService || "未安装"]
   ];
 
   refs.systemVersionCards.innerHTML = cards.map(([label, value]) => `
@@ -2762,6 +2770,7 @@ async function refreshSystemUpdateStatus() {
   const payload = await api("/api/admin/system/update-status");
   renderSystemInfo({
     updateState: payload.updateState,
+    membership: payload.membership,
     log: payload.log,
     nodeEnv: ""
   });

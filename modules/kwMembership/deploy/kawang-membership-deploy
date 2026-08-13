@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE_DIR="@@SOURCE_DIR@@"
+INSTALL_DIR="@@INSTALL_DIR@@"
+RUN_USER="@@RUN_USER@@"
+RUN_GROUP="@@RUN_GROUP@@"
+ENV_FILE="@@ENV_FILE@@"
+PYTHON_BIN="@@PYTHON_BIN@@"
+
+if [ "$#" -ne 0 ]; then
+  echo "this deployment helper does not accept arguments"
+  exit 2
+fi
+if [ ! -x "$SOURCE_DIR/bin/kwmembership-worker" ] || [ ! -f "$SOURCE_DIR/python_executor/__main__.py" ]; then
+  echo "kwMembership source has not been built or is incomplete"
+  exit 1
+fi
+if [ ! -f "$ENV_FILE" ]; then
+  echo "missing $ENV_FILE"
+  exit 1
+fi
+
+runuser -u "$RUN_USER" -- "$PYTHON_BIN" -m pip install -r "$SOURCE_DIR/python_executor/requirements.txt"
+
+EXECUTOR_MODE="$(sed -n 's/^[[:space:]]*KWMEMBERSHIP_PYTHON_EXECUTOR_MODE[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | tr -d '\"' | tr -d "'")"
+EXECUTOR_MODE="${EXECUTOR_MODE:-fixture}"
+if [ "$EXECUTOR_MODE" = "live" ]; then
+  runuser -u "$RUN_USER" -- env PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.playwright-browsers" \
+    "$PYTHON_BIN" -m playwright install chromium
+fi
+
+systemctl stop kwmembership-python-executor.service >/dev/null 2>&1 || true
+systemctl stop kwmembership-worker.service >/dev/null 2>&1 || true
+
+mkdir -p "$INSTALL_DIR"
+rsync -a --delete \
+  --exclude '.env' --exclude '.git/' --exclude '.build/' --exclude 'node_modules/' \
+  --exclude '.venv/' --exclude '.playwright-browsers/' \
+  --exclude '__pycache__/' --exclude '*.pyc' \
+  "$SOURCE_DIR/" "$INSTALL_DIR/"
+rm -f "$INSTALL_DIR/.env"
+chown -R "$RUN_USER:$RUN_GROUP" "$INSTALL_DIR"
+
+systemctl restart kwmembership-worker.service
+CHECKOUT_EXECUTOR="$(sed -n 's/^[[:space:]]*KWMEMBERSHIP_CHECKOUT_EXECUTOR[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | tr -d '\"' | tr -d "'")"
+CHECKOUT_EXECUTOR="${CHECKOUT_EXECUTOR:-python}"
+if [ "$CHECKOUT_EXECUTOR" = "python" ]; then
+  systemctl restart kwmembership-python-executor.service
+else
+  systemctl disable --now kwmembership-python-executor.service >/dev/null 2>&1 || true
+fi
+
+systemctl is-active --quiet kwmembership-worker.service
+if [ "$CHECKOUT_EXECUTOR" = "python" ]; then
+  systemctl is-active --quiet kwmembership-python-executor.service
+fi

@@ -16,9 +16,11 @@ if ! command -v git >/dev/null 2>&1; then
   exit 0
 fi
 
+INITIALIZED=0
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "当前目录不是 Git 仓库，正在初始化 Git 环境..."
   git init
+  INITIALIZED=1
 fi
 
 if git remote get-url origin >/dev/null 2>&1; then
@@ -28,8 +30,14 @@ else
 fi
 
 git fetch origin "$BRANCH" --prune
-git symbolic-ref HEAD "refs/heads/$BRANCH"
-git reset --hard "origin/$BRANCH" >/dev/null
-git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
+if [ "$INITIALIZED" -eq 1 ] || ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+  git symbolic-ref HEAD "refs/heads/$BRANCH"
+  git reset --hard "origin/$BRANCH" >/dev/null
+fi
 
-log "Git 环境已就绪：$BRANCH -> origin/$BRANCH"
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$CURRENT_BRANCH" = "$BRANCH" ]; then
+  git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
+fi
+
+log "Git 环境已就绪：${CURRENT_BRANCH:-$BRANCH}（目标远端 origin/$BRANCH）"

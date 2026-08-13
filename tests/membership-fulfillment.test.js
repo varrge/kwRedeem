@@ -108,6 +108,17 @@ test("membership provider contract is strict and separates starting-free from pa
   }, { nowMs }), MembershipContractError);
 });
 
+test("membership provider accepts the explicit no-subscription placeholder contract", () => {
+  const observation = normalizeMembershipEnvelope({
+    code: 200,
+    data: { token: "opaque" },
+    message: " 您还没有订阅，允许您生成订阅链接 "
+  }, { nowMs: Date.parse("2026-08-14T00:40:31Z") });
+  assert.equal(observation.accountType, "free");
+  assert.equal(observation.autoRenew, false);
+  assert.equal(classifyStartingMembership(observation), "free");
+});
+
 test("membership state adapter uses the fixed URL and object token contract", async () => {
   const envelope = fixture("gptserve-subscription-info-pro.json");
   let request;

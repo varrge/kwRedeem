@@ -149,6 +149,13 @@ function parseTime(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
+function isNoSubscriptionMessage(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[，,]/g, "")
+    .replace(/\s+/g, "") === "您还没有订阅允许您生成订阅链接";
+}
+
 export function normalizeMembershipEnvelope(envelope, options = {}) {
   const root = requireObject(envelope, "会员状态响应不是对象");
   if (root.code === 401) {
@@ -160,7 +167,7 @@ export function normalizeMembershipEnvelope(envelope, options = {}) {
   if (root.code !== 200) {
     throw new MembershipContractError("会员状态响应业务码不是 200");
   }
-	if (root.data === null && String(root.message || "").trim() === "您还没有订阅,允许您生成订阅链接") {
+	if (isNoSubscriptionMessage(root.message)) {
 		const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
 		return Object.freeze({
 			providerCode: 200,

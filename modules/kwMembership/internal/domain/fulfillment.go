@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type Tier string
@@ -158,18 +159,15 @@ func NormalizeMembershipEnvelope(payload []byte, now time.Time) (*MembershipObse
 	if providerCode != 200 {
 		return nil, contractError("会员状态响应业务码不是 200")
 	}
-	if rawData, ok := root["data"]; ok && strings.TrimSpace(string(rawData)) == "null" {
-		var message string
-		if json.Unmarshal(root["message"], &message) == nil &&
-			strings.TrimSpace(message) == "您还没有订阅,允许您生成订阅链接" {
-			autoRenew := false
-			return &MembershipObservation{
-				ProviderCode: 200,
-				AccountType:  TierFree,
-				AutoRenew:    &autoRenew,
-				ObservedAt:   utcNow(now),
-			}, nil
-		}
+	var message string
+	if json.Unmarshal(root["message"], &message) == nil && isNoSubscriptionMessage(message) {
+		autoRenew := false
+		return &MembershipObservation{
+			ProviderCode: 200,
+			AccountType:  TierFree,
+			AutoRenew:    &autoRenew,
+			ObservedAt:   utcNow(now),
+		}, nil
 	}
 
 	data, err := requireJSONObject(root["data"], "会员状态响应缺少 data")
@@ -242,6 +240,16 @@ func NormalizeMembershipEnvelope(payload []byte, now time.Time) (*MembershipObse
 		ExpireTimeFuture:    expireValid && parsedExpire.After(now),
 		ObservedAt:          now,
 	}, nil
+}
+
+func isNoSubscriptionMessage(value string) bool {
+	normalized := strings.Map(func(char rune) rune {
+		if char == ',' || char == '，' || unicode.IsSpace(char) {
+			return -1
+		}
+		return char
+	}, strings.TrimSpace(value))
+	return normalized == "您还没有订阅允许您生成订阅链接"
 }
 
 func requireJSONObject(raw json.RawMessage, message string) (map[string]json.RawMessage, error) {

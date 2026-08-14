@@ -58,18 +58,30 @@ INSPECT_FRAME_JS = r"""
   };
   const has = selectors => Boolean(find(selectors));
   const control = entries => { for (const [id, selectors] of entries) if (has(selectors)) return id; return null; };
+  const pageText = String(document.body?.innerText || document.body?.textContent || '');
+  const textPlan = /\b(?:ChatGPT\s+)?Plus\b/i.test(pageText) ? 'plus' : (/\bChatGPT\s+Pro\b/i.test(pageText) ? 'pro' : null);
+  const textAmounts = [];
+  for (const pattern of [/(?:PHP|\u20B1)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi, /([0-9][0-9,]*(?:\.\d{1,2})?)\s*PHP\b/gi]) {
+    for (const match of pageText.matchAll(pattern)) {
+      const value = Number(String(match[1] || '').replace(/,/g, ''));
+      if (Number.isFinite(value) && value > 0 && value <= 10000000) textAmounts.push(value);
+    }
+  }
   const planRaw = attr(['[data-kw-plan]', '[data-testid="plan-name"][data-plan]', 'meta[name="openai-plan"]'], ['data-kw-plan', 'data-plan', 'content']);
   const countryRaw = attr(['[data-kw-country]', '[data-testid="checkout-price"][data-country]', 'meta[name="openai-country"]'], ['data-kw-country', 'data-country', 'content']);
   const currencyRaw = attr(['[data-kw-currency]', '[data-testid="checkout-price"][data-currency]', 'meta[name="openai-currency"]'], ['data-kw-currency', 'data-currency', 'content']);
   const amountRaw = attr(['[data-kw-amount]', '[data-testid="checkout-price"][data-amount]', 'meta[name="openai-amount"]'], ['data-kw-amount', 'data-amount', 'content']);
   const stateRaw = attr(['[data-kw-checkout-state]', '[data-testid="checkout-state"][data-state]'], ['data-kw-checkout-state', 'data-state']);
-  const amount = amountRaw !== null && /^\d+(?:\.\d{1,2})?$/.test(amountRaw) ? Number(amountRaw) : null;
+  const attributeAmount = amountRaw !== null && /^\d+(?:\.\d{1,2})?$/.test(amountRaw) ? Number(amountRaw) : null;
+  const displayedAmounts = Array.from(new Set([attributeAmount, ...textAmounts].filter(value => Number.isFinite(value) && value > 0)));
+  const amount = displayedAmounts.length === 1 ? displayedAmounts[0] : null;
   return {
     origin, routeTemplate: route,
-    plan: ['plus', 'prolite', 'pro'].includes(planRaw) ? planRaw : null,
+    plan: ['plus', 'prolite', 'pro'].includes(planRaw) ? planRaw : textPlan,
     country: countryRaw === 'PH' ? 'PH' : null,
-    currency: currencyRaw === 'PHP' ? 'PHP' : null,
+    currency: currencyRaw === 'PHP' || textAmounts.length > 0 ? 'PHP' : null,
     displayedAmount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    displayedAmounts,
     stateMarker: ['card-entry', 'billing-entry', 'review', 'upgrade-selection', 'challenge', 'complete'].includes(stateRaw) ? stateRaw : null,
     fields: {
       cardNumber: has(['#payment-numberInput', 'input[name="number"]', 'input[autocomplete="cc-number"]']),
@@ -86,7 +98,7 @@ INSPECT_FRAME_JS = r"""
     },
     controls: {
       progression: control([['payment-next', ['#payment-next', '[data-testid="checkout-next"]']], ['hosted-payment-next', ['[data-testid="hosted-payment-next-button"]', 'button[name="continue-payment"]']]]),
-      submit: control([['payment-submit', ['#payment-submit', '[data-testid="checkout-submit"]']], ['hosted-payment-submit', ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]']]]),
+      submit: control([['payment-submit', ['#payment-submit', '[data-testid="checkout-submit"]']], ['hosted-payment-submit', ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]', 'button[type="submit"]']]]),
       upgradeX5: control([['upgrade-x5', ['[data-testid="upgrade-to-prolite"]', 'button[data-plan="prolite"][data-action="upgrade"]']]]),
       upgradeX20: control([['upgrade-x20', ['[data-testid="upgrade-to-pro"]', 'button[data-plan="pro"][data-action="upgrade"]']]]),
       challenge: control([
@@ -130,7 +142,7 @@ CONTROL_SELECTORS = {
     "payment-next": ("#payment-next", '[data-testid="checkout-next"]'),
     "hosted-payment-next": ('[data-testid="hosted-payment-next-button"]', 'button[name="continue-payment"]'),
     "payment-submit": ("#payment-submit", '[data-testid="checkout-submit"]'),
-    "hosted-payment-submit": ('[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]'),
+    "hosted-payment-submit": ('[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]', 'button[type="submit"]'),
     "upgrade-x5": ('[data-testid="upgrade-to-prolite"]', 'button[data-plan="prolite"][data-action="upgrade"]'),
     "upgrade-x20": ('[data-testid="upgrade-to-pro"]', 'button[data-plan="pro"][data-action="upgrade"]'),
 }
@@ -362,8 +374,12 @@ class LiveExecutor:
             key = facts["stateId"] + ":" + facts["structuralHash"]
             if key in seen: raise ExecutorAPIError("PAYMENT_REPEATED_STATE", 409)
             seen.add(key)
-            if facts["stateId"] not in {"PAYMENT_PROGRESSION_READY", "PAYMENT_FINAL_READY"}:
+            if facts["stateId"] not in {"PAYMENT_CARD_ENTRY_READY", "PAYMENT_PROGRESSION_READY", "PAYMENT_FINAL_READY"}:
                 raise ExecutorAPIError("CHECKOUT_UI_UNSUPPORTED", 409)
+            if facts["stateId"] == "PAYMENT_CARD_ENTRY_READY":
+                _fill_card_frames(page, material)
+                pending = self._wait_facts(client, lease, page, deadline, "checkout", facts["structuralHash"])
+                continue
             _fill_frames(page, material)
             refreshed = self._wait_facts(client, lease, page, deadline, "checkout")
             if refreshed["stateId"] == "PAYMENT_ACTION_REQUIRED":
@@ -503,7 +519,12 @@ def _inspect(page: Any, lease: ExecutorLease, purpose: str) -> dict[str, Any]:
     top_origin = f"{urlsplit(page.url).scheme}://{urlsplit(page.url).netloc}"
     top_route = route_template(page.url)
     top = [fact for fact in frames if fact.get("origin") == top_origin]
-    page_data: dict[str, Any] = {"origin": top_origin, "routeTemplate": top_route, "plan": _unique(top, "plan"), "country": _unique(top, "country"), "currency": _unique(top, "currency"), "displayedAmount": _unique_amount(top), "stateMarker": _unique(top, "stateMarker"), "fields": {}, "controls": {}}
+    currency = _unique(top, "currency")
+    amount = _contract_amount(top, lease)
+    country = _unique(top, "country")
+    if not country and currency == "PHP" and amount is not None:
+        country = "PH"
+    page_data: dict[str, Any] = {"origin": top_origin, "routeTemplate": top_route, "plan": _unique(top, "plan"), "country": country, "currency": currency, "displayedAmount": amount, "stateMarker": _unique(top, "stateMarker"), "fields": {}, "controls": {}}
     for fact in frames:
         for key, value in fact.get("fields", {}).items(): page_data["fields"][key] = page_data["fields"].get(key, False) or bool(value)
     for key in ("progression", "submit", "upgradeX5", "upgradeX20", "challenge"):
@@ -531,7 +552,9 @@ def _classify(page: dict[str, Any], lease: ExecutorLease, purpose: str) -> str:
     card = fields.get("cardNumber") and fields.get("cvc") and (fields.get("expiry") or fields.get("expiryMonth") and fields.get("expiryYear"))
     billing = fields.get("billingName") and fields.get("billingCountry") and fields.get("billingPostal")
     address = sum(bool(fields.get(key)) for key in ("billingLine1", "billingCity", "billingState"))
-    if not card or not billing or address not in {0, 3} or (bool(controls.get("progression")) == bool(controls.get("submit"))): return "UNKNOWN_PAYMENT_STATE"
+    if not card or (bool(controls.get("progression")) == bool(controls.get("submit"))): return "UNKNOWN_PAYMENT_STATE"
+    if controls.get("submit") and not billing and address == 0: return "PAYMENT_CARD_ENTRY_READY"
+    if not billing or address not in {0, 3}: return "UNKNOWN_PAYMENT_STATE"
     return "PAYMENT_PROGRESSION_READY" if controls.get("progression") else "PAYMENT_FINAL_READY"
 
 
@@ -540,15 +563,39 @@ def _unique(items: list[dict[str, Any]], key: str) -> Any:
     return values.pop() if len(values) == 1 else ""
 
 
-def _unique_amount(items: list[dict[str, Any]]) -> float | None:
-    values = {item.get("displayedAmount") for item in items if item.get("displayedAmount") is not None}
-    return float(values.pop()) if len(values) == 1 else None
+def _contract_amount(items: list[dict[str, Any]], lease: ExecutorLease) -> float | None:
+    values: set[float] = set()
+    for item in items:
+        candidates = list(item.get("displayedAmounts") or [])
+        if item.get("displayedAmount") is not None:
+            candidates.append(item["displayedAmount"])
+        for candidate in candidates:
+            if isinstance(candidate, (int, float)) and float(lease.price_contract["MinAmount"]) <= candidate <= float(lease.price_contract["MaxAmount"]):
+                values.add(float(candidate))
+    return values.pop() if len(values) == 1 else None
 
 
 def _fill_frames(page: Any, material: dict[str, Any]) -> None:
     card = material.get("card", {}); billing = material.get("billing", {})
     year = str(card.get("ExpiryYear", card.get("expiryYear", "")))
-    fragment = {"cardNumber": str(card.get("Number", card.get("number", ""))), "expiry": str(card.get("ExpiryMonth", card.get("expiryMonth", ""))) + "/" + year[-2:], "expiryMonth": str(card.get("ExpiryMonth", card.get("expiryMonth", ""))), "expiryYear": year, "cvc": str(card.get("CVV", card.get("cvv", ""))), "billingName": str(billing.get("Name", billing.get("name", ""))), "billingLine1": str(billing.get("Line1", billing.get("line1", ""))), "billingCity": str(billing.get("City", billing.get("city", ""))), "billingState": str(billing.get("State", billing.get("state", ""))), "billingCountry": str(billing.get("Country", billing.get("country", ""))), "billingPostal": str(billing.get("PostalCode", billing.get("postalCode", "")))}
+    fragment = {**_card_fragment(card, year), "billingName": str(billing.get("Name", billing.get("name", ""))), "billingLine1": str(billing.get("Line1", billing.get("line1", ""))), "billingCity": str(billing.get("City", billing.get("city", ""))), "billingState": str(billing.get("State", billing.get("state", ""))), "billingCountry": str(billing.get("Country", billing.get("country", ""))), "billingPostal": str(billing.get("PostalCode", billing.get("postalCode", "")))}
+    filled = _fill_fragment(page, fragment)
+    if not (_card_complete(filled) and {"billingName", "billingCountry", "billingPostal"} <= filled):
+        raise ExecutorAPIError("PAYMENT_FIELDS_NOT_FILLED", 409)
+
+
+def _fill_card_frames(page: Any, material: dict[str, Any]) -> None:
+    card = material.get("card", {})
+    year = str(card.get("ExpiryYear", card.get("expiryYear", "")))
+    if not _card_complete(_fill_fragment(page, _card_fragment(card, year))):
+        raise ExecutorAPIError("PAYMENT_FIELDS_NOT_FILLED", 409)
+
+
+def _card_fragment(card: dict[str, Any], year: str) -> dict[str, str]:
+    return {"cardNumber": str(card.get("Number", card.get("number", ""))), "expiry": str(card.get("ExpiryMonth", card.get("expiryMonth", ""))) + "/" + year[-2:], "expiryMonth": str(card.get("ExpiryMonth", card.get("expiryMonth", ""))), "expiryYear": year, "cvc": str(card.get("CVV", card.get("cvv", "")))}
+
+
+def _fill_fragment(page: Any, fragment: dict[str, str]) -> set[str]:
     filled: set[str] = set()
     for frame in page.frames:
         try:
@@ -556,8 +603,11 @@ def _fill_frames(page: Any, material: dict[str, Any]) -> None:
             filled.update(result.get("filled", []))
         except Exception:
             continue
-    if not ("cardNumber" in filled and "cvc" in filled and ("expiry" in filled or {"expiryMonth", "expiryYear"} <= filled) and "billingName" in filled and "billingCountry" in filled and "billingPostal" in filled):
-        raise ExecutorAPIError("PAYMENT_FIELDS_NOT_FILLED", 409)
+    return filled
+
+
+def _card_complete(filled: set[str]) -> bool:
+    return "cardNumber" in filled and "cvc" in filled and ("expiry" in filled or {"expiryMonth", "expiryYear"} <= filled)
 
 
 def _activate_frames(page: Any, control_id: str) -> bool:

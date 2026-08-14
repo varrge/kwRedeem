@@ -6,6 +6,8 @@ from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
     LiveExecutor,
     _classify,
+    _contract_amount,
+    _fill_card_frames,
     _execution_deadline,
     _resolve_checkout_entry,
     route_template,
@@ -14,14 +16,14 @@ from python_executor.live import (
 )
 
 
-def lease(stage: str = "plus", target_tier: str = "plus") -> ExecutorLease:
+def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "payment") -> ExecutorLease:
     return ExecutorLease(
         execution_id="exec-1",
         executor_id="python-test",
         lease_epoch=1,
         lease_token="opaque",
         hard_deadline_at="2026-08-13T00:05:00Z",
-        command_kind="payment",
+        command_kind=command_kind,
         stage=stage,
         attempt_no=1,
         target_tier=target_tier,
@@ -116,6 +118,42 @@ class LiveContractTest(unittest.TestCase):
             _classify(selection, lease("upgrade", "x20"), "selection"),
             "UNKNOWN_PAYMENT_STATE",
         )
+
+    def test_classifies_card_entry_before_billing_fields_are_revealed(self) -> None:
+        page = {
+            "origin": "https://chatgpt.com",
+            "routeTemplate": "/checkout/{id}",
+            "plan": "plus",
+            "country": "PH",
+            "currency": "PHP",
+            "displayedAmount": 1100,
+            "fields": {"cardNumber": True, "expiry": True, "cvc": True},
+            "controls": {"submit": "hosted-payment-submit"},
+        }
+        self.assertEqual(
+            _classify(page, lease(command_kind="preflight"), "checkout"),
+            "PAYMENT_CARD_ENTRY_READY",
+        )
+
+    def test_price_facts_select_only_one_amount_inside_contract(self) -> None:
+        facts = [{"displayedAmounts": [20, 1100, 9999], "displayedAmount": None}]
+        self.assertEqual(_contract_amount(facts, lease()), 1100)
+        facts[0]["displayedAmounts"] = [1050, 1100]
+        self.assertIsNone(_contract_amount(facts, lease()))
+
+    def test_card_entry_fill_does_not_require_billing_fields(self) -> None:
+        class Frame:
+            def evaluate(self, _script: str, fragment: dict[str, str]) -> dict[str, object]:
+                self.fragment = fragment
+                return {"accepted": True, "filled": ["cardNumber", "expiry", "cvc"]}
+
+        class Page:
+            frames = [Frame()]
+
+        _fill_card_frames(Page(), {
+            "card": {"Number": "4242424242424242", "ExpiryMonth": "08", "ExpiryYear": "2030", "CVV": "123"}
+        })
+        self.assertNotIn("billingName", Page.frames[0].fragment)
 
     def test_action_click_is_between_activate_and_result(self) -> None:
         calls: list[str] = []

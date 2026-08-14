@@ -379,8 +379,20 @@ func (b *Bridge) handlePrepareAction(response http.ResponseWriter, request *http
 // page exists. It is still a progression action, but must bind to the target
 // tier rather than the generic payment-next control.
 func expectedActionControl(page checkout.PageFacts, request checkout.Request, kind checkout.ActionKind) string {
-	if kind != checkout.ActionProgression || page.StateID != "UPGRADE_SELECTION_READY" {
-		return page.Controls[string(kind)]
+	if kind == checkout.ActionSubmit {
+		if page.StateID == "PAYMENT_FINAL_READY" {
+			return page.Controls["submit"]
+		}
+		return ""
+	}
+	if kind != checkout.ActionProgression {
+		return ""
+	}
+	if page.StateID == "PAYMENT_PROGRESSION_READY" {
+		return page.Controls["progression"]
+	}
+	if page.StateID != "UPGRADE_SELECTION_READY" {
+		return ""
 	}
 	if request.TargetTier == "x5" {
 		return page.Controls["upgradeX5"]
@@ -559,7 +571,7 @@ func validatePageFacts(page checkout.PageFacts, request checkout.Request) (check
 	if request.Stage == "upgrade" {
 		expectedPlan = map[string]string{"x5": "prolite", "x20": "pro"}[request.TargetTier]
 	}
-	if page.Plan != expectedPlan || !map[string]bool{"PAYMENT_PROGRESSION_READY": true, "PAYMENT_FINAL_READY": true, "PAYMENT_ACTION_REQUIRED": true, "UPGRADE_SELECTION_READY": true}[page.StateID] {
+	if page.Plan != expectedPlan || !map[string]bool{"PAYMENT_CARD_ENTRY_READY": true, "PAYMENT_PROGRESSION_READY": true, "PAYMENT_FINAL_READY": true, "PAYMENT_ACTION_REQUIRED": true, "UPGRADE_SELECTION_READY": true}[page.StateID] {
 		return checkout.PageFacts{}, bridgeError("CHECKOUT_PAGE_CONTRACT_INVALID", "checkout page state is invalid")
 	}
 	allowedControls := map[string]map[string]bool{
@@ -573,8 +585,19 @@ func validatePageFacts(page checkout.PageFacts, request checkout.Request) (check
 			return checkout.PageFacts{}, bridgeError("CHECKOUT_PAGE_CONTRACT_INVALID", "checkout control is invalid")
 		}
 	}
+	if page.StateID == "PAYMENT_CARD_ENTRY_READY" && !validCardEntryFacts(page) {
+		return checkout.PageFacts{}, bridgeError("CHECKOUT_PAGE_CONTRACT_INVALID", "card-entry page contract is invalid")
+	}
 	page.StructuralHash = pageFingerprint(page)
 	return page, nil
+}
+
+func validCardEntryFacts(page checkout.PageFacts) bool {
+	fields := page.Fields
+	card := fields["cardNumber"] && fields["cvc"] && (fields["expiry"] || fields["expiryMonth"] && fields["expiryYear"])
+	billing := fields["billingName"] || fields["billingCountry"] || fields["billingPostal"]
+	address := fields["billingLine1"] || fields["billingCity"] || fields["billingState"]
+	return card && !billing && !address && page.Controls["submit"] != "" && page.Controls["progression"] == ""
 }
 
 func validateHandoffFacts(page checkout.PageFacts, request checkout.Request) (checkout.PageFacts, error) {

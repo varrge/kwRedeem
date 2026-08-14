@@ -276,7 +276,7 @@ python -m membership_payment_executor
 4. 验证浏览器账号与 Go 给出的期望身份一致；
 5. 在同一 Session 和网络出口中调用官方 checkout API；
 6. 只接受 allowlist 中的 ChatGPT/OpenAI hosted checkout URL；
-7. 校验页面合同后填写一次性卡资料；
+7. 校验页面合同后按页面实际顺序填写一次性卡资料；首屏只有卡号、有效期和 CVC 时只填卡并等待账单字段出现；
 8. 每次危险点击前调用 Permit 接口；
 9. 回报脱敏结果；
 10. 在 `finally` 中关闭浏览器并删除临时目录。
@@ -300,6 +300,8 @@ entry_point = all_plans_pricing_modal
 ```
 
 Python 不得从任务内容接收任意 URL、选择其他国家/币种或修改目标套餐。响应解析必须是严格的版本化结构解析，只允许受支持的 hosted URL 或 `openai_llc/{oaics_*,cs_*}` 路由；未知包装、未知 processor、未知域名或路径立即停止。
+
+`PAYMENT_CARD_ENTRY_READY` 只表示卡片输入控件、静态提交控件和套餐/币种/金额合同已识别，但账单字段尚未出现。无扣款预检可在此结束；真实付款任务只可填写卡片并等待结构变化。该状态不得申请 progression 或 submit Permit，只有重新识别为完整的付款 progression/final 状态后才能进入动作流程。
 
 ## 11. 失败、重试和挑战
 
@@ -415,6 +417,7 @@ python-session-card-checkout-v1
 - hosted/custom checkout URL allowlist；
 - Plus、x5、x20 页面结构与金额合同；
 - 多步表单 progression 与 submit 分离；
+- 卡片字段先于账单字段出现时只填卡、等待账单字段，且中间状态不能获得 Permit；
 - Cloudflare/CAPTCHA、3DS/SMS/bank challenge；
 - 超时、崩溃、页面丢失和临时目录清理；
 - 两个阶段不复用浏览器或 Cookie Store。

@@ -94,16 +94,17 @@ func VerifyChrome(ctx context.Context, path, proxyServer string, visible bool) e
 }
 
 type frameFact struct {
-	FrameID         cdp.FrameID       `json:"-"`
-	Origin          string            `json:"origin"`
-	RouteTemplate   string            `json:"routeTemplate"`
-	Plan            string            `json:"plan"`
-	Country         string            `json:"country"`
-	Currency        string            `json:"currency"`
-	DisplayedAmount *float64          `json:"displayedAmount"`
-	StateMarker     string            `json:"stateMarker"`
-	Fields          map[string]bool   `json:"fields"`
-	Controls        map[string]string `json:"controls"`
+	FrameID          cdp.FrameID       `json:"-"`
+	Origin           string            `json:"origin"`
+	RouteTemplate    string            `json:"routeTemplate"`
+	Plan             string            `json:"plan"`
+	Country          string            `json:"country"`
+	Currency         string            `json:"currency"`
+	DisplayedAmount  *float64          `json:"displayedAmount"`
+	DisplayedAmounts []float64         `json:"displayedAmounts"`
+	StateMarker      string            `json:"stateMarker"`
+	Fields           map[string]bool   `json:"fields"`
+	Controls         map[string]string `json:"controls"`
 }
 
 type frameFields struct {
@@ -425,7 +426,7 @@ func (c *ChromeExecutor) executeInteractivePreflight(ctx context.Context, reques
 				}
 				if topOrigin == "https://chatgpt.com" || topOrigin == "https://pay.openai.com" {
 					page, inspectErr := c.inspect(ctx, request, "checkout")
-					if inspectErr == nil && (page.StateID == "PAYMENT_PROGRESSION_READY" || page.StateID == "PAYMENT_FINAL_READY") {
+					if inspectErr == nil && (page.StateID == "PAYMENT_CARD_ENTRY_READY" || page.StateID == "PAYMENT_PROGRESSION_READY" || page.StateID == "PAYMENT_FINAL_READY") {
 						if !identityVerified {
 							return Result{}, failure("INTERACTIVE_LOGIN_IDENTITY_UNVERIFIED", "interactive login identity could not be verified")
 						}
@@ -614,7 +615,7 @@ func (c *ChromeExecutor) executeCheckout(ctx context.Context, request Request, i
 		if page.StateID == "PAYMENT_ACTION_REQUIRED" {
 			return Result{Page: page.PageFacts, Challenge: true, ProgressionCount: progressionCount}, nil
 		}
-		if page.StateID != "PAYMENT_PROGRESSION_READY" && page.StateID != "PAYMENT_FINAL_READY" {
+		if page.StateID != "PAYMENT_CARD_ENTRY_READY" && page.StateID != "PAYMENT_PROGRESSION_READY" && page.StateID != "PAYMENT_FINAL_READY" {
 			return Result{}, failure("CHECKOUT_UI_UNSUPPORTED", "checkout page structure is unsupported")
 		}
 		key := page.StateID + ":" + page.StructuralHash
@@ -622,6 +623,17 @@ func (c *ChromeExecutor) executeCheckout(ctx context.Context, request Request, i
 			return Result{}, failure("PAYMENT_REPEATED_STATE", "checkout page repeated the same state")
 		}
 		seen[key] = true
+		if page.StateID == "PAYMENT_CARD_ENTRY_READY" {
+			if err := c.fillCardMaterial(ctx, page, *request.Material); err != nil {
+				return Result{}, err
+			}
+			next, err := c.waitPage(ctx, request, "checkout", page.StructuralHash)
+			if err != nil {
+				return Result{}, failure("PAYMENT_STATE_CHANGED_DURING_FILL", "checkout page did not reveal billing fields after card entry", err)
+			}
+			page = next
+			continue
+		}
 		if err := c.fillMaterial(ctx, page, *request.Material); err != nil {
 			return Result{}, err
 		}
@@ -694,6 +706,37 @@ func (c *ChromeExecutor) fillMaterial(ctx context.Context, page inspectedPage, m
 		"billingName": material.Billing.Name, "billingLine1": material.Billing.Line1, "billingCity": material.Billing.City,
 		"billingState": material.Billing.State, "billingCountry": material.Billing.Country, "billingPostal": material.Billing.PostalCode,
 	}
+	filled, err := c.fillFields(ctx, page, values)
+	if err != nil {
+		return err
+	}
+	cardComplete := filled["cardNumber"] && filled["cvc"] && (filled["expiry"] || filled["expiryMonth"] && filled["expiryYear"])
+	billingComplete := filled["billingName"] && filled["billingCountry"] && filled["billingPostal"]
+	if !cardComplete || !billingComplete {
+		return failure("PAYMENT_FIELDS_NOT_FILLED", "required checkout fields were not filled")
+	}
+	return nil
+}
+
+func (c *ChromeExecutor) fillCardMaterial(ctx context.Context, page inspectedPage, material Material) error {
+	values := map[string]string{
+		"cardNumber":  material.Card.Number,
+		"expiry":      material.Card.ExpiryMonth + "/" + material.Card.ExpiryYear[len(material.Card.ExpiryYear)-2:],
+		"expiryMonth": material.Card.ExpiryMonth,
+		"expiryYear":  material.Card.ExpiryYear,
+		"cvc":         material.Card.CVV,
+	}
+	filled, err := c.fillFields(ctx, page, values)
+	if err != nil {
+		return err
+	}
+	if !filled["cardNumber"] || !filled["cvc"] || !(filled["expiry"] || filled["expiryMonth"] && filled["expiryYear"]) {
+		return failure("PAYMENT_FIELDS_NOT_FILLED", "required card fields were not filled")
+	}
+	return nil
+}
+
+func (c *ChromeExecutor) fillFields(ctx context.Context, page inspectedPage, values map[string]string) (map[string]bool, error) {
 	filled := map[string]bool{}
 	for _, frame := range page.fieldFrames {
 		fragment := map[string]string{}
@@ -708,18 +751,13 @@ func (c *ChromeExecutor) fillMaterial(ctx context.Context, page inspectedPage, m
 		payload, _ := json.Marshal(fragment)
 		var result fillResult
 		if err := evaluateFrame(ctx, frame.FrameID, fillFrameFunction+"("+string(payload)+")", &result, false); err != nil {
-			return failure("PAYMENT_FIELDS_NOT_FILLED", "fill checkout fields", err)
+			return nil, failure("PAYMENT_FIELDS_NOT_FILLED", "fill checkout fields", err)
 		}
 		for _, key := range result.Filled {
 			filled[key] = true
 		}
 	}
-	cardComplete := filled["cardNumber"] && filled["cvc"] && (filled["expiry"] || filled["expiryMonth"] && filled["expiryYear"])
-	billingComplete := filled["billingName"] && filled["billingCountry"] && filled["billingPostal"]
-	if !cardComplete || !billingComplete {
-		return failure("PAYMENT_FIELDS_NOT_FILLED", "required checkout fields were not filled")
-	}
-	return nil
+	return filled, nil
 }
 
 func (c *ChromeExecutor) waitPage(ctx context.Context, request Request, purpose, previousHash string) (inspectedPage, error) {
@@ -862,10 +900,15 @@ func mergeFacts(frames []frameFact, topOrigin, topRoute string, request Request,
 			controls[key], controlFrames[key] = value, frameID
 		}
 	}
+	currency := uniqueFact(top, func(f frameFact) string { return f.Currency })
+	amount := contractAmount(top, request.PriceContract)
+	country := uniqueFact(top, func(f frameFact) string { return f.Country })
+	if country == "" && currency == "PHP" && amount != nil {
+		country = "PH"
+	}
 	page := inspectedPage{PageFacts: PageFacts{
 		Origin: topOrigin, RouteTemplate: topRoute, Plan: uniqueFact(top, func(f frameFact) string { return f.Plan }),
-		Country: uniqueFact(top, func(f frameFact) string { return f.Country }), Currency: uniqueFact(top, func(f frameFact) string { return f.Currency }),
-		DisplayedAmount: uniqueAmount(top), StateMarker: uniqueFact(top, func(f frameFact) string { return f.StateMarker }),
+		Country: country, Currency: currency, DisplayedAmount: amount, StateMarker: uniqueFact(top, func(f frameFact) string { return f.StateMarker }),
 		Fields: fields, Controls: controls,
 	}, controlFrames: controlFrames, fieldFrames: fieldFrames}
 	page.StateID = classify(page, request, purpose)
@@ -918,7 +961,13 @@ func classify(page inspectedPage, request Request, purpose string) string {
 	cardFields := page.Fields["cardNumber"] && page.Fields["cvc"] && (page.Fields["expiry"] || page.Fields["expiryMonth"] && page.Fields["expiryYear"])
 	billingCore := page.Fields["billingName"] && page.Fields["billingCountry"] && page.Fields["billingPostal"]
 	addressCount := boolCount(page.Fields["billingLine1"], page.Fields["billingCity"], page.Fields["billingState"])
-	if !cardFields || !billingCore || addressCount != 0 && addressCount != 3 || (page.Controls["progression"] == "") == (page.Controls["submit"] == "") {
+	if !cardFields || (page.Controls["progression"] == "") == (page.Controls["submit"] == "") {
+		return "UNKNOWN_PAYMENT_STATE"
+	}
+	if page.Controls["submit"] != "" && !billingCore && addressCount == 0 {
+		return "PAYMENT_CARD_ENTRY_READY"
+	}
+	if !billingCore || addressCount != 0 && addressCount != 3 {
 		return "UNKNOWN_PAYMENT_STATE"
 	}
 	if page.Controls["progression"] != "" {
@@ -961,19 +1010,26 @@ func uniqueFact(facts []frameFact, get func(frameFact) string) string {
 	return value
 }
 
-func uniqueAmount(facts []frameFact) *float64 {
-	var result *float64
+func contractAmount(facts []frameFact, contract PriceContract) *float64 {
+	values := map[float64]bool{}
 	for _, fact := range facts {
-		if fact.DisplayedAmount == nil {
-			continue
+		candidates := append([]float64(nil), fact.DisplayedAmounts...)
+		if fact.DisplayedAmount != nil {
+			candidates = append(candidates, *fact.DisplayedAmount)
 		}
-		if result != nil && *result != *fact.DisplayedAmount {
-			return nil
+		for _, candidate := range candidates {
+			if candidate >= contract.MinAmount && candidate <= contract.MaxAmount {
+				values[candidate] = true
+			}
 		}
-		value := *fact.DisplayedAmount
-		result = &value
 	}
-	return result
+	if len(values) != 1 {
+		return nil
+	}
+	for value := range values {
+		return &value
+	}
+	return nil
 }
 
 func uniqueControl(facts []frameFact, key string) (string, cdp.FrameID, bool) {

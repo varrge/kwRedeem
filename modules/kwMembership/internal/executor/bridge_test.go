@@ -190,6 +190,40 @@ func TestExpectedActionControlBindsUpgradeToTargetTier(t *testing.T) {
 	if got := expectedActionControl(page, request, checkout.ActionProgression); got != "payment-next" {
 		t.Fatalf("payment progression control = %q", got)
 	}
+
+	page.StateID = "PAYMENT_CARD_ENTRY_READY"
+	page.Controls["submit"] = "payment-submit"
+	if got := expectedActionControl(page, request, checkout.ActionSubmit); got != "" {
+		t.Fatalf("card-entry submit control = %q, want no action", got)
+	}
+	page.StateID = "PAYMENT_FINAL_READY"
+	if got := expectedActionControl(page, request, checkout.ActionProgression); got != "" {
+		t.Fatalf("final-page progression control = %q, want no action", got)
+	}
+	if got := expectedActionControl(page, request, checkout.ActionSubmit); got != "payment-submit" {
+		t.Fatalf("final-page submit control = %q", got)
+	}
+}
+
+func TestValidatePageFactsAcceptsCardEntryWithoutBillingAndRejectsActionableShape(t *testing.T) {
+	amount := 1100.0
+	request := checkout.Request{
+		Stage: "plus", TargetTier: "plus",
+		PriceContract: checkout.PriceContract{MinAmount: 1000, MaxAmount: 1200},
+	}
+	page := checkout.PageFacts{
+		StateID: "PAYMENT_CARD_ENTRY_READY", Origin: "https://chatgpt.com", RouteTemplate: "/checkout/{id}",
+		Plan: "plus", Country: "PH", Currency: "PHP", DisplayedAmount: &amount,
+		Fields:   map[string]bool{"cardNumber": true, "expiry": true, "cvc": true},
+		Controls: map[string]string{"submit": "hosted-payment-submit"},
+	}
+	if _, err := validatePageFacts(page, request); err != nil {
+		t.Fatalf("card-entry facts rejected: %v", err)
+	}
+	page.Fields["billingName"] = true
+	if _, err := validatePageFacts(page, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
+		t.Fatalf("partial billing facts error = %v", err)
+	}
 }
 
 func TestValidateHandoffFactsRejectsUntrustedChallengePage(t *testing.T) {

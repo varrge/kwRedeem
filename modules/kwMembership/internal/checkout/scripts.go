@@ -138,19 +138,32 @@ const inspectFrameJS = `(() => {
     for (const [id, selectors] of entries) if (has(selectors)) return id;
     return null;
   };
+  const pageText = String(document.body?.innerText || document.body?.textContent || '');
+  const textPlan = /\b(?:ChatGPT\s+)?Plus\b/i.test(pageText) ? 'plus'
+    : (/\bChatGPT\s+Pro\b/i.test(pageText) ? 'pro' : null);
+  const textAmounts = [];
+  for (const pattern of [/(?:PHP|\u20B1)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi, /([0-9][0-9,]*(?:\.\d{1,2})?)\s*PHP\b/gi]) {
+    for (const match of pageText.matchAll(pattern)) {
+      const value = Number(String(match[1] || '').replace(/,/g, ''));
+      if (Number.isFinite(value) && value > 0 && value <= 10000000) textAmounts.push(value);
+    }
+  }
   const planRaw = attribute(['[data-kw-plan]', '[data-testid="plan-name"][data-plan]', 'meta[name="openai-plan"]'], ['data-kw-plan', 'data-plan', 'content']);
   const countryRaw = attribute(['[data-kw-country]', '[data-testid="checkout-price"][data-country]', 'meta[name="openai-country"]'], ['data-kw-country', 'data-country', 'content']);
   const currencyRaw = attribute(['[data-kw-currency]', '[data-testid="checkout-price"][data-currency]', 'meta[name="openai-currency"]'], ['data-kw-currency', 'data-currency', 'content']);
   const amountRaw = attribute(['[data-kw-amount]', '[data-testid="checkout-price"][data-amount]', 'meta[name="openai-amount"]'], ['data-kw-amount', 'data-amount', 'content']);
   const stateRaw = attribute(['[data-kw-checkout-state]', '[data-testid="checkout-state"][data-state]'], ['data-kw-checkout-state', 'data-state']);
-  const amount = amountRaw !== null && /^\d+(?:\.\d{1,2})?$/.test(amountRaw) ? Number(amountRaw) : null;
+  const attributeAmount = amountRaw !== null && /^\d+(?:\.\d{1,2})?$/.test(amountRaw) ? Number(amountRaw) : null;
+  const displayedAmounts = Array.from(new Set([attributeAmount, ...textAmounts].filter(value => Number.isFinite(value) && value > 0)));
+  const amount = displayedAmounts.length === 1 ? displayedAmounts[0] : null;
   return {
     origin,
     routeTemplate: route,
-    plan: ['plus', 'prolite', 'pro'].includes(planRaw) ? planRaw : null,
+    plan: ['plus', 'prolite', 'pro'].includes(planRaw) ? planRaw : textPlan,
     country: countryRaw === 'PH' ? 'PH' : null,
-    currency: currencyRaw === 'PHP' ? 'PHP' : null,
+    currency: currencyRaw === 'PHP' || textAmounts.length > 0 ? 'PHP' : null,
     displayedAmount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    displayedAmounts,
     stateMarker: ['card-entry', 'billing-entry', 'review', 'upgrade-selection', 'challenge', 'complete'].includes(stateRaw) ? stateRaw : null,
     fields: {
       cardNumber: has(['#payment-numberInput', 'input[name="number"]', 'input[autocomplete="cc-number"]']),
@@ -172,7 +185,7 @@ const inspectFrameJS = `(() => {
       ]),
       submit: control([
         ['payment-submit', ['#payment-submit', '[data-testid="checkout-submit"]']],
-        ['hosted-payment-submit', ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]']]
+        ['hosted-payment-submit', ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]', 'button[type="submit"]']]
       ]),
       upgradeX5: control([['upgrade-x5', ['[data-testid="upgrade-to-prolite"]', 'button[data-plan="prolite"][data-action="upgrade"]']]]),
       upgradeX20: control([['upgrade-x20', ['[data-testid="upgrade-to-pro"]', 'button[data-plan="pro"][data-action="upgrade"]']]]),
@@ -230,7 +243,7 @@ const activateControlFunction = `(controlId => {
     'payment-next': ['#payment-next', '[data-testid="checkout-next"]'],
     'hosted-payment-next': ['[data-testid="hosted-payment-next-button"]', 'button[name="continue-payment"]'],
     'payment-submit': ['#payment-submit', '[data-testid="checkout-submit"]'],
-    'hosted-payment-submit': ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]'],
+    'hosted-payment-submit': ['[data-testid="hosted-payment-submit-button"]', 'button[name="submit-payment"]', 'button[type="submit"]'],
     'upgrade-x5': ['[data-testid="upgrade-to-prolite"]', 'button[data-plan="prolite"][data-action="upgrade"]'],
     'upgrade-x20': ['[data-testid="upgrade-to-pro"]', 'button[data-plan="pro"][data-action="upgrade"]']
   };

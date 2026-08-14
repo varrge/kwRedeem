@@ -205,6 +205,44 @@ func TestMergeFactsRecognizesAllowlistedCheckoutAcrossFrames(t *testing.T) {
 	}
 }
 
+func TestMergeFactsRecognizesCardEntryBeforeBillingFieldsAreRevealed(t *testing.T) {
+	amount := 1150.0
+	request := Request{
+		Mode: ModeSessionPreflight, Stage: "plus", TargetTier: "plus",
+		PriceContract: PriceContract{ID: "price-1", Version: 1, Tier: "plus", Currency: "PHP", MinAmount: 1100, MaxAmount: 1200},
+	}
+	page, err := mergeFacts([]frameFact{
+		{
+			FrameID: "top", Origin: "https://chatgpt.com", RouteTemplate: "/checkout/{id}",
+			Plan: "plus", Country: "PH", Currency: "PHP", DisplayedAmount: &amount,
+			Controls: map[string]string{"submit": "hosted-payment-submit"}, Fields: map[string]bool{},
+		},
+		{
+			FrameID: "stripe", Origin: "https://js.stripe.com", Fields: map[string]bool{
+				"cardNumber": true, "expiry": true, "cvc": true,
+			}, Controls: map[string]string{},
+		},
+	}, "https://chatgpt.com", "/checkout/{id}", request, "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.StateID != "PAYMENT_CARD_ENTRY_READY" {
+		t.Fatalf("state = %s, want PAYMENT_CARD_ENTRY_READY", page.StateID)
+	}
+}
+
+func TestContractAmountSelectsOnlyOneAmountInsideContract(t *testing.T) {
+	contract := PriceContract{MinAmount: 1000, MaxAmount: 1200}
+	facts := []frameFact{{DisplayedAmounts: []float64{20, 1100, 9999}}}
+	if amount := contractAmount(facts, contract); amount == nil || *amount != 1100 {
+		t.Fatalf("amount = %v, want 1100", amount)
+	}
+	facts[0].DisplayedAmounts = []float64{1050, 1100}
+	if amount := contractAmount(facts, contract); amount != nil {
+		t.Fatalf("ambiguous amount = %v, want nil", *amount)
+	}
+}
+
 func TestAllowedCheckoutURLRecognizesOpenAILLCPath(t *testing.T) {
 	for _, prefix := range []string{"oaics_", "cs_"} {
 		parsed, err := allowedCheckoutURL("https://chatgpt.com/checkout/openai_llc/" + prefix + "4e33c980620248fb926f384591ae06f1")

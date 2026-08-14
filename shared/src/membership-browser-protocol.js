@@ -19,6 +19,7 @@ const CONTROL_VALUES = Object.freeze({
   challenge: new Set([null, "challenge-3ds", "challenge-captcha", "challenge-sms", "challenge-bank"])
 });
 const STATE_IDS = new Set([
+  "PAYMENT_CARD_ENTRY_READY",
   "PAYMENT_PROGRESSION_READY",
   "PAYMENT_FINAL_READY",
   "PAYMENT_ACTION_REQUIRED",
@@ -134,6 +135,15 @@ export function validateMembershipPaymentPage(page, binding = {}) {
     if (!allowedCheckoutRoute || planRoutes.has(page.routeTemplate)) {
       fail("CHECKOUT_UI_UNSUPPORTED", "支付页面路由无法识别");
     }
+    if (page.stateId === "PAYMENT_CARD_ENTRY_READY") {
+      const card = page.fields.cardNumber && page.fields.cvc
+        && (page.fields.expiry || (page.fields.expiryMonth && page.fields.expiryYear));
+      const billing = page.fields.billingName || page.fields.billingCountry || page.fields.billingPostal;
+      const address = page.fields.billingLine1 || page.fields.billingCity || page.fields.billingState;
+      if (!card || billing || address || !page.controls.submit || page.controls.progression) {
+        fail("CHECKOUT_UI_UNSUPPORTED", "卡片输入页面结构无效");
+      }
+    }
     if (page.stateId === "PAYMENT_PROGRESSION_READY" && !page.controls.progression) {
       fail("CHECKOUT_UI_UNSUPPORTED", "支付下一步控件缺失");
     }
@@ -151,9 +161,15 @@ export function validateMembershipPaymentPage(page, binding = {}) {
 
 export function validateMembershipStageControl(page, permitKind, controlId) {
   if (permitKind === "progression") {
+    if (!["PAYMENT_PROGRESSION_READY", "UPGRADE_SELECTION_READY"].includes(page.stateId)) {
+      fail("PAYMENT_CONTROL_UNRECOGNIZED", "当前页面不允许下一步操作");
+    }
     const controls = [page.controls.progression, page.controls.upgradeX5, page.controls.upgradeX20];
     if (!controls.includes(controlId)) fail("PAYMENT_CONTROL_UNRECOGNIZED", "下一步控件不匹配");
   } else if (permitKind === "submit") {
+    if (page.stateId !== "PAYMENT_FINAL_READY") {
+      fail("PAYMENT_CONTROL_UNRECOGNIZED", "当前页面不允许提交支付");
+    }
     if (page.controls.submit !== controlId) fail("PAYMENT_CONTROL_UNRECOGNIZED", "提交控件不匹配");
   } else {
     fail("PAYMENT_CONTROL_UNRECOGNIZED", "许可类型无效");

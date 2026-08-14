@@ -49,6 +49,31 @@ test("strict sanitized payment facts verify their own structural fingerprint and
   assert.equal(validateMembershipStageControl(page, "submit", "payment-submit"), true);
 });
 
+test("card entry is valid before billing is revealed but cannot receive an action permit", () => {
+  const page = paymentPage({
+    stateId: "PAYMENT_CARD_ENTRY_READY",
+    stateMarker: "card-entry",
+    fields: {
+      cardNumber: true, expiry: true, expiryMonth: false, expiryYear: false, cvc: true,
+      billingName: false, billingLine1: false, billingCity: false, billingState: false,
+      billingCountry: false, billingPostal: false
+    },
+    controls: {
+      progression: null,
+      submit: "hosted-payment-submit",
+      upgradeX5: null,
+      upgradeX20: null,
+      challenge: null
+    }
+  });
+  assert.doesNotThrow(() => validateMembershipPaymentPage(page, binding));
+  assert.throws(
+    () => validateMembershipStageControl(page, "submit", "hosted-payment-submit"),
+    (error) => error instanceof MembershipBrowserProtocolError
+      && error.code === "PAYMENT_CONTROL_UNRECOGNIZED"
+  );
+});
+
 test("raw or extra page facts and a changed fingerprint fail closed", () => {
   const extra = { ...paymentPage(), rawText: "Pay now" };
   assert.throws(() => validateMembershipPaymentPage(extra, binding), MembershipBrowserProtocolError);

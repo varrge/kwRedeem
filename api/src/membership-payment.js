@@ -14,7 +14,6 @@ import {
   expireLiveCanaryAuthorizations,
   liveCanaryAuthorizationTtlMs,
   qualifyTierRollout,
-  requiredQualificationTier,
   reviseAutomaticCheckoutScope,
   verifyFreshAdminCredentials
 } from "../../shared/src/membership-rollout.js";
@@ -959,11 +958,6 @@ export function createMembershipPaymentService(options = {}) {
             EXISTS(SELECT 1 FROM card_capacity_reservations WHERE fulfillment_id = ?) AS has_reservation
         `).get(fulfillmentId, fulfillmentId);
         if (exposure.has_funding || exposure.has_reservation) return { error: "state" };
-        const previousTier = requiredQualificationTier(fulfillment.target_tier);
-        if (previousTier && !db.prepare(`
-          SELECT id FROM tier_rollout_qualifications
-		  WHERE tier = ? AND adapter_version IN (?, ?) LIMIT 1
-		`).get(previousTier, GO_CHECKOUT_ADAPTER, CHECKOUT_ADAPTER)) return { error: "qualification" };
         const active = db.prepare(`
           SELECT id FROM membership_fulfillments
           WHERE id <> ? AND run_mode = 'canary'
@@ -984,7 +978,6 @@ export function createMembershipPaymentService(options = {}) {
       }).immediate();
       if (result.error === "not_found") return sendError(reply, 404, "MEMBERSHIP_FULFILLMENT_NOT_FOUND");
       if (result.error === "gate") return sendError(reply, 409, "MEMBERSHIP_PAYMENT_GATE_LOCKED");
-      if (result.error === "qualification") return sendError(reply, 409, "ROLLOUT_QUALIFICATION_ORDER_REQUIRED");
       if (result.error === "busy") return sendError(reply, 409, "CANARY_FULFILLMENT_BUSY");
       if (result.error) return sendError(reply, 409, "CANARY_START_STATE_INVALID");
       audit(request, "membership.canary.start", "membership_fulfillment", fulfillmentId, {

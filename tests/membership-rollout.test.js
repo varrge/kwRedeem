@@ -387,14 +387,19 @@ test("qualification fails closed unless settlement, exact tier, renewal, and unr
   assert.equal(qualification.priceContractVersion, 1);
 });
 
-test("x5 and x20 branch independently from Plus qualification, with separate Plus and upgrade approvals", () => {
+test("x5 and x20 canaries are self-contained, with separate same-order Plus and upgrade approvals", () => {
   insertContract("contract-x5-v1", "x5", 1);
   insertContract("contract-x20-v1", "x20", 1);
+  const adapterVersion = "go-session-api-checkout-v2";
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE adapter_version = ?
+  `).get(adapterVersion).count, 0);
 
   const x20 = createFulfillment("mf-x20-canary", "x20");
-  addAttempt(x20.id, "plus", 1);
+  addAttempt(x20.id, "plus", 1, { adapterVersion });
   const x20Plus = approveAndConsume(x20, "plus", "contract-plus-v1", 16.44, {
-    id: "x20-plus-approval"
+    id: "x20-plus-approval",
+    adapterVersion
   });
   db.prepare(`
     UPDATE membership_fulfillment_attempts SET ended_at = ?, outcome_code = 'CONFIRMED'
@@ -404,23 +409,28 @@ test("x5 and x20 branch independently from Plus qualification, with separate Plu
     UPDATE membership_fulfillments
     SET state = 'UPGRADE_APPROVAL_WAIT', current_stage = 'upgrade', updated_at = ? WHERE id = ?
   `).run("2026-07-16T00:04:00.000Z", x20.id);
-  addAttempt(x20.id, "upgrade", 1, { startedAt: "2026-07-16T00:04:00.000Z" });
+  addAttempt(x20.id, "upgrade", 1, {
+    adapterVersion,
+    startedAt: "2026-07-16T00:04:00.000Z"
+  });
   const x20Upgrade = approveAndConsume(x20, "upgrade", "contract-x20-v1", 199.2, {
     id: "x20-upgrade-approval",
+    adapterVersion,
     approvedAt: "2026-07-16T00:04:00.000Z",
     consumedAt: "2026-07-16T00:05:00.000Z"
   });
   assert.notEqual(x20Plus.authorization.id, x20Upgrade.authorization.id);
   assert.deepEqual(requiredCanaryStages("x20"), ["plus", "upgrade"]);
   assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE tier = 'x5'").get().count,
+    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE adapter_version = ?")
+      .get(adapterVersion).count,
     0
   );
   finishCanary(x20, "x20");
   const x20Qualification = qualifyTierRollout(db, {
     fulfillmentId: x20.id,
     tier: "x20",
-    adapterVersion: "checkout-v1",
+    adapterVersion,
     adapterPath: "plan-management-x20",
     priceContractId: "contract-x20-v1",
     unresolvedOutcomeCount: 0,
@@ -428,13 +438,19 @@ test("x5 and x20 branch independently from Plus qualification, with separate Plu
   });
   assert.equal(x20Qualification.tier, "x20");
   assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE tier = 'x5'").get().count,
+    db.prepare(`
+      SELECT COUNT(*) AS count FROM tier_rollout_qualifications
+      WHERE adapter_version = ? AND tier IN ('plus', 'x5')
+    `).get(adapterVersion).count,
     0
   );
 
   const x5 = createFulfillment("mf-x5-canary", "x5");
-  addAttempt(x5.id, "plus", 1);
-  const x5Plus = approveAndConsume(x5, "plus", "contract-plus-v1", 16.44, { id: "x5-plus-approval" });
+  addAttempt(x5.id, "plus", 1, { adapterVersion });
+  const x5Plus = approveAndConsume(x5, "plus", "contract-plus-v1", 16.44, {
+    id: "x5-plus-approval",
+    adapterVersion
+  });
   db.prepare(`
     UPDATE membership_fulfillment_attempts SET ended_at = ?, outcome_code = 'CONFIRMED'
     WHERE fulfillment_id = ? AND stage = 'plus'
@@ -443,9 +459,13 @@ test("x5 and x20 branch independently from Plus qualification, with separate Plu
     UPDATE membership_fulfillments
     SET state = 'UPGRADE_APPROVAL_WAIT', current_stage = 'upgrade', updated_at = ? WHERE id = ?
   `).run("2026-07-16T00:04:00.000Z", x5.id);
-  addAttempt(x5.id, "upgrade", 1, { startedAt: "2026-07-16T00:04:00.000Z" });
+  addAttempt(x5.id, "upgrade", 1, {
+    adapterVersion,
+    startedAt: "2026-07-16T00:04:00.000Z"
+  });
   const x5Upgrade = approveAndConsume(x5, "upgrade", "contract-x5-v1", 99.2, {
     id: "x5-upgrade-approval",
+    adapterVersion,
     approvedAt: "2026-07-16T00:04:00.000Z",
     consumedAt: "2026-07-16T00:05:00.000Z"
   });
@@ -455,7 +475,7 @@ test("x5 and x20 branch independently from Plus qualification, with separate Plu
   const x5Qualification = qualifyTierRollout(db, {
     fulfillmentId: x5.id,
     tier: "x5",
-    adapterVersion: "checkout-v1",
+    adapterVersion,
     adapterPath: "plan-management-x5",
     priceContractId: "contract-x5-v1",
     unresolvedOutcomeCount: 0,
@@ -464,19 +484,22 @@ test("x5 and x20 branch independently from Plus qualification, with separate Plu
   assert.equal(x5Qualification.tier, "x5");
 });
 
-test("an upgrade canary still requires a Plus qualification for the same adapter", () => {
-  const withoutPlus = createFulfillment("mf-x20-without-plus", "x20");
-  addAttempt(withoutPlus.id, "plus", 1, { adapterVersion: "checkout-v99" });
+test("an upgrade canary still requires a consumed Plus approval from the same fulfillment", () => {
+  const withoutPlus = createFulfillment("mf-x20-without-plus", "x20", {
+    state: "UPGRADE_APPROVAL_WAIT",
+    stage: "upgrade"
+  });
+  addAttempt(withoutPlus.id, "upgrade", 1, { adapterVersion: "checkout-v99" });
   expectCode(() => approveLiveCanaryStage(db, {
     fulfillmentId: withoutPlus.id,
-    stageKey: "plus",
+    stageKey: "upgrade",
     cardId: withoutPlus.cardId,
-    fundingBudgetUsd: 16.44,
-    priceContractId: "contract-plus-v1",
+    fundingBudgetUsd: 199.2,
+    priceContractId: "contract-x20-v1",
     adapterVersion: "checkout-v99",
     snapshotFingerprint: fingerprint("x20-without-plus"),
     credentials: credentials()
-  }, expectedAdmin), "ROLLOUT_QUALIFICATION_ORDER_REQUIRED");
+  }, expectedAdmin), "CANARY_INITIAL_STAGE_REQUIRED");
 });
 
 test("exact automatic scopes default to one order, revise limits freshly, pause on version drift, and reserve full daily risk once", () => {
@@ -753,7 +776,7 @@ test("two SQLite writers atomically share the scope order and full-risk budgets"
     siteId: "site-rollout",
     productId: "product-x5",
     tier: "x5",
-    adapterVersion: "checkout-v1",
+    adapterVersion: "go-session-api-checkout-v2",
     priceContractId: "contract-x5-v1",
     dailyRiskLimitUsd: 200,
     activatedAt: "2026-07-17T00:00:00.000Z",
@@ -800,7 +823,7 @@ test("two SQLite writers atomically share the scope order and full-risk budgets"
         input: {
           fulfillmentId,
           scopeId: scope.id,
-          adapterVersion: "checkout-v1",
+          adapterVersion: "go-session-api-checkout-v2",
           priceContractId: "contract-x5-v1",
           fullPaymentBudgetUsd: 115.64,
           providerFeeUsd: 0.5,

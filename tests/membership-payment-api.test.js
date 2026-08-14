@@ -315,7 +315,7 @@ test("service registers the fixed extension/admin surfaces with admin guards", (
   }
 });
 
-test("rollout gate accepts a ready EfunCard platform and lets x20 branch from a Plus qualification", async () => {
+test("rollout gate accepts a ready EfunCard platform and starts one self-contained x20 canary", async () => {
   db.prepare(`
     UPDATE membership_fulfillment_settings
     SET inventory_status = 'not_started', spacexcard_app_secret_encrypted = NULL
@@ -369,21 +369,13 @@ test("rollout gate accepts a ready EfunCard platform and lets x20 branch from a 
     /test-password/);
   db.prepare("UPDATE membership_fulfillments SET state = 'COMPLETED' WHERE id = 'mf-start-canary'").run();
   db.prepare(`
-    INSERT INTO tier_rollout_qualifications (
-      id, tier, adapter_version, adapter_path, price_contract_id,
-      fulfillment_id, qualified_at
-    ) VALUES (
-      'qualification-api-plus', 'plus', 'go-session-api-checkout-v2',
-      'initial-plus', 'contract-api-plus', 'mf-start-canary', ?
-    )
-  `).run(fixedNow);
-  db.prepare(`
     INSERT INTO membership_fulfillments (
       id, order_id, order_no, target_tier, state, current_stage, run_mode,
       created_at, updated_at
     ) VALUES ('mf-start-canary-x20', 'order-start-canary-x20', 'ORDER-START-CANARY-X20',
       'x20', 'FUNDING_READY', 'plus', NULL, ?, ?)
   `).run(fixedNow, fixedNow);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications").get().count, 0);
   const startedX20 = await app.injectRoute("POST", "/api/admin/membership-fulfillments/:id/start-canary", {
     ip: "127.0.0.4",
     params: { id: "mf-start-canary-x20" },
@@ -392,10 +384,7 @@ test("rollout gate accepts a ready EfunCard platform and lets x20 branch from a 
   assert.equal(startedX20.statusCode, 200);
   assert.equal(startedX20.body.item.targetTier, "x20");
   assert.equal(startedX20.body.item.runMode, "canary");
-  assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE tier = 'x5'").get().count,
-    0
-  );
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications").get().count, 0);
   db.prepare("UPDATE membership_fulfillments SET state = 'COMPLETED' WHERE id = 'mf-start-canary-x20'").run();
 });
 

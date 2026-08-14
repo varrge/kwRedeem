@@ -15,11 +15,6 @@ const REQUIRED_CANARY_STAGES = Object.freeze({
   x20: Object.freeze(["plus", "upgrade"])
 });
 
-const PREVIOUS_QUALIFIED_TIER = Object.freeze({
-  x5: "plus",
-  x20: "plus"
-});
-
 const APPROVAL_WAIT_STATE = Object.freeze({
   plus: "PLUS_APPROVAL_WAIT",
   upgrade: "UPGRADE_APPROVAL_WAIT"
@@ -132,26 +127,6 @@ function requireActivePriceContract(db, id, expectedTier) {
     throw rolloutError("ROLLOUT_PRICE_CONTRACT_INVALID", "PHP 价格契约无效或已失效");
   }
   return row;
-}
-
-function requireQualificationOrder(db, tier, adapterVersion) {
-  const previousTier = requiredQualificationTier(tier);
-  if (!previousTier) return;
-  const previous = db.prepare(`
-    SELECT id FROM tier_rollout_qualifications
-    WHERE tier = ? AND adapter_version = ?
-    ORDER BY qualified_at DESC LIMIT 1
-  `).get(previousTier, adapterVersion);
-  if (!previous) {
-    throw rolloutError(
-      "ROLLOUT_QUALIFICATION_ORDER_REQUIRED",
-      `必须先完成 ${previousTier} 的同版本灰度资格`
-    );
-  }
-}
-
-export function requiredQualificationTier(targetTier) {
-  return PREVIOUS_QUALIFIED_TIER[requireTier(targetTier)] || null;
 }
 
 function expectedContractTier(targetTier, stageKey) {
@@ -278,7 +253,6 @@ export function approveLiveCanaryStage(db, input = {}, secrets = {}) {
       || ![null, "canary"].includes(fulfillment.run_mode)) {
       throw rolloutError("CANARY_STAGE_NOT_READY", "会员履约尚未进入对应灰度批准状态");
     }
-    requireQualificationOrder(db, targetTier, adapterVersion);
     requireCanaryReservation(db, fulfillment, cardId);
     const contract = requireActivePriceContract(
       db,
@@ -535,7 +509,6 @@ export function qualifyTierRollout(db, input = {}) {
       || fulfillment.target_tier !== tier || fulfillment.run_mode !== "canary") {
       throw rolloutError("ROLLOUT_FULFILLMENT_NOT_COMPLETE", "灰度履约尚未严格完成或会员类型不匹配");
     }
-    requireQualificationOrder(db, tier, adapterVersion);
     requireActivePriceContract(db, priceContractId, tier);
     requireNoStoredUnresolvedOutcome(db, fulfillment);
 

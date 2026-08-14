@@ -743,17 +743,17 @@ Critical states create a red console task and a deduplicated Feishu notification
 
 A prepared canary stage may hold the browser lease for at most 15 minutes awaiting approval. Expiry invalidates the page/approval snapshot, discards ephemeral material, sanitizes incognito state, and releases the browser lease, while retaining the fulfillment, card reservation, funding intent, balance, and confirmed earlier stages.
 
-### 14.2 Qualification branches
+### 14.2 Self-contained qualifications
 
-Plus is the shared rollout prerequisite:
+Each target canary exercises its complete payment path:
 
 ```text
-Plus
-|-- x5
-`-- x20
+Plus: Plus
+x5:   Plus -> x5
+x20:  Plus -> x20
 ```
 
-One strict Plus live canary with transaction settlement `COMPLETE`, correct final membership, `auto_renew=false`, and no unresolved outcome allows either staged-upgrade canary to begin. x5 and x20 each execute and qualify independently through their own initial Plus and target-upgrade stages; neither final tier is a prerequisite for the other. Qualification remains exact to the tier/adapter/path/PHP-contract version and does not automatically enable an automatic scope.
+No qualification from another order is required to start a live canary. A strict canary with transaction settlement `COMPLETE`, correct final membership, `auto_renew=false`, and no unresolved outcome qualifies only its exact target tier/adapter/path/PHP-contract version. The intermediate Plus stage of x5/x20 is evidence for that same fulfillment, not a separate Plus qualification. Qualification does not automatically enable an automatic scope.
 
 Creating a scope requires fresh password verification and explicit confirmation of site, product, tier, adapter version, PHP contract version, daily order limit, and daily USD risk limit. Scopes affect only matching orders created after activation. Older queued orders remain canary-only. Disabling a scope stops work before the money boundary; money-bearing work continues only toward safe reconciliation and renewal protection.
 
@@ -794,10 +794,10 @@ Creating a scope requires fresh password verification and explicit confirmation 
 - Release the versioned Plus page adapter, material claim, progression permit, final submit permit, dual confirmation, and renewal cancellation.
 - Run one explicit Plus canary; require `COMPLETE`, correct Plus, and `auto_renew=false`.
 
-### Phase 6 — independent x5 and x20 branches
+### Phase 6 — self-contained x5 and x20 canaries
 
 - Add versioned plan-management and upgrade states.
-- After Plus qualification, run independently approved Plus and upgrade stages for each selected x5 or x20 branch; neither branch gates the other.
+- Run independently approved same-order Plus and upgrade stages for each selected x5 or x20 canary; no other target qualification gates it.
 - Exercise multi-step checkout variants and human-challenge recovery separately.
 
 ### Phase 7 — limited automatic scopes
@@ -865,7 +865,7 @@ Implemented and covered by local fixture/simulation checks:
 - Phase 4 implements atomic card-capacity reservation, deterministic selection/opening plans, immutable Funding Intent persistence before provider calls, exact body/idempotency-key replay for unknown outcomes, single-funding execution, and per-order Automatic daily order/risk ledger consumption.
 - Phase 5 implements stage-bound single-use material claim, in-memory card/address autofill, progression and submit permits, single-page and multi-step checkout state transitions, Plus dual-provider reconciliation, human-challenge confirmation-only recovery, and final renewal cancellation verification.
 - Phase 6 implements versioned x5/x20 plan-management and upgrade checkout flows. Their initial Plus payment stays in the final target lane, the plan-management action does not consume a checkout canary, and the actual upgrade checkout has its own stage authorization and confirmation.
-- Phase 7 implements Plus-gated independent x5/x20 qualification, 15-minute single-order canary authorization, exact versioned Automatic scopes, a default one-order/day ledger, scope revisioning, version-drift pause, intervention acknowledgement, and append-only customer compensation records.
+- Phase 7 implements self-contained target-tier qualification, 15-minute single-order canary authorization, exact versioned Automatic scopes, a default one-order/day ledger, scope revisioning, version-drift pause, intervention acknowledgement, and append-only customer compensation records.
 - The payment REST surface binds material claims, progression/submit permits, activation reports, canary approvals, qualifications, scopes, interventions, and compensation to the durable fulfillment. The extension recomputes the sanitized page SHA-256 fingerprint and never receives remote selectors or executable rules.
 - The Worker connects the gated funding runner, authoritative transaction/membership reconciliation, and renewal cancellation/recheck loop. A `COMPLETED` fulfillment requires the correct final target tier, exactly one matching new stage transaction, and a subsequent `auto_renew=false` observation.
 - The operations console exposes rollout and evidence-gated recovery controls, but no direct card opening, recharge, refund, deletion, freezing, force-success, or force-retry action.
@@ -873,6 +873,6 @@ Implemented and covered by local fixture/simulation checks:
 Production acceptance remains deliberately pending:
 
 - The payment gate defaults off. Local implementation and fixture checks do not authorize a real SpaceX Card opening, recharge, ChatGPT checkout submission, or production rollout scope.
-- Run the controlled production sequence from the shared prerequisite: inventory initialization and no-charge validation, one explicitly approved Plus canary through settled `COMPLETE` plus `auto_renew=false`, then a separately approved x5 or x20 staged canary for each target scope, and only then the corresponding exact one-order/day Automatic scope.
+- Run the controlled production sequence per target scope: inventory initialization and no-charge validation, one explicitly approved target canary through settled `COMPLETE` plus `auto_renew=false`, and only then the corresponding exact one-order/day Automatic scope. An x5/x20 target canary includes its own separately approved Plus and upgrade stages.
 - A provisional `PENDING` authorization may keep fulfillment convergence moving, but it cannot earn rollout qualification until it settles `COMPLETE`; unresolved payment, preauthorization, refund, renewal, adapter, or circuit outcomes block qualification.
 - `sub2api/` remains an unchanged upstream/reference checkout and is outside this implementation.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from python_executor.client import ExecutorAPIError, ExecutorLease
@@ -10,6 +11,7 @@ from python_executor.live import (
     _fill_card_frames,
     _sanitized_fact_diagnostic,
     _execution_deadline,
+    _path_class,
     _resolve_checkout_entry,
     route_template,
     session_cookies,
@@ -168,10 +170,17 @@ class LiveContractTest(unittest.TestCase):
             "rawText": "must not log",
             "fields": {"cardNumber": True, "pan": "must not log"},
             "controls": {"submit": "hosted-payment-submit", "raw": "must not log"},
-        })
+        }, "https://chatgpt.com/checkout/openai_llc/oaics_secret_identifier")
         self.assertEqual(diagnostic["fields"], ["cardNumber"])
         self.assertEqual(diagnostic["controls"], {"submit": "hosted-payment-submit"})
         self.assertNotIn("rawText", diagnostic)
+        self.assertEqual(diagnostic["pathClass"], "/checkout/{id}")
+        self.assertNotIn("secret_identifier", json.dumps(diagnostic))
+
+    def test_path_class_never_returns_checkout_identifiers(self) -> None:
+        self.assertEqual(_path_class("https://chatgpt.com/"), "root")
+        self.assertEqual(_path_class("https://chatgpt.com/auth/login"), "auth")
+        self.assertEqual(_path_class("https://chatgpt.com/checkout/untrusted/value"), "checkout-unrecognized")
 
     def test_action_click_is_between_activate_and_result(self) -> None:
         calls: list[str] = []

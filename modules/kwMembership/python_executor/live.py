@@ -340,6 +340,7 @@ class LiveExecutor:
         if lease.command_kind == "preflight":
             entry = page.evaluate(PREPARE_PLUS_JS)
             checkout_url = _resolve_checkout_entry(entry)
+            _log_checkout_entry(lease, entry, checkout_url)
             _navigate(client, lease, page, checkout_url, deadline)
             page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
             if page_facts["stateId"] == "PAYMENT_ACTION_REQUIRED":
@@ -351,6 +352,7 @@ class LiveExecutor:
         if lease.stage == "plus":
             entry = page.evaluate(PREPARE_PLUS_JS)
             checkout_url = _resolve_checkout_entry(entry)
+            _log_checkout_entry(lease, entry, checkout_url)
             _navigate(client, lease, page, checkout_url, deadline)
         else:
             _navigate(client, lease, page, CHATGPT_ORIGIN + "/settings/subscription", deadline)
@@ -416,7 +418,7 @@ class LiveExecutor:
             if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
                 client.heartbeat(lease); last_heartbeat = time.monotonic()
             raw = _inspect(page, lease, purpose)
-            diagnostic = json.dumps(_sanitized_fact_diagnostic(raw), sort_keys=True, separators=(",", ":"))
+            diagnostic = json.dumps(_sanitized_fact_diagnostic(raw, page.url), sort_keys=True, separators=(",", ":"))
             if diagnostic != observed:
                 LOGGER.info("execution=%s stage=%s checkout_facts=%s", lease.execution_id, lease.stage, diagnostic)
                 observed = diagnostic
@@ -519,6 +521,20 @@ def _resolve_checkout_entry(entry: Any) -> str:
     raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
 
 
+def _log_checkout_entry(lease: ExecutorLease, entry: dict[str, Any], checkout_url: str) -> None:
+    diagnostic = {
+        "responseTag": str(entry.get("responseTag") or ""),
+        "origin": f"{urlsplit(checkout_url).scheme}://{urlsplit(checkout_url).netloc}",
+        "routeTemplate": route_template(checkout_url),
+    }
+    LOGGER.info(
+        "execution=%s stage=%s checkout_entry=%s",
+        lease.execution_id,
+        lease.stage,
+        json.dumps(diagnostic, sort_keys=True, separators=(",", ":")),
+    )
+
+
 def _inspect(page: Any, lease: ExecutorLease, purpose: str) -> dict[str, Any]:
     frames = []
     for frame in page.frames:
@@ -588,7 +604,7 @@ def _contract_amount(items: list[dict[str, Any]], lease: ExecutorLease) -> float
     return values.pop() if len(values) == 1 else None
 
 
-def _sanitized_fact_diagnostic(page: dict[str, Any]) -> dict[str, Any]:
+def _sanitized_fact_diagnostic(page: dict[str, Any], page_url: str = "") -> dict[str, Any]:
     return {
         "stateId": str(page.get("stateId") or ""),
         "origin": str(page.get("origin") or ""),
@@ -597,9 +613,26 @@ def _sanitized_fact_diagnostic(page: dict[str, Any]) -> dict[str, Any]:
         "country": str(page.get("country") or ""),
         "currency": str(page.get("currency") or ""),
         "displayedAmount": page.get("displayedAmount") if isinstance(page.get("displayedAmount"), (int, float)) else None,
+        "pathClass": _path_class(page_url),
         "fields": [key for key in FACT_FIELD_KEYS if page.get("fields", {}).get(key) is True],
         "controls": {key: str(page.get("controls", {}).get(key)) for key in FACT_CONTROL_KEYS if page.get("controls", {}).get(key)},
     }
+
+
+def _path_class(value: str) -> str:
+    route = route_template(value) if value else ""
+    if route:
+        return route
+    path = urlsplit(value).path.rstrip("/") if value else ""
+    if path == "":
+        return "root"
+    if path.startswith("/auth") or path.startswith("/login"):
+        return "auth"
+    if path.startswith("/checkout"):
+        return "checkout-unrecognized"
+    if path.startswith("/cdn-cgi"):
+        return "challenge"
+    return "other"
 
 
 def _fill_frames(page: Any, material: dict[str, Any]) -> None:

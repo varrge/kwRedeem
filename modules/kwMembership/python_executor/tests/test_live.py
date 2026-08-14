@@ -8,6 +8,7 @@ from python_executor.live import (
     _classify,
     _contract_amount,
     _fill_card_frames,
+    _sanitized_fact_diagnostic,
     _execution_deadline,
     _resolve_checkout_entry,
     route_template,
@@ -127,7 +128,7 @@ class LiveContractTest(unittest.TestCase):
             "country": "PH",
             "currency": "PHP",
             "displayedAmount": 1100,
-            "fields": {"cardNumber": True, "expiry": True, "cvc": True},
+            "fields": {"cardNumber": True, "expiry": True, "cvc": True, "billingCountry": True},
             "controls": {"submit": "hosted-payment-submit"},
         }
         self.assertEqual(
@@ -154,6 +155,23 @@ class LiveContractTest(unittest.TestCase):
             "card": {"Number": "4242424242424242", "ExpiryMonth": "08", "ExpiryYear": "2030", "CVV": "123"}
         })
         self.assertNotIn("billingName", Page.frames[0].fragment)
+
+    def test_checkout_fact_diagnostic_contains_only_allowlisted_structure(self) -> None:
+        diagnostic = _sanitized_fact_diagnostic({
+            "stateId": "UNKNOWN_PAYMENT_STATE",
+            "origin": "https://chatgpt.com",
+            "routeTemplate": "/checkout/{id}",
+            "plan": "plus",
+            "country": "PH",
+            "currency": "PHP",
+            "displayedAmount": 1100,
+            "rawText": "must not log",
+            "fields": {"cardNumber": True, "pan": "must not log"},
+            "controls": {"submit": "hosted-payment-submit", "raw": "must not log"},
+        })
+        self.assertEqual(diagnostic["fields"], ["cardNumber"])
+        self.assertEqual(diagnostic["controls"], {"submit": "hosted-payment-submit"})
+        self.assertNotIn("rawText", diagnostic)
 
     def test_action_click_is_between_activate_and_result(self) -> None:
         calls: list[str] = []

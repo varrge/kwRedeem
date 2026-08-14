@@ -56,7 +56,7 @@ test("card entry is valid before billing is revealed but cannot receive an actio
     fields: {
       cardNumber: true, expiry: true, expiryMonth: false, expiryYear: false, cvc: true,
       billingName: false, billingLine1: false, billingCity: false, billingState: false,
-      billingCountry: false, billingPostal: false
+      billingCountry: true, billingPostal: false
     },
     controls: {
       progression: null,

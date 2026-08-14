@@ -214,15 +214,16 @@ func TestValidatePageFactsAcceptsCardEntryWithoutBillingAndRejectsActionableShap
 	page := checkout.PageFacts{
 		StateID: "PAYMENT_CARD_ENTRY_READY", Origin: "https://chatgpt.com", RouteTemplate: "/checkout/{id}",
 		Plan: "plus", Country: "PH", Currency: "PHP", DisplayedAmount: &amount,
-		Fields:   map[string]bool{"cardNumber": true, "expiry": true, "cvc": true},
+		Fields:   map[string]bool{"cardNumber": true, "expiry": true, "cvc": true, "billingCountry": true},
 		Controls: map[string]string{"submit": "hosted-payment-submit"},
 	}
 	if _, err := validatePageFacts(page, request); err != nil {
 		t.Fatalf("card-entry facts rejected: %v", err)
 	}
 	page.Fields["billingName"] = true
+	page.Fields["billingPostal"] = true
 	if _, err := validatePageFacts(page, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
-		t.Fatalf("partial billing facts error = %v", err)
+		t.Fatalf("complete billing facts error = %v", err)
 	}
 }
 

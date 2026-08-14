@@ -138,9 +138,10 @@ export function validateMembershipPaymentPage(page, binding = {}) {
     if (page.stateId === "PAYMENT_CARD_ENTRY_READY") {
       const card = page.fields.cardNumber && page.fields.cvc
         && (page.fields.expiry || (page.fields.expiryMonth && page.fields.expiryYear));
-      const billing = page.fields.billingName || page.fields.billingCountry || page.fields.billingPostal;
-      const address = page.fields.billingLine1 || page.fields.billingCity || page.fields.billingState;
-      if (!card || billing || address || !page.controls.submit || page.controls.progression) {
+      const billingCore = page.fields.billingName && page.fields.billingCountry && page.fields.billingPostal;
+      const addressCount = [page.fields.billingLine1, page.fields.billingCity, page.fields.billingState].filter(Boolean).length;
+      const billingComplete = billingCore && [0, 3].includes(addressCount);
+      if (!card || billingComplete || !page.controls.submit || page.controls.progression) {
         fail("CHECKOUT_UI_UNSUPPORTED", "卡片输入页面结构无效");
       }
     }

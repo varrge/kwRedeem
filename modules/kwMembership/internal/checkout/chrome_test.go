@@ -219,7 +219,7 @@ func TestMergeFactsRecognizesCardEntryBeforeBillingFieldsAreRevealed(t *testing.
 		},
 		{
 			FrameID: "stripe", Origin: "https://js.stripe.com", Fields: map[string]bool{
-				"cardNumber": true, "expiry": true, "cvc": true,
+				"cardNumber": true, "expiry": true, "cvc": true, "billingCountry": true,
 			}, Controls: map[string]string{},
 		},
 	}, "https://chatgpt.com", "/checkout/{id}", request, "checkout")

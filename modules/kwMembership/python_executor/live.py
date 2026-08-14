@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -27,6 +28,12 @@ MAX_TRANSITIONS = 6
 POLL_SECONDS = 0.25
 HEARTBEAT_SECONDS = 5.0
 REPORT_MARGIN_SECONDS = 15.0
+LOGGER = logging.getLogger("kwmembership.python_executor.live")
+FACT_FIELD_KEYS = (
+    "cardNumber", "expiry", "expiryMonth", "expiryYear", "cvc",
+    "billingName", "billingLine1", "billingCity", "billingState", "billingCountry", "billingPostal",
+)
+FACT_CONTROL_KEYS = ("progression", "submit", "upgradeX5", "upgradeX20", "challenge")
 
 INSPECT_FRAME_JS = r"""
 () => {
@@ -404,10 +411,15 @@ class LiveExecutor:
     def _wait_facts(self, client: ExecutorClient, lease: ExecutorLease, page: Any, deadline: float, purpose: str, previous_hash: str = "") -> dict[str, Any]:
         last_heartbeat = 0.0
         last: dict[str, Any] | None = None
+        observed = ""
         while time.time() < deadline:
             if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
                 client.heartbeat(lease); last_heartbeat = time.monotonic()
             raw = _inspect(page, lease, purpose)
+            diagnostic = json.dumps(_sanitized_fact_diagnostic(raw), sort_keys=True, separators=(",", ":"))
+            if diagnostic != observed:
+                LOGGER.info("execution=%s stage=%s checkout_facts=%s", lease.execution_id, lease.stage, diagnostic)
+                observed = diagnostic
             if raw.get("stateId") == "PAYMENT_ACTION_REQUIRED":
                 return raw
             if raw.get("origin") in {CHATGPT_ORIGIN, PAY_ORIGIN} and raw.get("routeTemplate"):
@@ -553,8 +565,9 @@ def _classify(page: dict[str, Any], lease: ExecutorLease, purpose: str) -> str:
     billing = fields.get("billingName") and fields.get("billingCountry") and fields.get("billingPostal")
     address = sum(bool(fields.get(key)) for key in ("billingLine1", "billingCity", "billingState"))
     if not card or (bool(controls.get("progression")) == bool(controls.get("submit"))): return "UNKNOWN_PAYMENT_STATE"
-    if controls.get("submit") and not billing and address == 0: return "PAYMENT_CARD_ENTRY_READY"
-    if not billing or address not in {0, 3}: return "UNKNOWN_PAYMENT_STATE"
+    billing_complete = billing and address in {0, 3}
+    if controls.get("submit") and not billing_complete: return "PAYMENT_CARD_ENTRY_READY"
+    if not billing_complete: return "UNKNOWN_PAYMENT_STATE"
     return "PAYMENT_PROGRESSION_READY" if controls.get("progression") else "PAYMENT_FINAL_READY"
 
 
@@ -573,6 +586,20 @@ def _contract_amount(items: list[dict[str, Any]], lease: ExecutorLease) -> float
             if isinstance(candidate, (int, float)) and float(lease.price_contract["MinAmount"]) <= candidate <= float(lease.price_contract["MaxAmount"]):
                 values.add(float(candidate))
     return values.pop() if len(values) == 1 else None
+
+
+def _sanitized_fact_diagnostic(page: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "stateId": str(page.get("stateId") or ""),
+        "origin": str(page.get("origin") or ""),
+        "routeTemplate": str(page.get("routeTemplate") or ""),
+        "plan": str(page.get("plan") or ""),
+        "country": str(page.get("country") or ""),
+        "currency": str(page.get("currency") or ""),
+        "displayedAmount": page.get("displayedAmount") if isinstance(page.get("displayedAmount"), (int, float)) else None,
+        "fields": [key for key in FACT_FIELD_KEYS if page.get("fields", {}).get(key) is True],
+        "controls": {key: str(page.get("controls", {}).get(key)) for key in FACT_CONTROL_KEYS if page.get("controls", {}).get(key)},
+    }
 
 
 def _fill_frames(page: Any, material: dict[str, Any]) -> None:

@@ -595,9 +595,15 @@ func validatePageFacts(page checkout.PageFacts, request checkout.Request) (check
 func validCardEntryFacts(page checkout.PageFacts) bool {
 	fields := page.Fields
 	card := fields["cardNumber"] && fields["cvc"] && (fields["expiry"] || fields["expiryMonth"] && fields["expiryYear"])
-	billing := fields["billingName"] || fields["billingCountry"] || fields["billingPostal"]
-	address := fields["billingLine1"] || fields["billingCity"] || fields["billingState"]
-	return card && !billing && !address && page.Controls["submit"] != "" && page.Controls["progression"] == ""
+	billingCore := fields["billingName"] && fields["billingCountry"] && fields["billingPostal"]
+	addressCount := 0
+	for _, key := range []string{"billingLine1", "billingCity", "billingState"} {
+		if fields[key] {
+			addressCount++
+		}
+	}
+	billingComplete := billingCore && (addressCount == 0 || addressCount == 3)
+	return card && !billingComplete && page.Controls["submit"] != "" && page.Controls["progression"] == ""
 }
 
 func validateHandoffFacts(page checkout.PageFacts, request checkout.Request) (checkout.PageFacts, error) {

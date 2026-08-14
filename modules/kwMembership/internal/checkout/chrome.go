@@ -964,10 +964,11 @@ func classify(page inspectedPage, request Request, purpose string) string {
 	if !cardFields || (page.Controls["progression"] == "") == (page.Controls["submit"] == "") {
 		return "UNKNOWN_PAYMENT_STATE"
 	}
-	if page.Controls["submit"] != "" && !billingCore && addressCount == 0 {
+	billingComplete := billingCore && (addressCount == 0 || addressCount == 3)
+	if page.Controls["submit"] != "" && !billingComplete {
 		return "PAYMENT_CARD_ENTRY_READY"
 	}
-	if !billingCore || addressCount != 0 && addressCount != 3 {
+	if !billingComplete {
 		return "UNKNOWN_PAYMENT_STATE"
 	}
 	if page.Controls["progression"] != "" {

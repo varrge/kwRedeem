@@ -97,6 +97,38 @@ func TestEfunCardsAndTransactionsNormalizeWithoutRetainingPAN(t *testing.T) {
 	}
 }
 
+func TestEfunCurrentTransactionContractIgnoresCardFunding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path != "/cards/101/transactions" {
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+		_, _ = io.WriteString(response, `{"success":true,"data":{"transactions":[
+      {"id":"recharge-1","type":"card_recharge","status":"success","amount":100,"currency":"USD","merchantName":"","tradeTime":"2026-08-13 12:00:00"},
+      {"id":"purchase-1","type":"purchase","status":"success","amount":-19.99,"currency":"USD","merchantName":"OPENAI *CHATGPT","tradeTime":"2026-08-13 12:30:00"},
+      {"id":"purchase-2","type":"purchase","status":"processing","amount":-19.99,"currency":"USD","merchantName":"OPENAI *CHATGPT","tradeTime":"2026-08-13 12:31:00"}
+    ],"total":3,"page":1,"pageSize":20}}`)
+	}))
+	defer server.Close()
+	client, _ := NewEfunCardClient(server.Client(), server.URL, "efk_current_transactions")
+	transactions, err := client.ListTransactions(context.Background(), 101, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transactions) != 3 || !transactions[0].IgnoreForPayment {
+		t.Fatalf("card funding must be marked outside payment history: %+v", transactions)
+	}
+	if transactions[1].AuthID != "purchase-1" || transactions[1].Type != "Settlement" ||
+		transactions[1].Status != "COMPLETE" || transactions[1].SettleAmount != 19.99 ||
+		transactions[1].MerchantNormalized != "OPENAI" {
+		t.Fatalf("unexpected settled purchase: %+v", transactions[1])
+	}
+	if transactions[2].AuthID != "purchase-2" || transactions[2].Type != "Authorization" ||
+		transactions[2].Status != "PENDING" || transactions[2].AuthAmount != 19.99 {
+		t.Fatalf("unexpected pending purchase: %+v", transactions[2])
+	}
+}
+
 func TestEfunOpenCardUsesIdempotencyAndValidatesAcceptedResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")

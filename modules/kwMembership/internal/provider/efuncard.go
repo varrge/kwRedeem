@@ -261,6 +261,16 @@ func (c *EfunCardClient) GetBalance(ctx context.Context) (Balance, error) {
 	return Balance{Balance: amount / catalog.ExchangeRate, Currency: "USD"}, nil
 }
 
+type efunCardListItem struct {
+	ID          *int64 `json:"id"`
+	CardNumber  string `json:"cardNumber"`
+	CardNo      string `json:"cardNo"`
+	CardType    string `json:"cardType"`
+	Status      string `json:"status"`
+	CardBalance string `json:"cardBalance"`
+	CreatedAt   string `json:"createdAt"`
+}
+
 func (c *EfunCardClient) ListCards(ctx context.Context, page, pageSize int, _ bool) (int, []Card, error) {
 	if page < 1 {
 		page = 1
@@ -273,15 +283,9 @@ func (c *EfunCardClient) ListCards(ctx context.Context, page, pageSize int, _ bo
 	}
 	params := url.Values{"page": {strconv.Itoa(page)}, "pageSize": {strconv.Itoa(pageSize)}}
 	var raw struct {
-		Cards []struct {
-			ID          *int64 `json:"id"`
-			CardNumber  string `json:"cardNumber"`
-			CardType    string `json:"cardType"`
-			Status      string `json:"status"`
-			CardBalance string `json:"cardBalance"`
-			CreatedAt   string `json:"createdAt"`
-		} `json:"cards"`
-		Total *int `json:"total"`
+		Cards *[]efunCardListItem `json:"cards"`
+		Items *[]efunCardListItem `json:"items"`
+		Total *int                `json:"total"`
 	}
 	if err := c.request(ctx, http.MethodGet, "/cards?"+params.Encode(), nil, "", &raw); err != nil {
 		return 0, nil, err
@@ -289,10 +293,23 @@ func (c *EfunCardClient) ListCards(ctx context.Context, page, pageSize int, _ bo
 	if raw.Total == nil || *raw.Total < 0 {
 		return 0, nil, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard card total is invalid", true)
 	}
-	cards := make([]Card, 0, len(raw.Cards))
-	for _, item := range raw.Cards {
+	if (raw.Cards == nil) == (raw.Items == nil) {
+		return 0, nil, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard card list contract drift", true)
+	}
+	entries := raw.Items
+	if entries == nil {
+		entries = raw.Cards
+	}
+	cards := make([]Card, 0, len(*entries))
+	for _, item := range *entries {
 		balance, ok := parseDecimal(item.CardBalance, false)
-		digits := regexp.MustCompile(`\D`).ReplaceAllString(item.CardNumber, "")
+		cardNumber := strings.TrimSpace(item.CardNo)
+		if cardNumber == "" {
+			cardNumber = strings.TrimSpace(item.CardNumber)
+		} else if strings.TrimSpace(item.CardNumber) != "" && strings.TrimSpace(item.CardNumber) != cardNumber {
+			return 0, nil, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard card list contract drift", true)
+		}
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(cardNumber, "")
 		last4 := ""
 		if len(digits) >= 4 {
 			last4 = digits[len(digits)-4:]
@@ -369,6 +386,33 @@ func efunTransactionState(amount float64, status string) (string, string, bool) 
 	}
 }
 
+func parseEfunTransactionAmount(raw json.RawMessage) (float64, float64, bool) {
+	value := strings.TrimSpace(string(raw))
+	if len(value) == 0 || value == "null" {
+		return 0, 0, false
+	}
+	if value[0] == '"' {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return 0, 0, false
+		}
+		value = strings.TrimSpace(value)
+	}
+	signed, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(signed) || math.IsInf(signed, 0) {
+		return 0, 0, false
+	}
+	return signed, math.Abs(signed), true
+}
+
+func firstEfunValue(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (c *EfunCardClient) ListTransactions(ctx context.Context, cardID int64, page, pageSize int) ([]Transaction, error) {
 	if page < 1 {
 		page = 1
@@ -386,12 +430,19 @@ func (c *EfunCardClient) ListTransactions(ctx context.Context, cardID int64, pag
 	}
 	var raw struct {
 		Transactions []struct {
-			RequestID string `json:"request_id"`
-			Amount    string `json:"amount"`
-			Currency  string `json:"currency"`
-			Merchant  string `json:"merchant"`
-			Time      string `json:"transaction_time"`
-			Status    string `json:"status"`
+			RequestID       string          `json:"request_id"`
+			ID              string          `json:"id"`
+			ProviderType    string          `json:"type"`
+			Amount          json.RawMessage `json:"amount"`
+			Currency        string          `json:"currency"`
+			Merchant        string          `json:"merchant"`
+			MerchantName    string          `json:"merchantName"`
+			MerchantNameAlt string          `json:"merchant_name"`
+			Time            string          `json:"transaction_time"`
+			TradeTime       string          `json:"tradeTime"`
+			TradeTimeAlt    string          `json:"trade_time"`
+			TransactionDate string          `json:"transaction_date"`
+			Status          string          `json:"status"`
 		} `json:"transactions"`
 	}
 	if err := c.request(ctx, http.MethodGet, fmt.Sprintf("/cards/%d/transactions?%s", cardID, params.Encode()), nil, "", &raw); err != nil {
@@ -399,19 +450,23 @@ func (c *EfunCardClient) ListTransactions(ctx context.Context, cardID int64, pag
 	}
 	items := make([]Transaction, 0, len(raw.Transactions))
 	for _, item := range raw.Transactions {
-		amount, ok := parseDecimal(strings.TrimPrefix(strings.TrimSpace(item.Amount), "-"), false)
-		signed, signedErr := strconv.ParseFloat(strings.TrimSpace(item.Amount), 64)
+		signed, amount, amountOK := parseEfunTransactionAmount(item.Amount)
 		typeName, status, stateOK := efunTransactionState(signed, item.Status)
 		currency := strings.ToUpper(strings.TrimSpace(item.Currency))
-		if strings.TrimSpace(item.RequestID) == "" || !ok || signedErr != nil || currency == "" || !stateOK || strings.TrimSpace(item.Time) == "" {
+		requestID := firstEfunValue(item.RequestID, item.ID)
+		merchantName := firstEfunValue(item.Merchant, item.MerchantName, item.MerchantNameAlt)
+		transactionTime := firstEfunValue(item.Time, item.TradeTime, item.TradeTimeAlt, item.TransactionDate)
+		if requestID == "" || !amountOK || currency == "" || !stateOK || transactionTime == "" {
 			return nil, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard transaction contract drift", true)
 		}
 		merchant := "OTHER"
-		lowerMerchant := strings.ToLower(item.Merchant)
+		lowerMerchant := strings.ToLower(merchantName)
 		if strings.Contains(lowerMerchant, "openai") || strings.Contains(lowerMerchant, "chatgpt") {
 			merchant = "OPENAI"
 		}
-		transaction := Transaction{AuthID: strings.TrimSpace(item.RequestID), AuthTime: strings.TrimSpace(item.Time), AuthCurrency: currency, Status: status, Type: typeName, MerchantNormalized: merchant, CreatedAt: strings.TrimSpace(item.Time)}
+		transaction := Transaction{AuthID: requestID, AuthTime: transactionTime, AuthCurrency: currency, Status: status,
+			Type: typeName, MerchantNormalized: merchant, CreatedAt: transactionTime,
+			IgnoreForPayment: strings.EqualFold(strings.TrimSpace(item.ProviderType), "card_recharge")}
 		if typeName == "Settlement" || typeName == "Refund" {
 			transaction.SettleAmount, transaction.SettleCurrency = amount, currency
 		} else {

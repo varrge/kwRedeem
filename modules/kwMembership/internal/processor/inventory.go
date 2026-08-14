@@ -445,7 +445,11 @@ func (p *Processor) loadAllTransactions(ctx context.Context, client provider.Car
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, items...)
+		for _, item := range items {
+			if !item.IgnoreForPayment {
+				all = append(all, item)
+			}
+		}
 		if len(items) < transactionPageSize {
 			return all, nil
 		}

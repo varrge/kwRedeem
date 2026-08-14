@@ -59,6 +59,7 @@ type Transaction struct {
 	Type               string
 	MerchantNormalized string
 	CreatedAt          string
+	IgnoreForPayment   bool
 }
 
 type PriceSignal struct {

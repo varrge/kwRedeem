@@ -3,6 +3,8 @@ package processor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -62,6 +64,108 @@ func TestInventoryRejectsEmptyPageBeforeReportedTotal(t *testing.T) {
 	err = processor.discoverInventoryPage(ctx, client, run, now)
 	if got := errorCode(err); got != "SPACEXCARD_CONTRACT_DRIFT" {
 		t.Fatalf("empty partial page error code = %s, err=%v", got, err)
+	}
+}
+
+func TestInventoryAcceptsCurrentEfunCardListContract(t *testing.T) {
+	ctx := context.Background()
+	repository, err := store.Open(filepath.Join(t.TempDir(), "inventory-capped-page.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	if _, err := repository.DB().Exec(`CREATE TABLE card_inventory_run_items (
+    run_id TEXT NOT NULL,upstream_card_id INTEGER NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,PRIMARY KEY(run_id,upstream_card_id)
+  ); CREATE TABLE card_inventory_runs (
+    id TEXT PRIMARY KEY,status TEXT NOT NULL,next_page INTEGER NOT NULL,total_cards INTEGER,
+    discovered_cards INTEGER NOT NULL,last_error_code TEXT,updated_at TEXT NOT NULL
+  ); CREATE TABLE managed_cards (
+    id TEXT PRIMARY KEY,provider_key TEXT NOT NULL,upstream_card_id INTEGER NOT NULL,vm_card_id TEXT NOT NULL,
+    product_code TEXT NOT NULL,bin TEXT,last4 TEXT,upstream_status TEXT NOT NULL,cached_available_amount REAL NOT NULL,
+    capacity_state TEXT NOT NULL,reconciliation_state TEXT NOT NULL,last_balance_sync_at TEXT,
+    created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(provider_key,upstream_card_id)
+  ); INSERT INTO card_inventory_runs
+    (id,status,next_page,total_cards,discovered_cards,updated_at)
+    VALUES ('run-1','discovering',1,NULL,0,'2026-07-20T01:00:00.000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC)
+	if err := repository.EnsureLeaseTable(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repository.AcquireLease(ctx, "go", "inventory-capped-page", "test", now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: inventoryRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"success":true,"data":{"items":[
+				{"id":101,"cardNo":"424242******4242","cardType":"559666","cardCountry":"US","status":"active","cardBalance":"100.00","validDate":"12/2028"}
+			],"total":1,"page":1,"pageSize":20}}`)),
+		}, nil
+	})}
+	client, err := provider.NewEfunCardClient(httpClient, "https://efuncard.invalid", "efk_test_capped_page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor := &Processor{
+		config: config.Config{MaintenancePath: filepath.Join(t.TempDir(), "standby")},
+		store:  repository, lease: lease, now: func() time.Time { return now },
+	}
+	run := inventoryRun{ID: "run-1", ProviderKey: provider.CardPlatformEfun, Status: "discovering", NextPage: 1}
+	if err := processor.discoverInventoryPage(ctx, client, run, now); err != nil {
+		t.Fatalf("current EfunCard list contract was rejected: %v", err)
+	}
+	var status string
+	var nextPage, total, discovered int
+	if err := repository.DB().QueryRow(`SELECT status,next_page,total_cards,discovered_cards
+    FROM card_inventory_runs WHERE id='run-1'`).Scan(&status, &nextPage, &total, &discovered); err != nil {
+		t.Fatal(err)
+	}
+	if status != "reconciling" || nextPage != 2 || total != 1 || discovered != 1 {
+		t.Fatalf("inventory progress = status=%s page=%d total=%d discovered=%d", status, nextPage, total, discovered)
+	}
+}
+
+func TestLoadAllTransactionsCountsIgnoredEventsForPagination(t *testing.T) {
+	httpClient := &http.Client{Transport: inventoryRoundTripper(func(request *http.Request) (*http.Response, error) {
+		page := request.URL.Query().Get("page")
+		transactions := make([]map[string]any, 0, transactionPageSize)
+		if page == "1" {
+			for index := 0; index < transactionPageSize; index++ {
+				transactions = append(transactions, map[string]any{
+					"id": fmt.Sprintf("recharge-%d", index), "type": "card_recharge", "status": "success",
+					"amount": 100, "currency": "USD", "merchantName": "", "tradeTime": "2026-08-13 12:00:00",
+				})
+			}
+		} else if page == "2" {
+			transactions = append(transactions, map[string]any{
+				"id": "purchase-1", "type": "purchase", "status": "success", "amount": -19.99,
+				"currency": "USD", "merchantName": "OPENAI *CHATGPT", "tradeTime": "2026-08-13 12:30:00",
+			})
+		} else {
+			t.Fatalf("unexpected transaction page %s", page)
+		}
+		body, err := json.Marshal(map[string]any{"success": true, "data": map[string]any{"transactions": transactions}})
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	})}
+	client, err := provider.NewEfunCardClient(httpClient, "https://efuncard.invalid", "efk_ignored_pagination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor := &Processor{}
+	transactions, err := processor.loadAllTransactions(context.Background(), client, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transactions) != 1 || transactions[0].AuthID != "purchase-1" {
+		t.Fatalf("payment transactions = %+v", transactions)
 	}
 }
 

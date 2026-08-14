@@ -567,9 +567,18 @@ def _inspect(page: Any, lease: ExecutorLease, purpose: str) -> dict[str, Any]:
     for key in ("progression", "submit", "upgradeX5", "upgradeX20", "challenge"):
         values = [fact.get("controls", {}).get(key) for fact in top if fact.get("controls", {}).get(key)]
         if len(set(values)) == 1: page_data["controls"][key] = values[0]
+    page_data = _restrict_pre_route_challenge_controls(page_data)
     page_data["stateId"] = _classify(page_data, lease, purpose)
     page_data["structuralHash"] = structural_hash(page_data)
     return page_data
+
+
+def _restrict_pre_route_challenge_controls(page: dict[str, Any]) -> dict[str, Any]:
+    controls = page.get("controls", {})
+    if (page.get("origin") == CHATGPT_ORIGIN and not page.get("routeTemplate")
+            and controls.get("challenge") == "challenge-cloudflare"):
+        return {**page, "controls": {"challenge": "challenge-cloudflare"}}
+    return page
 
 
 def _classify(page: dict[str, Any], lease: ExecutorLease, purpose: str) -> str:

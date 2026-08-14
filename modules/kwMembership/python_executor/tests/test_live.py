@@ -10,6 +10,7 @@ from python_executor.live import (
     _classify,
     _contract_amount,
     _fill_card_frames,
+    _restrict_pre_route_challenge_controls,
     _sanitized_fact_diagnostic,
     _execution_deadline,
     _path_class,
@@ -158,6 +159,26 @@ class LiveContractTest(unittest.TestCase):
             "card": {"Number": "4242424242424242", "ExpiryMonth": "08", "ExpiryYear": "2030", "CVV": "123"}
         })
         self.assertNotIn("billingName", Page.frames[0].fragment)
+
+    def test_pre_route_cloudflare_handoff_keeps_only_challenge_control(self) -> None:
+        page = _restrict_pre_route_challenge_controls({
+            "origin": "https://chatgpt.com",
+            "routeTemplate": "",
+            "fields": {},
+            "controls": {
+                "challenge": "challenge-cloudflare",
+                "submit": "hosted-payment-submit",
+                "progression": "hosted-payment-next",
+            },
+        })
+        self.assertEqual(page["controls"], {"challenge": "challenge-cloudflare"})
+
+        checkout_page = _restrict_pre_route_challenge_controls({
+            **page,
+            "routeTemplate": "/checkout/{id}",
+            "controls": {"challenge": "challenge-cloudflare", "submit": "hosted-payment-submit"},
+        })
+        self.assertEqual(checkout_page["controls"]["submit"], "hosted-payment-submit")
 
     def test_checkout_fact_diagnostic_contains_only_allowlisted_structure(self) -> None:
         diagnostic = _sanitized_fact_diagnostic({

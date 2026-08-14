@@ -387,22 +387,50 @@ test("qualification fails closed unless settlement, exact tier, renewal, and unr
   assert.equal(qualification.priceContractVersion, 1);
 });
 
-test("rollout order is Plus then x5 then x20, with separate Plus and upgrade approvals for both upgrades", () => {
+test("x5 and x20 branch independently from Plus qualification, with separate Plus and upgrade approvals", () => {
   insertContract("contract-x5-v1", "x5", 1);
   insertContract("contract-x20-v1", "x20", 1);
 
-  const prematureX20 = createFulfillment("mf-x20-premature", "x20");
-  addAttempt(prematureX20.id, "plus", 1);
-  expectCode(() => approveLiveCanaryStage(db, {
-    fulfillmentId: prematureX20.id,
-    stageKey: "plus",
-    cardId: prematureX20.cardId,
-    fundingBudgetUsd: 16.44,
-    priceContractId: "contract-plus-v1",
+  const x20 = createFulfillment("mf-x20-canary", "x20");
+  addAttempt(x20.id, "plus", 1);
+  const x20Plus = approveAndConsume(x20, "plus", "contract-plus-v1", 16.44, {
+    id: "x20-plus-approval"
+  });
+  db.prepare(`
+    UPDATE membership_fulfillment_attempts SET ended_at = ?, outcome_code = 'CONFIRMED'
+    WHERE fulfillment_id = ? AND stage = 'plus'
+  `).run("2026-07-16T00:03:00.000Z", x20.id);
+  db.prepare(`
+    UPDATE membership_fulfillments
+    SET state = 'UPGRADE_APPROVAL_WAIT', current_stage = 'upgrade', updated_at = ? WHERE id = ?
+  `).run("2026-07-16T00:04:00.000Z", x20.id);
+  addAttempt(x20.id, "upgrade", 1, { startedAt: "2026-07-16T00:04:00.000Z" });
+  const x20Upgrade = approveAndConsume(x20, "upgrade", "contract-x20-v1", 199.2, {
+    id: "x20-upgrade-approval",
+    approvedAt: "2026-07-16T00:04:00.000Z",
+    consumedAt: "2026-07-16T00:05:00.000Z"
+  });
+  assert.notEqual(x20Plus.authorization.id, x20Upgrade.authorization.id);
+  assert.deepEqual(requiredCanaryStages("x20"), ["plus", "upgrade"]);
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE tier = 'x5'").get().count,
+    0
+  );
+  finishCanary(x20, "x20");
+  const x20Qualification = qualifyTierRollout(db, {
+    fulfillmentId: x20.id,
+    tier: "x20",
     adapterVersion: "checkout-v1",
-    snapshotFingerprint: fingerprint("premature-x20"),
-    credentials: credentials()
-  }, expectedAdmin), "ROLLOUT_QUALIFICATION_ORDER_REQUIRED");
+    adapterPath: "plan-management-x20",
+    priceContractId: "contract-x20-v1",
+    unresolvedOutcomeCount: 0,
+    qualifiedAt: "2026-07-16T02:20:00.000Z"
+  });
+  assert.equal(x20Qualification.tier, "x20");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM tier_rollout_qualifications WHERE tier = 'x5'").get().count,
+    0
+  );
 
   const x5 = createFulfillment("mf-x5-canary", "x5");
   addAttempt(x5.id, "plus", 1);
@@ -434,28 +462,21 @@ test("rollout order is Plus then x5 then x20, with separate Plus and upgrade app
     qualifiedAt: "2026-07-16T02:10:00.000Z"
   });
   assert.equal(x5Qualification.tier, "x5");
+});
 
-  const x20 = createFulfillment("mf-x20-canary", "x20");
-  addAttempt(x20.id, "plus", 1);
-  const x20Plus = approveAndConsume(x20, "plus", "contract-plus-v1", 16.44, {
-    id: "x20-plus-approval"
-  });
-  db.prepare(`
-    UPDATE membership_fulfillment_attempts SET ended_at = ?, outcome_code = 'CONFIRMED'
-    WHERE fulfillment_id = ? AND stage = 'plus'
-  `).run("2026-07-16T00:03:00.000Z", x20.id);
-  db.prepare(`
-    UPDATE membership_fulfillments
-    SET state = 'UPGRADE_APPROVAL_WAIT', current_stage = 'upgrade', updated_at = ? WHERE id = ?
-  `).run("2026-07-16T00:04:00.000Z", x20.id);
-  addAttempt(x20.id, "upgrade", 1, { startedAt: "2026-07-16T00:04:00.000Z" });
-  const x20Upgrade = approveAndConsume(x20, "upgrade", "contract-x20-v1", 199.2, {
-    id: "x20-upgrade-approval",
-    approvedAt: "2026-07-16T00:04:00.000Z",
-    consumedAt: "2026-07-16T00:05:00.000Z"
-  });
-  assert.notEqual(x20Plus.authorization.id, x20Upgrade.authorization.id);
-  assert.deepEqual(requiredCanaryStages("x20"), ["plus", "upgrade"]);
+test("an upgrade canary still requires a Plus qualification for the same adapter", () => {
+  const withoutPlus = createFulfillment("mf-x20-without-plus", "x20");
+  addAttempt(withoutPlus.id, "plus", 1, { adapterVersion: "checkout-v99" });
+  expectCode(() => approveLiveCanaryStage(db, {
+    fulfillmentId: withoutPlus.id,
+    stageKey: "plus",
+    cardId: withoutPlus.cardId,
+    fundingBudgetUsd: 16.44,
+    priceContractId: "contract-plus-v1",
+    adapterVersion: "checkout-v99",
+    snapshotFingerprint: fingerprint("x20-without-plus"),
+    credentials: credentials()
+  }, expectedAdmin), "ROLLOUT_QUALIFICATION_ORDER_REQUIRED");
 });
 
 test("exact automatic scopes default to one order, revise limits freshly, pause on version drift, and reserve full daily risk once", () => {

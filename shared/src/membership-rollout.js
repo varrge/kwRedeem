@@ -17,7 +17,7 @@ const REQUIRED_CANARY_STAGES = Object.freeze({
 
 const PREVIOUS_QUALIFIED_TIER = Object.freeze({
   x5: "plus",
-  x20: "x5"
+  x20: "plus"
 });
 
 const APPROVAL_WAIT_STATE = Object.freeze({
@@ -135,7 +135,7 @@ function requireActivePriceContract(db, id, expectedTier) {
 }
 
 function requireQualificationOrder(db, tier, adapterVersion) {
-  const previousTier = PREVIOUS_QUALIFIED_TIER[tier];
+  const previousTier = requiredQualificationTier(tier);
   if (!previousTier) return;
   const previous = db.prepare(`
     SELECT id FROM tier_rollout_qualifications
@@ -148,6 +148,10 @@ function requireQualificationOrder(db, tier, adapterVersion) {
       `必须先完成 ${previousTier} 的同版本灰度资格`
     );
   }
+}
+
+export function requiredQualificationTier(targetTier) {
+  return PREVIOUS_QUALIFIED_TIER[requireTier(targetTier)] || null;
 }
 
 function expectedContractTier(targetTier, stageKey) {

@@ -14,6 +14,7 @@ import {
   expireLiveCanaryAuthorizations,
   liveCanaryAuthorizationTtlMs,
   qualifyTierRollout,
+  requiredQualificationTier,
   reviseAutomaticCheckoutScope,
   verifyFreshAdminCredentials
 } from "../../shared/src/membership-rollout.js";
@@ -958,8 +959,7 @@ export function createMembershipPaymentService(options = {}) {
             EXISTS(SELECT 1 FROM card_capacity_reservations WHERE fulfillment_id = ?) AS has_reservation
         `).get(fulfillmentId, fulfillmentId);
         if (exposure.has_funding || exposure.has_reservation) return { error: "state" };
-        const previousTier = fulfillment.target_tier === "x5" ? "plus"
-          : (fulfillment.target_tier === "x20" ? "x5" : null);
+        const previousTier = requiredQualificationTier(fulfillment.target_tier);
         if (previousTier && !db.prepare(`
           SELECT id FROM tier_rollout_qualifications
 		  WHERE tier = ? AND adapter_version IN (?, ?) LIMIT 1

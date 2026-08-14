@@ -249,6 +249,40 @@ class LiveContractTest(unittest.TestCase):
             LiveExecutor()._wait_facts(Client(), lease(), Page(), 100.0, "checkout")
         self.assertEqual(raised.exception.code, "CHATGPT_SESSION_UNAUTHORIZED")
 
+    def test_auth_redirect_cloudflare_marker_does_not_mask_invalid_session(self) -> None:
+        class Client:
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                pass
+
+        class Page:
+            url = "https://chatgpt.com/auth/login?next=%2Fcheckout%2Fsafe"
+
+        with patch("python_executor.live._inspect", return_value={
+            "stateId": "PAYMENT_ACTION_REQUIRED", "origin": "https://chatgpt.com", "routeTemplate": "",
+            "fields": {}, "controls": {"challenge": "challenge-cloudflare"}, "structuralHash": "0" * 64,
+        }), patch("python_executor.live.time.monotonic", side_effect=[1.0, 1.0, 1.0, 1.0, 7.0, 7.0, 7.0]), patch(
+            "python_executor.live.time.time", return_value=1.0
+        ), patch("python_executor.live.time.sleep"), self.assertRaises(ExecutorAPIError) as raised:
+            LiveExecutor()._wait_facts(Client(), lease(), Page(), 100.0, "checkout")
+        self.assertEqual(raised.exception.code, "CHATGPT_SESSION_UNAUTHORIZED")
+
+    def test_challenge_wait_stops_when_page_redirects_to_login(self) -> None:
+        class Client:
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                pass
+
+        class Page:
+            url = "https://chatgpt.com/auth/login?next=%2Fcheckout%2Fsafe"
+
+        with patch("python_executor.live._inspect", return_value={
+            "stateId": "UNKNOWN_PAYMENT_STATE", "origin": "https://chatgpt.com", "routeTemplate": "",
+            "fields": {}, "controls": {}, "structuralHash": "0" * 64,
+        }), patch("python_executor.live.time.monotonic", side_effect=[1.0, 1.0, 1.0, 1.0, 7.0, 7.0, 7.0]), patch(
+            "python_executor.live.time.time", side_effect=[1.0, 1.0, 101.0]
+        ), patch("python_executor.live.time.sleep"), self.assertRaises(ExecutorAPIError) as raised:
+            LiveExecutor()._wait_challenge_clear(Client(), lease(), Page(), 100.0, "checkout")
+        self.assertEqual(raised.exception.code, "CHATGPT_SESSION_UNAUTHORIZED")
+
     def test_action_click_is_between_activate_and_result(self) -> None:
         calls: list[str] = []
 

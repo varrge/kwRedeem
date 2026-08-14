@@ -445,6 +445,8 @@ class LiveExecutor:
                 auth_redirect_started = auth_redirect_started or time.monotonic()
                 if time.monotonic() - auth_redirect_started >= AUTH_REDIRECT_GRACE_SECONDS:
                     raise ExecutorAPIError("CHATGPT_SESSION_UNAUTHORIZED", 409)
+                time.sleep(POLL_SECONDS)
+                continue
             else:
                 auth_redirect_started = 0.0
             if raw.get("stateId") == "PAYMENT_ACTION_REQUIRED":
@@ -465,11 +467,19 @@ class LiveExecutor:
 
     def _wait_challenge_clear(self, client: ExecutorClient, lease: ExecutorLease, page: Any, deadline: float, purpose: str) -> dict[str, Any]:
         last_heartbeat = 0.0
+        auth_redirect_started = 0.0
         while time.time() < deadline:
             if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
                 client.heartbeat(lease)
                 last_heartbeat = time.monotonic()
             raw = _inspect(page, lease, purpose)
+            if _path_class(page.url) == "auth":
+                auth_redirect_started = auth_redirect_started or time.monotonic()
+                if time.monotonic() - auth_redirect_started >= AUTH_REDIRECT_GRACE_SECONDS:
+                    raise ExecutorAPIError("CHATGPT_SESSION_UNAUTHORIZED", 409)
+                time.sleep(POLL_SECONDS)
+                continue
+            auth_redirect_started = 0.0
             if raw.get("stateId") == "PAYMENT_ACTION_REQUIRED":
                 time.sleep(POLL_SECONDS)
                 continue

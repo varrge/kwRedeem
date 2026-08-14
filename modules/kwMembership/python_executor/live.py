@@ -28,6 +28,7 @@ MAX_TRANSITIONS = 6
 POLL_SECONDS = 0.25
 HEARTBEAT_SECONDS = 5.0
 REPORT_MARGIN_SECONDS = 15.0
+AUTH_REDIRECT_GRACE_SECONDS = 5.0
 LOGGER = logging.getLogger("kwmembership.python_executor.live")
 FACT_FIELD_KEYS = (
     "cardNumber", "expiry", "expiryMonth", "expiryYear", "cvc",
@@ -414,14 +415,22 @@ class LiveExecutor:
         last_heartbeat = 0.0
         last: dict[str, Any] | None = None
         observed = ""
+        auth_redirect_started = 0.0
         while time.time() < deadline:
             if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
                 client.heartbeat(lease); last_heartbeat = time.monotonic()
             raw = _inspect(page, lease, purpose)
-            diagnostic = json.dumps(_sanitized_fact_diagnostic(raw, page.url), sort_keys=True, separators=(",", ":"))
+            fact_diagnostic = _sanitized_fact_diagnostic(raw, page.url)
+            diagnostic = json.dumps(fact_diagnostic, sort_keys=True, separators=(",", ":"))
             if diagnostic != observed:
                 LOGGER.info("execution=%s stage=%s checkout_facts=%s", lease.execution_id, lease.stage, diagnostic)
                 observed = diagnostic
+            if fact_diagnostic["pathClass"] == "auth":
+                auth_redirect_started = auth_redirect_started or time.monotonic()
+                if time.monotonic() - auth_redirect_started >= AUTH_REDIRECT_GRACE_SECONDS:
+                    raise ExecutorAPIError("CHATGPT_SESSION_UNAUTHORIZED", 409)
+            else:
+                auth_redirect_started = 0.0
             if raw.get("stateId") == "PAYMENT_ACTION_REQUIRED":
                 return raw
             if raw.get("origin") in {CHATGPT_ORIGIN, PAY_ORIGIN} and raw.get("routeTemplate"):

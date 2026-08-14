@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
@@ -181,6 +182,23 @@ class LiveContractTest(unittest.TestCase):
         self.assertEqual(_path_class("https://chatgpt.com/"), "root")
         self.assertEqual(_path_class("https://chatgpt.com/auth/login"), "auth")
         self.assertEqual(_path_class("https://chatgpt.com/checkout/untrusted/value"), "checkout-unrecognized")
+
+    def test_sustained_checkout_auth_redirect_fails_as_invalid_session(self) -> None:
+        class Client:
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                pass
+
+        class Page:
+            url = "https://chatgpt.com/auth/login"
+
+        with patch("python_executor.live._inspect", return_value={
+            "stateId": "UNKNOWN_PAYMENT_STATE", "origin": "https://chatgpt.com", "routeTemplate": "",
+            "fields": {}, "controls": {}, "structuralHash": "0" * 64,
+        }), patch("python_executor.live.time.monotonic", side_effect=[1.0, 1.0, 1.0, 7.0, 7.0, 7.0, 7.0]), patch(
+            "python_executor.live.time.time", return_value=1.0
+        ), self.assertRaises(ExecutorAPIError) as raised:
+            LiveExecutor()._wait_facts(Client(), lease(), Page(), 100.0, "checkout")
+        self.assertEqual(raised.exception.code, "CHATGPT_SESSION_UNAUTHORIZED")
 
     def test_action_click_is_between_activate_and_result(self) -> None:
         calls: list[str] = []

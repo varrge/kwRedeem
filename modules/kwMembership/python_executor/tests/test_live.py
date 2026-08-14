@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
+    INSPECT_FRAME_JS,
     LiveExecutor,
     PREPARE_PLUS_JS,
     _browser_proxy_from_env,
@@ -41,6 +42,16 @@ def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "p
 
 
 class LiveContractTest(unittest.TestCase):
+    def test_cloudflare_detection_requires_an_active_challenge_surface(self) -> None:
+        for marker in (
+            "#challenge-form",
+            "#challenge-running",
+            'input[name="cf-turnstile-response"]',
+            'iframe[src*="challenges.cloudflare.com"]',
+        ):
+            self.assertIn(marker, INSPECT_FRAME_JS)
+        self.assertNotIn('/cdn-cgi/challenge-platform/', INSPECT_FRAME_JS)
+
     def test_plus_checkout_scopes_requests_to_the_chatgpt_account(self) -> None:
         self.assertIn("headers['ChatGPT-Account-ID'] = accountID", PREPARE_PLUS_JS)
         self.assertIn("/backend-api/payments/checkout", PREPARE_PLUS_JS)

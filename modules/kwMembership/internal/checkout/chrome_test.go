@@ -23,6 +23,22 @@ func TestAuthenticatedIdentityEvaluationAwaitsPromise(t *testing.T) {
 	}
 }
 
+func TestCloudflareDetectionRequiresAnActiveChallengeSurface(t *testing.T) {
+	for _, required := range []string{
+		`#challenge-form`,
+		`#challenge-running`,
+		`input[name="cf-turnstile-response"]`,
+		`iframe[src*="challenges.cloudflare.com"]`,
+	} {
+		if !strings.Contains(inspectFrameJS, required) {
+			t.Fatalf("checkout inspection is missing active challenge marker %q", required)
+		}
+	}
+	if strings.Contains(inspectFrameJS, `/cdn-cgi/challenge-platform/`) {
+		t.Fatal("checkout inspection treats a passive Cloudflare script as an active challenge")
+	}
+}
+
 func (requestGuardStub) BeforeAction(context.Context, Action) (Permit, error) {
 	return Permit{ID: "permit"}, nil
 }

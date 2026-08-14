@@ -76,6 +76,48 @@ func TestPaymentFundingPlanUsesIntegerCents(t *testing.T) {
 	}
 }
 
+func TestPaymentFundingPlanHonorsProviderFeeRoundingAndBalanceFloor(t *testing.T) {
+	snapshot := paymentPriceSnapshot{TargetTier: domain.TierX20, TotalCents: 10001}
+	product := paymentProduct{
+		Code: "product_1", OpenEnabled: true, OpenFeeRate: 0.003,
+		MinimumPlatformBalanceCents: 20000, RoundOpenFeeUp: true,
+		MinimumAmountCents: 100, MaximumAmountCents: 20000,
+	}
+
+	plan, err := paymentPlanNewCard(snapshot, product, 10032)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FeeCents != 31 || plan.PlatformDebitCents != 10032 || plan.PlatformBalanceSufficient {
+		t.Fatalf("unexpected fee-rounded funding plan: %+v", plan)
+	}
+	plan, err = paymentPlanNewCard(snapshot, product, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.PlatformBalanceSufficient {
+		t.Fatalf("provider balance floor remained unsatisfied: %+v", plan)
+	}
+}
+
+func TestPaymentRechargeUsesItsOwnProviderRoundingRule(t *testing.T) {
+	snapshot := paymentPriceSnapshot{TargetTier: domain.TierX20, TotalCents: 10001}
+	card := paymentCard{ID: "mc_1", UpstreamCardID: 7, ProductCode: "product_1"}
+	live := provider.Card{UpstreamCardID: 7, ProductCode: "product_1", AvailableAmount: 0, Status: "ACTIVE"}
+	product := paymentProduct{
+		Code: "product_1", RechargeFeeRate: 0.003, RoundRechargeFeeUp: false,
+		MinimumAmountCents: 100, MaximumAmountCents: 20000,
+	}
+
+	plan, err := paymentPlanExistingCard(snapshot, card, live, product, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FeeCents != 30 || plan.PlatformDebitCents != 10031 {
+		t.Fatalf("unexpected recharge-rounded funding plan: %+v", plan)
+	}
+}
+
 func TestPaymentCanonicalFundingBodyMatchesNodeFingerprint(t *testing.T) {
 	canonical, err := paymentCanonicalJSON(map[string]any{"card_id": int64(123), "amount": 20.2})
 	if err != nil {

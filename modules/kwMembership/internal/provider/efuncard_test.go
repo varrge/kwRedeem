@@ -15,6 +15,44 @@ import (
 
 const efunCatalogFixture = `{"success":true,"message":"ok","data":{"cardTypes":[{"id":1,"cardType":"559666","baseCardFeeRmb":"10.00","feeRate":"0.0200","minAmount":"5.00","maxAmount":"5000.00"}],"exchangeRate":7.3,"discount":{"levelName":"diamond","discountPercent":80},"purchaseEnabled":true,"validityOptions":[]}}`
 
+const efunUSDTCardCatalogFixture = `{"success":true,"message":"ok","data":{"cardTypes":[{"id":29,"cardType":"Z-43612081","baseCardFeeUsdt":"1.00","feeRate":"0.0100","effectiveCardFeeUsdt":"0.00","effectiveFeeRate":"0.0030","minServiceFeeUsdt":"0.00","minAmount":"5.00","maxAmount":"200.00","requireMinBalance":1,"minBalanceUsdt":"20.00"}],"discount":{"levelName":"king","discountPercent":100,"openFeeDiscount":100,"serviceFeeDiscount":100},"purchaseEnabled":true,"validityOptions":[]}}`
+
+func TestEfunCurrentUSDTContractNormalizesWithoutExchangeRate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/account/balance":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"balance":"254.88","currency":"USDT"}}`)
+		case "/card-types":
+			_, _ = io.WriteString(response, efunUSDTCardCatalogFixture)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewEfunCardClient(server.Client(), server.URL, "efk_usdt_contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	products, err := client.ListProducts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	balance, err := client.GetBalance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance.Currency != "USD" || balance.Balance != 254.88 || len(products) != 1 {
+		t.Fatalf("unexpected normalized contract: balance=%+v products=%+v", balance, products)
+	}
+	product := products[0]
+	if product.ProductCode != "Z-43612081" || !product.OpenEnabled || product.OpenFee != 0 ||
+		product.OpenFeeRate != 0.003 || product.RechargeFee != 0.003 || product.MinimumServiceFee != 0 ||
+		product.MinimumPlatformBalance != 20 || !product.RoundOpenFeeUp || product.RoundRechargeFeeUp || product.MinAmount != 5 || product.MaxAmount != 200 {
+		t.Fatalf("unexpected product: %+v", product)
+	}
+}
+
 func TestEfunCatalogAndBalanceNormalizeCNYToUSD(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("X-API-Key") != "efk_test" {
@@ -161,6 +199,31 @@ func TestEfunOpenCardUsesIdempotencyAndValidatesAcceptedResult(t *testing.T) {
 	}
 }
 
+func TestEfunOpenCardValidatesCurrentUSDTReceipt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/card-types":
+			_, _ = io.WriteString(response, efunUSDTCardCatalogFixture)
+		case request.Method == http.MethodPost && request.URL.Path == "/cards/purchase":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"cards":[{"id":103,"status":"pending"}],"totalCostUsdt":"100.32"}}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/cards/103":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"id":103,"cardNumber":"4242424242424242","cardType":"Z-43612081","cvv":"123","expiryMonth":"12","expiryYear":"2028","status":"active","cardBalance":"100.01"}}`)
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, _ := NewEfunCardClient(server.Client(), server.URL, "efk_usdt_open")
+	result, err := client.OpenCard(context.Background(), OpenCardInput{ProductCode: "Z-43612081", InitAmount: 100.01}, "short-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UpstreamCardID != 103 || math.Abs(result.OpenFee-0.31) > 0.0001 || result.AvailableAmount != 100.01 {
+		t.Fatalf("unexpected open result: %+v", result)
+	}
+}
+
 func TestEfunPostWritePollFailureIsOutcomeUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
@@ -241,6 +304,29 @@ func TestEfunRechargeValidatesReceiptBeforePolling(t *testing.T) {
 	defer server.Close()
 	client, _ := NewEfunCardClient(server.Client(), server.URL, "efk_recharge_valid")
 	if err := client.RechargeCard(context.Background(), 101, 10, "ignored"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEfunRechargeValidatesCurrentUSDTReceipt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/cards/103":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"id":103,"cardType":"Z-43612081","status":"active","cardBalance":"100.00"}}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/card-types":
+			_, _ = io.WriteString(response, efunUSDTCardCatalogFixture)
+		case request.Method == http.MethodPost && request.URL.Path == "/cards/103/recharge":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"taskId":"2439","rechargeAmountUsd":100.01,"serviceFeeUsd":0.30,"totalCostUsdt":100.31}}`)
+		case request.Method == http.MethodPost && request.URL.Path == "/cards/103/refresh-balance":
+			_, _ = io.WriteString(response, `{"success":true,"data":{"cardBalance":"200.01"}}`)
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, _ := NewEfunCardClient(server.Client(), server.URL, "efk_usdt_recharge")
+	if err := client.RechargeCard(context.Background(), 103, 100.01, "ignored"); err != nil {
 		t.Fatal(err)
 	}
 }

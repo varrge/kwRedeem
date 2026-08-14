@@ -86,13 +86,17 @@ type paymentCard struct {
 }
 
 type paymentProduct struct {
-	Code               string
-	OpenEnabled        bool
-	OpenFeeCents       int64
-	OpenFeeRate        float64
-	RechargeFeeRate    float64
-	MinimumAmountCents int64
-	MaximumAmountCents int64
+	Code                        string
+	OpenEnabled                 bool
+	OpenFeeCents                int64
+	OpenFeeRate                 float64
+	RechargeFeeRate             float64
+	MinimumServiceFeeCents      int64
+	MinimumPlatformBalanceCents int64
+	RoundOpenFeeUp              bool
+	RoundRechargeFeeUp          bool
+	MinimumAmountCents          int64
+	MaximumAmountCents          int64
 }
 
 type paymentFundingFacts struct {
@@ -621,19 +625,38 @@ func (p *Processor) paymentLoadFundingFacts(ctx context.Context, client provider
 	for _, product := range products {
 		code := strings.TrimSpace(product.ProductCode)
 		openFee, openErr := paymentRoundedCents(product.OpenFee, false)
+		minimumServiceFee, serviceErr := paymentRoundedCents(product.MinimumServiceFee, false)
+		minimumPlatformBalance, platformBalanceErr := paymentRoundedCents(product.MinimumPlatformBalance, false)
 		minimum, minErr := paymentRoundedCents(product.MinAmount, false)
 		maximum, maxErr := paymentRoundedCents(product.MaxAmount, true)
-		if code == "" || catalog[code].Code != "" || openErr != nil || minErr != nil || maxErr != nil || maximum < minimum ||
+		if code == "" || catalog[code].Code != "" || openErr != nil || serviceErr != nil || platformBalanceErr != nil || minErr != nil || maxErr != nil || maximum < minimum ||
 			math.IsNaN(product.OpenFeeRate) || math.IsInf(product.OpenFeeRate, 0) || product.OpenFeeRate < 0 || product.OpenFeeRate > 1 ||
 			math.IsNaN(product.RechargeFee) || math.IsInf(product.RechargeFee, 0) || product.RechargeFee < 0 || product.RechargeFee > 1 {
 			return paymentFundingFacts{}, paymentFailure("PAYMENT_PROVIDER_PRODUCTS_INVALID", "card platform product catalog is invalid", true)
 		}
 		catalog[code] = paymentProduct{
 			Code: code, OpenEnabled: product.OpenEnabled, OpenFeeCents: openFee, OpenFeeRate: product.OpenFeeRate, RechargeFeeRate: product.RechargeFee,
+			MinimumServiceFeeCents: minimumServiceFee, MinimumPlatformBalanceCents: minimumPlatformBalance,
+			RoundOpenFeeUp: product.RoundOpenFeeUp, RoundRechargeFeeUp: product.RoundRechargeFeeUp,
 			MinimumAmountCents: minimum, MaximumAmountCents: maximum,
 		}
 	}
 	return paymentFundingFacts{PlatformBalanceCents: balanceCents, Products: catalog}, nil
+}
+
+func paymentServiceFeeCents(amountCents int64, rate float64, minimumCents int64, roundUp bool) (int64, error) {
+	feeUSD := domain.USDFromCents(amountCents) * rate
+	if roundUp {
+		feeUSD = math.Ceil(feeUSD*100-1e-9) / 100
+	}
+	fee, err := domain.CentsFromUSD(feeUSD)
+	if err != nil || fee < 0 {
+		return 0, paymentFailure("FUNDING_REQUEST_INVALID", "service fee is invalid")
+	}
+	if fee < minimumCents {
+		fee = minimumCents
+	}
+	return fee, nil
 }
 
 func (p *Processor) paymentLoadLiveCards(ctx context.Context, client provider.CardPlatform) (map[int64]provider.Card, error) {
@@ -688,9 +711,9 @@ func paymentPlanNewCard(snapshot paymentPriceSnapshot, product paymentProduct, p
 	if funding > product.MaximumAmountCents {
 		return paymentFundingPlan{}, paymentFailure("CARD_PRODUCT_AMOUNT_UNSUPPORTED", "card product cannot cover the full order budget")
 	}
-	variableFee, err := domain.CentsFromUSD(domain.USDFromCents(funding) * product.OpenFeeRate)
-	if err != nil || variableFee < 0 {
-		return paymentFundingPlan{}, paymentFailure("FUNDING_REQUEST_INVALID", "open-card fee is invalid")
+	variableFee, err := paymentServiceFeeCents(funding, product.OpenFeeRate, product.MinimumServiceFeeCents, product.RoundOpenFeeUp)
+	if err != nil {
+		return paymentFundingPlan{}, err
 	}
 	fee, err := paymentAddCents(product.OpenFeeCents, variableFee)
 	if err != nil {
@@ -703,7 +726,8 @@ func paymentPlanNewCard(snapshot paymentPriceSnapshot, product paymentProduct, p
 	return paymentFundingPlan{
 		Kind: "new_card", Operation: "open", FullOrderBudgetCents: snapshot.TotalCents,
 		FundingAmountCents: funding, FeeCents: fee, PlatformDebitCents: debit,
-		PlatformBalanceCents: platformBalance, PlatformBalanceSufficient: platformBalance >= debit,
+		PlatformBalanceCents:      platformBalance,
+		PlatformBalanceSufficient: platformBalance >= debit && platformBalance >= product.MinimumPlatformBalanceCents,
 	}, nil
 }
 
@@ -737,9 +761,9 @@ func paymentPlanExistingCard(snapshot paymentPriceSnapshot, card paymentCard, li
 	if shortfall > product.MaximumAmountCents {
 		return paymentFundingPlan{}, paymentFailure("CARD_PRODUCT_AMOUNT_UNSUPPORTED", "card product cannot cover the exact card shortfall")
 	}
-	fee, err := domain.CentsFromUSD(domain.USDFromCents(shortfall) * product.RechargeFeeRate)
-	if err != nil || fee < 0 {
-		return paymentFundingPlan{}, paymentFailure("FUNDING_REQUEST_INVALID", "recharge fee is invalid")
+	fee, err := paymentServiceFeeCents(shortfall, product.RechargeFeeRate, product.MinimumServiceFeeCents, product.RoundRechargeFeeUp)
+	if err != nil {
+		return paymentFundingPlan{}, err
 	}
 	debit, err := paymentAddCents(shortfall, fee)
 	if err != nil {
@@ -748,7 +772,7 @@ func paymentPlanExistingCard(snapshot paymentPriceSnapshot, card paymentCard, li
 	plan.Operation = "recharge"
 	plan.FeeCents = fee
 	plan.PlatformDebitCents = debit
-	plan.PlatformBalanceSufficient = platformBalance >= debit
+	plan.PlatformBalanceSufficient = platformBalance >= debit && platformBalance >= product.MinimumPlatformBalanceCents
 	return plan, nil
 }
 

@@ -174,6 +174,7 @@ type efunCatalog struct {
 	Products        []Product
 	IDs             map[string]int64
 	ExchangeRate    float64
+	DebitCurrency   string
 	PurchaseEnabled bool
 }
 
@@ -185,15 +186,42 @@ func parseDecimal(value string, positive bool) (float64, bool) {
 	return parsed, true
 }
 
+func parseDecimalJSON(raw json.RawMessage, positive bool) (float64, bool) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return 0, false
+	}
+	if value[0] == '"' {
+		if json.Unmarshal(raw, &value) != nil {
+			return 0, false
+		}
+	}
+	return parseDecimal(value, positive)
+}
+
+func efunServiceFee(amount, rate, minimum float64, roundUp bool) float64 {
+	fee := math.Max(amount*rate, minimum)
+	if roundUp {
+		return math.Ceil(fee*100-1e-9) / 100
+	}
+	return math.Round(fee*100) / 100
+}
+
 func (c *EfunCardClient) catalog(ctx context.Context) (efunCatalog, error) {
 	var raw struct {
 		CardTypes []struct {
-			ID             *int64 `json:"id"`
-			CardType       string `json:"cardType"`
-			BaseCardFeeRMB string `json:"baseCardFeeRmb"`
-			FeeRate        string `json:"feeRate"`
-			MinAmount      string `json:"minAmount"`
-			MaxAmount      string `json:"maxAmount"`
+			ID                    *int64 `json:"id"`
+			CardType              string `json:"cardType"`
+			BaseCardFeeRMB        string `json:"baseCardFeeRmb"`
+			BaseCardFeeUSDT       string `json:"baseCardFeeUsdt"`
+			EffectiveCardFeeUSDT  string `json:"effectiveCardFeeUsdt"`
+			FeeRate               string `json:"feeRate"`
+			EffectiveFeeRate      string `json:"effectiveFeeRate"`
+			MinimumServiceFeeUSDT string `json:"minServiceFeeUsdt"`
+			MinAmount             string `json:"minAmount"`
+			MaxAmount             string `json:"maxAmount"`
+			RequireMinBalance     *int   `json:"requireMinBalance"`
+			MinimumBalanceUSDT    string `json:"minBalanceUsdt"`
 		} `json:"cardTypes"`
 		ExchangeRate    *float64 `json:"exchangeRate"`
 		PurchaseEnabled *bool    `json:"purchaseEnabled"`
@@ -204,11 +232,12 @@ func (c *EfunCardClient) catalog(ctx context.Context) (efunCatalog, error) {
 	if err := c.request(ctx, http.MethodGet, "/card-types", nil, "", &raw); err != nil {
 		return efunCatalog{}, err
 	}
-	if raw.ExchangeRate == nil || *raw.ExchangeRate <= 0 || raw.PurchaseEnabled == nil {
+	if raw.PurchaseEnabled == nil || (raw.ExchangeRate != nil && *raw.ExchangeRate <= 0) {
 		return efunCatalog{}, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard catalog is invalid", true)
 	}
+	legacyCNY := raw.ExchangeRate != nil
 	discount := 1.0
-	if raw.Discount != nil {
+	if legacyCNY && raw.Discount != nil {
 		if raw.Discount.Percent == nil || *raw.Discount.Percent <= 0 || *raw.Discount.Percent > 100 {
 			return efunCatalog{}, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard discount is invalid", true)
 		}
@@ -219,22 +248,43 @@ func (c *EfunCardClient) catalog(ctx context.Context) (efunCatalog, error) {
 	products := make([]Product, 0, len(raw.CardTypes))
 	for _, item := range raw.CardTypes {
 		code := strings.TrimSpace(item.CardType)
-		baseFee, baseOK := parseDecimal(item.BaseCardFeeRMB, false)
-		feeRate, rateOK := parseDecimal(item.FeeRate, false)
 		minimum, minOK := parseDecimal(item.MinAmount, false)
 		maximum, maxOK := parseDecimal(item.MaxAmount, true)
-		if item.ID == nil || *item.ID <= 0 || code == "" || seen[code] || !baseOK || !rateOK || !minOK || !maxOK || feeRate > 1 || maximum < minimum {
+		baseFee, feeRate, minimumServiceFee, minimumPlatformBalance := 0.0, 0.0, 0.0, 0.0
+		baseOK, rateOK, serviceOK, platformBalanceOK := false, false, true, true
+		if legacyCNY {
+			baseFee, baseOK = parseDecimal(item.BaseCardFeeRMB, false)
+			feeRate, rateOK = parseDecimal(item.FeeRate, false)
+			baseFee = baseFee * discount / *raw.ExchangeRate
+			feeRate *= discount
+		} else {
+			baseFee, baseOK = parseDecimal(item.EffectiveCardFeeUSDT, false)
+			feeRate, rateOK = parseDecimal(item.EffectiveFeeRate, false)
+			minimumServiceFee, serviceOK = parseDecimal(item.MinimumServiceFeeUSDT, false)
+			if item.RequireMinBalance == nil || (*item.RequireMinBalance != 0 && *item.RequireMinBalance != 1) {
+				platformBalanceOK = false
+			} else if *item.RequireMinBalance == 1 {
+				minimumPlatformBalance, platformBalanceOK = parseDecimal(item.MinimumBalanceUSDT, false)
+			}
+		}
+		if item.ID == nil || *item.ID <= 0 || code == "" || seen[code] || !baseOK || !rateOK || !serviceOK || !platformBalanceOK || !minOK || !maxOK || feeRate > 1 || maximum < minimum {
 			return efunCatalog{}, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard product contract drift", true)
 		}
 		seen[code] = true
 		ids[code] = *item.ID
 		products = append(products, Product{
-			ProductCode: code, OpenEnabled: *raw.PurchaseEnabled, OpenFee: baseFee * discount / *raw.ExchangeRate,
-			OpenFeeRate: feeRate * discount, RechargeFee: feeRate * discount,
-			MinAmount: minimum, MaxAmount: maximum,
+			ProductCode: code, OpenEnabled: *raw.PurchaseEnabled, OpenFee: baseFee,
+			OpenFeeRate: feeRate, RechargeFee: feeRate, MinimumServiceFee: minimumServiceFee,
+			MinimumPlatformBalance: minimumPlatformBalance, RoundOpenFeeUp: !legacyCNY,
+			RoundRechargeFeeUp: false,
+			MinAmount:          minimum, MaxAmount: maximum,
 		})
 	}
-	return efunCatalog{Products: products, IDs: ids, ExchangeRate: *raw.ExchangeRate, PurchaseEnabled: *raw.PurchaseEnabled}, nil
+	debitCurrency, exchangeRate := "USDT", 0.0
+	if legacyCNY {
+		debitCurrency, exchangeRate = "CNY", *raw.ExchangeRate
+	}
+	return efunCatalog{Products: products, IDs: ids, ExchangeRate: exchangeRate, DebitCurrency: debitCurrency, PurchaseEnabled: *raw.PurchaseEnabled}, nil
 }
 
 func (c *EfunCardClient) ListProducts(ctx context.Context) ([]Product, error) {
@@ -251,12 +301,19 @@ func (c *EfunCardClient) GetBalance(ctx context.Context) (Balance, error) {
 		return Balance{}, err
 	}
 	amount, ok := parseDecimal(raw.Balance, false)
-	if !ok || strings.ToUpper(strings.TrimSpace(raw.Currency)) != "CNY" {
+	currency := strings.ToUpper(strings.TrimSpace(raw.Currency))
+	if !ok || (currency != "CNY" && currency != "USD" && currency != "USDT") {
 		return Balance{}, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard balance contract drift", true)
+	}
+	if currency == "USD" || currency == "USDT" {
+		return Balance{Balance: amount, Currency: "USD"}, nil
 	}
 	catalog, err := c.catalog(ctx)
 	if err != nil {
 		return Balance{}, err
+	}
+	if catalog.DebitCurrency != "CNY" || catalog.ExchangeRate <= 0 {
+		return Balance{}, fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard balance and catalog currencies disagree", true)
 	}
 	return Balance{Balance: amount / catalog.ExchangeRate, Currency: "USD"}, nil
 }
@@ -529,7 +586,9 @@ func (c *EfunCardClient) OpenCard(ctx context.Context, input OpenCardInput, key 
 			ID     *int64 `json:"id"`
 			Status string `json:"status"`
 		} `json:"cards"`
-		TotalCost string `json:"totalCost"`
+		TotalCost     json.RawMessage `json:"totalCost"`
+		TotalCostCNY  json.RawMessage `json:"totalCostCny"`
+		TotalCostUSDT json.RawMessage `json:"totalCostUsdt"`
 	}
 	request := map[string]any{"cardTypeId": cardTypeID, "quantity": 1, "openCardAmount": input.InitAmount, "remark": "kwmembership:" + normalizedKey}
 	if err := c.request(ctx, http.MethodPost, "/cards/purchase", request, normalizedKey, &raw); err != nil {
@@ -538,12 +597,25 @@ func (c *EfunCardClient) OpenCard(ctx context.Context, input OpenCardInput, key 
 	if len(raw.Cards) != 1 || raw.Cards[0].ID == nil || *raw.Cards[0].ID <= 0 {
 		return OpenCardResult{}, fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard accepted purchase but returned an invalid result", false)
 	}
-	totalCostCNY, ok := parseDecimal(raw.TotalCost, true)
+	totalCostRaw := raw.TotalCost
+	if catalog.DebitCurrency == "CNY" && len(raw.TotalCostCNY) > 0 {
+		totalCostRaw = raw.TotalCostCNY
+	}
+	if catalog.DebitCurrency == "USDT" && len(raw.TotalCostUSDT) > 0 {
+		totalCostRaw = raw.TotalCostUSDT
+	}
+	totalCost, ok := parseDecimalJSON(totalCostRaw, true)
 	if !ok {
 		return OpenCardResult{}, fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard accepted purchase but returned an invalid cost", false)
 	}
-	providerFeeUSD := totalCostCNY/catalog.ExchangeRate - input.InitAmount
-	expectedFeeUSD := selected.OpenFee + input.InitAmount*selected.OpenFeeRate
+	totalCostUSD := totalCost
+	if catalog.DebitCurrency == "CNY" {
+		totalCostUSD /= catalog.ExchangeRate
+	} else if catalog.DebitCurrency != "USDT" {
+		return OpenCardResult{}, fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard accepted purchase with an unknown debit currency", false)
+	}
+	providerFeeUSD := totalCostUSD - input.InitAmount
+	expectedFeeUSD := selected.OpenFee + efunServiceFee(input.InitAmount, selected.OpenFeeRate, selected.MinimumServiceFee, selected.RoundOpenFeeUp)
 	if providerFeeUSD < 0 || math.Abs(providerFeeUSD-expectedFeeUSD) > 0.02 {
 		return OpenCardResult{}, fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard accepted purchase with an unexpected cost", false)
 	}
@@ -616,19 +688,26 @@ func (c *EfunCardClient) RechargeCard(ctx context.Context, cardID int64, amount 
 		RechargeAmountUSD *float64 `json:"rechargeAmountUsd"`
 		ServiceFeeUSD     *float64 `json:"serviceFeeUsd"`
 		TotalCostCNY      *float64 `json:"totalCostCny"`
+		TotalCostUSDT     *float64 `json:"totalCostUsdt"`
 	}
 	if err := c.request(ctx, http.MethodPost, fmt.Sprintf("/cards/%d/recharge", cardID), map[string]any{"amount": amount}, "", &receipt); err != nil {
 		return err
 	}
-	expectedFeeUSD := amount * product.RechargeFee
-	expectedCostCNY := (amount + expectedFeeUSD) * catalog.ExchangeRate
-	if strings.TrimSpace(receipt.TaskID) == "" || receipt.RechargeAmountUSD == nil || receipt.ServiceFeeUSD == nil || receipt.TotalCostCNY == nil ||
+	expectedFeeUSD := efunServiceFee(amount, product.RechargeFee, product.MinimumServiceFee, product.RoundRechargeFeeUp)
+	validTotalCost := false
+	if catalog.DebitCurrency == "CNY" && receipt.TotalCostCNY != nil {
+		validTotalCost = !math.IsNaN(*receipt.TotalCostCNY) && !math.IsInf(*receipt.TotalCostCNY, 0) &&
+			math.Abs(*receipt.TotalCostCNY-(amount+expectedFeeUSD)*catalog.ExchangeRate) <= 0.05
+	}
+	if catalog.DebitCurrency == "USDT" && receipt.TotalCostUSDT != nil {
+		validTotalCost = !math.IsNaN(*receipt.TotalCostUSDT) && !math.IsInf(*receipt.TotalCostUSDT, 0) &&
+			math.Abs(*receipt.TotalCostUSDT-(amount+expectedFeeUSD)) <= 0.005
+	}
+	if strings.TrimSpace(receipt.TaskID) == "" || receipt.RechargeAmountUSD == nil || receipt.ServiceFeeUSD == nil || !validTotalCost ||
 		math.IsNaN(*receipt.RechargeAmountUSD) || math.IsInf(*receipt.RechargeAmountUSD, 0) ||
 		math.IsNaN(*receipt.ServiceFeeUSD) || math.IsInf(*receipt.ServiceFeeUSD, 0) ||
-		math.IsNaN(*receipt.TotalCostCNY) || math.IsInf(*receipt.TotalCostCNY, 0) ||
 		math.Abs(*receipt.RechargeAmountUSD-amount) > 0.005 ||
-		math.Abs(*receipt.ServiceFeeUSD-expectedFeeUSD) > 0.02 ||
-		math.Abs(*receipt.TotalCostCNY-expectedCostCNY) > 0.05 {
+		math.Abs(*receipt.ServiceFeeUSD-expectedFeeUSD) > 0.005 {
 		return fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard accepted recharge with an invalid receipt", false)
 	}
 	deadline := time.Now().Add(5 * time.Minute)

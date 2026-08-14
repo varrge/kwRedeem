@@ -26,13 +26,17 @@ type SpaceXClient struct {
 }
 
 type Product struct {
-	ProductCode string
-	OpenEnabled bool
-	OpenFee     float64
-	OpenFeeRate float64
-	RechargeFee float64
-	MinAmount   float64
-	MaxAmount   float64
+	ProductCode            string
+	OpenEnabled            bool
+	OpenFee                float64
+	OpenFeeRate            float64
+	RechargeFee            float64
+	MinimumServiceFee      float64
+	MinimumPlatformBalance float64
+	RoundOpenFeeUp         bool
+	RoundRechargeFeeUp     bool
+	MinAmount              float64
+	MaxAmount              float64
 }
 
 type Card struct {

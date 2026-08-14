@@ -134,6 +134,10 @@ KWMEMBERSHIP_VISIBLE_BROWSER=true
 KWMEMBERSHIP_HUMAN_CHALLENGE_TIMEOUT_MS=300000
 ```
 
+远端 Chrome 代理需要认证时，使用 `KWMEMBERSHIP_CHROME_PROXY_USERNAME` 和
+`KWMEMBERSHIP_CHROME_PROXY_PASSWORD` 分开配置；真实凭据只写入服务器的
+`/etc/kwmembership.env`，不要提交到仓库或拼进代理 URL。
+
 ```bash
 ssh -L 6080:127.0.0.1:6080 root@服务器地址
 # 本机浏览器打开：

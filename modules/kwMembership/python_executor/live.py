@@ -270,6 +270,22 @@ def structural_hash(page: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 
+def _browser_proxy_from_env() -> dict[str, str] | None:
+    server = os.environ.get("KWMEMBERSHIP_CHROME_PROXY_SERVER", "").strip()
+    username = os.environ.get("KWMEMBERSHIP_CHROME_PROXY_USERNAME", "")
+    password = os.environ.get("KWMEMBERSHIP_CHROME_PROXY_PASSWORD", "")
+    if not server:
+        if username or password:
+            raise ExecutorAPIError("CHROME_PROXY_CONFIG_INVALID", 503)
+        return None
+    if bool(username) != bool(password):
+        raise ExecutorAPIError("CHROME_PROXY_CONFIG_INVALID", 503)
+    proxy = {"server": server}
+    if username:
+        proxy.update({"username": username, "password": password})
+    return proxy
+
+
 class LiveExecutor:
     def execute(self, client: ExecutorClient, lease: ExecutorLease) -> None:
         try:
@@ -304,9 +320,9 @@ class LiveExecutor:
                 executable = os.environ.get("KWMEMBERSHIP_CHROME_PATH", "").strip()
                 if executable:
                     launch_kwargs["executable_path"] = executable
-                proxy = os.environ.get("KWMEMBERSHIP_CHROME_PROXY_SERVER", "").strip()
+                proxy = _browser_proxy_from_env()
                 if proxy:
-                    launch_kwargs["proxy"] = {"server": proxy}
+                    launch_kwargs["proxy"] = proxy
                 context = playwright.chromium.launch_persistent_context(
                     user_data_dir,
                     viewport={"width": 1280, "height": 900},

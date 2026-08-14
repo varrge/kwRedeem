@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from unittest.mock import patch
 
 from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
     LiveExecutor,
+    _browser_proxy_from_env,
     _classify,
     _contract_amount,
     _fill_card_frames,
@@ -38,6 +40,32 @@ def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "p
 
 
 class LiveContractTest(unittest.TestCase):
+    def test_builds_authenticated_browser_proxy_from_separate_secrets(self) -> None:
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_CHROME_PROXY_SERVER": "http://proxy.example:3000",
+            "KWMEMBERSHIP_CHROME_PROXY_USERNAME": "proxy-user",
+            "KWMEMBERSHIP_CHROME_PROXY_PASSWORD": "proxy-password",
+        }, clear=True):
+            self.assertEqual(_browser_proxy_from_env(), {
+                "server": "http://proxy.example:3000",
+                "username": "proxy-user",
+                "password": "proxy-password",
+            })
+
+    def test_browser_proxy_credentials_must_be_complete(self) -> None:
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_CHROME_PROXY_SERVER": "http://proxy.example:3000",
+            "KWMEMBERSHIP_CHROME_PROXY_USERNAME": "proxy-user",
+        }, clear=True), self.assertRaises(ExecutorAPIError) as raised:
+            _browser_proxy_from_env()
+        self.assertEqual(raised.exception.code, "CHROME_PROXY_CONFIG_INVALID")
+
+    def test_supports_browser_proxy_without_credentials(self) -> None:
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_CHROME_PROXY_SERVER": "http://127.0.0.1:7890",
+        }, clear=True):
+            self.assertEqual(_browser_proxy_from_env(), {"server": "http://127.0.0.1:7890"})
+
     def test_reserves_time_to_close_browser_and_report_before_hard_deadline(self) -> None:
         self.assertEqual(
             _execution_deadline("2026-08-13T00:05:00Z"),

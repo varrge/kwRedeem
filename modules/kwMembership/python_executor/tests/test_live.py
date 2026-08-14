@@ -8,6 +8,7 @@ from unittest.mock import patch
 from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
     LiveExecutor,
+    PREPARE_PLUS_JS,
     _browser_proxy_from_env,
     _classify,
     _contract_amount,
@@ -40,6 +41,10 @@ def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "p
 
 
 class LiveContractTest(unittest.TestCase):
+    def test_plus_checkout_scopes_requests_to_the_chatgpt_account(self) -> None:
+        self.assertIn("headers['ChatGPT-Account-ID'] = accountID", PREPARE_PLUS_JS)
+        self.assertIn("/backend-api/payments/checkout", PREPARE_PLUS_JS)
+
     def test_builds_authenticated_browser_proxy_from_separate_secrets(self) -> None:
         with patch.dict(os.environ, {
             "KWMEMBERSHIP_CHROME_PROXY_SERVER": "http://proxy.example:3000",

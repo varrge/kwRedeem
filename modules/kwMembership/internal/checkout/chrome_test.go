@@ -81,6 +81,7 @@ func TestValidateRequestAllowsSessionDrivenPreflightAndCheckout(t *testing.T) {
 		`/api/auth/session`,
 		`/backend-api/subscriptions?`,
 		`/backend-api/payments/checkout`,
+		`headers['ChatGPT-Account-ID'] = accountID`,
 		`billing_details: {country: 'PH', currency: 'PHP'}`,
 		`checkout_ui_mode: 'hosted'`,
 		`entry_point: 'all_plans_pricing_modal'`,

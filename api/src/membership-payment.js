@@ -497,6 +497,24 @@ export function createMembershipPaymentService(options = {}) {
     return typeof adminCredentials === "function" ? adminCredentials() : (adminCredentials || {});
   }
 
+  function hasReadyCardPlatform(settings) {
+    const platforms = db.prepare(`
+      SELECT key, base_url, credential_encrypted, enabled, inventory_status
+      FROM membership_card_platforms
+      WHERE enabled = 1
+    `).all();
+    return platforms.some((platform) => {
+      if (platform.inventory_status !== "completed") return false;
+      if (platform.key === "spacexcard") {
+        return Boolean(platform.credential_encrypted || settings?.spacexcard_app_secret_encrypted);
+      }
+      if (platform.key === "efuncard") {
+        return Boolean(platform.base_url && platform.credential_encrypted);
+      }
+      return false;
+    });
+  }
+
   function assertPaymentGate(fulfillment) {
     if (fulfillment?.money_boundary_at) return;
     const gate = typeof configuredPaymentGate === "function"
@@ -883,14 +901,8 @@ export function createMembershipPaymentService(options = {}) {
       const current = db.prepare(`
         SELECT * FROM membership_fulfillment_settings WHERE id = 'default'
       `).get();
-      const extension = db.prepare(`
-		SELECT spacexcard_api_token_encrypted
-        FROM extension_delivery_settings WHERE id = 'default'
-      `).get();
       const moneyEnabled = ["canary", "automatic"].includes(parsed.data.mode);
-      if (moneyEnabled && (current.inventory_status !== "completed"
-        || !current.spacexcard_app_secret_encrypted
-        || !extension.spacexcard_api_token_encrypted)) {
+      if (moneyEnabled && !hasReadyCardPlatform(current)) {
         return sendError(reply, 409, "MEMBERSHIP_ROLLOUT_DEPENDENCIES_NOT_READY");
       }
       const at = nowIso(now);

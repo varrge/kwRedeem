@@ -315,18 +315,33 @@ test("service registers the fixed extension/admin surfaces with admin guards", (
   }
 });
 
-test("rollout gate and canary start require fresh credentials and select only one zero-exposure fulfillment", async () => {
+test("rollout gate accepts a ready EfunCard platform and selects only one zero-exposure fulfillment", async () => {
   db.prepare(`
     UPDATE membership_fulfillment_settings
-    SET inventory_status = 'completed', spacexcard_app_secret_encrypted = 'encrypted-test'
+    SET inventory_status = 'not_started', spacexcard_app_secret_encrypted = NULL
     WHERE id = 'default'
   `).run();
   db.prepare(`
     UPDATE extension_delivery_settings
 	SET extension_token_sha256 = NULL, bound_installation_id = NULL,
-		spacexcard_api_token_encrypted = 'encrypted-test'
+		spacexcard_api_token_encrypted = NULL
     WHERE id = 'default'
 	`).run();
+  db.prepare(`
+    UPDATE membership_card_platforms
+    SET enabled = 1, base_url = 'https://cards.example.test/api/open/v1',
+      credential_encrypted = 'encrypted-efuncard-test', inventory_status = 'not_started'
+    WHERE key = 'efuncard'
+  `).run();
+  const blocked = await app.injectRoute("POST", "/api/admin/membership-fulfillment/rollout-mode", {
+    ip: "127.0.0.3",
+    body: { mode: "canary", credentials: adminSecrets }
+  });
+  assert.equal(blocked.statusCode, 409);
+  assert.equal(blocked.body.code, "MEMBERSHIP_ROLLOUT_DEPENDENCIES_NOT_READY");
+  db.prepare(`
+    UPDATE membership_card_platforms SET inventory_status = 'completed' WHERE key = 'efuncard'
+  `).run();
   const enabled = await app.injectRoute("POST", "/api/admin/membership-fulfillment/rollout-mode", {
     ip: "127.0.0.2",
     body: { mode: "canary", credentials: adminSecrets }

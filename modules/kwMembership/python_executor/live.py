@@ -171,6 +171,7 @@ async () => {
     const candidates = [session?.account?.id, session?.account?.account_id, session?.accountId, session?.account_id, session?.user?.accountId, session?.user?.account_id, claims?.chatgpt_account_id, claims?.account_id, authClaims?.chatgpt_account_id, authClaims?.account_id];
     const accountID = candidates.find(value => typeof value === 'string' && value.length > 0) || '';
     const headers = {authorization:'Bearer '+accessToken};
+    if (accountID) headers['ChatGPT-Account-ID'] = accountID;
     if (accountID) {
       const subscriptionResponse = await fetch('/backend-api/subscriptions?account_id='+encodeURIComponent(accountID), {method:'GET',credentials:'include',cache:'no-store',redirect:'error',headers,signal:controller.signal});
       if (subscriptionResponse.ok) {

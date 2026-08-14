@@ -48,6 +48,7 @@ const preparePlusCheckoutJS = `(async () => {
     ];
     const accountID = accountCandidates.find(value => typeof value === 'string' && value.length > 0) || '';
     const headers = {authorization: 'Bearer ' + accessToken};
+    if (accountID) headers['ChatGPT-Account-ID'] = accountID;
     if (accountID) {
       const subscriptionResponse = await fetch(
         '/backend-api/subscriptions?account_id=' + encodeURIComponent(accountID),

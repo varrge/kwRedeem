@@ -103,6 +103,44 @@ func TestEligibilityExpiredSessionDoesNotOpenProviderCircuit(t *testing.T) {
 	}
 }
 
+func TestEligibilityExpiredProviderSessionCanEnterInteractiveBrowserPreflight(t *testing.T) {
+	processor, repository, fulfillment, now := newEligibilityDependencyProcessor(t, func(*http.Request) (*http.Response, error) {
+		return eligibilityHTTPResponse(http.StatusOK, `{"code":401,"message":"token error","data":null}`), nil
+	})
+	processor.config.VisibleBrowser = true
+	processor.config.InteractiveBootstrap = true
+	if _, err := repository.DB().Exec(`CREATE TABLE membership_fulfillment_settings (
+	  id TEXT PRIMARY KEY,inventory_status TEXT NOT NULL
+	); CREATE TABLE managed_cards (
+	  id TEXT PRIMARY KEY,product_code TEXT,lane TEXT,consumed_slots INTEGER,capacity_state TEXT,
+	  upstream_status TEXT,reconciliation_state TEXT
+	); CREATE TABLE card_price_signals (
+	  card_id TEXT,tier TEXT,found INTEGER,amount REAL,provider_time TEXT
+	); CREATE TABLE card_product_policies (product_code TEXT,enabled INTEGER);
+	CREATE TABLE checkout_price_contracts (
+	  id TEXT PRIMARY KEY,tier TEXT,currency TEXT,status TEXT
+	);
+	INSERT INTO membership_fulfillment_settings VALUES ('default','completed');
+	INSERT INTO managed_cards VALUES ('card-1','p1',NULL,0,'AVAILABLE','ACTIVE','READY');
+	INSERT INTO card_price_signals VALUES ('card-1','plus',1,16.2,'2026-07-20T00:00:00Z');
+	INSERT INTO checkout_price_contracts VALUES ('contract-1','plus','PHP','active')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := processor.processEligibility(context.Background(), fulfillment, now); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var moneyBoundary, reservation sql.NullString
+	if err := repository.DB().QueryRow(`SELECT state,money_boundary_at,card_reservation_id
+	  FROM membership_fulfillments WHERE id='mf-1'`).Scan(&state, &moneyBoundary, &reservation); err != nil {
+		t.Fatal(err)
+	}
+	if state != "CHECKOUT_PREFLIGHT_READY" || moneyBoundary.Valid || reservation.Valid {
+		t.Fatalf("browser recovery state=%s money=%v reservation=%v", state, moneyBoundary, reservation)
+	}
+}
+
 func TestEligibilityExpiredSessionReleasesHalfOpenProviderProbe(t *testing.T) {
 	processor, repository, fulfillment, now := newEligibilityDependencyProcessor(t, func(*http.Request) (*http.Response, error) {
 		return eligibilityHTTPResponse(http.StatusOK, `{"code":401,"message":"token error","data":null}`), nil

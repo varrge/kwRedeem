@@ -347,8 +347,13 @@ func (p *Processor) processEligibility(ctx context.Context, fulfillment Fulfillm
 
 func (p *Processor) eligibilityDependencyFailure(ctx context.Context, fulfillment Fulfillment, cause error, state string, now time.Time) error {
 	code := errorCode(cause)
+	browserRecovery := code == "SESSION_INVALID" && p.config.VisibleBrowser && p.config.InteractiveBootstrap
 	var persistErr error
-	if isSessionFailureCode(code) {
+	if browserRecovery {
+		// A provider 401 can be recovered only by the explicitly enabled,
+		// same-profile browser preflight. No card or money boundary exists here.
+		persistErr = p.preflightReadiness(ctx, fulfillment, now)
+	} else if isSessionFailureCode(code) {
 		persistErr = p.handleSessionFailure(ctx, fulfillment.ID, code, "eligibility", now)
 	} else {
 		persistErr = p.eligibilityFailure(ctx, fulfillment, code, state, now, sharedRetry)
@@ -363,6 +368,9 @@ func (p *Processor) eligibilityDependencyFailure(ctx context.Context, fulfillmen
 	}
 	if persistErr != nil {
 		return withCircuitAccounting(persistErr, circuitErr)
+	}
+	if browserRecovery {
+		return circuitErr
 	}
 	return withCircuitAccounting(cause, circuitErr)
 }

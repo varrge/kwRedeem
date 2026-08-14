@@ -34,6 +34,7 @@ type Config struct {
 	ChromeProxyServer     string
 	EfunCardProxyURL      string
 	VisibleBrowser        bool
+	InteractiveBootstrap  bool
 	BrowserTimeout        time.Duration
 	HumanChallengeTimeout time.Duration
 	ExecutorListenAddress string
@@ -116,6 +117,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	interactiveSessionBootstrap, err := boolean("KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP", false)
+	if err != nil {
+		return Config{}, err
+	}
 	browserTimeout, err := milliseconds("KWMEMBERSHIP_BROWSER_TIMEOUT_MS", 90*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -149,6 +154,7 @@ func Load() (Config, error) {
 		ChromeProxyServer:     chromeProxyServer,
 		EfunCardProxyURL:      efunCardProxyURL,
 		VisibleBrowser:        visibleBrowser,
+		InteractiveBootstrap:  interactiveSessionBootstrap,
 		BrowserTimeout:        browserTimeout,
 		HumanChallengeTimeout: humanChallengeTimeout,
 		ExecutorListenAddress: executorListenAddress,

@@ -158,7 +158,8 @@ Python 会把该单切换为 `CHECKOUT_SESSION_LOGIN_WAIT`，管理员通过同�
 不会接收或记录密码、MFA、Passkey、Cookie 或 checkout URL。成功的预检 Profile 仅保留在
 systemd 管理的 `/run/kwmembership-browser-profiles` 运行目录中，用履约 ID 和代理配置摘要绑定；
 代理变化、身份不匹配、失败、最终付款完成或两小时过期都会清理。该能力默认关闭，且
-`preflight` 模式仍拒绝所有 payment 命令。
+`preflight` 模式仍拒绝所有 payment 命令。启用后，若前置会员状态服务返回订单级 `401`，
+系统只会转入这个浏览器预检，不会在登录前创建卡片、预留卡片或建立资金边界。
 
 ## 自动流程
 

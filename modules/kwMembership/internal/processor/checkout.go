@@ -114,9 +114,10 @@ func (p *Processor) checkoutPreflight(ctx context.Context, fulfillment Fulfillme
 		request.ExpectedEmail = browserSession.Email
 		request.Cookies = browserSession.Cookies
 		request.Session = session
+		bindingRevision := checkoutPreflightBindingRevision(fulfillment)
 		request.Binding = checkout.ExecutionBinding{
-			FulfillmentID: fulfillment.ID, FulfillmentRevision: fulfillment.StateRevision,
-			AttemptNo: fulfillment.StateRevision, PriorityClass: "normal", AdapterVersion: paymentAdapterVersion,
+			FulfillmentID: fulfillment.ID, FulfillmentRevision: bindingRevision,
+			AttemptNo: bindingRevision, PriorityClass: "normal", AdapterVersion: paymentAdapterVersion,
 		}
 	}
 	if p.config.VisibleBrowser && !interactive {
@@ -168,6 +169,13 @@ func (p *Processor) checkoutPreflight(ctx context.Context, fulfillment Fulfillme
 		CurrentStage: pointer("plus"), ExpectedRevision: &current.StateRevision,
 	})
 	return err
+}
+
+func checkoutPreflightBindingRevision(fulfillment Fulfillment) int64 {
+	if (fulfillment.State == "CHECKOUT_CHALLENGE_WAIT" || fulfillment.State == "CHECKOUT_LOGIN_WAIT") && fulfillment.StateRevision > 0 {
+		return fulfillment.StateRevision - 1
+	}
+	return fulfillment.StateRevision
 }
 
 func (p *Processor) checkoutPersistPreflight(ctx context.Context, fulfillment Fulfillment, contract checkout.PriceContract, page checkout.PageFacts, adapterVersion string, now time.Time) error {

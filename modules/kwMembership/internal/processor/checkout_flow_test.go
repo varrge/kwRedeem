@@ -20,6 +20,28 @@ func (fn checkoutExecutorFunc) Execute(ctx context.Context, request checkout.Req
 	return fn(ctx, request)
 }
 
+func TestChallengeWaitKeepsOriginalPreflightBinding(t *testing.T) {
+	for _, test := range []struct {
+		state string
+		want  int64
+	}{
+		{state: "CHECKOUT_PREFLIGHT_READY", want: 4},
+		{state: "CHECKOUT_CHALLENGE_WAIT", want: 3},
+		{state: "CHECKOUT_LOGIN_READY", want: 4},
+		{state: "CHECKOUT_LOGIN_WAIT", want: 3},
+	} {
+		t.Run(test.state, func(t *testing.T) {
+			got := checkoutPreflightBindingRevision(Fulfillment{State: test.state, StateRevision: 4})
+			if got != test.want {
+				t.Fatalf("binding revision = %d, want %d", got, test.want)
+			}
+		})
+	}
+	if got := checkoutPreflightBindingRevision(Fulfillment{State: "CHECKOUT_CHALLENGE_WAIT", StateRevision: 0}); got != 0 {
+		t.Fatalf("zero binding revision = %d, want 0", got)
+	}
+}
+
 func TestGoSessionPreflightNeedsNoBrokerOrExtensionDelivery(t *testing.T) {
 	ctx := context.Background()
 	repository, err := store.Open(filepath.Join(t.TempDir(), "checkout-flow.db"))

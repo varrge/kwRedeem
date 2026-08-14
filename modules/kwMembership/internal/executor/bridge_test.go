@@ -66,7 +66,8 @@ func TestBridgeLeasesPreflightAndClaimsMaterialOnce(t *testing.T) {
 	if err := json.Unmarshal(leased.Body.Bytes(), &command); err != nil {
 		t.Fatal(err)
 	}
-	if command["commandKind"] != "preflight" || command["adapterVersion"] != AdapterVersion {
+	if command["commandKind"] != "preflight" || command["adapterVersion"] != AdapterVersion ||
+		command["fulfillmentId"] != "mf-bridge" {
 		t.Fatalf("unexpected command: %#v", command)
 	}
 	headers := map[string]string{
@@ -237,31 +238,47 @@ func TestValidateHandoffFactsRejectsUntrustedChallengePage(t *testing.T) {
 		RouteTemplate: "/checkout/{id}", Controls: map[string]string{"challenge": "challenge-cloudflare"},
 		Fields: map[string]bool{},
 	}
-	validated, err := validateHandoffFacts(trusted, request)
+	validated, err := validateHandoffFacts("captcha", trusted, request)
 	if err != nil || validated.StructuralHash == "" {
 		t.Fatalf("trusted challenge = %+v err=%v", validated, err)
 	}
 
 	foreign := trusted
 	foreign.Origin = "https://evil.example"
-	if _, err := validateHandoffFacts(foreign, request); errorCode(err) != "CHECKOUT_CONTEXT_INVALID" {
+	if _, err := validateHandoffFacts("captcha", foreign, request); errorCode(err) != "CHECKOUT_CONTEXT_INVALID" {
 		t.Fatalf("foreign challenge error = %v", err)
 	}
 	unknown := trusted
 	unknown.Controls = map[string]string{"challenge": "challenge-unknown"}
-	if _, err := validateHandoffFacts(unknown, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
+	if _, err := validateHandoffFacts("captcha", unknown, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
 		t.Fatalf("unknown challenge error = %v", err)
 	}
 
 	unstableRoute := trusted
 	unstableRoute.RouteTemplate = ""
-	if _, err := validateHandoffFacts(unstableRoute, request); err != nil {
+	if _, err := validateHandoffFacts("cloudflare", unstableRoute, request); err != nil {
 		t.Fatalf("Cloudflare challenge before route stabilization rejected: %v", err)
 	}
 	unstableRoute.Origin = "https://pay.openai.com"
 	unstableRoute.Controls = map[string]string{"challenge": "challenge-3ds"}
-	if _, err := validateHandoffFacts(unstableRoute, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
+	if _, err := validateHandoffFacts("cloudflare", unstableRoute, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
 		t.Fatalf("non-Cloudflare empty route error = %v", err)
+	}
+}
+
+func TestValidateHandoffFactsAcceptsOnlyBoundSessionPreflightLogin(t *testing.T) {
+	request := checkout.Request{Mode: checkout.ModeSessionPreflight}
+	page := checkout.PageFacts{
+		StateID: "INTERACTIVE_LOGIN_REQUIRED", Origin: "https://chatgpt.com", RouteTemplate: "/",
+		Fields: map[string]bool{}, Controls: map[string]string{},
+	}
+	validated, err := validateHandoffFacts("interactive-login", page, request)
+	if err != nil || validated.StructuralHash == "" {
+		t.Fatalf("interactive login handoff = %+v err=%v", validated, err)
+	}
+	request.Mode = checkout.ModeSessionCheckout
+	if _, err := validateHandoffFacts("interactive-login", page, request); errorCode(err) != "CHECKOUT_CONTEXT_INVALID" {
+		t.Fatalf("payment login handoff error = %v", err)
 	}
 }
 

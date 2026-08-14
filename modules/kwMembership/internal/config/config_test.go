@@ -209,6 +209,24 @@ func TestProductionSessionCookieDropInUsesPrivateVirtualDisplay(t *testing.T) {
 	}
 }
 
+func TestPythonExecutorServiceOwnsPrivateOrderProfiles(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "systemd", "kwmembership-python-executor.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(raw)
+	for _, required := range []string{
+		"Environment=KWMEMBERSHIP_BROWSER_PROFILE_ROOT=/run/kwmembership-browser-profiles",
+		"RuntimeDirectory=kwmembership-browser-profiles",
+		"RuntimeDirectoryMode=0700",
+		"RuntimeDirectoryPreserve=restart",
+	} {
+		if !strings.Contains(config, required) {
+			t.Fatalf("Python executor service is missing %q", required)
+		}
+	}
+}
+
 func TestLoadRejectsDefaultKawangSecret(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\n"), 0o600); err != nil {

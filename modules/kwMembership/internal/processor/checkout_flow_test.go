@@ -27,6 +27,7 @@ func TestChallengeWaitKeepsOriginalPreflightBinding(t *testing.T) {
 	}{
 		{state: "CHECKOUT_PREFLIGHT_READY", want: 4},
 		{state: "CHECKOUT_CHALLENGE_WAIT", want: 3},
+		{state: "CHECKOUT_SESSION_LOGIN_WAIT", want: 3},
 		{state: "CHECKOUT_LOGIN_READY", want: 4},
 		{state: "CHECKOUT_LOGIN_WAIT", want: 3},
 	} {
@@ -122,6 +123,18 @@ func TestGoSessionPreflightNeedsNoBrokerOrExtensionDelivery(t *testing.T) {
 			if state != "CHECKOUT_CHALLENGE_WAIT" || moneyBoundary != nil || reservation != nil {
 				t.Fatalf("unsafe handoff state=%s money=%v reservation=%v", state, moneyBoundary, reservation)
 			}
+			if err := request.OnHandoff(ctx, checkout.Handoff{Type: "interactive-login", Page: checkout.PageFacts{
+				StateID: "INTERACTIVE_LOGIN_REQUIRED", Origin: "https://chatgpt.com", RouteTemplate: "/",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repository.DB().QueryRow(`SELECT state,money_boundary_at,card_reservation_id
+			  FROM membership_fulfillments WHERE id='mf-flow'`).Scan(&state, &moneyBoundary, &reservation); err != nil {
+				t.Fatal(err)
+			}
+			if state != "CHECKOUT_SESSION_LOGIN_WAIT" || moneyBoundary != nil || reservation != nil {
+				t.Fatalf("unsafe login handoff state=%s money=%v reservation=%v", state, moneyBoundary, reservation)
+			}
 			return checkout.Result{Page: checkout.PageFacts{StateID: "PAYMENT_FINAL_READY"}}, nil
 		}),
 		now: func() time.Time { return now }, requireLeaseFence: true,
@@ -145,6 +158,11 @@ func TestGoSessionPreflightNeedsNoBrokerOrExtensionDelivery(t *testing.T) {
 	  WHERE fulfillment_id='mf-flow' AND state='CHECKOUT_CHALLENGE_WAIT'
 	    AND reason_code='CLOUDFLARE_CHALLENGE_REQUIRED'`).Scan(&interventions); err != nil || interventions != 1 {
 		t.Fatalf("challenge interventions=%d err=%v", interventions, err)
+	}
+	if err := repository.DB().QueryRow(`SELECT COUNT(*) FROM fulfillment_interventions
+	  WHERE fulfillment_id='mf-flow' AND state='CHECKOUT_SESSION_LOGIN_WAIT'
+	    AND reason_code='INTERACTIVE_LOGIN_REQUIRED'`).Scan(&interventions); err != nil || interventions != 1 {
+		t.Fatalf("login interventions=%d err=%v", interventions, err)
 	}
 	var validations int
 	if err := repository.DB().QueryRow(`SELECT COUNT(*) FROM checkout_validation_runs

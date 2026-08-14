@@ -11,6 +11,10 @@ WorkingDirectory=@@INSTALL_DIR@@
 EnvironmentFile=@@ENV_FILE@@
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PLAYWRIGHT_BROWSERS_PATH=@@INSTALL_DIR@@/.playwright-browsers
+Environment=KWMEMBERSHIP_BROWSER_PROFILE_ROOT=/run/kwmembership-browser-profiles
+RuntimeDirectory=kwmembership-browser-profiles
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
 ExecStart=@@PYTHON_BIN@@ -m python_executor
 Restart=on-failure
 RestartSec=3

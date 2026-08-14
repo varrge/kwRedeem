@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -29,6 +30,9 @@ POLL_SECONDS = 0.25
 HEARTBEAT_SECONDS = 5.0
 REPORT_MARGIN_SECONDS = 15.0
 AUTH_REDIRECT_GRACE_SECONDS = 5.0
+PROFILE_MAX_AGE_SECONDS = 2 * 60 * 60
+PROFILE_BINDING_FILE = ".kwmembership-profile.json"
+SAFE_FULFILLMENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 LOGGER = logging.getLogger("kwmembership.python_executor.live")
 FACT_FIELD_KEYS = (
     "cardNumber", "expiry", "expiryMonth", "expiryYear", "cvc",
@@ -188,6 +192,21 @@ async () => {
 }
 """
 
+SESSION_IDENTITY_JS = r"""
+async () => {
+  try {
+    const response = await fetch('/api/auth/session', {
+      credentials:'include', cache:'no-store', redirect:'error', signal:AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return {email:'',errorKind:'present'};
+    const session = await response.json();
+    return {email: session?.user?.email || session?.email || '', errorKind: session?.error || ''};
+  } catch {
+    return {email:'',errorKind:'present'};
+  }
+}
+"""
+
 
 def normalize_email(value: Any) -> str:
     value = str(value or "").strip().lower()
@@ -287,6 +306,97 @@ def _browser_proxy_from_env() -> dict[str, str] | None:
     return proxy
 
 
+def _interactive_session_bootstrap_enabled() -> bool:
+    return os.environ.get("KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP", "false") == "true"
+
+
+def _proxy_fingerprint(proxy: dict[str, str] | None) -> str:
+    raw = json.dumps(proxy or {}, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _write_profile_binding(path: str, fulfillment_id: str, proxy_fingerprint: str, authenticated: bool) -> None:
+    payload = json.dumps({
+        "version": 1,
+        "fulfillmentId": fulfillment_id,
+        "proxyFingerprint": proxy_fingerprint,
+        "authenticated": authenticated,
+        "updatedAt": datetime.now().astimezone().isoformat(),
+    }, sort_keys=True, separators=(",", ":")).encode()
+    target = os.path.join(path, PROFILE_BINDING_FILE)
+    temporary = target + ".tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _read_profile_binding(path: str) -> dict[str, Any] | None:
+    try:
+        with open(os.path.join(path, PROFILE_BINDING_FILE), "rb") as source:
+            value = json.load(source)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _cleanup_stale_profiles(root: str, now: float | None = None) -> None:
+    cutoff = (time.time() if now is None else now) - PROFILE_MAX_AGE_SECONDS
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for entry in entries:
+        if not SAFE_FULFILLMENT_ID.fullmatch(entry.name) or entry.is_symlink():
+            continue
+        try:
+            if entry.is_dir(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                shutil.rmtree(entry.path, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _prepare_browser_profile(lease: ExecutorLease, proxy: dict[str, str] | None) -> tuple[str, bool, bool, str]:
+    root = os.environ.get("KWMEMBERSHIP_BROWSER_PROFILE_ROOT", "").strip()
+    if not root:
+        return tempfile.mkdtemp(prefix="kwmembership-python-"), False, False, ""
+    if not os.path.isabs(root) or not SAFE_FULFILLMENT_ID.fullmatch(lease.fulfillment_id):
+        raise ExecutorAPIError("BROWSER_PROFILE_CONFIG_INVALID", 503)
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    os.chmod(root, 0o700)
+    root = os.path.realpath(root)
+    _cleanup_stale_profiles(root)
+    path = os.path.join(root, lease.fulfillment_id)
+    fingerprint = _proxy_fingerprint(proxy)
+    binding = _read_profile_binding(path)
+    compatible = bool(binding
+        and binding.get("version") == 1
+        and binding.get("fulfillmentId") == lease.fulfillment_id
+        and binding.get("proxyFingerprint") == fingerprint)
+    if os.path.lexists(path) and (os.path.islink(path) or not compatible):
+        if os.path.islink(path):
+            os.unlink(path)
+        elif not os.path.isdir(path):
+            os.unlink(path)
+        else:
+            shutil.rmtree(path)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    authenticated = compatible and binding.get("authenticated") is True
+    _write_profile_binding(path, lease.fulfillment_id, fingerprint, authenticated)
+    return path, True, authenticated, fingerprint
+
+
+def _retain_profile_after_success(lease: ExecutorLease) -> bool:
+    return lease.command_kind == "preflight" or (
+        lease.stage == "plus" and lease.target_tier in {"x5", "x20"}
+    )
+
+
 class LiveExecutor:
     def execute(self, client: ExecutorClient, lease: ExecutorLease) -> None:
         try:
@@ -314,14 +424,15 @@ class LiveExecutor:
 
         deadline = _execution_deadline(lease.hard_deadline_at)
         client.heartbeat(lease)
-        user_data_dir = tempfile.mkdtemp(prefix="kwmembership-python-")
+        proxy = _browser_proxy_from_env()
+        user_data_dir, persistent, profile_authenticated, proxy_fingerprint = _prepare_browser_profile(lease, proxy)
+        succeeded = False
         try:
             with sync_playwright() as playwright:
                 launch_kwargs: dict[str, Any] = {"headless": os.environ.get("KWMEMBERSHIP_VISIBLE_BROWSER", "false") != "true"}
                 executable = os.environ.get("KWMEMBERSHIP_CHROME_PATH", "").strip()
                 if executable:
                     launch_kwargs["executable_path"] = executable
-                proxy = _browser_proxy_from_env()
                 if proxy:
                     launch_kwargs["proxy"] = proxy
                 context = playwright.chromium.launch_persistent_context(
@@ -331,12 +442,16 @@ class LiveExecutor:
                     **launch_kwargs,
                 )
                 try:
-                    context.add_cookies(session_cookies(session, time.time()))
+                    if not profile_authenticated:
+                        context.add_cookies(session_cookies(session, time.time()))
                     page = context.pages[0] if context.pages else context.new_page()
                     client.heartbeat(lease)
                     self._run(client, lease, material, page, deadline)
                 finally:
                     context.close()
+                succeeded = True
+                if persistent:
+                    _write_profile_binding(user_data_dir, lease.fulfillment_id, proxy_fingerprint, True)
         except ExecutorAPIError:
             raise
         except PlaywrightTimeoutError as error:
@@ -344,14 +459,21 @@ class LiveExecutor:
         except Exception as error:
             raise ExecutorAPIError("HEADLESS_BROWSER_UNAVAILABLE", 503) from error
         finally:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
+            if not persistent or not (succeeded and _retain_profile_after_success(lease)):
+                shutil.rmtree(user_data_dir, ignore_errors=True)
 
     def _run(self, client: ExecutorClient, lease: ExecutorLease, material: dict[str, Any], page: Any, deadline: float) -> None:
         _navigate(client, lease, page, CHATGPT_ORIGIN + "/", deadline)
-        identity = page.evaluate("""async () => { try { const response = await fetch('/api/auth/session', {credentials:'include',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(10000)}); if (!response.ok) return {email:'',errorKind:'present'}; const session = await response.json(); return {email: session?.user?.email || session?.email || '', errorKind: session?.error || ''}; } catch { return {email:'',errorKind:'present'}; } }""")
+        identity = page.evaluate(SESSION_IDENTITY_JS)
         expected = normalize_email(material.get("expectedEmail")); actual = normalize_email(identity.get("email"))
-        if identity.get("errorKind"): raise ExecutorAPIError("CHATGPT_SESSION_REFRESH_FAILED", 409)
-        if not actual: raise ExecutorAPIError("CHATGPT_SESSION_UNAUTHORIZED", 409)
+        if identity.get("errorKind") or not actual:
+            if lease.command_kind == "preflight" and _interactive_session_bootstrap_enabled():
+                self._interactive_login(client, lease, page, deadline, expected)
+                actual = expected
+            elif identity.get("errorKind"):
+                raise ExecutorAPIError("CHATGPT_SESSION_REFRESH_FAILED", 409)
+            else:
+                raise ExecutorAPIError("CHATGPT_SESSION_UNAUTHORIZED", 409)
         if actual != expected: raise ExecutorAPIError("CHATGPT_SESSION_IDENTITY_MISMATCH", 409)
         client.heartbeat(lease)
 
@@ -360,7 +482,17 @@ class LiveExecutor:
             checkout_url = _resolve_checkout_entry(entry)
             _log_checkout_entry(lease, entry, checkout_url)
             _navigate(client, lease, page, checkout_url, deadline)
-            page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
+            try:
+                page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
+            except ExecutorAPIError as error:
+                if error.code != "CHATGPT_SESSION_UNAUTHORIZED" or not _interactive_session_bootstrap_enabled():
+                    raise
+                self._interactive_login(client, lease, page, deadline, expected)
+                entry = page.evaluate(PREPARE_PLUS_JS)
+                checkout_url = _resolve_checkout_entry(entry)
+                _log_checkout_entry(lease, entry, checkout_url)
+                _navigate(client, lease, page, checkout_url, deadline)
+                page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
             if page_facts["stateId"] == "PAYMENT_ACTION_REQUIRED":
                 self._handoff(client, lease, page_facts)
                 page_facts = self._wait_challenge_clear(client, lease, page, deadline, "checkout")
@@ -388,6 +520,38 @@ class LiveExecutor:
             return
 
         self._checkout(client, lease, material, page, deadline)
+
+    def _interactive_login(self, client: ExecutorClient, lease: ExecutorLease, page: Any, deadline: float, expected: str) -> None:
+        if lease.command_kind != "preflight" or not _interactive_session_bootstrap_enabled():
+            raise ExecutorAPIError("INTERACTIVE_LOGIN_DISABLED", 409)
+        if os.environ.get("KWMEMBERSHIP_VISIBLE_BROWSER", "false") != "true":
+            raise ExecutorAPIError("INTERACTIVE_LOGIN_DISABLED", 409)
+        context = page.context
+        context.clear_cookies(name=re.compile(r"^__Secure-next-auth\.session-token(?:\.\d+)?$"))
+        if _path_class(page.url) != "auth":
+            _navigate(client, lease, page, CHATGPT_ORIGIN + "/auth/login", deadline)
+        client.handoff(lease, "interactive-login", {
+            "stateId": "INTERACTIVE_LOGIN_REQUIRED",
+            "origin": CHATGPT_ORIGIN,
+            "routeTemplate": "/",
+            "plan": "", "country": "", "currency": "", "displayedAmount": None,
+            "stateMarker": "", "fields": {}, "controls": {}, "structuralHash": "",
+        }, {"phase": "interactive-login", "stateId": "INTERACTIVE_LOGIN_REQUIRED", "status": "action_required"})
+        last_heartbeat = 0.0
+        while time.time() < deadline:
+            if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
+                client.heartbeat(lease)
+                last_heartbeat = time.monotonic()
+            if urlsplit(page.url).scheme + "://" + urlsplit(page.url).netloc == CHATGPT_ORIGIN:
+                identity = page.evaluate(SESSION_IDENTITY_JS)
+                actual = normalize_email(identity.get("email")) if not identity.get("errorKind") else ""
+                if actual:
+                    if actual != expected:
+                        raise ExecutorAPIError("INTERACTIVE_LOGIN_IDENTITY_MISMATCH", 409)
+                    _navigate(client, lease, page, CHATGPT_ORIGIN + "/", deadline)
+                    return
+            time.sleep(POLL_SECONDS)
+        raise ExecutorAPIError("INTERACTIVE_LOGIN_TIMEOUT", 409)
 
     def _checkout(self, client: ExecutorClient, lease: ExecutorLease, material: dict[str, Any], page: Any, deadline: float, initial: dict[str, Any] | None = None) -> None:
         seen: set[str] = set()

@@ -10,6 +10,7 @@ from python_executor.runner import PreflightExecutor, executor_for_mode
 def lease(command_kind: str) -> ExecutorLease:
     return ExecutorLease(
         execution_id="exec-preflight",
+        fulfillment_id="mf-test-1",
         executor_id="python-test",
         lease_epoch=1,
         lease_token="opaque",

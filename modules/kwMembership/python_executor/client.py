@@ -17,6 +17,7 @@ class ExecutorAPIError(RuntimeError):
 @dataclass(frozen=True)
 class ExecutorLease:
     execution_id: str
+    fulfillment_id: str
     executor_id: str
     lease_epoch: int
     lease_token: str
@@ -48,6 +49,7 @@ class ExecutorClient:
             return None
         return ExecutorLease(
             execution_id=str(payload["executionId"]),
+            fulfillment_id=str(payload["fulfillmentId"]),
             executor_id=str(payload["executorId"]),
             lease_epoch=int(payload["leaseEpoch"]),
             lease_token=str(payload["leaseToken"]),

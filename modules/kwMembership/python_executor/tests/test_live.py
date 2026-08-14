@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +12,10 @@ from python_executor.live import (
     INSPECT_FRAME_JS,
     LiveExecutor,
     PREPARE_PLUS_JS,
+    _interactive_session_bootstrap_enabled,
+    _prepare_browser_profile,
+    _read_profile_binding,
+    _retain_profile_after_success,
     _browser_proxy_from_env,
     _classify,
     _contract_amount,
@@ -28,6 +34,7 @@ from python_executor.live import (
 def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "payment") -> ExecutorLease:
     return ExecutorLease(
         execution_id="exec-1",
+        fulfillment_id="mf-test-1",
         executor_id="python-test",
         lease_epoch=1,
         lease_token="opaque",
@@ -42,6 +49,126 @@ def lease(stage: str = "plus", target_tier: str = "plus", command_kind: str = "p
 
 
 class LiveContractTest(unittest.TestCase):
+    def test_interactive_login_reuses_page_and_requires_expected_identity(self) -> None:
+        calls: list[object] = []
+
+        class Context:
+            def clear_cookies(self, **filters: object) -> None:
+                calls.append(("clear", filters))
+
+        class Page:
+            url = "https://chatgpt.com/auth/login"
+            context = Context()
+
+            def evaluate(self, _script: str) -> dict[str, str]:
+                calls.append("identity")
+                return {"email": "buyer@example.com", "errorKind": ""}
+
+            def goto(self, value: str, **_options: object) -> None:
+                calls.append(("goto", value))
+                self.url = value
+
+        class Client:
+            def handoff(self, _lease: ExecutorLease, kind: str, facts: dict[str, object], _diagnostic: dict[str, str]) -> None:
+                calls.append(("handoff", kind, facts["stateId"]))
+
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                calls.append("heartbeat")
+
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_VISIBLE_BROWSER": "true",
+            "KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP": "true",
+        }, clear=True), patch(
+            "python_executor.live.time.sleep"
+        ):
+            LiveExecutor()._interactive_login(
+                Client(), lease(command_kind="preflight"), Page(), time.time() + 60, "buyer@example.com"
+            )
+
+        self.assertIn(("handoff", "interactive-login", "INTERACTIVE_LOGIN_REQUIRED"), calls)
+        self.assertIn(("goto", "https://chatgpt.com/"), calls)
+        self.assertEqual(calls.count("identity"), 1)
+
+    def test_interactive_login_rejects_a_different_account(self) -> None:
+        class Context:
+            def clear_cookies(self, **_filters: object) -> None:
+                pass
+
+        class Page:
+            url = "https://chatgpt.com/auth/login"
+            context = Context()
+
+            def evaluate(self, _script: str) -> dict[str, str]:
+                return {"email": "other@example.com", "errorKind": ""}
+
+        class Client:
+            def handoff(self, *_args: object) -> None:
+                pass
+
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                pass
+
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_VISIBLE_BROWSER": "true",
+            "KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP": "true",
+        }, clear=True), self.assertRaises(
+            ExecutorAPIError
+        ) as raised:
+            LiveExecutor()._interactive_login(
+                Client(), lease(command_kind="preflight"), Page(), time.time() + 60, "buyer@example.com"
+            )
+        self.assertEqual(raised.exception.code, "INTERACTIVE_LOGIN_IDENTITY_MISMATCH")
+
+    def test_interactive_login_is_never_allowed_for_payment_commands(self) -> None:
+        with patch.dict(os.environ, {
+            "KWMEMBERSHIP_VISIBLE_BROWSER": "true",
+            "KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP": "true",
+        }, clear=True), self.assertRaises(ExecutorAPIError) as raised:
+            LiveExecutor()._interactive_login(
+                object(), lease(command_kind="payment"), object(), time.time() + 60, "buyer@example.com"
+            )
+        self.assertEqual(raised.exception.code, "INTERACTIVE_LOGIN_DISABLED")
+
+    def test_interactive_session_bootstrap_is_explicitly_enabled(self) -> None:
+        with patch.dict(os.environ, {"KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP": "true"}, clear=True):
+            self.assertTrue(_interactive_session_bootstrap_enabled())
+        for value in ("", "false", "TRUE", "1"):
+            with self.subTest(value=value), patch.dict(os.environ, {
+                "KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP": value
+            }, clear=True):
+                self.assertFalse(_interactive_session_bootstrap_enabled())
+
+    def test_order_profile_reuses_only_the_same_proxy_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {
+            "KWMEMBERSHIP_BROWSER_PROFILE_ROOT": root
+        }, clear=True):
+            item = lease(command_kind="preflight")
+            path, persistent, authenticated, fingerprint = _prepare_browser_profile(
+                item, {"server": "http://proxy.example:3000", "username": "user", "password": "secret"}
+            )
+            self.assertTrue(persistent)
+            self.assertFalse(authenticated)
+            self.assertNotIn("secret", json.dumps(_read_profile_binding(path)))
+            from python_executor.live import _write_profile_binding
+            _write_profile_binding(path, item.fulfillment_id, fingerprint, True)
+            same_path, _, authenticated, _ = _prepare_browser_profile(
+                item, {"server": "http://proxy.example:3000", "username": "user", "password": "secret"}
+            )
+            self.assertEqual(same_path, path)
+            self.assertTrue(authenticated)
+            _, _, authenticated, _ = _prepare_browser_profile(
+                item, {"server": "http://other-proxy.example:3000", "username": "user", "password": "secret"}
+            )
+            self.assertFalse(authenticated)
+
+    def test_profile_is_retained_only_until_the_final_stage(self) -> None:
+        self.assertTrue(_retain_profile_after_success(lease(command_kind="preflight")))
+        self.assertFalse(_retain_profile_after_success(lease(command_kind="payment")))
+        self.assertTrue(_retain_profile_after_success(lease(target_tier="x20", command_kind="payment")))
+        self.assertFalse(_retain_profile_after_success(lease(
+            stage="upgrade", target_tier="x20", command_kind="payment"
+        )))
+
     def test_cloudflare_detection_requires_an_active_challenge_surface(self) -> None:
         for marker in (
             "#challenge-form",

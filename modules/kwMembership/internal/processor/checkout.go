@@ -49,6 +49,7 @@ func (p *Processor) tickCheckout(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if fulfillment.State == "CHECKOUT_PREFLIGHT_READY" || fulfillment.State == "CHECKOUT_CHALLENGE_WAIT" ||
+		fulfillment.State == "CHECKOUT_SESSION_LOGIN_WAIT" ||
 		fulfillment.State == "CHECKOUT_LOGIN_READY" || fulfillment.State == "CHECKOUT_LOGIN_WAIT" {
 		return true, p.checkoutPreflight(ctx, fulfillment, now)
 	}
@@ -64,7 +65,8 @@ func (p *Processor) checkoutDue(ctx context.Context, now time.Time) (Fulfillment
     FROM membership_fulfillments
     WHERE automation_enrolled_at IS NOT NULL
       AND state IN (
-      'CHECKOUT_PREFLIGHT_READY','CHECKOUT_CHALLENGE_WAIT','CHECKOUT_LOGIN_READY','CHECKOUT_LOGIN_WAIT',
+      'CHECKOUT_PREFLIGHT_READY','CHECKOUT_CHALLENGE_WAIT','CHECKOUT_SESSION_LOGIN_WAIT',
+	  'CHECKOUT_LOGIN_READY','CHECKOUT_LOGIN_WAIT',
 	  'CHECKOUT_EXECUTION_WAIT','CHECKOUT_PRE_SUBMIT_FAILED',
       'PLUS_CONFIRMED','PLUS_APPROVAL_WAIT','UPGRADE_APPROVAL_WAIT'
     )
@@ -123,10 +125,15 @@ func (p *Processor) checkoutPreflight(ctx context.Context, fulfillment Fulfillme
 	if p.config.VisibleBrowser && !interactive {
 		request.OnHandoff = func(ctx context.Context, challenge checkout.Handoff) error {
 			reason := "SECURITY_CHALLENGE_REQUIRED"
+			state := "CHECKOUT_CHALLENGE_WAIT"
+			if challenge.Type == "interactive-login" {
+				reason = "INTERACTIVE_LOGIN_REQUIRED"
+				state = "CHECKOUT_SESSION_LOGIN_WAIT"
+			}
 			if challenge.Type == "cloudflare" || challenge.Type == "challenge-cloudflare" {
 				reason = "CLOUDFLARE_CHALLENGE_REQUIRED"
 			}
-			return p.checkoutInterventionTransition(ctx, fulfillment.ID, "CHECKOUT_CHALLENGE_WAIT", reason, "plus", p.now().UTC())
+			return p.checkoutInterventionTransition(ctx, fulfillment.ID, state, reason, "plus", p.now().UTC())
 		}
 	}
 	result, err := p.executor.Execute(ctx, request)
@@ -148,7 +155,8 @@ func (p *Processor) checkoutPreflight(ctx context.Context, fulfillment Fulfillme
 	if err != nil {
 		return err
 	}
-	validCurrent := current.State == "CHECKOUT_PREFLIGHT_READY" || current.State == "CHECKOUT_CHALLENGE_WAIT"
+	validCurrent := current.State == "CHECKOUT_PREFLIGHT_READY" || current.State == "CHECKOUT_CHALLENGE_WAIT" ||
+		current.State == "CHECKOUT_SESSION_LOGIN_WAIT"
 	if interactive {
 		validCurrent = current.State == "CHECKOUT_LOGIN_READY" || current.State == "CHECKOUT_LOGIN_WAIT"
 	}
@@ -172,7 +180,8 @@ func (p *Processor) checkoutPreflight(ctx context.Context, fulfillment Fulfillme
 }
 
 func checkoutPreflightBindingRevision(fulfillment Fulfillment) int64 {
-	if (fulfillment.State == "CHECKOUT_CHALLENGE_WAIT" || fulfillment.State == "CHECKOUT_LOGIN_WAIT") && fulfillment.StateRevision > 0 {
+	if (fulfillment.State == "CHECKOUT_CHALLENGE_WAIT" || fulfillment.State == "CHECKOUT_SESSION_LOGIN_WAIT" ||
+		fulfillment.State == "CHECKOUT_LOGIN_WAIT") && fulfillment.StateRevision > 0 {
 		return fulfillment.StateRevision - 1
 	}
 	return fulfillment.StateRevision

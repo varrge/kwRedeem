@@ -784,6 +784,7 @@ const MEMBERSHIP_FULFILLMENT_STATUS_LABELS = {
   card_price_unavailable: "卡片价格不可用",
 	checkout_preflight_ready: "等待 Go 注入 Session 并预检结账页",
 	checkout_challenge_wait: "等待人工完成安全验证",
+	checkout_session_login_wait: "等待在订单浏览器内重新登录",
 	checkout_login_ready: "等待 Go 打开人工登录页",
 	checkout_login_wait: "等待人工登录并进入 Plus 结账页",
 	checkout_login_preflight_passed: "人工登录预检通过（未进入资金流程）",

@@ -245,6 +245,7 @@ test("membership fulfillment states are displayed in Chinese", () => {
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("ACCOUNT_CHECKING"), "正在检查订阅状态");
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CARD_PRICE_UNAVAILABLE"), "卡片价格不可用");
 	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_PREFLIGHT_READY"), "等待 Go 注入 Session 并预检结账页");
+	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_SESSION_LOGIN_WAIT"), "等待在订单浏览器内重新登录");
   assert.equal(dom.window.getMembershipFulfillmentStatusLabel("FUNDING_READY"), "资金准备就绪");
 	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_LOGIN_WAIT"), "等待人工登录并进入 Plus 结账页");
 	assert.equal(dom.window.getMembershipFulfillmentStatusLabel("CHECKOUT_LOGIN_PREFLIGHT_PASSED"), "人工登录预检通过（未进入资金流程）");

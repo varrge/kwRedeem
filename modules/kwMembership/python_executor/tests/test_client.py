@@ -23,6 +23,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.endswith("/lease"):
             payload = {
                 "executionId": "exec-1",
+                "fulfillmentId": "mf-test-1",
                 "executorId": "python-test",
                 "leaseEpoch": 4,
                 "leaseToken": "opaque-token",
@@ -69,6 +70,7 @@ class ClientTest(unittest.TestCase):
     def test_lease_and_bound_result_headers(self) -> None:
         lease = self.client.lease()
         self.assertIsNotNone(lease)
+        self.assertEqual(lease.fulfillment_id, "mf-test-1")
         self.client.report(lease, "failed", error_code="FIXTURE_FAILURE")
         report = Handler.requests[-1]
         headers = report["headers"]

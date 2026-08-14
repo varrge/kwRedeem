@@ -62,6 +62,7 @@ KWMEMBERSHIP_EXECUTOR_LISTEN=127.0.0.1:4312
 KWMEMBERSHIP_EXECUTOR_SECRET=<至少 32 位的独立随机密钥>
 KWMEMBERSHIP_PYTHON_EXECUTOR_MODE=fixture
 KWMEMBERSHIP_LIVE_PAYMENT_ENABLED=false
+KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP=false
 # 可选：只代理 EfunCard Open API，不影响其他上游请求
 KWMEMBERSHIP_EFUNCARD_PROXY_URL=http://127.0.0.1:7890
 ```
@@ -145,6 +146,19 @@ ssh -L 6080:127.0.0.1:6080 root@服务器地址
 ```
 
 只有 Go 明确认出安全验证页并写入 `CHECKOUT_CHALLENGE_WAIT` 时，管理员才可通过 SSH 隧道访问 noVNC 完成验证。Go 只在重新识别到受支持的结账结构后继续；它不会自动绕过验证，也不会因虚拟显示模式削弱付款 Gate、页面许可或对账边界。
+
+若导入的 Session 能验证账号、但 checkout 路由要求重新登录，可显式启用：
+
+```dotenv
+KWMEMBERSHIP_INTERACTIVE_SESSION_BOOTSTRAP=true
+```
+
+Python 会把该单切换为 `CHECKOUT_SESSION_LOGIN_WAIT`，管理员通过同一 SSH + noVNC
+窗口完成登录。执行器随后在原 Chromium Context 和原代理出口内重新创建 checkout，
+不会接收或记录密码、MFA、Passkey、Cookie 或 checkout URL。成功的预检 Profile 仅保留在
+systemd 管理的 `/run/kwmembership-browser-profiles` 运行目录中，用履约 ID 和代理配置摘要绑定；
+代理变化、身份不匹配、失败、最终付款完成或两小时过期都会清理。该能力默认关闭，且
+`preflight` 模式仍拒绝所有 payment 命令。
 
 ## 自动流程
 

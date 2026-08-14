@@ -204,7 +204,8 @@ func (b *Bridge) handleLease(response http.ResponseWriter, request *http.Request
 
 func commandResponse(lease Lease, request checkout.Request) map[string]any {
 	return map[string]any{
-		"executionId": lease.Command.ID, "executorId": lease.Command.LeasedBy,
+		"executionId": lease.Command.ID, "fulfillmentId": lease.Command.FulfillmentID,
+		"executorId": lease.Command.LeasedBy,
 		"leaseEpoch": lease.Command.LeaseEpoch, "leaseToken": lease.Token,
 		"hardDeadlineAt": lease.Command.HardDeadlineAt, "commandKind": lease.Command.CommandKind,
 		"stage": lease.Command.StageKey, "attemptNo": lease.Command.AttemptNo,
@@ -268,7 +269,8 @@ func validateMaterialClaim(ctx context.Context, tx *sql.Tx, command Command, req
 		return ErrCommandConflict
 	}
 	if command.CommandKind == "preflight" {
-		if state != "CHECKOUT_PREFLIGHT_READY" && state != "CHECKOUT_CHALLENGE_WAIT" {
+		if state != "CHECKOUT_PREFLIGHT_READY" && state != "CHECKOUT_CHALLENGE_WAIT" &&
+			state != "CHECKOUT_SESSION_LOGIN_WAIT" {
 			return ErrCommandConflict
 		}
 		return nil
@@ -485,7 +487,7 @@ func (b *Bridge) handleHandoff(response http.ResponseWriter, request *http.Reque
 	if !decodeJSON(response, request, &body) || !safeHandoff(body.Type) {
 		return
 	}
-	page, err := validateHandoffFacts(body.Page, pending.request)
+	page, err := validateHandoffFacts(body.Type, body.Page, pending.request)
 	if err != nil {
 		writeBridgeError(response, err)
 		return
@@ -533,7 +535,7 @@ func (b *Bridge) handleResult(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	if body.Status == "challenge" {
-		page, err := validateHandoffFacts(body.Page, pending.request)
+		page, err := validateHandoffFacts("", body.Page, pending.request)
 		if err != nil {
 			writeBridgeError(response, err)
 			return
@@ -606,7 +608,17 @@ func validCardEntryFacts(page checkout.PageFacts) bool {
 	return card && !billingComplete && page.Controls["submit"] != "" && page.Controls["progression"] == ""
 }
 
-func validateHandoffFacts(page checkout.PageFacts, request checkout.Request) (checkout.PageFacts, error) {
+func validateHandoffFacts(handoffType string, page checkout.PageFacts, request checkout.Request) (checkout.PageFacts, error) {
+	if handoffType == "interactive-login" {
+		if request.Mode != checkout.ModeSessionPreflight || page.StateID != "INTERACTIVE_LOGIN_REQUIRED" ||
+			page.Origin != "https://chatgpt.com" || page.RouteTemplate != "/" || page.Plan != "" ||
+			page.Country != "" || page.Currency != "" || page.DisplayedAmount != nil ||
+			len(page.Fields) != 0 || len(page.Controls) != 0 {
+			return checkout.PageFacts{}, bridgeError("CHECKOUT_CONTEXT_INVALID", "interactive login context is invalid")
+		}
+		page.StructuralHash = pageFingerprint(page)
+		return page, nil
+	}
 	if page.StateID != "PAYMENT_ACTION_REQUIRED" ||
 		(page.Origin != "https://chatgpt.com" && page.Origin != "https://pay.openai.com") {
 		return checkout.PageFacts{}, bridgeError("CHECKOUT_CONTEXT_INVALID", "challenge page context is invalid")
@@ -751,7 +763,7 @@ func safeIdentity(value string) bool {
 }
 
 func safeHandoff(value string) bool {
-	return value == "cloudflare" || value == "challenge-cloudflare" || value == "captcha" || value == "3ds" || value == "sms" || value == "bank"
+	return value == "interactive-login" || value == "cloudflare" || value == "challenge-cloudflare" || value == "captcha" || value == "3ds" || value == "sms" || value == "bank"
 }
 
 func bridgeError(code, message string) error {

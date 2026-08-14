@@ -613,7 +613,9 @@ func validateHandoffFacts(page checkout.PageFacts, request checkout.Request) (ch
 	}
 	allowedRoute := map[string]bool{"/checkout": true, "/checkout/{id}": true, "/pay/{id}": true, "/settings/subscription": true, "/settings/billing": true, "/account/billing/overview": true}
 	challenge := page.Controls["challenge"]
-	if !allowedRoute[page.RouteTemplate] || !map[string]bool{
+	routeAllowed := allowedRoute[page.RouteTemplate] ||
+		page.RouteTemplate == "" && page.Origin == "https://chatgpt.com" && challenge == "challenge-cloudflare"
+	if !routeAllowed || !map[string]bool{
 		"challenge-3ds": true, "challenge-captcha": true, "challenge-sms": true,
 		"challenge-bank": true, "challenge-cloudflare": true,
 	}[challenge] {

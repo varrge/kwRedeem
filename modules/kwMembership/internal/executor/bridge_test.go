@@ -252,6 +252,17 @@ func TestValidateHandoffFactsRejectsUntrustedChallengePage(t *testing.T) {
 	if _, err := validateHandoffFacts(unknown, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
 		t.Fatalf("unknown challenge error = %v", err)
 	}
+
+	unstableRoute := trusted
+	unstableRoute.RouteTemplate = ""
+	if _, err := validateHandoffFacts(unstableRoute, request); err != nil {
+		t.Fatalf("Cloudflare challenge before route stabilization rejected: %v", err)
+	}
+	unstableRoute.Origin = "https://pay.openai.com"
+	unstableRoute.Controls = map[string]string{"challenge": "challenge-3ds"}
+	if _, err := validateHandoffFacts(unstableRoute, request); errorCode(err) != "CHECKOUT_PAGE_CONTRACT_INVALID" {
+		t.Fatalf("non-Cloudflare empty route error = %v", err)
+	}
 }
 
 func errorCode(err error) string {

@@ -26,6 +26,7 @@ SESSION_CHUNK_SIZE = 3936
 MAX_TRANSITIONS = 6
 POLL_SECONDS = 0.25
 HEARTBEAT_SECONDS = 5.0
+REPORT_MARGIN_SECONDS = 15.0
 
 INSPECT_FRAME_JS = r"""
 () => {
@@ -274,7 +275,7 @@ class LiveExecutor:
         if lease.command_kind == "payment" and not material.get("card"):
             raise ExecutorAPIError("CHECKOUT_MATERIAL_INVALID", 409)
 
-        deadline = _deadline(lease.hard_deadline_at)
+        deadline = _execution_deadline(lease.hard_deadline_at)
         client.heartbeat(lease)
         user_data_dir = tempfile.mkdtemp(prefix="kwmembership-python-")
         try:
@@ -445,6 +446,10 @@ class LiveExecutor:
 
 def _deadline(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+
+
+def _execution_deadline(value: str) -> float:
+    return _deadline(value) - REPORT_MARGIN_SECONDS
 
 
 def _remaining_ms(deadline: float) -> int:

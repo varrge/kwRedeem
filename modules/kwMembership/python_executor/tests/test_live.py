@@ -6,6 +6,7 @@ from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
     LiveExecutor,
     _classify,
+    _execution_deadline,
     _resolve_checkout_entry,
     route_template,
     session_cookies,
@@ -30,6 +31,12 @@ def lease(stage: str = "plus", target_tier: str = "plus") -> ExecutorLease:
 
 
 class LiveContractTest(unittest.TestCase):
+    def test_reserves_time_to_close_browser_and_report_before_hard_deadline(self) -> None:
+        self.assertEqual(
+            _execution_deadline("2026-08-13T00:05:00Z"),
+            1_786_579_485.0,
+        )
+
     def test_chunks_session_cookie_like_go_provider(self) -> None:
         cookies = session_cookies(
             {"sessionToken": "x" * 4400, "expires": "2026-08-14T00:00:00Z"},

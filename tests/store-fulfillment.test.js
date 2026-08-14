@@ -20,7 +20,7 @@ const {
   normalizeDujiaoBaseUrl
 } = await import("../shared/src/store-fulfillment.js");
 const { getDb } = await import("../shared/src/database.js");
-const { encryptText } = await import("../shared/src/secure.js");
+const { decryptText, encryptText } = await import("../shared/src/secure.js");
 const { createStoreFulfillmentRunner } = await import("../shared/src/store-fulfillment-runner.js");
 
 const db = getDb();
@@ -95,6 +95,7 @@ test("admin UI exposes the store fulfillment console and card order search", asy
   assert.equal(panel.classList.contains("hidden"), false);
   assert.ok(panel.querySelector("#store-settings-form"));
   assert.ok(panel.querySelector("#store-mapping-form"));
+  assert.ok(panel.querySelector('#store-fulfillment-kind option[value="membership_auto"]'));
   assert.ok(panel.querySelector("#store-task-list"));
   const storeRefresh = panel.querySelector("#store-task-list-refresh-btn");
   assert.ok(storeRefresh);
@@ -250,6 +251,55 @@ test("runner issues one active manual CDK per purchased unit and delivers idempo
   }
 });
 
+test("runner issues local membership wrappers without provisioning SpaceX CDKs", () => {
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO store_product_mappings (
+      id, product_id, sku_id, product_title, manual_type, fulfillment_kind, spacex_plan,
+      site_id, prefix, enabled, created_at, updated_at, updated_by
+    ) VALUES ('map-membership-auto', 'membership-100', '0', 'Efun Plus', 'PLUS',
+              'membership_auto', NULL, 'site_demo', 'EFUNPLUS', 1, ?, ?, 'test')
+  `).run(now, now);
+
+  let spaceXProvisionCalls = 0;
+  const runner = createStoreFulfillmentRunner({
+    db,
+    redeemUrl: "https://key.example.com",
+    spaceXCdkService: {
+      ensureTaskUnits() {
+        spaceXProvisionCalls += 1;
+      }
+    }
+  });
+  const task = runner.createTask({
+    orderId: "membership-target-100",
+    orderNo: "DJ-MEMBERSHIP-100-1",
+    parentOrderId: "membership-parent-100",
+    parentOrderNo: "DJ-MEMBERSHIP-100",
+    status: "fulfilling",
+    items: [{
+      id: "membership-item-100",
+      productId: "membership-100",
+      skuId: "0",
+      title: "Efun Plus",
+      quantity: 2,
+      fulfillmentType: "manual"
+    }]
+  });
+
+  assert.equal(task.status, "pending");
+  assert.equal(spaceXProvisionCalls, 0);
+  assert.equal(JSON.parse(task.mapping_snapshot)[0].fulfillmentKind, "membership_auto");
+  const cards = db.prepare(`
+    SELECT * FROM cdkeys WHERE store_fulfillment_task_id = ? ORDER BY public_key
+  `).all(task.id);
+  assert.equal(cards.length, 2);
+  assert.ok(cards.every((card) => card.processing_mode === "membership_auto"));
+  assert.ok(cards.every((card) => card.manual_type === "PLUS" && card.origin === "store_order"));
+  assert.ok(cards.every((card) => decryptText(card.source_key).startsWith("membership-wrapper:PLUS:")));
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spacex_cdk_units WHERE task_id = ?").get(task.id).count, 0);
+});
+
 test("runner reuses the same cards when a timed-out delivery is later confirmed", async () => {
   const now = new Date().toISOString();
   db.prepare(`
@@ -398,6 +448,7 @@ test("admin APIs manage store settings, mappings, tasks and CDK order search", a
     skuId: "0",
     productTitle: "x5 商品",
     manualType: "x5",
+    fulfillmentKind: "membership_auto",
     siteId: "site_demo",
     prefix: "X5",
     enabled: true
@@ -405,7 +456,8 @@ test("admin APIs manage store settings, mappings, tasks and CDK order search", a
   assert.equal(created.response.statusCode, 200);
 
   const mappings = await adminRequest("GET", "/api/admin/store-fulfillment/mappings", token);
-  assert.ok(mappings.json.items.some((item) => item.productId === "200" && item.manualType === "x5"));
+  assert.ok(mappings.json.items.some((item) => item.productId === "200"
+    && item.manualType === "x5" && item.fulfillmentKind === "membership_auto"));
 
   const tasks = await adminRequest("GET", "/api/admin/store-fulfillment/tasks?q=DJ100", token);
   assert.equal(tasks.response.statusCode, 200);

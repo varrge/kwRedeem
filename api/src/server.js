@@ -14,7 +14,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { getDb, withTransaction } from "../../shared/src/database.js";
 import { env, resolveProjectPath } from "../../shared/src/env.js";
-import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
+import { cdkeyProcessingModes, cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, notificationMatchModes, notificationMonitorTypes, notificationRuleOperators, orderStatuses, quotaCardStatuses, quotaBatchStatuses, quotaErrorCodes, quotaSubCardStatuses, smsCardStatuses, smsOrderStatuses, smsSiteStatuses, QUOTA_RATE_LIMIT_WINDOW, QUOTA_RATE_LIMIT_MAX, QUOTA_LOCK_DURATION_MINUTES } from "../../shared/src/constants.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { convertSessionToCookiePayload } from "../../shared/src/session-cookie-converter.js";
@@ -1610,6 +1610,10 @@ function getOrderDetail(orderNo) {
         WHERE fulfillment_id = ? ORDER BY revision DESC LIMIT 1
       `).get(membershipFulfillment.id)
     : null;
+  const processingMode = getCdkeyProcessingMode({
+    processing_mode: order.cdkey_processing_mode,
+    metadata: order.cdkey_metadata
+  });
 
   return {
     orderNo: order.order_no,
@@ -1618,12 +1622,7 @@ function getOrderDetail(orderNo) {
     siteName: order.site_name || order.product_title,
     siteSlug: order.site_slug || null,
     status: order.status,
-    processingMode: order.cdkey_processing_mode === "spacex_cdk"
-      ? "spacex_cdk"
-      : (isManualProcessingCdkey({
-        processing_mode: order.cdkey_processing_mode,
-        metadata: order.cdkey_metadata
-      }) ? "manual" : "auto"),
+    processingMode,
     manualType: getCdkeyManualType({
       manual_type: order.cdkey_manual_type,
       metadata: order.cdkey_metadata
@@ -2141,9 +2140,13 @@ function isSupportOnlyCdkey(metadataValue) {
 
 function getCdkeyProcessingMode(row = {}) {
   const fieldMode = String(row.processing_mode || "").trim().toLowerCase();
-  if (fieldMode === "manual") return "manual";
+  if (fieldMode !== cdkeyProcessingModes.automatic
+    && Object.values(cdkeyProcessingModes).includes(fieldMode)) return fieldMode;
   const metadata = parseCdkeyMetadata(row.metadata);
-  return metadata.processingMode === "manual" ? "manual" : "auto";
+  const metadataMode = String(metadata.processingMode || "").trim().toLowerCase();
+  return Object.values(cdkeyProcessingModes).includes(metadataMode)
+    ? metadataMode
+    : cdkeyProcessingModes.automatic;
 }
 
 function getCdkeyManualType(row = {}) {
@@ -2151,7 +2154,11 @@ function getCdkeyManualType(row = {}) {
 }
 
 function isManualProcessingCdkey(row = {}) {
-  return getCdkeyProcessingMode(row) === "manual";
+  return getCdkeyProcessingMode(row) === cdkeyProcessingModes.manual;
+}
+
+function isMembershipAutomationCdkey(row = {}) {
+  return getCdkeyProcessingMode(row) === cdkeyProcessingModes.membershipAutomatic;
 }
 
 function buildSupportAccountPayload(raw = {}, supportCookie = null, authMode = null) {
@@ -2213,9 +2220,12 @@ async function verifyCdkeyForPublic(publicKey) {
 
   const supportOnly = isSupportOnlyCdkey(key.metadata);
   const manualProcessing = isManualProcessingCdkey(key);
-  const spaceXCdkProcessing = key.processing_mode === "spacex_cdk";
+  const membershipAutomation = isMembershipAutomationCdkey(key);
+  const spaceXCdkProcessing = getCdkeyProcessingMode(key) === cdkeyProcessingModes.spaceXCdk;
   const manualType = getCdkeyManualType(key);
-  const sourceKey = supportOnly || manualProcessing || spaceXCdkProcessing ? "" : decryptText(key.source_key);
+  const sourceKey = supportOnly || manualProcessing || membershipAutomation || spaceXCdkProcessing
+    ? ""
+    : decryptText(key.source_key);
   const verifyContext = {
     publicKey: key.public_key,
     sourceKey,
@@ -2233,6 +2243,9 @@ async function verifyCdkeyForPublic(publicKey) {
   if (spaceXCdkProcessing) {
     canRedeem = key.status === cdkeyStatuses.active && key.spacex_state === "allocated";
     remoteMessage = canRedeem ? "自动化已就绪，可提交 Session 自动激活" : "自动化当前不可激活";
+  } else if (membershipAutomation) {
+    canRedeem = key.status === cdkeyStatuses.active;
+    remoteMessage = "会员自动化已就绪，可提交 Session";
   } else if (manualProcessing) {
     canRedeem = key.status === cdkeyStatuses.active;
     remoteMessage = "手动处理卡密，无需远端原始卡密校验";
@@ -2270,7 +2283,7 @@ async function verifyCdkeyForPublic(publicKey) {
       siteName: key.site_name || "未命名网站",
       siteSlug: key.site_slug || null,
       supportOnly,
-      processingMode: spaceXCdkProcessing ? "spacex_cdk" : (manualProcessing ? "manual" : "auto"),
+      processingMode: getCdkeyProcessingMode(key),
       manualType,
       spacexPlan: key.spacex_plan || null,
       canRedeem,
@@ -6835,6 +6848,10 @@ app.post("/api/public/redeem", async (request, reply) => {
       processing_mode: preflight.cdkey_processing_mode,
       metadata: preflight.cdkey_metadata
     });
+    const membershipAutomation = isMembershipAutomationCdkey({
+      processing_mode: preflight.cdkey_processing_mode,
+      metadata: preflight.cdkey_metadata
+    });
 
     if (preflight.cdkey_processing_mode === "spacex_cdk") {
       const result = await spaceXCdkService.activate({
@@ -6851,7 +6868,7 @@ app.post("/api/public/redeem", async (request, reply) => {
       return result;
     }
 
-    if (!manualProcessing) {
+    if (!manualProcessing && !membershipAutomation) {
       await assertSiteQueueReady(preflight);
     }
 
@@ -6887,8 +6904,10 @@ app.post("/api/public/redeem", async (request, reply) => {
       const now = nowIso();
       const orderId = nanoid(18);
       const manualProcessing = isManualProcessingCdkey(cdkey);
+      const membershipAutomation = isMembershipAutomationCdkey(cdkey);
+      const delegatedMembershipProcessing = manualProcessing || membershipAutomation;
       const manualType = getCdkeyManualType(cdkey);
-      const jobId = manualProcessing ? null : nanoid(18);
+      const jobId = delegatedMembershipProcessing ? null : nanoid(18);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
 	  const productId = site.product_id || cdkey.product_id;
 	  const membershipTier = db.prepare("SELECT membership_tier FROM products WHERE id=?").get(productId)?.membership_tier;
@@ -6918,7 +6937,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         JSON.stringify(session.preview),
         request.ip,
         parsed.data.abandonRemainingTime ? 1 : 0,
-        manualProcessing ? orderStatuses.pending : orderStatuses.processing,
+        delegatedMembershipProcessing ? orderStatuses.pending : orderStatuses.processing,
         jobId,
         now,
         now,
@@ -6932,12 +6951,12 @@ app.post("/api/public/redeem", async (request, reply) => {
           orderId,
           orderNo,
 		  productId,
-          manualType: manualProcessing ? manualType : null,
+          manualType: delegatedMembershipProcessing ? manualType : null,
           createdAt: now
         });
       }
 
-      if (!manualProcessing) {
+      if (!delegatedMembershipProcessing) {
         db.prepare(`
           INSERT INTO activation_jobs (
             id, order_id, cdkey_id, activation_endpoint_id, site_id, dedupe_key, status, payload,
@@ -6982,14 +7001,14 @@ app.post("/api/public/redeem", async (request, reply) => {
           publicKey,
           orderNo,
           abandonRemainingTime: parsed.data.abandonRemainingTime,
-          processingMode: manualProcessing ? "manual" : "auto",
+          processingMode: getCdkeyProcessingMode(cdkey),
           manualType
         }
       });
 
       return {
         orderNo,
-        processingMode: manualProcessing ? "manual" : "auto",
+        processingMode: getCdkeyProcessingMode(cdkey),
         manualType,
         pollingDisabled: manualProcessing,
         extensionDeliveryPending: deliveryEnrollment.status === "pending"
@@ -7743,7 +7762,7 @@ const storeProductMappingSchema = z.object({
   skuId: z.coerce.string().trim().min(1).default("0"),
   productTitle: z.string().trim().optional().default(""),
   manualType: z.enum(MANUAL_CDKEY_TYPES),
-  fulfillmentKind: z.enum(["manual", "spacex_cdk"]).optional().default("manual"),
+  fulfillmentKind: z.enum(["manual", "membership_auto", "spacex_cdk"]).optional().default("manual"),
   spacexPlan: z.enum(SPACEX_CDK_PLANS).nullable().optional().default(null),
   siteId: z.string().trim().min(1),
   prefix: z.string().trim().min(1),

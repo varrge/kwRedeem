@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { cdkeyStatuses } from "./constants.js";
+import { cdkeyProcessingModes, cdkeyStatuses } from "./constants.js";
 import { decryptText, encryptText } from "./secure.js";
 import { SPACEX_CDK_PLANS, SPACEX_CDK_PLAN_PREFIXES } from "./spacex-cdk.js";
 import {
@@ -17,6 +17,9 @@ const TERMINAL_REMOTE_STATUSES = new Set(["canceled", "cancelled", "refunded", "
 const CONFIRMABLE_REMOTE_STATUSES = new Set(["delivered", "completed"]);
 const TASK_LOCK_MS = 2 * 60 * 1000;
 const RETRY_DELAYS_SECONDS = [30, 60, 120, 300];
+const MEMBERSHIP_AUTOMATION_KIND = "membership_auto";
+const MEMBERSHIP_TIERS = new Set(["plus", "x5", "x20"]);
+const STORE_FULFILLMENT_KINDS = new Set(["manual", MEMBERSHIP_AUTOMATION_KIND, "spacex_cdk"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -102,8 +105,17 @@ function buildMappingSnapshot(db, items) {
     }
     const fulfillmentKind = String(mapping.fulfillment_kind || "manual");
     const spacexPlan = String(mapping.spacex_plan || "");
+    if (!STORE_FULFILLMENT_KINDS.has(fulfillmentKind)) {
+      errors.push(`商品 ${item.productId}/${item.skuId} 的履约类型无效`);
+      continue;
+    }
     if (fulfillmentKind === "spacex_cdk" && !SPACEX_CDK_PLANS.includes(spacexPlan)) {
       errors.push(`商品 ${item.productId}/${item.skuId} 的 SpaceX 套餐映射无效`);
+      continue;
+    }
+    if (fulfillmentKind === MEMBERSHIP_AUTOMATION_KIND
+      && !MEMBERSHIP_TIERS.has(String(mapping.manual_type || "").trim().toLowerCase())) {
+      errors.push(`商品 ${item.productId}/${item.skuId} 的会员套餐映射无效`);
       continue;
     }
     snapshots.push({
@@ -149,23 +161,28 @@ function issueTaskCards(db, task, redeemUrl, spaceXCdkService = null) {
       locked_at, locked_by_order_id, used_at, disabled_reason, metadata, processing_mode, manual_type,
       origin, store_order_no, store_fulfillment_target_no, store_fulfillment_task_id, created_at, updated_at
     )
-    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 'manual', ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const createdAt = nowIso();
   for (const mapping of resolved.snapshots.filter((item) => item.fulfillmentKind !== "spacex_cdk")) {
     for (let index = 0; index < mapping.quantity; index += 1) {
       const id = nanoid(18);
       const publicKey = generatePublicKey(db, mapping.prefix);
+      const membershipAutomation = mapping.fulfillmentKind === MEMBERSHIP_AUTOMATION_KIND;
+      const processingMode = membershipAutomation
+        ? cdkeyProcessingModes.membershipAutomatic
+        : cdkeyProcessingModes.manual;
       insert.run(
         id,
         mapping.kawangProductId,
         mapping.kawangActivationEndpointId,
         mapping.siteId,
-        encryptText(`manual-card:${mapping.manualType}:${publicKey}`),
+        encryptText(`${membershipAutomation ? "membership-wrapper" : "manual-card"}:${mapping.manualType}:${publicKey}`),
         publicKey,
         mapping.prefix,
         cdkeyStatuses.active,
-        JSON.stringify({ processingMode: "manual", manualType: mapping.manualType }),
+        JSON.stringify({ processingMode, manualType: mapping.manualType }),
+        processingMode,
         mapping.manualType,
         STORE_CDK_ORIGINS.store,
         task.parent_order_no || task.remote_order_no,
@@ -185,7 +202,7 @@ function issueTaskCards(db, task, redeemUrl, spaceXCdkService = null) {
     }
   }
 
-  if (spaceXCdkService) {
+  if (spaceXCdkService && resolved.snapshots.some((item) => item.fulfillmentKind === "spacex_cdk")) {
     spaceXCdkService.ensureTaskUnits(task, resolved.snapshots);
   }
 

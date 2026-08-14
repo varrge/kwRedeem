@@ -6,6 +6,13 @@ export const cdkeyStatuses = {
   void: "void"
 };
 
+export const cdkeyProcessingModes = Object.freeze({
+  automatic: "auto",
+  manual: "manual",
+  membershipAutomatic: "membership_auto",
+  spaceXCdk: "spacex_cdk"
+});
+
 export const orderStatuses = {
   pending: "pending",
   processing: "processing",

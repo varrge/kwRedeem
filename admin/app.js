@@ -1579,7 +1579,7 @@ function resetStoreMappingForm() {
   refs.storeMappingFormTitle.textContent = "添加商品映射";
   refs.storeSkuId.value = "0";
   refs.storeManualType.value = "PLUS";
-  refs.storeFulfillmentKind.value = "manual";
+  refs.storeFulfillmentKind.value = "membership_auto";
   refs.storeSpaceXPlan.value = "plus";
   refs.storePrefix.value = "PLUS";
   refs.storeMappingEnabled.value = "true";
@@ -1606,7 +1606,9 @@ async function refreshStoreMappings() {
     { label: "商品 / SKU", render: (item) => `<code>${escapeHtml(item.productId)}</code> / <code>${escapeHtml(item.skuId)}</code><br/><span class="hint">${escapeHtml(item.productTitle || "-")}</span>` },
     { label: "履约类型", render: (item) => item.fulfillmentKind === "spacex_cdk"
       ? `<span class="table-badge status-processing">SpaceX CDK / ${escapeHtml(item.spacexPlan)}</span>`
-      : `<span class="table-badge status-processing">人工 / ${escapeHtml(item.manualType)}</span>` },
+      : (item.fulfillmentKind === "membership_auto"
+        ? `<span class="table-badge status-processing">EfunCard 自动化 / ${escapeHtml(item.manualType)}</span>`
+        : `<span class="table-badge status-processing">人工 / ${escapeHtml(item.manualType)}</span>`) },
     { label: "KaWang 站点", render: (item) => escapeHtml(item.siteName || item.siteId) },
     { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
     { label: "状态", render: (item) => renderStatus(item.enabled ? "active" : "disabled") },
@@ -1663,7 +1665,9 @@ async function refreshStoreTasks() {
     { label: "商城订单", render: (item) => `<code>${escapeHtml(item.parentOrderNo)}</code>${item.remoteOrderNo !== item.parentOrderNo ? `<br/><span class="hint">子单 <code>${escapeHtml(item.remoteOrderNo)}</code></span>` : ""}` },
     { label: "商品", render: (item) => `<span title="${escapeHtml(storeTaskProducts(item))}">${escapeHtml(storeTaskProducts(item) || "-")}</span>` },
     { label: "映射快照", render: (item) => (item.mappingSnapshot || []).length
-      ? (item.mappingSnapshot || []).map((mapping) => `${mapping.fulfillmentKind === "spacex_cdk" ? `SpaceX ${escapeHtml(mapping.spacexPlan)}` : escapeHtml(mapping.manualType)} / ${escapeHtml(mapping.siteName || mapping.siteId)} / <code>${escapeHtml(mapping.prefix)}</code>`).join("<br/>")
+      ? (item.mappingSnapshot || []).map((mapping) => `${mapping.fulfillmentKind === "spacex_cdk"
+        ? `SpaceX ${escapeHtml(mapping.spacexPlan)}`
+        : (mapping.fulfillmentKind === "membership_auto" ? `EfunCard ${escapeHtml(mapping.manualType)}` : escapeHtml(mapping.manualType))} / ${escapeHtml(mapping.siteName || mapping.siteId)} / <code>${escapeHtml(mapping.prefix)}</code>`).join("<br/>")
       : "-" },
     { label: "CDK", render: (item) => (item.cdkeys || []).length
       ? (item.cdkeys || []).map((card) => `<code>${escapeHtml(card.publicKey)}</code>`).join("<br/>")

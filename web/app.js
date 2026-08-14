@@ -195,6 +195,9 @@ function stopRedeemStatusPolling() {
 
 function shouldKeepPolling(order = {}) {
   if (order.pollingDisabled) return false;
+  if (order.processingMode === "membership_auto" && order.membershipDelivery) {
+    return String(order.membershipDelivery.status || "").toLowerCase() === "processing";
+  }
   const live = String(order.liveTaskStatus || "").toLowerCase();
   if (live === "completed" || live === "failed") return false;
   const orderStatus = String(order.status || "").toLowerCase();
@@ -343,7 +346,7 @@ function renderVerifyResult(payload) {
         <div class="result-item"><span>本地状态</span><strong>${renderStatusText(payload.status)}</strong></div>
         <div class="result-item"><span>远端校验</span><strong>${escapeHtml(verifyMessage)}</strong></div>
         <div class="result-item"><span>可兑换</span><strong>${payload.canRedeem ? "是" : "否"}</strong></div>
-        ${payload.processingMode === "spacex_cdk" ? `<div class="result-item"><span>激活方式</span><strong>自动化激活</strong></div>` : ""}
+        ${["membership_auto", "spacex_cdk"].includes(payload.processingMode) ? `<div class="result-item"><span>激活方式</span><strong>会员自动化</strong></div>` : ""}
         ${payload.spacexPlan ? `<div class="result-item"><span>会员套餐</span><strong>${escapeHtml({ plus: "Plus", pro_5x: "Pro x5", pro_20x: "Pro x20" }[payload.spacexPlan] || payload.spacexPlan)}</strong></div>` : ""}
         <div class="result-item"><span>库存等级</span><strong>${escapeHtml(getStockLevelLabel(payload.stockLevel))}</strong></div>
       </div>
@@ -354,25 +357,39 @@ function renderVerifyResult(payload) {
 function renderRedeemSuccess(payload) {
   const spacexActivation = payload.spaceXCdkActivation || null;
   const manualProcessing = payload.processingMode === "manual" || payload.pollingDisabled;
+  const membershipAutomation = payload.processingMode === "membership_auto";
+  const membershipDelivery = payload.membershipDelivery || null;
   const hasLiveTask = Boolean(payload.liveTaskStatus);
+  const membershipLiveStatus = {
+    processing: "processing",
+    session_required: "processing",
+    succeeded: "succeeded",
+    cancelled: "cancelled",
+    manual_review: "processing",
+    after_sales: "processing"
+  }[String(membershipDelivery?.status || "").toLowerCase()];
   const liveStatus = spacexActivation
     ? (spacexActivation.state === "completed" ? "succeeded" : (spacexActivation.state === "failed_resolution" ? "failed" : "processing"))
+    : (membershipAutomation && membershipLiveStatus
+      ? membershipLiveStatus
     : (hasLiveTask
     ? (payload.liveTaskStatus === "completed" ? "succeeded" : payload.liveTaskStatus)
-    : (payload.job?.status || payload.status || "processing"));
+    : (payload.job?.status || payload.status || "processing")));
   const apiMessage = getApiMessage(payload.job || {});
   const sessionFixNeeded = isSessionFixNeededMessage(apiMessage) || isSessionFixNeededMessage(payload.errorMessage);
   const liveStage = String(payload.liveStage || "").trim();
   const liveProgress = Number.isFinite(Number(payload.liveProgress)) ? Number(payload.liveProgress) : null;
   const liveErrorMessage = String(payload.liveErrorMessage || "").trim();
-	const recoveryRequired = payload.membershipDelivery?.status === "session_required";
+  const recoveryRequired = payload.membershipDelivery?.status === "session_required";
 
   let statusHint;
   if (spacexActivation) {
     statusHint = spacexActivation.message || spacexActivation.stateText || "会员状态正在同步。";
-	} else if (recoveryRequired) {
-		statusHint = "原订单已保留，请提交同一 ChatGPT 账号的新 Session。";
-	} else if (manualProcessing) {
+  } else if (recoveryRequired) {
+    statusHint = "原订单已保留，请提交同一 ChatGPT 账号的新 Session。";
+  } else if (membershipAutomation && membershipDelivery) {
+    statusHint = membershipDelivery.label || "会员自动化正在处理。";
+  } else if (manualProcessing) {
     statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
   } else if (hasLiveTask) {
     statusHint = liveErrorMessage || payload.liveMessage || "任务状态会自动刷新。";
@@ -402,10 +419,11 @@ function renderRedeemSuccess(payload) {
       <div class="result-grid">
         <div class="result-item"><span>订单号</span><strong>${escapeHtml(payload.orderNo)}</strong></div>
         ${manualProcessing ? `<div class="result-item"><span>处理方式</span><strong>人工处理${payload.manualType ? ` / ${escapeHtml(payload.manualType)}` : ""}</strong></div>` : ""}
+        ${membershipAutomation ? `<div class="result-item"><span>处理方式</span><strong>会员自动化${payload.manualType ? ` / ${escapeHtml(payload.manualType)}` : ""}</strong></div>` : ""}
         ${spacexActivation ? `<div class="result-item"><span>处理方式</span><strong>自动化激活</strong></div>` : ""}
         ${spacexActivation?.accountMasked ? `<div class="result-item"><span>绑定账号</span><strong>${escapeHtml(spacexActivation.accountMasked)}</strong></div>` : ""}
         ${spacexActivation?.state ? `<div class="result-item"><span>激活状态</span><strong>${renderStatusText(spacexActivation.state)}</strong></div>` : ""}
-		<div class="result-item"><span>实时任务状态</span><strong>${recoveryRequired ? escapeHtml(payload.membershipDelivery.label) : renderStatusText(liveStatus)}</strong></div>
+        <div class="result-item"><span>实时任务状态</span><strong>${membershipAutomation && membershipDelivery ? escapeHtml(membershipDelivery.label) : renderStatusText(liveStatus)}</strong></div>
         ${queueHtml}
         ${progressHtml}
         ${stageHtml}

@@ -1559,6 +1559,64 @@ test("manual membership CDKs create the target fulfillment and support one-order
 	`).get(repaired.json().item.id).count, 2);
 });
 
+test("store membership wrappers enter Efun-capable automation without a legacy activation job", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, site_id, source_key, public_key, prefix,
+      status, metadata, processing_mode, manual_type, origin, store_order_no,
+      store_fulfillment_target_no, store_fulfillment_task_id, created_at, updated_at
+    ) VALUES (
+      'membership-wrapper-api', '', 'prod_demo', 'endpoint_demo', 'site_demo', ?,
+      'EFUNPLUS-API-WRAPPER', 'EFUNPLUS', 'active', ?, 'membership_auto', 'PLUS',
+      'store_order', 'DJ-EFUN-API', 'DJ-EFUN-API-1', 'task-efun-api', ?, ?
+    )
+  `).run(
+    encryptText("membership-wrapper:PLUS:EFUNPLUS-API-WRAPPER"),
+    JSON.stringify({ processingMode: "membership_auto", manualType: "PLUS" }),
+    now,
+    now
+  );
+
+  const verified = await app.inject({
+    method: "POST",
+    url: "/api/public/cdkeys/verify",
+    payload: { publicKey: "EFUNPLUS-API-WRAPPER" }
+  });
+  assert.equal(verified.statusCode, 200);
+  assert.equal(verified.json().canRedeem, true);
+  assert.equal(verified.json().processingMode, "membership_auto");
+  assert.match(verified.json().remoteMessage, /会员自动化已就绪/);
+
+  const redeemed = await app.inject({
+    method: "POST",
+    url: "/api/public/redeem",
+    payload: {
+      publicKey: "EFUNPLUS-API-WRAPPER",
+      sessionPayload: JSON.stringify({ user: { email: "efun-wrapper@example.com" } }),
+      abandonRemainingTime: false
+    }
+  });
+  assert.equal(redeemed.statusCode, 200);
+  assert.equal(redeemed.json().processingMode, "membership_auto");
+  assert.equal(redeemed.json().pollingDisabled, false);
+
+  const order = db.prepare("SELECT * FROM redeem_orders WHERE order_no = ?").get(redeemed.json().orderNo);
+  assert.equal(order.status, "pending");
+  assert.equal(order.latest_job_id, null);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM activation_jobs WHERE order_id = ?").get(order.id).count, 0);
+  const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
+  assert.equal(fulfillment.target_tier, "plus");
+  assert.equal(fulfillment.state, "WAITING_SESSION_VALIDATION");
+
+  const detail = await app.inject({ method: "GET", url: `/api/public/orders/${redeemed.json().orderNo}` });
+  assert.equal(detail.statusCode, 200);
+  assert.equal(detail.json().processingMode, "membership_auto");
+  assert.equal(detail.json().pollingDisabled, false);
+  assert.equal(detail.json().membershipDelivery.status, "processing");
+});
+
 test("voiding a redeemed CDK cancels its queued delivery and membership fulfillment", async () => {
   if (!app) ({ app } = await import("../api/src/server.js"));
   const login = await app.inject({

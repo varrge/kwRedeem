@@ -286,7 +286,10 @@ class LiveContractTest(unittest.TestCase):
         ])
 
     def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:
-        node_program = f"""
+        for session_prefix in ("cs", "oaics"):
+            session_id = f"{session_prefix}_fixture"
+            client_secret = f"{session_prefix}_fixture_secret_fixture"
+            node_program = f"""
 const prepare = {json.dumps(PREPARE_PLUS_JS)};
 global.location = {{origin: 'https://chatgpt.com'}};
 global.window = {{}};
@@ -314,9 +317,9 @@ global.fetch = async (url, options = {{}}) => {{
       json: async () => ({{
         tag: 'custom_checkout_session',
         processor_entity: 'openai_llc',
-        checkout_session_id: 'cs_fixture',
+        checkout_session_id: {json.dumps(session_id)},
         publishable_key: 'pk_live_fixture',
-        client_secret: 'cs_fixture_secret_fixture',
+        client_secret: {json.dumps(client_secret)},
       }}),
     }};
   }}
@@ -330,21 +333,22 @@ global.fetch = async (url, options = {{}}) => {{
   process.exitCode = 1;
 }});
 """
-        completed = subprocess.run(
-            ["node", "-e", node_program],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        result = json.loads(completed.stdout)
-        self.assertEqual(result["errorKind"], "")
-        self.assertTrue(result["customMaterialReady"])
-        self.assertEqual(result["checkoutSessionClass"], "cs_")
-        self.assertEqual(result["checkoutSessionID"], "")
-        self.assertNotIn("pk_live_fixture", completed.stdout)
-        self.assertNotIn("cs_fixture_secret_fixture", completed.stdout)
+            with self.subTest(session_prefix=session_prefix):
+                completed = subprocess.run(
+                    ["node", "-e", node_program],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                result = json.loads(completed.stdout)
+                self.assertEqual(result["errorKind"], "")
+                self.assertTrue(result["customMaterialReady"])
+                self.assertEqual(result["checkoutSessionClass"], f"{session_prefix}_")
+                self.assertEqual(result["checkoutSessionID"], "")
+                self.assertNotIn("pk_live_fixture", completed.stdout)
+                self.assertNotIn(client_secret, completed.stdout)
 
     def test_custom_checkout_mounts_without_opening_a_chatgpt_checkout_route(self) -> None:
         navigations: list[str] = []

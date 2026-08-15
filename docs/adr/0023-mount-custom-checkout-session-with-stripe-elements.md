@@ -23,7 +23,8 @@ not required to echo `billing_details`, `checkout_ui_mode`, or `plan_name`; thos
 not response evidence. The executor instead validates the response tag, processor entity, Checkout
 Session identifier class, publishable-key class, and client-secret class before retaining material
 in page memory. Later Stripe Session inspection remains authoritative for the returned currency and
-amount.
+amount. OpenAI may issue either `cs_` or `oaics_` custom Session material; the client-secret class
+must match the Checkout Session identifier class.
 
 Before the mounted surface is eligible for preflight or payment, the executor reads the Stripe
 Checkout Session through `loadActions()`. It derives the PHP major-unit amount from

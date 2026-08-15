@@ -198,7 +198,8 @@ async () => {
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
-      const validSecret = /^cs_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret) && clientSecret.length <= 4096;
+      const validSecret = /^(?:oaics_|cs_)[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret)
+        && clientSecret.startsWith(checkoutSessionClass) && clientSecret.length <= 4096;
       const contractViolation = !safeSessionID ? 'checkout_session_id'
         : (!validKey ? 'publishable_key'
           : (!validSecret ? 'client_secret'

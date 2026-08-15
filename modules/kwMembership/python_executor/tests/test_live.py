@@ -268,17 +268,22 @@ class LiveContractTest(unittest.TestCase):
         with self.assertRaises(ExecutorAPIError) as raised:
             _resolve_checkout_entry({"errorKind": "already_subscribed"})
         self.assertEqual(raised.exception.code, "CHATGPT_ACCOUNT_ALREADY_SUBSCRIBED")
-        with self.assertRaises(ExecutorAPIError) as raised:
-            _resolve_checkout_entry({
-                "responseTag": "custom_checkout_session",
-                "checkoutURL": "",
-                "processorEntity": "openai_llc",
-                "checkoutSessionID": "",
-                "checkoutSessionClass": "cs_",
-                "customMaterialReady": False,
-                "errorKind": "",
-            })
+        with self.assertLogs("kwmembership.python_executor.live", level="WARNING") as captured:
+            with self.assertRaises(ExecutorAPIError) as raised:
+                _resolve_checkout_entry({
+                    "responseTag": "custom_checkout_session",
+                    "checkoutURL": "",
+                    "processorEntity": "openai_llc",
+                    "checkoutSessionID": "",
+                    "checkoutSessionClass": "cs_",
+                    "customMaterialReady": False,
+                    "contractViolation": "client_secret",
+                    "errorKind": "custom_checkout_material_invalid",
+                })
         self.assertEqual(raised.exception.code, "CHECKOUT_API_CONTRACT_DRIFT")
+        self.assertEqual(captured.output, [
+            "WARNING:kwmembership.python_executor.live:custom checkout response rejected field=client_secret"
+        ])
 
     def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:
         node_program = f"""

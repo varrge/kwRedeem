@@ -161,7 +161,7 @@ CONTROL_SELECTORS = {
 
 PREPARE_PLUS_JS = r"""
 async () => {
-  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',checkoutSessionClass:'',customMaterialReady:false,errorKind:'',httpStatus:0,...overrides});
+  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',checkoutSessionClass:'',customMaterialReady:false,contractViolation:'',errorKind:'',httpStatus:0,...overrides});
   if (location.origin !== 'https://chatgpt.com') return result({errorKind:'context_invalid'});
   try { delete window.__kwmembershipCustomCheckout; } catch {}
   const controller = new AbortController(); const abortTimer = setTimeout(() => controller.abort(), 12000);
@@ -199,8 +199,12 @@ async () => {
       const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
       const validSecret = /^cs_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret) && clientSecret.length <= 4096;
-      if (!safeSessionID || !validKey || !validSecret || entry.processorEntity !== 'openai_llc') {
-        return result({...customEntry,errorKind:'custom_checkout_material_invalid'});
+      const contractViolation = !safeSessionID ? 'checkout_session_id'
+        : (!validKey ? 'publishable_key'
+          : (!validSecret ? 'client_secret'
+            : (entry.processorEntity !== 'openai_llc' ? 'processor_entity' : '')));
+      if (contractViolation) {
+        return result({...customEntry,contractViolation,errorKind:'custom_checkout_material_invalid'});
       }
       Object.defineProperty(window, '__kwmembershipCustomCheckout', {
         value: Object.freeze({publishableKey,clientSecret,country:requestContext.country,currency:requestContext.currency,plan:'plus'}),
@@ -825,6 +829,11 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
     if not isinstance(entry, dict): raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
     error_kind = entry.get("errorKind")
     if error_kind:
+        if error_kind == "custom_checkout_material_invalid":
+            violation = entry.get("contractViolation")
+            if violation not in {"checkout_session_id", "publishable_key", "client_secret", "processor_entity"}:
+                violation = "unknown"
+            LOGGER.warning("custom checkout response rejected field=%s", violation)
         code = {
             "already_subscribed": "CHATGPT_ACCOUNT_ALREADY_SUBSCRIBED",
             "session_unavailable": "CHATGPT_SESSION_REFRESH_FAILED",

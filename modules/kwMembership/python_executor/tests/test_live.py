@@ -289,7 +289,7 @@ class LiveContractTest(unittest.TestCase):
         for session_prefix, secret_container, rejected_as in (
             ("cs", "direct", ""),
             ("oaics", "direct", ""),
-            ("oaics", "null", "client_secret_null"),
+            ("oaics", "null", "client_secret_null_route_id"),
             ("oaics", "array", "client_secret_array"),
             ("oaics", "number", "client_secret_number"),
             ("oaics", "boolean", "client_secret_boolean"),

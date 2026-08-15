@@ -44,8 +44,8 @@ Use the existing encrypted SpaceX Card GPT user token only for the Cookie conver
 
 ```text
 POST https://spacexcard.com/api/v1/gpt/session-to-cookie
-POST https://gptserve.freespaces.app/api/subscription/info
-POST https://gptserve.freespaces.app/api/subscription/cancel
+POST https://cat.freespaces.app/api/subscription/info
+POST https://cat.freespaces.app/api/subscription/cancel
 POST https://spacexcard.com/api/v1/gpt/checkout
 ```
 
@@ -96,7 +96,7 @@ It must not expose wrappers for card refund, freeze/unfreeze, or delete. Every r
 Only kwRedeem calls:
 
 ```http
-POST https://gptserve.freespaces.app/api/subscription/info
+POST https://cat.freespaces.app/api/subscription/info
 Content-Type: application/json
 
 {"token": <decrypted Session object>}

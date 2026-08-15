@@ -160,22 +160,6 @@ func (p *Processor) spaceXClient(ctx context.Context) (*provider.SpaceXClient, e
 	return provider.NewSpaceXClient(p.httpClient, appID.String, secret)
 }
 
-func (p *Processor) renewalToken(ctx context.Context) (string, error) {
-	var encrypted sql.NullString
-	if err := p.store.DB().QueryRowContext(ctx, `SELECT spacexcard_api_token_encrypted
-    FROM extension_delivery_settings WHERE id='default'`).Scan(&encrypted); err != nil {
-		return "", err
-	}
-	if !encrypted.Valid || encrypted.String == "" {
-		return "", coded("RENEWAL_CANCEL_NOT_CONFIGURED", "renewal token is not configured")
-	}
-	value, err := p.decrypter.Decrypt(encrypted.String)
-	if err != nil {
-		return "", codedWrap("RENEWAL_CANCEL_NOT_CONFIGURED", "decrypt renewal token", err)
-	}
-	return value, nil
-}
-
 func (p *Processor) acquireCircuit(ctx context.Context, dependency, scope string, now time.Time) (bool, error) {
 	allowed := false
 	err := p.withFencedImmediate(ctx, func(tx *sql.Tx) error {

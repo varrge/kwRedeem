@@ -7,6 +7,11 @@ import {
   membershipRenewalCancelUrl
 } from "../shared/src/membership-renewal.js";
 
+test("renewal provider URLs use the cat service", () => {
+  assert.equal(membershipRenewalCheckUrl, "https://cat.freespaces.app/api/subscription/info");
+  assert.equal(membershipRenewalCancelUrl, "https://cat.freespaces.app/api/subscription/cancel");
+});
+
 test("renewal cancellation uses the fixed Session token contract", async () => {
   let captured;
   const result = await cancelMembershipRenewal({ token: "session" }, {

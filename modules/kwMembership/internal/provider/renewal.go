@@ -7,33 +7,25 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"strings"
 )
 
-const RenewalCancelURL = "https://spacexcard.com/api/v1/gpt/cancel-renewal"
+const RenewalCancelURL = "https://cat.freespaces.app/api/subscription/cancel"
 
 type RenewalClient struct{ http *http.Client }
 
 func NewRenewalClient(client *http.Client) *RenewalClient { return &RenewalClient{http: client} }
 
-func (c *RenewalClient) Cancel(ctx context.Context, session json.RawMessage, token string) error {
-	token = strings.TrimSpace(token)
+func (c *RenewalClient) Cancel(ctx context.Context, session json.RawMessage) error {
 	if !json.Valid(session) || len(session) == 0 || session[0] != '{' {
 		return fail("SESSION_INVALID", "session is invalid", false)
 	}
-	if token == "" || len(token) > 8192 {
-		return fail("RENEWAL_CANCEL_NOT_CONFIGURED", "renewal token is not configured", false)
-	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, session); err != nil {
-		return fail("SESSION_INVALID", "session is invalid", false)
-	}
-	body, _ := json.Marshal(map[string]string{"token_input": compact.String()})
+	body, _ := json.Marshal(struct {
+		Token json.RawMessage `json:"token"`
+	}{Token: session})
 	request, err := newRequest(ctx, http.MethodPost, RenewalCancelURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -59,13 +51,9 @@ func (c *RenewalClient) Cancel(ctx context.Context, session json.RawMessage, tok
 	}
 	var envelope struct {
 		Code *int `json:"code"`
-		Data struct {
-			Cancelled *bool `json:"cancelled"`
-			WillRenew *bool `json:"will_renew"`
-			AutoRenew *bool `json:"auto_renew"`
-		} `json:"data"`
+		Data *int `json:"data"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Code == nil || *envelope.Code != 0 || !((envelope.Data.Cancelled != nil && *envelope.Data.Cancelled) || (envelope.Data.WillRenew != nil && !*envelope.Data.WillRenew) || (envelope.Data.AutoRenew != nil && !*envelope.Data.AutoRenew)) {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Code == nil || *envelope.Code != 200 || envelope.Data == nil || *envelope.Data != 1 {
 		return fail("RENEWAL_CANCEL_RESPONSE_INVALID", "renewal cancellation result is ambiguous", true)
 	}
 	return nil

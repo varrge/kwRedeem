@@ -283,11 +283,7 @@ func (p *Processor) processEligibility(ctx context.Context, fulfillment Fulfillm
 		if err := p.persistObservation(ctx, fulfillment.ID, "", "starting_before_renewal_cancel", observation); err != nil {
 			return err
 		}
-		token, err := p.renewalToken(ctx)
-		if err != nil {
-			return p.eligibilityFailure(ctx, fulfillment, errorCode(err), "ACCOUNT_REPURCHASE_NOT_READY", now, sharedRetry)
-		}
-		if err := p.renewal.Cancel(ctx, json.RawMessage(plain), token); err != nil {
+		if err := p.renewal.Cancel(ctx, json.RawMessage(plain)); err != nil {
 			if isSessionFailureCode(errorCode(err)) {
 				return p.handleSessionFailure(ctx, fulfillment.ID, errorCode(err), "eligibility", now)
 			}

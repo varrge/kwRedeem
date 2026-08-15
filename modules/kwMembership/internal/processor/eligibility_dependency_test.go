@@ -221,7 +221,7 @@ func TestEligibilityCancelsRenewalAndRequiresFreshFreeObservation(t *testing.T) 
 				`"is_delinquent":false,"expire_time":null,"expires_at":""}}`), nil
 		case provider.RenewalCancelURL:
 			cancelCalls.Add(1)
-			return eligibilityHTTPResponse(http.StatusOK, `{"code":0,"data":{"cancelled":true}}`), nil
+			return eligibilityHTTPResponse(http.StatusOK, `{"code":200,"data":1}`), nil
 		default:
 			t.Fatalf("unexpected provider URL: %s", request.URL)
 			return nil, nil
@@ -352,8 +352,6 @@ func newEligibilityDependencyProcessor(t *testing.T, roundTrip eligibilityRoundT
 	  ); CREATE TABLE fulfillment_interventions (
 	    id TEXT PRIMARY KEY,fulfillment_id TEXT NOT NULL,state TEXT NOT NULL,state_revision INTEGER NOT NULL,
 	    reason_code TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(fulfillment_id,state,state_revision)
-	  ); CREATE TABLE extension_delivery_settings (
-	    id TEXT PRIMARY KEY,spacexcard_api_token_encrypted TEXT
 	  )`); err != nil {
 		t.Fatal(err)
 	}
@@ -371,14 +369,6 @@ func newEligibilityDependencyProcessor(t *testing.T, roundTrip eligibilityRoundT
 	}
 	session, err := decrypter.Encrypt(`{"access_token":"session"}`)
 	if err != nil {
-		t.Fatal(err)
-	}
-	renewalToken, err := decrypter.Encrypt("renewal-token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.DB().Exec(`INSERT INTO extension_delivery_settings
-	  (id,spacexcard_api_token_encrypted) VALUES ('default',?)`, renewalToken); err != nil {
 		t.Fatal(err)
 	}
 	at := store.ISO(now)

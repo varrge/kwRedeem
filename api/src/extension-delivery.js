@@ -11,8 +11,8 @@ const WS_MAX_MESSAGE_BYTES = 4096;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const AUTH_TIMEOUT_MS = 5_000;
 const CONVERTER_URL = "https://spacexcard.com/api/v1/gpt/session-to-cookie";
-const SUBSCRIPTION_CHECK_URL = "https://gptserve.freespaces.app/api/subscription/info";
-const SUBSCRIPTION_CANCEL_URL = "https://gptserve.freespaces.app/api/subscription/cancel";
+const SUBSCRIPTION_CHECK_URL = "https://cat.freespaces.app/api/subscription/info";
+const SUBSCRIPTION_CANCEL_URL = "https://cat.freespaces.app/api/subscription/cancel";
 const SUBSCRIPTION_REQUEST_TIMEOUT_MS = 15_000;
 const SUBSCRIPTION_RESPONSE_MAX_BYTES = 128 * 1024;
 

@@ -26,6 +26,10 @@ const {
   fetchMembershipObservation,
   membershipStateProviderUrl
 } = await import("../shared/src/membership-state-provider.js");
+
+test("membership state provider uses the cat service", () => {
+  assert.equal(membershipStateProviderUrl, "https://cat.freespaces.app/api/subscription/info");
+});
 const {
   SpaceXCardOpenApiClient,
   spaceXCardOpenApiBaseUrl

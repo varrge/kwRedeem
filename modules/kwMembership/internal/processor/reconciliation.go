@@ -993,14 +993,10 @@ func (p *Processor) rcProtectRenewal(ctx context.Context, fulfillment Fulfillmen
 	shouldCancel := observation.AutoRenew != nil && *observation.AutoRenew &&
 		(!partial || p.rcShouldCancelPartialRenewal(observation, now))
 	if shouldCancel {
-		token, err := p.renewalToken(ctx)
-		if err != nil {
-			return err
-		}
 		if guardErr := p.assertWorkAllowed(ctx); guardErr != nil {
 			return &rcWorkGuardError{cause: guardErr}
 		}
-		cancelErr := p.renewal.Cancel(ctx, session, token)
+		cancelErr := p.renewal.Cancel(ctx, session)
 		if guardErr := p.assertWorkAllowed(ctx); guardErr != nil {
 			return &rcWorkGuardError{cause: guardErr}
 		}

@@ -9,7 +9,7 @@ import (
 	"net/http"
 )
 
-const MembershipStateURL = "https://gptserve.freespaces.app/api/subscription/info"
+const MembershipStateURL = "https://cat.freespaces.app/api/subscription/info"
 const maxMembershipResponse = 128 << 10
 
 type MembershipClient struct{ http *http.Client }

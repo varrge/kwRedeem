@@ -1,5 +1,5 @@
-export const membershipRenewalCancelUrl = "https://gptserve.freespaces.app/api/subscription/cancel";
-export const membershipRenewalCheckUrl = "https://gptserve.freespaces.app/api/subscription/info";
+export const membershipRenewalCancelUrl = "https://cat.freespaces.app/api/subscription/cancel";
+export const membershipRenewalCheckUrl = "https://cat.freespaces.app/api/subscription/info";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;

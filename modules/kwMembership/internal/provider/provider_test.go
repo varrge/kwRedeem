@@ -249,15 +249,47 @@ func TestMembershipProviderUsesObjectToken(t *testing.T) {
 	}
 }
 
+func TestSubscriptionProviderURLsUseCatService(t *testing.T) {
+	if MembershipStateURL != "https://cat.freespaces.app/api/subscription/info" {
+		t.Fatalf("membership URL = %s", MembershipStateURL)
+	}
+	if RenewalCancelURL != "https://cat.freespaces.app/api/subscription/cancel" {
+		t.Fatalf("renewal URL = %s", RenewalCancelURL)
+	}
+}
+
 func TestRenewalCancelRejectsMissingEnvelopeCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if string(body) != `{"token":{"access_token":"x"}}` {
+			t.Fatalf("body = %s", body)
+		}
+		if request.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected Authorization header")
+		}
 		_, _ = io.WriteString(response, `{"data":{"auto_renew":false}}`)
 	}))
 	defer server.Close()
 	client := NewRenewalClient(server.Client())
 	client.http.Transport = rewriteTransport{target: server.URL, base: http.DefaultTransport}
-	err := client.Cancel(context.Background(), json.RawMessage(`{"access_token":"x"}`), "token")
+	err := client.Cancel(context.Background(), json.RawMessage(`{"access_token":"x"}`))
 	requireProviderErrorCode(t, err, "RENEWAL_CANCEL_RESPONSE_INVALID")
+}
+
+func TestRenewalCancelAcceptsSessionProviderContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if string(body) != `{"token":{"sessionToken":"session"}}` {
+			t.Fatalf("body = %s", body)
+		}
+		_, _ = io.WriteString(response, `{"code":200,"data":1}`)
+	}))
+	defer server.Close()
+	client := NewRenewalClient(server.Client())
+	client.http.Transport = rewriteTransport{target: server.URL, base: http.DefaultTransport}
+	if err := client.Cancel(context.Background(), json.RawMessage(`{"sessionToken":"session"}`)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type rewriteTransport struct {

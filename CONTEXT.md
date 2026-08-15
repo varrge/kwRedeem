@@ -765,7 +765,7 @@ A deduplicated, sanitized operations-console task and Feishu notification indica
 _Avoid_: Notification per worker retry, secrets in messages, treating acknowledgement as workflow approval
 
 **Membership State Provider**:
-The authorized `gptserve.freespaces.app` service that receives an order's protected ChatGPT Session from the fulfillment workflow and reports the current account type for starting eligibility and payment-stage confirmation. The checkout executor does not use its response to decide that an order or stage is complete.
+The authorized `cat.freespaces.app` service that receives an order's protected ChatGPT Session from the fulfillment workflow and reports the current account type for starting eligibility and payment-stage confirmation. The checkout executor does not use its response to decide that an order or stage is complete.
 _Avoid_: Browser-side membership query, persisting the provider's raw response
 
 **Confirmed Account Type**:

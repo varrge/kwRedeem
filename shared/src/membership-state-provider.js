@@ -1,6 +1,6 @@
 import { MembershipContractError, normalizeMembershipEnvelope } from "./membership-fulfillment.js";
 
-export const membershipStateProviderUrl = "https://gptserve.freespaces.app/api/subscription/info";
+export const membershipStateProviderUrl = "https://cat.freespaces.app/api/subscription/info";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;

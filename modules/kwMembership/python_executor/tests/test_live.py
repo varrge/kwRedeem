@@ -285,17 +285,29 @@ class LiveContractTest(unittest.TestCase):
             "WARNING:kwmembership.python_executor.live:custom checkout response rejected field=client_secret_class"
         ])
 
-    def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:
-        for session_prefix, secret_container in (
-            ("cs", "direct"),
-            ("oaics", "direct"),
-            ("oaics", "processor_entity"),
+    def test_custom_checkout_validates_material_without_request_echoes(self) -> None:
+        for session_prefix, secret_container, rejected_as in (
+            ("cs", "direct", ""),
+            ("oaics", "direct", ""),
+            ("oaics", "processor_entity", ""),
+            ("oaics", "null", "client_secret_null"),
+            ("oaics", "array", "client_secret_array"),
+            ("oaics", "number", "client_secret_number"),
+            ("oaics", "boolean", "client_secret_boolean"),
         ):
             session_id = f"{session_prefix}_fixture"
             client_secret = f"{session_prefix}_fixture_secret_fixture"
             response_client_secret: object = client_secret
             if secret_container == "processor_entity":
                 response_client_secret = {"openai_llc": client_secret}
+            elif secret_container == "null":
+                response_client_secret = None
+            elif secret_container == "array":
+                response_client_secret = [client_secret]
+            elif secret_container == "number":
+                response_client_secret = 1
+            elif secret_container == "boolean":
+                response_client_secret = False
             node_program = f"""
 const prepare = {json.dumps(PREPARE_PLUS_JS)};
 global.location = {{origin: 'https://chatgpt.com'}};
@@ -353,8 +365,10 @@ global.fetch = async (url, options = {{}}) => {{
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 result = json.loads(completed.stdout)
-                self.assertEqual(result["errorKind"], "")
-                self.assertTrue(result["customMaterialReady"])
+                expected_error = "custom_checkout_material_invalid" if rejected_as else ""
+                self.assertEqual(result["errorKind"], expected_error)
+                self.assertEqual(result["contractViolation"], rejected_as)
+                self.assertEqual(result["customMaterialReady"], not rejected_as)
                 self.assertEqual(result["checkoutSessionClass"], f"{session_prefix}_")
                 self.assertEqual(result["checkoutSessionID"], "")
                 self.assertNotIn("pk_live_fixture", completed.stdout)

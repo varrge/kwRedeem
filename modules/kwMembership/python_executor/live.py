@@ -206,8 +206,11 @@ async () => {
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
       let secretViolation = '';
       if (clientSecretValue === undefined) secretViolation = 'client_secret_missing';
-      else if (typeof clientSecretValue !== 'string'
-          && (!clientSecretValue || typeof clientSecretValue !== 'object' || Array.isArray(clientSecretValue))) {
+      else if (clientSecretValue === null) secretViolation = 'client_secret_null';
+      else if (Array.isArray(clientSecretValue)) secretViolation = 'client_secret_array';
+      else if (typeof clientSecretValue === 'number') secretViolation = 'client_secret_number';
+      else if (typeof clientSecretValue === 'boolean') secretViolation = 'client_secret_boolean';
+      else if (typeof clientSecretValue !== 'string' && typeof clientSecretValue !== 'object') {
         secretViolation = 'client_secret_type';
       } else if (typeof clientSecretValue === 'object'
           && !Object.prototype.hasOwnProperty.call(clientSecretValue, 'openai_llc')) {
@@ -856,7 +859,9 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
             violation = entry.get("contractViolation")
             if violation not in {
                 "checkout_session_id", "publishable_key", "processor_entity",
-                "client_secret_missing", "client_secret_type", "client_secret_empty",
+                "client_secret_missing", "client_secret_null", "client_secret_array",
+                "client_secret_number", "client_secret_boolean", "client_secret_type",
+                "client_secret_entity_missing", "client_secret_entity_type", "client_secret_empty",
                 "client_secret_prefix", "client_secret_separator", "client_secret_charset",
                 "client_secret_length", "client_secret_class",
             }:

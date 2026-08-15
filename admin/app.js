@@ -99,6 +99,47 @@ const refs = {
   extensionDeliveryListRefresh: document.querySelector("#extension-delivery-list-refresh"),
   extensionDeliveryList: document.querySelector("#extension-delivery-list"),
   extensionDeliveryListResult: document.querySelector("#extension-delivery-list-result"),
+  automationGateForm: document.querySelector("#automation-gate-form"),
+  automationGateEnabled: document.querySelector("#automation-gate-enabled"),
+  automationConfigTtl: document.querySelector("#automation-config-ttl"),
+  automationGateUsername: document.querySelector("#automation-gate-username"),
+  automationGatePassword: document.querySelector("#automation-gate-password"),
+  automationGateConfirm: document.querySelector("#automation-gate-confirm"),
+  automationGateResult: document.querySelector("#automation-gate-result"),
+  automationProviderForm: document.querySelector("#automation-provider-form"),
+  automationProviderId: document.querySelector("#automation-provider-id"),
+  automationProviderName: document.querySelector("#automation-provider-name"),
+  automationProviderAdapter: document.querySelector("#automation-provider-adapter"),
+  automationProviderBaseUrl: document.querySelector("#automation-provider-base-url"),
+  automationProviderApiKey: document.querySelector("#automation-provider-api-key"),
+  automationProviderStatus: document.querySelector("#automation-provider-status"),
+  automationProviderCancel: document.querySelector("#automation-provider-cancel"),
+  automationProviderRefresh: document.querySelector("#automation-provider-refresh"),
+  automationProviderResult: document.querySelector("#automation-provider-result"),
+  automationProviderList: document.querySelector("#automation-provider-list"),
+  automationMappingForm: document.querySelector("#automation-mapping-form"),
+  automationMappingId: document.querySelector("#automation-mapping-id"),
+  automationMappingProduct: document.querySelector("#automation-mapping-product"),
+  automationMappingProvider: document.querySelector("#automation-mapping-provider"),
+  automationMappingPlan: document.querySelector("#automation-mapping-plan"),
+  automationMappingRegion: document.querySelector("#automation-mapping-region"),
+  automationMappingCardPlatform: document.querySelector("#automation-mapping-card-platform"),
+  automationMappingCardProduct: document.querySelector("#automation-mapping-card-product"),
+  automationMappingCapacityKey: document.querySelector("#automation-mapping-capacity-key"),
+  automationMappingCardCapacity: document.querySelector("#automation-mapping-card-capacity"),
+  automationMappingFunding: document.querySelector("#automation-mapping-funding"),
+  automationMappingPriceMin: document.querySelector("#automation-mapping-price-min"),
+  automationMappingPriceMax: document.querySelector("#automation-mapping-price-max"),
+  automationMappingDailyRisk: document.querySelector("#automation-mapping-daily-risk"),
+  automationMappingPriority: document.querySelector("#automation-mapping-priority"),
+  automationMappingEnabled: document.querySelector("#automation-mapping-enabled"),
+  automationMappingCancel: document.querySelector("#automation-mapping-cancel"),
+  automationMappingRefresh: document.querySelector("#automation-mapping-refresh"),
+  automationMappingResult: document.querySelector("#automation-mapping-result"),
+  automationMappingList: document.querySelector("#automation-mapping-list"),
+  automationExecutionRefresh: document.querySelector("#automation-execution-refresh"),
+  automationExecutionList: document.querySelector("#automation-execution-list"),
+  automationExecutionResult: document.querySelector("#automation-execution-result"),
   membershipFulfillmentSettingsForm: document.querySelector("#membership-fulfillment-settings-form"),
   membershipOpenApiBase: document.querySelector("#membership-openapi-base"),
   membershipAppId: document.querySelector("#membership-app-id"),
@@ -544,6 +585,8 @@ let worldCupMatchesCache = [];
 let worldCupBetsCache = [];
 let storeMappingsCache = [];
 let storeTasksCache = [];
+let automationProvidersCache = [];
+let automationMappingsCache = [];
 let membershipPreparedCanaries = new Map();
 let membershipAutomaticScopes = new Map();
 let migrationRestoreUploadId = null;
@@ -1972,7 +2015,215 @@ async function refreshExtensionDeliveryConsole() {
   await refreshExtensionDeliveries();
 }
 
+function resetAutomationProviderForm() {
+  refs.automationProviderForm?.reset();
+  refs.automationProviderId.value = "";
+  refs.automationProviderAdapter.value = "automate_v1";
+  refs.automationProviderStatus.value = "paused";
+  refs.automationProviderApiKey.placeholder = "首次提供一次；后续留空继续使用";
+}
+
+function resetAutomationMappingForm() {
+  refs.automationMappingForm?.reset();
+  refs.automationMappingId.value = "";
+  refs.automationMappingCardCapacity.value = "1";
+  refs.automationMappingPriority.value = "100";
+  updateAutomationCapabilitySelects();
+}
+
+function updateAutomationCapabilitySelects() {
+  const provider = automationProvidersCache.find((item) => item.id === refs.automationMappingProvider?.value);
+  const plans = (provider?.config?.plans || []).filter((item) => item.taskType === "purchase");
+  const regions = provider?.config?.regions || [];
+  const selectedPlan = refs.automationMappingPlan?.value;
+  const selectedRegion = refs.automationMappingRegion?.value;
+  refs.automationMappingPlan.innerHTML = plans.map((item) => `
+    <option value="${escapeHtml(item.id)}">${escapeHtml(item.label || item.name)}（${escapeHtml(item.id)}）</option>
+  `).join("");
+  refs.automationMappingRegion.innerHTML = regions.map((item) => `
+    <option value="${escapeHtml(item.code)}">${escapeHtml(item.label)} / ${escapeHtml(item.code)} / ${escapeHtml(item.currency)}</option>
+  `).join("");
+  if (plans.some((item) => item.id === selectedPlan)) refs.automationMappingPlan.value = selectedPlan;
+  if (regions.some((item) => item.code === selectedRegion)) refs.automationMappingRegion.value = selectedRegion;
+}
+
+function loadAutomationProvider(id) {
+  const item = automationProvidersCache.find((provider) => provider.id === id);
+  if (!item) return;
+  refs.automationProviderId.value = item.id;
+  refs.automationProviderName.value = item.name;
+  refs.automationProviderAdapter.value = item.adapterKey;
+  refs.automationProviderBaseUrl.value = item.baseUrl;
+  refs.automationProviderApiKey.value = "";
+  refs.automationProviderApiKey.placeholder = item.hasCredential ? "Key 已加密保存；留空保持不变" : "必须提供 Key";
+  refs.automationProviderStatus.value = item.status;
+  refs.automationProviderForm.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function loadAutomationMapping(id) {
+  const item = automationMappingsCache.find((mapping) => mapping.id === id);
+  if (!item) return;
+  refs.automationMappingId.value = item.id;
+  refs.automationMappingProduct.value = item.productId;
+  refs.automationMappingProvider.value = item.providerId;
+  updateAutomationCapabilitySelects();
+  refs.automationMappingPlan.value = item.externalPlanId;
+  refs.automationMappingRegion.value = item.regionCode || "";
+  refs.automationMappingCardPlatform.value = item.cardPlatformKey;
+  refs.automationMappingCardProduct.value = item.cardProductCode || "";
+  refs.automationMappingCapacityKey.value = item.capacityKey;
+  refs.automationMappingCardCapacity.value = item.cardCapacity;
+  refs.automationMappingFunding.value = item.fundingAmountUsd;
+  refs.automationMappingPriceMin.value = item.expectedMinAmount;
+  refs.automationMappingPriceMax.value = item.expectedMaxAmount;
+  refs.automationMappingDailyRisk.value = item.dailyRiskLimitUsd;
+  refs.automationMappingPriority.value = item.priority;
+  refs.automationMappingEnabled.checked = item.enabled;
+  refs.automationMappingForm.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function syncAutomationProvider(id) {
+  try {
+    await api(`/api/admin/automation/providers/${encodeURIComponent(id)}/sync`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.automationProviderResult, "站点 /config 已同步；被移除的能力映射已自动停用");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationProviderResult, error.message);
+  }
+}
+
+async function resetAutomationProviderCircuit(id) {
+  if (!window.confirm("确认在排查站点、Key 和价格配置后重置该站点熔断？")) return;
+  try {
+    await api(`/api/admin/automation/providers/${encodeURIComponent(id)}/reset-circuit`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.automationProviderResult, "站点熔断已重置");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationProviderResult, error.message);
+  }
+}
+
+async function toggleAutomationMapping(id, enabled) {
+  try {
+    await api(`/api/admin/automation/mappings/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled })
+    });
+    setHint(refs.automationMappingResult, enabled ? "映射已启用" : "映射已暂停");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationMappingResult, error.message);
+  }
+}
+
+async function queryAutomationExecution(id) {
+  try {
+    await api(`/api/admin/automation/executions/${encodeURIComponent(id)}/query-now`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.automationExecutionResult, "已安排使用原站点、原 Key 和原任务号立即查询");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationExecutionResult, error.message);
+  }
+}
+
+async function resolveAutomationExecution(id, outcome) {
+  const evidenceReference = window.prompt("输入外部证据编号（工单号、远端任务号或对账记录编号；不要粘贴 Session 或卡资料）：", "");
+  if (!evidenceReference) return;
+  const label = outcome === "succeeded" ? "成功并消耗卡密" : "失败并释放卡密";
+  if (!window.confirm(`确认根据外部证据将该订单裁决为“${label}”？此操作不可自动撤销。`)) return;
+  try {
+    await api(`/api/admin/automation/executions/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ outcome, evidenceReference, confirmation: "RESOLVE_AUTOMATION_REVIEW" })
+    });
+    setHint(refs.automationExecutionResult, `人工裁决已记录：${label}`);
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationExecutionResult, error.message);
+  }
+}
+
+async function refreshAutomationConsole() {
+  const [settingsPayload, providerPayload, mappingPayload, productPayload, executionPayload] = await Promise.all([
+    api("/api/admin/automation/settings"),
+    api("/api/admin/automation/providers"),
+    api("/api/admin/automation/mappings"),
+    api("/api/admin/products"),
+    api("/api/admin/automation/executions")
+  ]);
+  automationProvidersCache = providerPayload.items || [];
+  automationMappingsCache = mappingPayload.items || [];
+  refs.automationGateEnabled.checked = settingsPayload.paymentGateEnabled === true;
+  refs.automationConfigTtl.value = Number(settingsPayload.configTtlSeconds) || 300;
+  setHint(
+    refs.automationGateResult,
+    `${settingsPayload.paymentGateEnabled ? "Gate 已开启" : "Gate 已关闭"}；最近更新 ${settingsPayload.updatedAt || "-"}`
+  );
+
+  const selectedProvider = refs.automationMappingProvider.value;
+  refs.automationMappingProvider.innerHTML = automationProvidersCache.map((item) => `
+    <option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} / ${escapeHtml(item.status)}</option>
+  `).join("");
+  if (automationProvidersCache.some((item) => item.id === selectedProvider)) {
+    refs.automationMappingProvider.value = selectedProvider;
+  }
+  const selectedProduct = refs.automationMappingProduct.value;
+  const products = (productPayload.items || []).filter((item) => item.status === "active");
+  refs.automationMappingProduct.innerHTML = products.map((item) => `
+    <option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}（${escapeHtml(item.code)}）</option>
+  `).join("");
+  if (products.some((item) => item.id === selectedProduct)) refs.automationMappingProduct.value = selectedProduct;
+  updateAutomationCapabilitySelects();
+
+  renderTable(refs.automationProviderList, [
+    { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.baseUrl)}</code>` },
+    { label: "协议 / Key", render: (item) => `<code>${escapeHtml(item.adapterKey)}</code><br/><span class="hint">${item.hasCredential ? "Key 已配置" : "Key 未配置"} / 并发 ${item.maxConcurrency}</span>` },
+    { label: "能力", render: (item) => `${escapeHtml(item.configStatus)}<br/><span class="hint">套餐 ${(item.config?.plans || []).filter((plan) => plan.taskType === "purchase").length} / 地区 ${(item.config?.regions || []).length}<br/>${escapeHtml(item.configSyncedAt || "-")}</span>` },
+    { label: "状态 / 熔断", render: (item) => `${renderStatus(item.status)}<br/><code>${escapeHtml(item.circuitState)}</code><br/><span class="hint">${escapeHtml(item.circuitReason || item.configError || "-")}</span>` },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='loadAutomationProvider(${JSON.stringify(item.id)})'>编辑</button> <button class="ghost-btn small" type="button" onclick='syncAutomationProvider(${JSON.stringify(item.id)})'>同步配置</button> ${item.circuitState === "open" ? `<button class="ghost-btn small" type="button" onclick='resetAutomationProviderCircuit(${JSON.stringify(item.id)})'>重置熔断</button>` : ""}` }
+  ], automationProvidersCache, "尚未配置自动化站点");
+
+  renderTable(refs.automationMappingList, [
+    { label: "商城商品", render: (item) => `<strong>${escapeHtml(item.productTitle || item.productId)}</strong><br/><code>${escapeHtml(item.productId)}</code>` },
+    { label: "站点套餐", render: (item) => `${escapeHtml(item.providerName || item.providerId)}<br/><code>${escapeHtml(item.externalPlanId)}</code>` },
+    { label: "区域 / 价格", render: (item) => `${escapeHtml(item.regionCode || "-")} / ${escapeHtml(item.currency || "-")}<br/><span class="hint">${item.expectedMinAmount} - ${item.expectedMaxAmount}</span>` },
+    { label: "卡台 / 资金", render: (item) => `${escapeHtml(item.cardPlatformKey)} / ${escapeHtml(item.capacityKey)} × ${item.cardCapacity}<br/><span class="hint">备付 $${Number(item.fundingAmountUsd).toFixed(2)} / 日上限 $${Number(item.dailyRiskLimitUsd).toFixed(2)}</span>` },
+    { label: "路由", render: (item) => `优先级 ${item.priority}<br/>${item.enabled ? renderStatus("active") : renderStatus("paused")}<br/><span class="hint">${escapeHtml(item.pausedReason || "-")}</span>` },
+    { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='loadAutomationMapping(${JSON.stringify(item.id)})'>编辑</button> <button class="ghost-btn small" type="button" onclick='toggleAutomationMapping(${JSON.stringify(item.id)}, ${item.enabled ? "false" : "true"})'>${item.enabled ? "暂停" : "启用"}</button>` }
+  ], automationMappingsCache, "尚未配置商品映射");
+
+  renderTable(refs.automationExecutionList, [
+    { label: "订单", render: (item) => `<strong>${escapeHtml(item.orderNo)}</strong><br/><code>${escapeHtml(item.id)}</code>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}<br/><span class="hint">${escapeHtml(item.currentPhase || "-")}</span>` },
+    { label: "站点任务", render: (item) => `<code>${escapeHtml(item.providerId || "-")}</code><br/><span class="hint">${escapeHtml(item.remoteTaskId || item.clientOrderId || "-")}</span>` },
+    { label: "卡片 / 价格", render: (item) => `${escapeHtml(item.cardBrand || "-")} ${escapeHtml(item.cardLast4 ? `•••• ${item.cardLast4}` : "")}<br/><span class="hint">${escapeHtml(item.pricingCurrency || "-")} ${escapeHtml(item.pricingTotal || "-")}</span>` },
+    { label: "错误 / 更新", render: (item) => `<code>${escapeHtml(item.lastErrorCode || "-")}</code><br/><span class="hint">${escapeHtml(item.lastErrorMessage || "-")}<br/>${escapeHtml(item.updatedAt || "-")}</span>` },
+    { label: "操作", render: (item) => [
+      ["queued", "running", "submit_unknown"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick='queryAutomationExecution(${JSON.stringify(item.id)})'>立即查询</button>` : "",
+      ["manual_review", "manual_hold"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "succeeded")'>裁决成功</button> <button class="ghost-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "failed")'>裁决失败</button>` : ""
+    ].filter(Boolean).join(" ") || "-" }
+  ], executionPayload.items || [], "暂无协议自动化订单");
+}
+
+window.loadAutomationProvider = loadAutomationProvider;
+window.syncAutomationProvider = syncAutomationProvider;
+window.resetAutomationProviderCircuit = resetAutomationProviderCircuit;
+window.loadAutomationMapping = loadAutomationMapping;
+window.toggleAutomationMapping = toggleAutomationMapping;
+window.queryAutomationExecution = queryAutomationExecution;
+window.resolveAutomationExecution = resolveAutomationExecution;
+
 async function refreshMembershipFulfillmentConsole() {
+  await refreshAutomationConsole();
   const payload = await api("/api/admin/membership-fulfillment/settings");
   const settings = payload.settings || {};
   const dependencies = settings.dependencies || {};
@@ -6266,6 +6517,111 @@ refs.extensionDeliveryListRefresh?.addEventListener("click", async () => {
   } finally {
     setButtonBusy(refs.extensionDeliveryListRefresh, false);
   }
+});
+
+refs.automationGateForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "保存中...");
+  try {
+    await api("/api/admin/automation/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        paymentGateEnabled: refs.automationGateEnabled.checked,
+        configTtlSeconds: Number(refs.automationConfigTtl.value),
+        credentials: {
+          username: refs.automationGateUsername.value.trim(),
+          password: refs.automationGatePassword.value
+        },
+        confirmation: "ENABLE_LIVE_AUTOMATION"
+      })
+    });
+    refs.automationGatePassword.value = "";
+    refs.automationGateConfirm.checked = false;
+    setHint(refs.automationGateResult, refs.automationGateEnabled.checked
+      ? "协议自动化付款 Gate 已开启"
+      : "协议自动化付款 Gate 已关闭；新订单不会选卡、充值或提交");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationGateResult, error.message);
+  } finally {
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.automationProviderForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "同步中...");
+  try {
+    await api("/api/admin/automation/providers", {
+      method: "POST",
+      body: JSON.stringify({
+        id: refs.automationProviderId.value || undefined,
+        name: refs.automationProviderName.value.trim(),
+        adapterKey: refs.automationProviderAdapter.value,
+        baseUrl: refs.automationProviderBaseUrl.value.trim(),
+        apiKey: refs.automationProviderApiKey.value.trim(),
+        status: refs.automationProviderStatus.value
+      })
+    });
+    resetAutomationProviderForm();
+    setHint(refs.automationProviderResult, "站点已保存，API Key 已加密复用，/config 已同步");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationProviderResult, error.message);
+  } finally {
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.automationProviderCancel?.addEventListener("click", resetAutomationProviderForm);
+refs.automationProviderRefresh?.addEventListener("click", () => {
+  refreshAutomationConsole().catch((error) => setHint(refs.automationProviderResult, error.message));
+});
+refs.automationMappingProvider?.addEventListener("change", updateAutomationCapabilitySelects);
+
+refs.automationMappingForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = event.submitter;
+  setButtonBusy(submitButton, true, "保存中...");
+  try {
+    await api("/api/admin/automation/mappings", {
+      method: "POST",
+      body: JSON.stringify({
+        id: refs.automationMappingId.value || undefined,
+        productId: refs.automationMappingProduct.value,
+        providerId: refs.automationMappingProvider.value,
+        externalPlanId: refs.automationMappingPlan.value,
+        regionCode: refs.automationMappingRegion.value,
+        cardPlatformKey: refs.automationMappingCardPlatform.value,
+        cardProductCode: refs.automationMappingCardProduct.value.trim(),
+        capacityKey: refs.automationMappingCapacityKey.value.trim(),
+        cardCapacity: Number(refs.automationMappingCardCapacity.value),
+        fundingAmountUsd: Number(refs.automationMappingFunding.value),
+        expectedMinAmount: Number(refs.automationMappingPriceMin.value),
+        expectedMaxAmount: Number(refs.automationMappingPriceMax.value),
+        dailyRiskLimitUsd: Number(refs.automationMappingDailyRisk.value),
+        priority: Number(refs.automationMappingPriority.value),
+        enabled: refs.automationMappingEnabled.checked
+      })
+    });
+    resetAutomationMappingForm();
+    setHint(refs.automationMappingResult, "商品映射已按站点当前 /config 能力保存");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationMappingResult, error.message);
+  } finally {
+    setButtonBusy(submitButton, false);
+  }
+});
+
+refs.automationMappingCancel?.addEventListener("click", resetAutomationMappingForm);
+refs.automationMappingRefresh?.addEventListener("click", () => {
+  refreshAutomationConsole().catch((error) => setHint(refs.automationMappingResult, error.message));
+});
+refs.automationExecutionRefresh?.addEventListener("click", () => {
+  refreshAutomationConsole().catch((error) => setHint(refs.automationExecutionResult, error.message));
 });
 
 refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event) => {

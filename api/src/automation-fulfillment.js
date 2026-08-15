@@ -1,0 +1,421 @@
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { AutomationAdapterError, normalizeAutomateV1BaseUrl } from "../../shared/src/automation-adapters/automate-v1.js";
+import { serializeAutomationExecution, settleAutomationExecution } from "../../shared/src/automation-fulfillment.js";
+import {
+  automationAdapterKeys,
+  serializeAutomationProvider,
+  syncAutomationProvider,
+  validateAutomationMappingCapability
+} from "../../shared/src/automation-provider-registry.js";
+
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+
+function setNoStore(reply) {
+  reply.header("Cache-Control", "no-store");
+  reply.header("Pragma", "no-cache");
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function serializeMapping(row) {
+  let capability = null;
+  try { capability = JSON.parse(row.capability_snapshot); } catch {}
+  return {
+    id: row.id,
+    productId: row.product_id,
+    productTitle: row.product_title || null,
+    providerId: row.provider_id,
+    providerName: row.provider_name || null,
+    externalPlanId: row.external_plan_id,
+    externalTaskType: row.external_task_type,
+    regionCode: row.region_code || null,
+    currency: row.currency || null,
+    cardPlatformKey: row.card_platform_key,
+    cardProductCode: row.card_product_code || null,
+    capacityKey: row.capacity_key,
+    cardCapacity: Number(row.card_capacity),
+    fundingAmountUsd: Number(row.funding_amount_usd),
+    expectedMinAmount: Number(row.expected_min_amount),
+    expectedMaxAmount: Number(row.expected_max_amount),
+    dailyRiskLimitUsd: Number(row.daily_risk_limit_usd),
+    priority: Number(row.priority),
+    enabled: row.enabled === 1,
+    pausedReason: row.paused_reason || null,
+    capability,
+    revision: Number(row.revision),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by
+  };
+}
+
+function errorReply(reply, error, fallback = "自动化配置操作失败") {
+  if (error instanceof AutomationAdapterError) {
+    return reply.code(error.statusCode >= 400 && error.statusCode < 500 ? 409 : 502).send({
+      code: error.code,
+      message: error.message
+    });
+  }
+  if (error instanceof TypeError) return reply.code(400).send({ message: error.message });
+  return reply.code(409).send({ message: error?.message || fallback });
+}
+
+export function createAutomationFulfillmentService(options = {}) {
+  const {
+    app,
+    db,
+    requireAdmin,
+    encryptText,
+    decryptText,
+    createAuditLog,
+    verifyFreshAdmin
+  } = options;
+  if (!app || !db || typeof requireAdmin !== "function" || typeof encryptText !== "function"
+    || typeof decryptText !== "function") throw new TypeError("automation fulfillment service 配置不完整");
+
+  const audit = (request, action, resourceType, resourceId, detail = null) => createAuditLog?.({
+    action,
+    actor: request.admin?.username || "admin",
+    resourceType,
+    resourceId,
+    detail
+  });
+
+  app.get("/api/admin/automation/settings", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    const row = db.prepare("SELECT * FROM automation_fulfillment_settings WHERE id = 'default'").get();
+    return {
+      paymentGateEnabled: row.payment_gate_enabled === 1,
+      mode: row.mode,
+      configTtlSeconds: Number(row.config_ttl_seconds),
+      updatedAt: row.updated_at,
+      updatedBy: row.updated_by
+    };
+  });
+
+  app.put("/api/admin/automation/settings", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({
+      paymentGateEnabled: z.boolean(),
+      configTtlSeconds: z.number().int().min(60).max(3600).default(300),
+      credentials: z.object({ username: z.string().min(1), password: z.string().min(1) }),
+      confirmation: z.literal("ENABLE_LIVE_AUTOMATION")
+    }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "自动付款 Gate 参数不正确" });
+    try {
+      verifyFreshAdmin?.(parsed.data.credentials);
+      const at = nowIso();
+      db.prepare(`
+        UPDATE automation_fulfillment_settings
+        SET payment_gate_enabled = ?, mode = ?, config_ttl_seconds = ?, updated_at = ?, updated_by = ?
+        WHERE id = 'default'
+      `).run(
+        parsed.data.paymentGateEnabled ? 1 : 0,
+        parsed.data.paymentGateEnabled ? "automatic" : "disabled",
+        parsed.data.configTtlSeconds,
+        at,
+        request.admin.username
+      );
+      audit(request, "automation.gate.update", "automation_settings", "default", {
+        paymentGateEnabled: parsed.data.paymentGateEnabled,
+        configTtlSeconds: parsed.data.configTtlSeconds
+      });
+      return { ok: true, paymentGateEnabled: parsed.data.paymentGateEnabled };
+    } catch {
+      return reply.code(403).send({ message: "管理员重新验证失败" });
+    }
+  });
+
+  app.get("/api/admin/automation/providers", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    return {
+      adapterKeys: automationAdapterKeys,
+      items: db.prepare("SELECT * FROM automation_providers ORDER BY name, id").all().map(serializeAutomationProvider)
+    };
+  });
+
+  app.post("/api/admin/automation/providers", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({
+      id: z.string().regex(SAFE_ID).optional(),
+      name: z.string().trim().min(1).max(120),
+      adapterKey: z.enum(automationAdapterKeys),
+      baseUrl: z.string().trim().min(1).max(500),
+      apiKey: z.string().trim().max(500).default(""),
+      status: z.enum(["active", "paused"]).default("paused")
+    }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "自动化站点参数不正确" });
+    const at = nowIso();
+    const id = parsed.data.id || `ap_${randomUUID()}`;
+    try {
+      const baseUrl = normalizeAutomateV1BaseUrl(parsed.data.baseUrl);
+      const existing = db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(id);
+      if (existing && existing.adapter_key !== parsed.data.adapterKey) {
+        return reply.code(409).send({ message: "已创建站点不能修改 Adapter 类型" });
+      }
+      if (!existing && !parsed.data.apiKey) return reply.code(400).send({ message: "首次配置必须提供 API Key" });
+      db.transaction(() => {
+        if (!existing) {
+          db.prepare(`
+            INSERT INTO automation_providers (
+              id, name, adapter_key, base_url, status, max_concurrency,
+              config_status, circuit_state, created_at, updated_at, updated_by
+            ) VALUES (?, ?, ?, ?, 'paused', 1, 'not_synced', 'closed', ?, ?, ?)
+          `).run(id, parsed.data.name, parsed.data.adapterKey, baseUrl, at, at, request.admin.username);
+        } else {
+          db.prepare(`
+            UPDATE automation_providers
+            SET name = ?, base_url = ?, status = 'paused', config_status = 'not_synced',
+                config_error = NULL, updated_at = ?, updated_by = ? WHERE id = ?
+          `).run(parsed.data.name, baseUrl, at, request.admin.username, id);
+        }
+        if (parsed.data.apiKey) {
+          const credentialId = `apc_${randomUUID()}`;
+          db.prepare(`
+            UPDATE automation_provider_credentials
+            SET status = 'retained', retired_at = ?
+            WHERE provider_id = ? AND status = 'current'
+          `).run(at, id);
+          db.prepare(`
+            INSERT INTO automation_provider_credentials (
+              id, provider_id, api_key_encrypted, status, created_at, created_by
+            ) VALUES (?, ?, ?, 'current', ?, ?)
+          `).run(credentialId, id, encryptText(parsed.data.apiKey), at, request.admin.username);
+          db.prepare("UPDATE automation_providers SET current_credential_id = ? WHERE id = ?")
+            .run(credentialId, id);
+        }
+      }).immediate();
+      await syncAutomationProvider(db, { providerId: id, decryptText });
+      db.prepare("UPDATE automation_providers SET status = ?, updated_at = ? WHERE id = ?")
+        .run(parsed.data.status, nowIso(), id);
+      audit(request, "automation.provider.upsert", "automation_provider", id, {
+        adapterKey: parsed.data.adapterKey,
+        status: parsed.data.status,
+        credentialChanged: Boolean(parsed.data.apiKey)
+      });
+      return { item: serializeAutomationProvider(db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(id)) };
+    } catch (error) {
+      return errorReply(reply, error);
+    }
+  });
+
+  app.post("/api/admin/automation/providers/:id/sync", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = String(request.params.id || "").trim();
+    if (!SAFE_ID.test(id)) return reply.code(400).send({ message: "站点 ID 无效" });
+    try {
+      const item = await syncAutomationProvider(db, { providerId: id, decryptText });
+      audit(request, "automation.provider.sync", "automation_provider", id, { configHash: item.configHash });
+      return { item };
+    } catch (error) {
+      return errorReply(reply, error);
+    }
+  });
+
+  app.post("/api/admin/automation/providers/:id/reset-circuit", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = String(request.params.id || "").trim();
+    const at = nowIso();
+    const changed = db.prepare(`
+      UPDATE automation_providers
+      SET circuit_state = 'closed', circuit_reason = NULL, circuit_opened_at = NULL,
+          consecutive_failures = 0, updated_at = ?, updated_by = ? WHERE id = ?
+    `).run(at, request.admin.username, id).changes;
+    if (!changed) return reply.code(404).send({ message: "自动化站点不存在" });
+    audit(request, "automation.provider.circuit_reset", "automation_provider", id);
+    return { ok: true };
+  });
+
+  app.get("/api/admin/automation/mappings", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    const items = db.prepare(`
+      SELECT m.*, p.title AS product_title, provider.name AS provider_name
+      FROM automation_product_mappings m
+      JOIN products p ON p.id = m.product_id
+      JOIN automation_providers provider ON provider.id = m.provider_id
+      ORDER BY p.title, m.priority, provider.name
+    `).all().map(serializeMapping);
+    return { items };
+  });
+
+  app.post("/api/admin/automation/mappings", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({
+      id: z.string().regex(SAFE_ID).optional(),
+      productId: z.string().trim().min(1).max(120),
+      providerId: z.string().regex(SAFE_ID),
+      externalPlanId: z.string().trim().min(1).max(120),
+      regionCode: z.string().trim().min(1).max(20).transform((value) => value.toUpperCase()),
+      cardPlatformKey: z.enum(["spacexcard", "efuncard"]),
+      cardProductCode: z.string().trim().max(120).optional().default(""),
+      capacityKey: z.string().trim().min(1).max(120),
+      cardCapacity: z.number().int().min(1).max(100),
+      fundingAmountUsd: z.number().positive().max(10000),
+      expectedMinAmount: z.number().positive().max(10000000),
+      expectedMaxAmount: z.number().positive().max(10000000),
+      dailyRiskLimitUsd: z.number().positive().max(1000000),
+      priority: z.number().int().min(1).max(10000),
+      enabled: z.boolean().default(false)
+    }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "自动化商品映射参数不正确" });
+    if (parsed.data.expectedMaxAmount < parsed.data.expectedMinAmount
+      || parsed.data.dailyRiskLimitUsd < parsed.data.fundingAmountUsd) {
+      return reply.code(400).send({ message: "价格或资金上限配置不正确" });
+    }
+    try {
+      const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(parsed.data.productId);
+      const provider = db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(parsed.data.providerId);
+      const platform = db.prepare("SELECT key FROM membership_card_platforms WHERE key = ? AND enabled = 1")
+        .get(parsed.data.cardPlatformKey);
+      if (!product) throw new Error("商城商品不存在或未启用");
+      if (!provider) throw new Error("自动化站点不存在");
+      if (!platform) throw new Error("所选卡台未启用");
+      const capability = validateAutomationMappingCapability(provider, parsed.data);
+      const at = nowIso();
+      const id = parsed.data.id || `apm_${randomUUID()}`;
+      const existing = db.prepare("SELECT * FROM automation_product_mappings WHERE id = ?").get(id);
+      const snapshot = JSON.stringify({
+        configHash: capability.configHash,
+        plan: capability.plan,
+        region: capability.region
+      });
+      if (existing) {
+        db.prepare(`
+          UPDATE automation_product_mappings
+          SET product_id = ?, provider_id = ?, external_plan_id = ?, external_task_type = ?,
+              region_code = ?, currency = ?, card_platform_key = ?, card_product_code = ?,
+              capacity_key = ?, card_capacity = ?, funding_amount_usd = ?,
+              expected_min_amount = ?, expected_max_amount = ?, daily_risk_limit_usd = ?,
+              priority = ?, enabled = ?, paused_reason = NULL, capability_snapshot = ?,
+              revision = revision + 1, updated_at = ?, updated_by = ?
+          WHERE id = ?
+        `).run(
+          parsed.data.productId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
+          capability.region.code, capability.region.currency, parsed.data.cardPlatformKey,
+          parsed.data.cardProductCode || null, parsed.data.capacityKey, parsed.data.cardCapacity,
+          parsed.data.fundingAmountUsd, parsed.data.expectedMinAmount, parsed.data.expectedMaxAmount,
+          parsed.data.dailyRiskLimitUsd, parsed.data.priority, parsed.data.enabled ? 1 : 0,
+          snapshot, at, request.admin.username, id
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO automation_product_mappings (
+            id, product_id, provider_id, external_plan_id, external_task_type,
+            region_code, currency, card_platform_key, card_product_code, capacity_key,
+            card_capacity, funding_amount_usd, expected_min_amount, expected_max_amount,
+            daily_risk_limit_usd, priority, enabled, capability_snapshot,
+            created_at, updated_at, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          id, parsed.data.productId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
+          capability.region.code, capability.region.currency, parsed.data.cardPlatformKey,
+          parsed.data.cardProductCode || null, parsed.data.capacityKey, parsed.data.cardCapacity,
+          parsed.data.fundingAmountUsd, parsed.data.expectedMinAmount, parsed.data.expectedMaxAmount,
+          parsed.data.dailyRiskLimitUsd, parsed.data.priority, parsed.data.enabled ? 1 : 0,
+          snapshot, at, at, request.admin.username
+        );
+      }
+      audit(request, "automation.mapping.upsert", "automation_mapping", id, {
+        productId: parsed.data.productId,
+        providerId: parsed.data.providerId,
+        externalPlanId: capability.plan.id,
+        regionCode: capability.region.code,
+        enabled: parsed.data.enabled
+      });
+      const row = db.prepare(`
+        SELECT m.*, p.title AS product_title, provider.name AS provider_name
+        FROM automation_product_mappings m JOIN products p ON p.id = m.product_id
+        JOIN automation_providers provider ON provider.id = m.provider_id WHERE m.id = ?
+      `).get(id);
+      return { item: serializeMapping(row) };
+    } catch (error) {
+      return errorReply(reply, error);
+    }
+  });
+
+  app.patch("/api/admin/automation/mappings/:id/status", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "映射状态参数不正确" });
+    const id = String(request.params.id || "").trim();
+    const at = nowIso();
+    const changed = db.prepare(`
+      UPDATE automation_product_mappings
+      SET enabled = ?, paused_reason = ?, revision = revision + 1, updated_at = ?, updated_by = ?
+      WHERE id = ?
+    `).run(parsed.data.enabled ? 1 : 0, parsed.data.enabled ? null : "ADMIN_PAUSED", at, request.admin.username, id).changes;
+    if (!changed) return reply.code(404).send({ message: "自动化商品映射不存在" });
+    audit(request, "automation.mapping.status", "automation_mapping", id, { enabled: parsed.data.enabled });
+    return { ok: true };
+  });
+
+  app.get("/api/admin/automation/executions", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    const items = db.prepare(`
+      SELECT * FROM automation_executions ORDER BY created_at DESC LIMIT 300
+    `).all().map((row) => serializeAutomationExecution(row, { admin: true }));
+    return { items };
+  });
+
+  app.get("/api/admin/automation/executions/:id", { preHandler: requireAdmin }, async (request, reply) => {
+    setNoStore(reply);
+    const row = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(String(request.params.id || ""));
+    if (!row) return reply.code(404).send({ message: "自动化履约不存在" });
+    const attempts = db.prepare(`
+      SELECT id, attempt_no, mapping_id, provider_id, credential_id, client_order_id,
+             status, remote_task_id, error_code, error_message, created_at, updated_at
+      FROM automation_execution_attempts WHERE execution_id = ? ORDER BY attempt_no
+    `).all(row.id).map((item) => ({
+      id: item.id,
+      attemptNo: Number(item.attempt_no),
+      mappingId: item.mapping_id,
+      providerId: item.provider_id,
+      credentialId: item.credential_id,
+      clientOrderId: item.client_order_id,
+      status: item.status,
+      remoteTaskId: item.remote_task_id || null,
+      errorCode: item.error_code || null,
+      errorMessage: item.error_message || null,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at
+    }));
+    return { item: serializeAutomationExecution(row, { admin: true }), attempts };
+  });
+
+  app.post("/api/admin/automation/executions/:id/query-now", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = String(request.params.id || "");
+    const changed = db.prepare(`
+      UPDATE automation_executions SET next_action_at = ?, updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'running', 'submit_unknown')
+    `).run(nowIso(), nowIso(), id).changes;
+    if (!changed) return reply.code(409).send({ message: "当前状态不能立即查询" });
+    return { ok: true };
+  });
+
+  app.post("/api/admin/automation/executions/:id/resolve", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({
+      outcome: z.enum(["succeeded", "failed"]),
+      evidenceReference: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/),
+      confirmation: z.literal("RESOLVE_AUTOMATION_REVIEW")
+    }).safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ message: "人工处理参数不正确" });
+    const id = String(request.params.id || "");
+    const current = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id);
+    if (!current || !["manual_review", "manual_hold"].includes(current.status)) {
+      return reply.code(409).send({ message: "当前履约不在人工处理状态" });
+    }
+    try {
+      const item = settleAutomationExecution(db, id, parsed.data.outcome, {
+        code: parsed.data.outcome === "failed" ? "MANUAL_REVIEW_FAILED" : null,
+        message: parsed.data.outcome === "failed" ? "人工核验确认失败" : null,
+        allowNoCard: current.status === "manual_hold",
+        at: nowIso()
+      });
+      audit(request, "automation.execution.resolve", "automation_execution", id, {
+        outcome: parsed.data.outcome,
+        evidenceReference: parsed.data.evidenceReference
+      });
+      return { item: serializeAutomationExecution(item, { admin: true }) };
+    } catch (error) {
+      return errorReply(reply, error);
+    }
+  });
+}
+

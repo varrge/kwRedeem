@@ -1786,6 +1786,171 @@ function createSchema(db) {
       dispatched_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS automation_fulfillment_settings (
+      id TEXT PRIMARY KEY,
+      payment_gate_enabled INTEGER NOT NULL DEFAULT 0,
+      mode TEXT NOT NULL DEFAULT 'disabled',
+      config_ttl_seconds INTEGER NOT NULL DEFAULT 300,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      adapter_key TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'paused',
+      current_credential_id TEXT,
+      max_concurrency INTEGER NOT NULL DEFAULT 1,
+      config_snapshot TEXT,
+      config_hash TEXT,
+      config_synced_at TEXT,
+      config_status TEXT NOT NULL DEFAULT 'not_synced',
+      config_error TEXT,
+      circuit_state TEXT NOT NULL DEFAULT 'closed',
+      circuit_reason TEXT,
+      circuit_opened_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_provider_credentials (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      api_key_encrypted TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'current',
+      created_at TEXT NOT NULL,
+      retired_at TEXT,
+      created_by TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_product_mappings (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      external_plan_id TEXT NOT NULL,
+      external_task_type TEXT NOT NULL DEFAULT 'purchase',
+      region_code TEXT,
+      currency TEXT,
+      card_platform_key TEXT NOT NULL,
+      card_product_code TEXT,
+      capacity_key TEXT NOT NULL,
+      card_capacity INTEGER NOT NULL DEFAULT 1,
+      funding_amount_usd REAL NOT NULL,
+      expected_min_amount REAL NOT NULL,
+      expected_max_amount REAL NOT NULL,
+      daily_risk_limit_usd REAL NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 100,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      paused_reason TEXT,
+      capability_snapshot TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      UNIQUE(product_id, provider_id, external_plan_id, region_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_executions (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL UNIQUE,
+      order_no TEXT NOT NULL UNIQUE,
+      product_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'waiting_gate',
+      mapping_id TEXT,
+      provider_id TEXT,
+      credential_id TEXT,
+      client_order_id TEXT,
+      remote_task_id TEXT,
+      remote_status TEXT,
+      current_phase TEXT,
+      public_message TEXT,
+      mapping_snapshot TEXT,
+      remote_snapshot TEXT,
+      card_id TEXT,
+      card_brand TEXT,
+      card_last4 TEXT,
+      card_reservation_state TEXT,
+      pricing_currency TEXT,
+      pricing_total TEXT,
+      pricing_confirmed INTEGER,
+      last_error_code TEXT,
+      last_error_message TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      poll_failure_count INTEGER NOT NULL DEFAULT 0,
+      next_action_at TEXT,
+      delayed_alerted_at TEXT,
+      manual_review_alerted_at TEXT,
+      locked_at TEXT,
+      locked_by TEXT,
+      accepted_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_execution_attempts (
+      id TEXT PRIMARY KEY,
+      execution_id TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      mapping_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      credential_id TEXT NOT NULL,
+      client_order_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      mapping_snapshot TEXT NOT NULL,
+      remote_task_id TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(execution_id, attempt_no),
+      UNIQUE(provider_id, credential_id, client_order_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_card_reservations (
+      id TEXT PRIMARY KEY,
+      execution_id TEXT NOT NULL UNIQUE,
+      provider_key TEXT NOT NULL,
+      card_id TEXT,
+      planned_product_code TEXT,
+      capacity_key TEXT NOT NULL,
+      slot_index INTEGER,
+      state TEXT NOT NULL,
+      reserved_at TEXT NOT NULL,
+      consumed_at TEXT,
+      released_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_funding_intents (
+      id TEXT PRIMARY KEY,
+      execution_id TEXT NOT NULL UNIQUE,
+      provider_key TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      target_card_id TEXT,
+      product_code TEXT,
+      amount_usd REAL NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      request_body_encrypted TEXT NOT NULL,
+      state TEXT NOT NULL,
+      provider_resource_id TEXT,
+      created_at TEXT NOT NULL,
+      submitted_at TEXT,
+      resolved_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_order_exclusions (
+      order_no TEXT PRIMARY KEY,
+      reason_code TEXT NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS spacexcard_webhook_events (
       auth_id TEXT NOT NULL,
       type TEXT NOT NULL,
@@ -2143,6 +2308,19 @@ function createSchema(db) {
       WHERE status = 'active';
     CREATE INDEX IF NOT EXISTS idx_fulfillment_interventions_open ON fulfillment_interventions(acknowledged_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_membership_outbox_pending ON membership_outbox(dispatched_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_providers_status
+      ON automation_providers(status, circuit_state, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_credentials_provider
+      ON automation_provider_credentials(provider_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_mappings_route
+      ON automation_product_mappings(product_id, enabled, priority, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_executions_due
+      ON automation_executions(status, next_action_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_executions_provider
+      ON automation_executions(provider_id, status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_card_active_slot
+      ON automation_card_reservations(card_id, capacity_key, slot_index)
+      WHERE card_id IS NOT NULL AND state IN ('reserved', 'consumed', 'manual_review');
     CREATE INDEX IF NOT EXISTS idx_spacexcard_webhook_card ON spacexcard_webhook_events(upstream_card_id, received_at);
   `);
 }
@@ -2642,10 +2820,63 @@ function seedDefaults(db) {
   `).run(new Date().toISOString());
 
   db.prepare(`
+    INSERT OR IGNORE INTO automation_fulfillment_settings (
+      id, payment_gate_enabled, mode, config_ttl_seconds, updated_at, updated_by
+    ) VALUES ('default', 0, 'disabled', 300, ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO automation_order_exclusions (
+      order_no, reason_code, note, created_at, created_by
+    ) VALUES ('KW1786762677460466', 'NO_PAYMENT_MANUAL_HOLD',
+      'Explicitly excluded from payment automation', ?, 'system')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
+    INSERT OR IGNORE INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      last_error_code, next_action_at, created_at, updated_at
+    )
+    SELECT
+      'afe_no_payment_kw1786762677460466', o.id, o.order_no, o.product_id,
+      'manual_hold', '人工核验中', 'NO_PAYMENT_MANUAL_HOLD', NULL, ?, ?
+    FROM redeem_orders o
+    WHERE o.order_no = 'KW1786762677460466'
+      AND o.status IN ('pending', 'processing')
+  `).run(new Date().toISOString(), new Date().toISOString());
+
+  db.prepare(`
+    UPDATE cdkeys
+    SET status = 'locked', locked_by_order_id = (
+          SELECT id FROM redeem_orders WHERE order_no = 'KW1786762677460466'
+        ),
+        locked_at = COALESCE(locked_at, ?), updated_at = ?
+    WHERE id = (
+      SELECT cdkey_id FROM redeem_orders
+      WHERE order_no = 'KW1786762677460466' AND status IN ('pending', 'processing')
+    ) AND (status = 'active' OR locked_by_order_id = (
+      SELECT id FROM redeem_orders WHERE order_no = 'KW1786762677460466'
+    ))
+  `).run(new Date().toISOString(), new Date().toISOString());
+
+  db.prepare(`
+    UPDATE membership_fulfillments
+    SET automation_enrolled_at = NULL, updated_at = ?
+    WHERE order_no = 'KW1786762677460466'
+      AND state NOT IN ('COMPLETED', 'CANCELLED')
+  `).run(new Date().toISOString());
+
+  db.prepare(`
     INSERT OR IGNORE INTO membership_intake_settings (
       id, accept_orders_created_at, created_at, created_by
     ) VALUES ('default', ?, ?, 'system')
   `).run(new Date().toISOString(), new Date().toISOString());
+
+  db.prepare(`
+    UPDATE membership_intake_settings
+    SET accept_orders_created_at = '9999-12-31T23:59:59.999Z'
+    WHERE id = 'default'
+  `).run();
 
   db.prepare(`
     INSERT OR IGNORE INTO browser_fulfillment_lease (id, epoch, state, updated_at)

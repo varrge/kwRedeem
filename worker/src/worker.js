@@ -5,7 +5,7 @@ import { getDb } from "../../shared/src/database.js";
 import { env, resolveProjectPath } from "../../shared/src/env.js";
 import { normalizeSourceKey } from "../../shared/src/cdkey-utils.js";
 import { extractSmsVerificationCode } from "../../shared/src/sms-code.js";
-import { decryptText } from "../../shared/src/secure.js";
+import { decryptText, encryptText } from "../../shared/src/secure.js";
 import { encodeRequestBody, evaluateRule, renderJsonTemplate, renderTemplateString, safeParseJson } from "../../shared/src/templates.js";
 import { cdkeyStatuses, endpointTypes, jobStatuses, logActions, notificationEventTypes, orderStatuses } from "../../shared/src/constants.js";
 import { getNumber, getStatus, setStatus } from "../../shared/src/fivesim-client.js";
@@ -44,6 +44,7 @@ import {
 import { getAvailableQuota } from "../../shared/src/quota-calc.js";
 import { createStoreFulfillmentRunner } from "../../shared/src/store-fulfillment-runner.js";
 import { createSpaceXCdkService } from "../../shared/src/spacex-cdk-service.js";
+import { createAutomationRunner } from "./automation-runner.js";
 
 const db = getDb();
 const workerId = `worker-${process.pid}`;
@@ -77,6 +78,48 @@ function writeAuditLog(action, resourceType, resourceId, detail) {
     VALUES (lower(hex(randomblob(8))), ?, 'worker', ?, ?, ?, ?)
   `).run(action, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
 }
+
+async function notifyAutomationIntervention(alert = {}) {
+  const at = nowIso();
+  const kind = String(alert.kind || "intervention").slice(0, 80);
+  const executionId = String(alert.executionId || "-").slice(0, 160);
+  const orderNo = String(alert.orderNo || "-").slice(0, 160);
+  const code = String(alert.detail?.code || alert.detail?.phase || "-").slice(0, 160);
+  db.prepare(`
+    INSERT INTO notification_events (
+      id, monitor_id, monitor_name, event_type, matched, summary, detail, created_at
+    ) VALUES (lower(hex(randomblob(8))), NULL, '协议自动化履约',
+      'automation_intervention', 1, ?, ?, ?)
+  `).run(
+    `${kind}: ${orderNo}`,
+    JSON.stringify({ kind, executionId, orderNo, code }),
+    at
+  );
+  const webhook = db.prepare(`
+    SELECT global_feishu_webhook FROM notification_settings WHERE id = 'default'
+  `).get()?.global_feishu_webhook;
+  if (!webhook) return;
+  const result = await sendFeishuMarkdown(webhook, {
+    title: "KaWang 协议自动化需要处理",
+    content: [
+      `**类型**：${kind}`,
+      `**订单号**：${orderNo}`,
+      `**履约 ID**：${executionId}`,
+      `**状态码/阶段**：${code}`,
+      `**时间**：${at}`
+    ].join("\n")
+  });
+  if (!result.ok) throw new Error(`飞书自动化告警失败：HTTP ${result.status || 0}`);
+}
+
+const automationRunner = createAutomationRunner({
+  db,
+  decryptText,
+  encryptText,
+  workerId: `${workerId}-automation`,
+  audit: writeAuditLog,
+  notify: notifyAutomationIntervention
+});
 
 const WORLDCUP_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const WORLDCUP_INTERNAL_TIMEOUT_MS = 30 * 1000;
@@ -3284,6 +3327,13 @@ setInterval(() => {
 
 setInterval(() => {
   if (isMaintenanceEnabled()) return;
+  automationRunner.tick().catch((error) => {
+    console.error("[KaWang worker] automation-fulfillment", error);
+  });
+}, 1000);
+
+setInterval(() => {
+  if (isMaintenanceEnabled()) return;
   spaceXCdkService.reconcileDue().catch((error) => {
     console.error("[KaWang worker] spacex-cdk-reconciliation", error);
   });
@@ -3314,6 +3364,10 @@ if (!isMaintenanceEnabled()) {
 
   storeFulfillmentRunner.tick().catch((error) => {
     console.error("[KaWang worker] store-fulfillment", error);
+  });
+
+  automationRunner.tick().catch((error) => {
+    console.error("[KaWang worker] automation-fulfillment", error);
   });
 
   spaceXCdkService.reconcileDue().catch((error) => {

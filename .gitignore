@@ -23,7 +23,12 @@ docs/*
 !docs/sub2api-home-content.html
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 !docs/python-membership-payment-executor-spec.md
+!docs/AUTOMATION_FULFILLMENT_V1.md
 tests/*
+!tests/automation-adapter.test.js
+!tests/automation-api.test.js
+!tests/automation-runner.test.js
+!tests/efuncard-openapi.test.js
 !tests/card-platform-migration.test.js
 !tests/store-membership-migration.test.js
 !tests/store-fulfillment.test.js

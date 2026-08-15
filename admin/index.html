@@ -532,7 +532,83 @@
         <section class="tab-panel hidden" data-panel="membership-fulfillment">
           <div class="content-header">
             <h2>ChatGPT 会员自动化</h2>
-            <p>配置服务端卡片 OpenAPI 基础凭据；付款能力按阶段实施且当前保持锁定</p>
+            <p>按站点协议执行直付任务；站点返回成功即视为订阅完成且自动续费已关闭</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-header"><h3>协议自动化付款 Gate</h3></div>
+              <form id="automation-gate-form" class="stack">
+                <label><input id="automation-gate-enabled" type="checkbox" /> 允许新订单选卡、充值并向自动化站点提交任务</label>
+                <label class="field"><span>站点配置有效期（秒）</span><input id="automation-config-ttl" type="number" min="60" max="3600" step="1" value="300" required /></label>
+                <div class="grid grid-2">
+                  <label class="field"><span>重新输入管理员账号</span><input id="automation-gate-username" autocomplete="off" required /></label>
+                  <label class="field"><span>重新输入管理员密码</span><input id="automation-gate-password" type="password" autocomplete="new-password" required /></label>
+                </div>
+                <label><input id="automation-gate-confirm" type="checkbox" required /> 我确认 Gate 开启后只处理已启用映射；关闭时不会产生新的选卡、充值或远端 POST</label>
+                <button type="submit" class="primary-btn">重新验密并保存 Gate</button>
+              </form>
+              <div id="automation-gate-result" class="hint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>自动化站点</h3></div>
+              <form id="automation-provider-form" class="stack">
+                <input id="automation-provider-id" type="hidden" />
+                <div class="grid grid-2">
+                  <label class="field"><span>站点名称</span><input id="automation-provider-name" autocomplete="off" required /></label>
+                  <label class="field"><span>协议 Adapter</span><select id="automation-provider-adapter"><option value="automate_v1">Automate API v1</option></select></label>
+                </div>
+                <label class="field"><span>API Base URL</span><input id="automation-provider-base-url" type="url" autocomplete="off" placeholder="https://example.com/api/v1/automate" required /></label>
+                <label class="field"><span>站点 API Key</span><input id="automation-provider-api-key" type="password" autocomplete="new-password" placeholder="首次提供一次；后续留空继续使用" /></label>
+                <label class="field"><span>状态</span><select id="automation-provider-status"><option value="paused">暂停</option><option value="active">启用</option></select></label>
+                <div class="actions-row"><button type="submit" class="primary-btn">保存并读取 /config</button><button id="automation-provider-cancel" type="button" class="ghost-btn">清空表单</button></div>
+              </form>
+              <div id="automation-provider-result" class="hint"></div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>站点能力</h3><button id="automation-provider-refresh" type="button" class="ghost-btn small">刷新</button></div>
+            <div id="automation-provider-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>商城商品与站点套餐映射</h3><button id="automation-mapping-refresh" type="button" class="ghost-btn small">刷新</button></div>
+            <form id="automation-mapping-form" class="stack">
+              <input id="automation-mapping-id" type="hidden" />
+              <div class="grid grid-2">
+                <label class="field"><span>商城商品</span><select id="automation-mapping-product" required></select></label>
+                <label class="field"><span>自动化站点</span><select id="automation-mapping-provider" required></select></label>
+                <label class="field"><span>站点直付套餐</span><select id="automation-mapping-plan" required></select></label>
+                <label class="field"><span>充值区域</span><select id="automation-mapping-region" required></select></label>
+                <label class="field"><span>卡台</span><select id="automation-mapping-card-platform"><option value="spacexcard">SpaceX Card</option><option value="efuncard">EfunCard</option></select></label>
+                <label class="field"><span>开卡产品代码</span><input id="automation-mapping-card-product" autocomplete="off" placeholder="无可用存量卡时使用" /></label>
+                <label class="field"><span>容量分组</span><input id="automation-mapping-capacity-key" autocomplete="off" required /></label>
+                <label class="field"><span>单卡容量</span><input id="automation-mapping-card-capacity" type="number" min="1" max="100" step="1" value="1" required /></label>
+                <label class="field"><span>备付金额（USD）</span><input id="automation-mapping-funding" type="number" min="0.01" step="0.01" required /></label>
+                <label class="field"><span>结账最低金额（区域币种）</span><input id="automation-mapping-price-min" type="number" min="0.01" step="0.01" required /></label>
+                <label class="field"><span>结账最高金额（区域币种）</span><input id="automation-mapping-price-max" type="number" min="0.01" step="0.01" required /></label>
+                <label class="field"><span>每日资金风险上限（USD）</span><input id="automation-mapping-daily-risk" type="number" min="0.01" step="0.01" required /></label>
+                <label class="field"><span>路由优先级</span><input id="automation-mapping-priority" type="number" min="1" max="10000" step="1" value="100" required /></label>
+                <label><input id="automation-mapping-enabled" type="checkbox" /> 启用该映射</label>
+              </div>
+              <div class="actions-row"><button type="submit" class="primary-btn">保存映射</button><button id="automation-mapping-cancel" type="button" class="ghost-btn">清空表单</button></div>
+            </form>
+            <div id="automation-mapping-result" class="hint"></div>
+            <div id="automation-mapping-list" class="table-wrapper mt-24"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3>协议自动化订单</h3><button id="automation-execution-refresh" type="button" class="ghost-btn small">刷新</button></div>
+            <p class="hint">人工核验状态不会自动重试或释放 Session、卡密和卡片容量；必须根据外部证据人工裁决。</p>
+            <div id="automation-execution-list" class="table-wrapper"></div>
+            <div id="automation-execution-result" class="hint"></div>
+          </div>
+
+          <div class="content-header mt-24">
+            <h2>旧版履约控制台</h2>
+            <p>仅用于冻结、核对和迁移历史 Go / 浏览器订单；新订单不再进入该流程</p>
           </div>
 
           <div class="grid grid-2">

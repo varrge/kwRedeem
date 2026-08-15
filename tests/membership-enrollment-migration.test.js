@@ -48,7 +48,7 @@ after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("membership enrollment migration leaves every existing fulfillment out of automation", () => {
+test("protocol automation freezes legacy Go intake and leaves existing fulfillment unenrolled", () => {
   const legacyFulfillment = db.prepare(`
     SELECT automation_enrolled_at
     FROM membership_fulfillments WHERE id = 'mf-legacy'
@@ -59,6 +59,6 @@ test("membership enrollment migration leaves every existing fulfillment out of a
     SELECT accept_orders_created_at
     FROM membership_intake_settings WHERE id = 'default'
   `).get();
-  assert.equal(Date.parse(intake.accept_orders_created_at) >= migrationStartedAt, true);
-  assert.equal(Date.parse(intake.accept_orders_created_at) <= Date.now(), true);
+  assert.equal(Date.parse(intake.accept_orders_created_at) > migrationStartedAt, true);
+  assert.equal(intake.accept_orders_created_at, "9999-12-31T23:59:59.999Z");
 });

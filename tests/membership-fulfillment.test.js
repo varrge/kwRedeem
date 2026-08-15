@@ -1563,7 +1563,7 @@ test("manual membership CDKs create the target fulfillment and support one-order
 	`).get(repaired.json().item.id).count, 2);
 });
 
-test("store membership wrappers enter Efun-capable automation without a legacy activation job", async () => {
+test("store membership wrappers enter protocol automation without legacy Go fulfillment or activation jobs", async () => {
   if (!app) ({ app } = await import("../api/src/server.js"));
   const now = new Date().toISOString();
   db.prepare(`
@@ -1610,9 +1610,10 @@ test("store membership wrappers enter Efun-capable automation without a legacy a
   assert.equal(order.status, "pending");
   assert.equal(order.latest_job_id, null);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM activation_jobs WHERE order_id = ?").get(order.id).count, 0);
-  const fulfillment = db.prepare("SELECT * FROM membership_fulfillments WHERE order_id = ?").get(order.id);
-  assert.equal(fulfillment.target_tier, "plus");
-  assert.equal(fulfillment.state, "WAITING_SESSION_VALIDATION");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM membership_fulfillments WHERE order_id = ?").get(order.id).count, 0);
+  const execution = db.prepare("SELECT * FROM automation_executions WHERE order_id = ?").get(order.id);
+  assert.equal(execution.product_id, "prod_demo");
+  assert.equal(execution.status, "waiting_gate");
 
   const detail = await app.inject({ method: "GET", url: `/api/public/orders/${redeemed.json().orderNo}` });
   assert.equal(detail.statusCode, 200);
@@ -1672,7 +1673,8 @@ test("voiding a redeemed CDK cancels its queued delivery and membership fulfillm
     cancelledOrders: 1,
     cancelledJobs: 0,
     cancelledExtensionDeliveries: 1,
-    cancelledMembershipFulfillments: 1
+    cancelledMembershipFulfillments: 1,
+    cancelledAutomationExecutions: 0
   });
 
   const cdkey = db.prepare("SELECT * FROM cdkeys WHERE id = ?").get(created.json().id);
@@ -1739,7 +1741,8 @@ test("voiding a redeemed CDK cancels its pending activation job", async () => {
     cancelledOrders: 1,
     cancelledJobs: 1,
     cancelledExtensionDeliveries: 0,
-    cancelledMembershipFulfillments: 0
+    cancelledMembershipFulfillments: 0,
+    cancelledAutomationExecutions: 0
   });
   const job = db.prepare("SELECT * FROM activation_jobs WHERE order_id = ?").get(order.id);
   assert.equal(job.status, "cancelled");

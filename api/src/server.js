@@ -21,12 +21,13 @@ import { convertSessionToCookiePayload } from "../../shared/src/session-cookie-c
 import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
 import { createMembershipPaymentService } from "./membership-payment.js";
+import { createAutomationFulfillmentService } from "./automation-fulfillment.js";
 import { createSub2ApiShakeService } from "./sub2api-shake.js";
 import { buildUpdateProcessEnv } from "./system-update.js";
 import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
 import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
 import { persistManagedCardTransactions } from "../../shared/src/membership-reconciliation.js";
-import { membershipTiers } from "../../shared/src/membership-fulfillment.js";
+import { enrollAutomationOrder, serializeAutomationExecution } from "../../shared/src/automation-fulfillment.js";
 import {
   activateMembershipFulfillmentIdentity,
   createMembershipFulfillmentForOrder,
@@ -767,6 +768,19 @@ createMembershipPaymentService({
     persistManagedCardTransactions(db, context.cardId, transactions);
     return [...new Set(transactions.map((item) => item.authId))].sort();
   }
+});
+
+createAutomationFulfillmentService({
+  app,
+  db,
+  requireAdmin,
+  encryptText,
+  decryptText,
+  createAuditLog,
+  verifyFreshAdmin: (credentials) => verifyFreshAdminCredentials(credentials, {
+    username: env.adminUsername,
+    password: env.adminPassword
+  })
 });
 
 function createAuditLogInDatabase(databasePath, { action, actor = "system", resourceType, resourceId = null, detail = null }) {
@@ -1604,6 +1618,10 @@ function getOrderDetail(orderNo) {
   const membershipFulfillment = db.prepare(`
     SELECT * FROM membership_fulfillments WHERE order_id = ?
   `).get(order.id);
+  const automationExecution = db.prepare(`
+    SELECT * FROM automation_executions WHERE order_id = ?
+  `).get(order.id);
+  const automationProjection = serializeAutomationExecution(automationExecution);
   const membershipCompensation = membershipFulfillment
     ? db.prepare(`
         SELECT * FROM customer_compensation_resolutions
@@ -1614,6 +1632,26 @@ function getOrderDetail(orderNo) {
     processing_mode: order.cdkey_processing_mode,
     metadata: order.cdkey_metadata
   });
+  const automationDelivery = automationProjection
+    ? {
+        status: automationProjection.publicStatus === "completed"
+          ? "succeeded"
+          : (automationProjection.publicStatus === "failed"
+              ? "cancelled"
+              : (automationProjection.publicStatus === "manual_review" ? "manual_review" : "processing")),
+        label: automationProjection.publicStatus === "completed"
+          ? "交付成功"
+          : (automationProjection.publicStatus === "failed"
+              ? "处理失败"
+              : (automationProjection.publicStatus === "manual_review" ? "人工核验中" : "处理中")),
+        updatedAt: automationProjection.updatedAt
+      }
+    : null;
+  const automationLiveStatus = automationProjection
+    ? (automationProjection.publicStatus === "completed"
+        ? "completed"
+        : (automationProjection.publicStatus === "failed" ? "failed" : "processing"))
+    : null;
 
   return {
     orderNo: order.order_no,
@@ -1636,19 +1674,19 @@ function getOrderDetail(orderNo) {
     sessionPreview: getJsonBodyOrNull(order.session_preview),
     createdAt: order.created_at,
     updatedAt: order.updated_at,
-    liveTaskStatus: liveInfo.liveTaskStatus || null,
+    liveTaskStatus: automationLiveStatus || liveInfo.liveTaskStatus || null,
     queuePosition: liveInfo.queuePosition ?? null,
-    liveMessage: liveInfo.liveMessage || null,
+    liveMessage: automationProjection?.message || liveInfo.liveMessage || null,
     liveStage: liveInfo.liveStage || null,
     liveProgress: liveInfo.liveProgress ?? null,
     liveErrorMessage: liveInfo.liveErrorMessage || null,
-    membershipDelivery: projectMembershipDelivery(membershipFulfillment, membershipCompensation),
+    membershipDelivery: automationDelivery || projectMembershipDelivery(membershipFulfillment, membershipCompensation),
     spaceXCdkActivation,
     job: {
-      status: order.job_status,
-      lastError: order.job_error,
+      status: automationLiveStatus || order.job_status,
+      lastError: automationProjection?.publicStatus === "failed" ? "自动化处理失败" : order.job_error,
       lastResponse,
-      attemptCount: order.job_attempt_count
+      attemptCount: automationExecution ? Number(automationExecution.attempt_count || 0) : order.job_attempt_count
     }
   };
 }
@@ -6905,15 +6943,16 @@ app.post("/api/public/redeem", async (request, reply) => {
       const orderId = nanoid(18);
       const manualProcessing = isManualProcessingCdkey(cdkey);
       const membershipAutomation = isMembershipAutomationCdkey(cdkey);
-      const delegatedMembershipProcessing = manualProcessing || membershipAutomation;
       const manualType = getCdkeyManualType(cdkey);
-      const jobId = delegatedMembershipProcessing ? null : nanoid(18);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
 	  const productId = site.product_id || cdkey.product_id;
-	  const membershipTier = db.prepare("SELECT membership_tier FROM products WHERE id=?").get(productId)?.membership_tier;
-	  const goMembershipOrder = !nodeMembershipAutomationTest && (membershipTiers.includes(membershipTier)
-		|| membershipTiers.includes(String(manualType || "").toLowerCase()));
-	  const deliveryEnrollment = goMembershipOrder
+	  const automationMapped = Boolean(db.prepare(`
+	    SELECT 1 FROM automation_product_mappings WHERE product_id = ? LIMIT 1
+	  `).get(productId));
+	  const automationOrder = membershipAutomation || automationMapped;
+	  const delegatedMembershipProcessing = manualProcessing || automationOrder;
+	  const jobId = delegatedMembershipProcessing ? null : nanoid(18);
+	  const deliveryEnrollment = automationOrder
 		? { status: null, expiresAt: null, updatedAt: null }
 		: extensionDelivery.enrollmentForSite(site.slug, now);
 
@@ -6946,7 +6985,14 @@ app.post("/api/public/redeem", async (request, reply) => {
         deliveryEnrollment.updatedAt
       );
 
-      if (nodeMembershipAutomationTest) {
+      if (automationOrder) {
+		enrollAutomationOrder(db, {
+		  orderId,
+		  orderNo,
+		  productId,
+		  createdAt: now
+		});
+      } else if (nodeMembershipAutomationTest) {
         createMembershipFulfillmentForOrder(db, {
           orderId,
           orderNo,
@@ -10508,7 +10554,8 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
           cancelledOrders: 0,
           cancelledJobs: 0,
           cancelledExtensionDeliveries: 0,
-          cancelledMembershipFulfillments: 0
+          cancelledMembershipFulfillments: 0,
+          cancelledAutomationExecutions: 0
         };
       }
       const selectedPlaceholders = selectedIds.map(() => "?").join(",");
@@ -10535,6 +10582,28 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
         LIMIT 1
       `).get(...selectedIds);
       if (exposedFulfillment) return { error: "CDKEY_VOID_BLOCKED_BY_MONEY_BOUNDARY" };
+
+      const exposedAutomation = db.prepare(`
+        SELECT execution.id
+        FROM automation_executions execution
+        JOIN redeem_orders o ON o.id = execution.order_id
+        WHERE o.cdkey_id IN (${selectedPlaceholders})
+          AND execution.status NOT IN ('succeeded', 'failed', 'cancelled')
+          AND (
+            execution.status NOT IN ('waiting_gate', 'waiting_mapping')
+            OR execution.card_id IS NOT NULL
+            OR EXISTS (
+              SELECT 1 FROM automation_card_reservations reservation
+              WHERE reservation.execution_id = execution.id AND reservation.state <> 'released'
+            )
+            OR EXISTS (
+              SELECT 1 FROM automation_funding_intents intent
+              WHERE intent.execution_id = execution.id
+            )
+          )
+        LIMIT 1
+      `).get(...selectedIds);
+      if (exposedAutomation) return { error: "CDKEY_VOID_BLOCKED_BY_AUTOMATION_BOUNDARY" };
 
       const cancelledJobs = db.prepare(`
         UPDATE activation_jobs
@@ -10576,6 +10645,26 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
         `).run(now, ...queuedFulfillments.map((item) => item.id));
       }
 
+      const cancelledAutomationExecutions = db.prepare(`
+        UPDATE automation_executions
+        SET status = 'cancelled', public_message = '处理失败',
+            last_error_code = 'CDKEY_VOIDED', last_error_message = '关联卡密已由后台作废',
+            next_action_at = NULL, locked_at = NULL, locked_by = NULL,
+            completed_at = COALESCE(completed_at, ?), updated_at = ?
+        WHERE order_id IN (
+          SELECT id FROM redeem_orders WHERE cdkey_id IN (${selectedPlaceholders})
+        ) AND status IN ('waiting_gate', 'waiting_mapping')
+          AND card_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM automation_card_reservations reservation
+            WHERE reservation.execution_id = automation_executions.id AND reservation.state <> 'released'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM automation_funding_intents intent
+            WHERE intent.execution_id = automation_executions.id
+          )
+      `).run(now, now, ...selectedIds).changes;
+
       const cancelledExtensionDeliveries = db.prepare(`
         UPDATE redeem_orders
         SET extension_delivery_status = 'failed', extension_delivery_error = 'CDKEY_VOIDED',
@@ -10589,7 +10678,8 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
 
       const cancelledOrders = db.prepare(`
         UPDATE redeem_orders
-        SET status = 'failed', error_message = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+        SET status = 'failed', error_message = ?, session_payload = '',
+            completed_at = COALESCE(completed_at, ?), updated_at = ?
         WHERE cdkey_id IN (${selectedPlaceholders})
           AND status IN ('pending', 'processing')
           AND NOT EXISTS (
@@ -10610,7 +10700,8 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
         cancelledOrders,
         cancelledJobs,
         cancelledExtensionDeliveries,
-        cancelledMembershipFulfillments: queuedFulfillments.length
+        cancelledMembershipFulfillments: queuedFulfillments.length,
+        cancelledAutomationExecutions
       };
     }).immediate();
 
@@ -10624,6 +10715,12 @@ app.post("/api/admin/cdkeys/bulk-action", { preHandler: requireAdmin }, async (r
       return reply.code(409).send({
         code: outcome.error,
         message: "所选卡密的会员履约已预留卡片、占用浏览器或进入资金阶段，不能直接作废"
+      });
+    }
+    if (outcome.error === "CDKEY_VOID_BLOCKED_BY_AUTOMATION_BOUNDARY") {
+      return reply.code(409).send({
+        code: outcome.error,
+        message: "所选卡密的协议自动化已选卡、进入资金动作、提交远端或等待人工核验，不能直接作废"
       });
     }
 

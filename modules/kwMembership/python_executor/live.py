@@ -196,13 +196,17 @@ async () => {
       const checkoutSessionClass = entry.checkoutSessionID.startsWith('oaics_') ? 'oaics_' : (entry.checkoutSessionID.startsWith('cs_') ? 'cs_' : '');
       const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
-      const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
+      const clientSecretValue = payload?.client_secret;
+      const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
-      const secretViolation = !/^(?:oaics_|cs_)/.test(clientSecret) ? 'client_secret_prefix'
-        : (!clientSecret.includes('_secret_') ? 'client_secret_separator'
+      const secretViolation = clientSecretValue === undefined ? 'client_secret_missing'
+        : (typeof clientSecretValue !== 'string' ? 'client_secret_type'
+          : (clientSecret.length === 0 ? 'client_secret_empty'
+            : (!/^(?:oaics_|cs_)/.test(clientSecret) ? 'client_secret_prefix'
+              : (!clientSecret.includes('_secret_') ? 'client_secret_separator'
           : (!/^[A-Za-z0-9_]+$/.test(clientSecret) ? 'client_secret_charset'
             : (clientSecret.length > 4096 ? 'client_secret_length'
-              : (!clientSecret.startsWith(checkoutSessionClass) ? 'client_secret_class' : ''))));
+                  : (!clientSecret.startsWith(checkoutSessionClass) ? 'client_secret_class' : '')))))));
       const validSecret = secretViolation === '';
       const contractViolation = !safeSessionID ? 'checkout_session_id'
         : (!validKey ? 'publishable_key'
@@ -838,6 +842,7 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
             violation = entry.get("contractViolation")
             if violation not in {
                 "checkout_session_id", "publishable_key", "processor_entity",
+                "client_secret_missing", "client_secret_type", "client_secret_empty",
                 "client_secret_prefix", "client_secret_separator", "client_secret_charset",
                 "client_secret_length", "client_secret_class",
             }:

@@ -168,7 +168,7 @@ systemd 管理的 `/run/kwmembership-browser-profiles` 运行目录中，用履�
 → Go 校验账号与库存
 → Go 取消已有自动续费并重新确认 free + auto-renew=false
 → Go 获取卡资料与账单地址，写入串行任务
-→ Python 一次领取 Session 和卡材料并校验 Plus / PH / PHP 页面合同
+→ Python 一次领取 Session 和卡材料，按 hosted URL 或 custom Stripe Elements 进入结账并校验 Plus / PH / PHP 页面合同
 → 每次可能产生授权的点击前写入 Permit 并快照卡交易
 → 提交后只进入对账，不会因超时盲目重提
 → 确认会员与卡交易后取消自动续费并写回后台

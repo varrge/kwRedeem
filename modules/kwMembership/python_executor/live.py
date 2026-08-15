@@ -161,8 +161,9 @@ CONTROL_SELECTORS = {
 
 PREPARE_PLUS_JS = r"""
 async () => {
-  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',errorKind:'',httpStatus:0,...overrides});
+  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',checkoutSessionClass:'',customMaterialReady:false,errorKind:'',httpStatus:0,...overrides});
   if (location.origin !== 'https://chatgpt.com') return result({errorKind:'context_invalid'});
+  try { delete window.__kwmembershipCustomCheckout; } catch {}
   const controller = new AbortController(); const abortTimer = setTimeout(() => controller.abort(), 12000);
   try {
     const sessionResponse = await fetch('/api/auth/session', {method:'GET', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal});
@@ -187,8 +188,142 @@ async () => {
     }
     const response = await fetch('/backend-api/payments/checkout', {method:'POST', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal, headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({billing_details:{country:'PH',currency:'PHP'},checkout_ui_mode:'hosted',entry_point:'all_plans_pricing_modal',plan_name:'chatgptplusplan'})});
     if (!response.ok) return result({errorKind:response.status===401||response.status===403?'checkout_unauthorized':'checkout_rejected',httpStatus:response.status});
-    const payload = await response.json(); return result({responseTag:typeof payload?.tag==='string'?payload.tag:'',checkoutURL:typeof payload?.url==='string'?payload.url:'',processorEntity:typeof payload?.processor_entity==='string'?payload.processor_entity:'',checkoutSessionID:typeof payload?.checkout_session_id==='string'?payload.checkout_session_id:''});
+    const payload = await response.json();
+    const entry = {responseTag:typeof payload?.tag==='string'?payload.tag:'',checkoutURL:typeof payload?.url==='string'?payload.url:'',processorEntity:typeof payload?.processor_entity==='string'?payload.processor_entity:'',checkoutSessionID:typeof payload?.checkout_session_id==='string'?payload.checkout_session_id:''};
+    if (entry.responseTag === 'custom_checkout_session') {
+      const safeSessionID = /^(?:oaics_|cs_)[A-Za-z0-9_-]+$/.test(entry.checkoutSessionID);
+      const checkoutSessionClass = entry.checkoutSessionID.startsWith('oaics_') ? 'oaics_' : (entry.checkoutSessionID.startsWith('cs_') ? 'cs_' : '');
+      const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
+      const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
+      const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
+      const country = typeof payload?.billing_details?.country === 'string' ? payload.billing_details.country : '';
+      const currency = typeof payload?.billing_details?.currency === 'string' ? payload.billing_details.currency : '';
+      const planName = typeof payload?.plan_name === 'string' ? payload.plan_name : '';
+      const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
+      const validSecret = /^cs_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret) && clientSecret.length <= 4096;
+      if (!safeSessionID || !validKey || !validSecret || payload?.checkout_ui_mode !== 'custom' || country !== 'PH' || currency !== 'PHP' || planName !== 'chatgptplusplan') {
+        return result({...customEntry,errorKind:'custom_checkout_material_invalid'});
+      }
+      Object.defineProperty(window, '__kwmembershipCustomCheckout', {
+        value: Object.freeze({publishableKey,clientSecret,country,currency,plan:'plus'}),
+        configurable: true,
+      });
+      return result({...customEntry,customMaterialReady:true});
+    }
+    return result(entry);
   } catch { return result({errorKind:'checkout_unavailable'}); } finally { clearTimeout(abortTimer); }
+}
+"""
+
+MOUNT_CUSTOM_CHECKOUT_JS = r"""
+async () => {
+  const result = (overrides = {}) => ({mounted:false,errorKind:'',...overrides});
+  if (location.origin !== 'https://chatgpt.com') return result({errorKind:'context_invalid'});
+  const material = window.__kwmembershipCustomCheckout;
+  try { delete window.__kwmembershipCustomCheckout; } catch {}
+  if (!material || typeof material.publishableKey !== 'string' || typeof material.clientSecret !== 'string'
+      || material.country !== 'PH' || material.currency !== 'PHP' || material.plan !== 'plus') {
+    return result({errorKind:'custom_checkout_material_missing'});
+  }
+  const stripeSource = 'https://js.stripe.com/dahlia/stripe.js';
+  try {
+    if (typeof window.Stripe !== 'function') {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = callback => { if (settled) return; settled = true; clearTimeout(timer); callback(); };
+        const timer = setTimeout(() => finish(() => reject(new Error('stripe_timeout'))), 12000);
+        const existing = document.querySelector(`script[src="${stripeSource}"]`);
+        const script = existing || document.createElement('script');
+        script.addEventListener('load', () => finish(resolve), {once:true});
+        script.addEventListener('error', () => finish(() => reject(new Error('stripe_load_failed'))), {once:true});
+        if (!existing) { script.src = stripeSource; script.async = true; document.head.appendChild(script); }
+        else if (typeof window.Stripe === 'function') finish(resolve);
+      });
+    }
+    if (typeof window.Stripe !== 'function') return result({errorKind:'stripe_unavailable'});
+    const stripe = window.Stripe(material.publishableKey);
+    const initializer = typeof stripe.initCheckoutElementsSdk === 'function'
+      ? stripe.initCheckoutElementsSdk.bind(stripe)
+      : (typeof stripe.initCheckout === 'function' ? stripe.initCheckout.bind(stripe) : null);
+    if (!initializer) return result({errorKind:'stripe_checkout_unavailable'});
+    const checkout = await initializer({clientSecret:material.clientSecret});
+    const loadActionsResult = await checkout.loadActions();
+    if (loadActionsResult?.type !== 'success' || !loadActionsResult.actions) {
+      return result({errorKind:'checkout_session_unavailable'});
+    }
+    const actions = loadActionsResult.actions;
+    const sessionFacts = current => {
+      const currency = typeof current?.currency === 'string' ? current.currency.toUpperCase() : '';
+      const minorAmount = Number(current?.total?.total?.minorUnitsAmount);
+      const divisor = Number(current?.minorUnitsAmountDivisor);
+      const amount = minorAmount / divisor;
+      if (currency !== material.currency || !Number.isFinite(minorAmount) || minorAmount <= 0
+          || !Number.isFinite(divisor) || divisor <= 0 || !Number.isFinite(amount) || amount <= 0) return null;
+      return {currency,amount};
+    };
+    const initialFacts = sessionFacts(actions.getSession());
+    if (!initialFacts) {
+      return result({errorKind:'checkout_session_contract_invalid'});
+    }
+
+    const root = document.createElement('main');
+    root.dataset.kwPlan = material.plan;
+    root.dataset.kwCountry = material.country;
+    root.dataset.kwCurrency = initialFacts.currency;
+    root.dataset.kwAmount = String(Number(initialFacts.amount.toFixed(2)));
+    root.dataset.kwCheckoutState = 'card-entry';
+    root.style.cssText = 'max-width:560px;margin:32px auto;padding:24px;font-family:Arial,sans-serif;color:#111;background:#fff';
+    const title = document.createElement('h1');
+    title.textContent = 'ChatGPT Plus';
+    title.style.cssText = 'font-size:20px;margin:0 0 8px';
+    const totalLabel = document.createElement('p');
+    totalLabel.textContent = `${initialFacts.currency} ${initialFacts.amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+    totalLabel.style.cssText = 'font-size:16px;margin:0 0 20px';
+    const form = document.createElement('form');
+    form.id = 'payment-form';
+    form.addEventListener('submit', event => event.preventDefault());
+    const payment = document.createElement('div');
+    payment.id = 'payment-element';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.testid = 'hosted-payment-submit-button';
+    button.textContent = 'Pay';
+    button.disabled = true;
+    button.style.cssText = 'width:100%;margin-top:20px;padding:12px;border:0;border-radius:6px;background:#111;color:#fff;font-size:15px';
+    const errors = document.createElement('div');
+    errors.id = 'confirm-errors';
+    errors.setAttribute('role', 'status');
+    errors.style.cssText = 'margin-top:12px;color:#b42318;font-size:14px';
+    form.append(payment, button, errors);
+    root.append(title, totalLabel, form);
+    document.body.replaceChildren(root);
+    history.replaceState(history.state, '', '/checkout');
+
+    const paymentElement = checkout.createPaymentElement();
+    paymentElement.mount(payment);
+    checkout.on('change', current => {
+      const currentFacts = sessionFacts(current);
+      if (!currentFacts) {
+        delete root.dataset.kwAmount;
+        button.disabled = true;
+        return;
+      }
+      root.dataset.kwCurrency = currentFacts.currency;
+      root.dataset.kwAmount = String(Number(currentFacts.amount.toFixed(2)));
+      totalLabel.textContent = `${currentFacts.currency} ${currentFacts.amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+      button.disabled = !current.canConfirm;
+    });
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      errors.textContent = '';
+      actions.confirm().then(confirmResult => {
+        if (confirmResult?.type === 'error') errors.textContent = String(confirmResult.error?.message || 'Payment could not be submitted.');
+      });
+    });
+    return result({mounted:true});
+  } catch {
+    return result({errorKind:'custom_checkout_unavailable'});
+  }
 }
 """
 
@@ -479,9 +614,7 @@ class LiveExecutor:
 
         if lease.command_kind == "preflight":
             entry = page.evaluate(PREPARE_PLUS_JS)
-            checkout_url = _resolve_checkout_entry(entry)
-            _log_checkout_entry(lease, entry, checkout_url)
-            _navigate(client, lease, page, checkout_url, deadline)
+            _open_checkout_entry(client, lease, page, entry, deadline)
             try:
                 page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
             except ExecutorAPIError as error:
@@ -489,9 +622,7 @@ class LiveExecutor:
                     raise
                 self._interactive_login(client, lease, page, deadline, expected)
                 entry = page.evaluate(PREPARE_PLUS_JS)
-                checkout_url = _resolve_checkout_entry(entry)
-                _log_checkout_entry(lease, entry, checkout_url)
-                _navigate(client, lease, page, checkout_url, deadline)
+                _open_checkout_entry(client, lease, page, entry, deadline)
                 page_facts = self._wait_facts(client, lease, page, deadline, "checkout")
             if page_facts["stateId"] == "PAYMENT_ACTION_REQUIRED":
                 self._handoff(client, lease, page_facts)
@@ -501,9 +632,7 @@ class LiveExecutor:
 
         if lease.stage == "plus":
             entry = page.evaluate(PREPARE_PLUS_JS)
-            checkout_url = _resolve_checkout_entry(entry)
-            _log_checkout_entry(lease, entry, checkout_url)
-            _navigate(client, lease, page, checkout_url, deadline)
+            _open_checkout_entry(client, lease, page, entry, deadline)
         else:
             _navigate(client, lease, page, CHATGPT_ORIGIN + "/settings/subscription", deadline)
             selection = self._wait_facts(client, lease, page, deadline, "selection")
@@ -694,7 +823,7 @@ def _navigate(client: ExecutorClient, lease: ExecutorLease, page: Any, value: st
     client.heartbeat(lease)
 
 
-def _resolve_checkout_entry(entry: Any) -> str:
+def _resolve_checkout_entry(entry: Any) -> str | None:
     if not isinstance(entry, dict): raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
     error_kind = entry.get("errorKind")
     if error_kind:
@@ -706,6 +835,7 @@ def _resolve_checkout_entry(entry: Any) -> str:
             "context_invalid": "CHECKOUT_CONTEXT_INVALID",
             "checkout_rejected": "CHECKOUT_ENTRY_UNAVAILABLE",
             "checkout_unavailable": "CHECKOUT_ENTRY_UNAVAILABLE",
+            "custom_checkout_material_invalid": "CHECKOUT_API_CONTRACT_DRIFT",
         }.get(str(error_kind), "CHECKOUT_API_CONTRACT_DRIFT")
         raise ExecutorAPIError(code, 409)
     tag = entry.get("responseTag")
@@ -713,12 +843,42 @@ def _resolve_checkout_entry(entry: Any) -> str:
         if not isinstance(entry.get("checkoutURL"), str) or entry.get("processorEntity") or entry.get("checkoutSessionID"): raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
         return validate_checkout_url(entry["checkoutURL"])
     if tag == "custom_checkout_session":
-        session_id = entry.get("checkoutSessionID", "")
-        safe = isinstance(session_id, str) and bool(session_id) and all(char.isalnum() or char in "_-" for char in session_id)
-        if entry.get("checkoutURL") or entry.get("processorEntity") != "openai_llc" or not safe or not (session_id.startswith("oaics_") or session_id.startswith("cs_")):
+        if (entry.get("checkoutURL") or entry.get("processorEntity") != "openai_llc"
+                or entry.get("checkoutSessionID") or entry.get("customMaterialReady") is not True
+                or entry.get("checkoutSessionClass") not in {"oaics_", "cs_"}):
             raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
-        return validate_checkout_url(CHATGPT_ORIGIN + "/checkout/openai_llc/" + session_id)
+        return None
     raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
+
+
+def _open_checkout_entry(
+    client: ExecutorClient, lease: ExecutorLease, page: Any, entry: Any, deadline: float
+) -> None:
+    checkout_url = _resolve_checkout_entry(entry)
+    if checkout_url is not None:
+        _log_checkout_entry(lease, entry, checkout_url)
+        _navigate(client, lease, page, checkout_url, deadline)
+        return
+    _log_checkout_entry(lease, entry, CHATGPT_ORIGIN + "/checkout")
+    client.heartbeat(lease)
+    mounted = page.evaluate(MOUNT_CUSTOM_CHECKOUT_JS)
+    client.heartbeat(lease)
+    if not isinstance(mounted, dict):
+        raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
+    error_kind = mounted.get("errorKind")
+    if error_kind:
+        code = {
+            "context_invalid": "CHECKOUT_CONTEXT_INVALID",
+            "custom_checkout_material_missing": "CHECKOUT_API_CONTRACT_DRIFT",
+            "checkout_session_contract_invalid": "CHECKOUT_PAGE_CONTRACT_INVALID",
+            "stripe_unavailable": "CHECKOUT_ENTRY_UNAVAILABLE",
+            "stripe_checkout_unavailable": "CHECKOUT_ENTRY_UNAVAILABLE",
+            "checkout_session_unavailable": "CHECKOUT_ENTRY_UNAVAILABLE",
+            "custom_checkout_unavailable": "CHECKOUT_ENTRY_UNAVAILABLE",
+        }.get(str(error_kind), "CHECKOUT_API_CONTRACT_DRIFT")
+        raise ExecutorAPIError(code, 409)
+    if mounted.get("mounted") is not True:
+        raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
 
 
 def _log_checkout_entry(lease: ExecutorLease, entry: dict[str, Any], checkout_url: str) -> None:

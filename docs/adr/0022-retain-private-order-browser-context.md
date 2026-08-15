@@ -4,7 +4,7 @@ status: accepted
 
 # Retain a private order browser context across checkout stages
 
-Some imported ChatGPT Sessions authenticate `/api/auth/session` but are redirected back to login when a newly created checkout route is opened. Reinjecting only the NextAuth Session Cookie into another fresh profile does not preserve the device, risk, and browser state established by a login in the checkout network environment.
+Some imported ChatGPT Sessions authenticate `/api/auth/session` but are redirected back to login when a hosted checkout route is opened. Custom Checkout Sessions avoid that second route through ADR-0023, but hosted responses and other authenticated ChatGPT surfaces can still require a device login. Reinjecting only the NextAuth Session Cookie into another fresh profile does not preserve the device, risk, and browser state established by a login in the checkout network environment.
 
 For explicitly enabled deployments, a Session preflight may therefore hand the existing visible Chromium window to an administrator through the localhost-only noVNC service when checkout redirects to login. The administrator enters credentials directly into ChatGPT. kwRedeem and kwMembership never receive, persist, or log the password, MFA code, passkey, resulting Cookie values, checkout URL, or page contents. Python verifies the resulting account email against the fulfillment identity and recreates checkout in the same Context and proxy environment.
 

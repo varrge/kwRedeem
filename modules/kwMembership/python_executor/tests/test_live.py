@@ -11,7 +11,9 @@ from python_executor.client import ExecutorAPIError, ExecutorLease
 from python_executor.live import (
     INSPECT_FRAME_JS,
     LiveExecutor,
+    MOUNT_CUSTOM_CHECKOUT_JS,
     PREPARE_PLUS_JS,
+    SESSION_IDENTITY_JS,
     _interactive_session_bootstrap_enabled,
     _prepare_browser_profile,
     _read_profile_binding,
@@ -183,6 +185,15 @@ class LiveContractTest(unittest.TestCase):
         self.assertIn("headers['ChatGPT-Account-ID'] = accountID", PREPARE_PLUS_JS)
         self.assertIn("/backend-api/payments/checkout", PREPARE_PLUS_JS)
 
+    def test_custom_checkout_uses_stripe_elements_without_redirecting(self) -> None:
+        self.assertIn("__kwmembershipCustomCheckout", PREPARE_PLUS_JS)
+        self.assertIn("https://js.stripe.com/dahlia/stripe.js", MOUNT_CUSTOM_CHECKOUT_JS)
+        self.assertIn("initCheckoutElementsSdk", MOUNT_CUSTOM_CHECKOUT_JS)
+        self.assertIn("checkout.loadActions()", MOUNT_CUSTOM_CHECKOUT_JS)
+        self.assertIn("minorUnitsAmountDivisor", MOUNT_CUSTOM_CHECKOUT_JS)
+        self.assertIn("actions.confirm()", MOUNT_CUSTOM_CHECKOUT_JS)
+        self.assertNotIn("redirectToCheckout", MOUNT_CUSTOM_CHECKOUT_JS)
+
     def test_builds_authenticated_browser_proxy_from_separate_secrets(self) -> None:
         with patch.dict(os.environ, {
             "KWMEMBERSHIP_CHROME_PROXY_SERVER": "http://proxy.example:3000",
@@ -246,14 +257,93 @@ class LiveContractTest(unittest.TestCase):
                 "responseTag": "custom_checkout_session",
                 "checkoutURL": "",
                 "processorEntity": "openai_llc",
-                "checkoutSessionID": "cs_safe_123",
+                "checkoutSessionID": "",
+                "checkoutSessionClass": "cs_",
+                "customMaterialReady": True,
                 "errorKind": "",
             }),
-            "https://chatgpt.com/checkout/openai_llc/cs_safe_123",
+            None,
         )
         with self.assertRaises(ExecutorAPIError) as raised:
             _resolve_checkout_entry({"errorKind": "already_subscribed"})
         self.assertEqual(raised.exception.code, "CHATGPT_ACCOUNT_ALREADY_SUBSCRIBED")
+        with self.assertRaises(ExecutorAPIError) as raised:
+            _resolve_checkout_entry({
+                "responseTag": "custom_checkout_session",
+                "checkoutURL": "",
+                "processorEntity": "openai_llc",
+                "checkoutSessionID": "",
+                "checkoutSessionClass": "cs_",
+                "customMaterialReady": False,
+                "errorKind": "",
+            })
+        self.assertEqual(raised.exception.code, "CHECKOUT_API_CONTRACT_DRIFT")
+
+    def test_custom_checkout_mounts_without_opening_a_chatgpt_checkout_route(self) -> None:
+        navigations: list[str] = []
+
+        class Client:
+            def heartbeat(self, _lease: ExecutorLease) -> None:
+                pass
+
+            def report(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+        class Page:
+            url = "https://chatgpt.com/"
+
+            def __init__(self) -> None:
+                self.scripts: list[str] = []
+
+            def evaluate(self, script: str) -> dict[str, object]:
+                self.scripts.append(script)
+                if script == SESSION_IDENTITY_JS:
+                    return {"email": "buyer@example.com", "errorKind": ""}
+                if script == PREPARE_PLUS_JS:
+                    return {
+                        "responseTag": "custom_checkout_session",
+                        "checkoutURL": "",
+                        "processorEntity": "openai_llc",
+                        "checkoutSessionID": "",
+                        "checkoutSessionClass": "cs_",
+                        "customMaterialReady": True,
+                        "errorKind": "",
+                    }
+                if script == MOUNT_CUSTOM_CHECKOUT_JS:
+                    return {"mounted": True}
+                raise AssertionError("unexpected browser script")
+
+        page = Page()
+
+        def navigate(_client: object, _lease: ExecutorLease, target: Page, value: str, _deadline: float) -> None:
+            navigations.append(value)
+            target.url = value
+
+        facts = {
+            "stateId": "PAYMENT_CARD_ENTRY_READY",
+            "origin": "https://chatgpt.com",
+            "routeTemplate": "/checkout",
+            "plan": "plus",
+            "country": "PH",
+            "currency": "PHP",
+            "displayedAmount": 1100,
+            "fields": {"cardNumber": True, "expiry": True, "cvc": True},
+            "controls": {"submit": "hosted-payment-submit"},
+            "structuralHash": "0" * 64,
+        }
+        with patch("python_executor.live._navigate", side_effect=navigate), patch.object(
+            LiveExecutor, "_wait_facts", return_value=facts
+        ):
+            LiveExecutor()._run(
+                Client(),
+                lease(command_kind="preflight"),
+                {"expectedEmail": "buyer@example.com"},
+                page,
+                time.time() + 60,
+            )
+
+        self.assertEqual(navigations, ["https://chatgpt.com/"])
+        self.assertIn(MOUNT_CUSTOM_CHECKOUT_JS, page.scripts)
 
     def test_classifies_plus_final_and_tier_specific_upgrade(self) -> None:
         fields = {

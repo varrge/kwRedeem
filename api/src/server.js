@@ -2191,6 +2191,49 @@ function getCdkeyManualType(row = {}) {
   return String(row.manual_type || parseCdkeyMetadata(row.metadata).manualType || "").trim();
 }
 
+function getCdkeyStoreProductMappingId(row = {}) {
+  const value = parseCdkeyMetadata(row.metadata).storeProductMappingId;
+  return typeof value === "string" && value.trim().length <= 120 ? value.trim() : "";
+}
+
+function resolveCdkeyStoreProductMappingId(row = {}) {
+  const directId = getCdkeyStoreProductMappingId(row);
+  if (directId) return directId;
+
+  if (row.store_fulfillment_task_id) {
+    const task = db.prepare(`
+      SELECT mapping_snapshot, cdkeys_json
+      FROM store_fulfillment_tasks
+      WHERE id = ?
+    `).get(row.store_fulfillment_task_id);
+    const rawMappings = safeParseJson(task?.mapping_snapshot, []);
+    const rawCards = safeParseJson(task?.cdkeys_json, []);
+    const mappings = (Array.isArray(rawMappings) ? rawMappings : []).filter((item) => item?.mappingId);
+    const cards = (Array.isArray(rawCards) ? rawCards : []).filter(Boolean);
+    const card = cards.find((item) => item.id === row.id || item.publicKey === row.public_key);
+    if (card?.mappingId && mappings.some((item) => item.mappingId === card.mappingId)) {
+      return String(card.mappingId);
+    }
+    if (card) {
+      const matches = mappings.filter((item) => String(item.productId) === String(card.productId)
+        && String(item.skuId) === String(card.skuId)
+        && String(item.manualType).trim().toLowerCase() === getCdkeyManualType(row).toLowerCase());
+      if (matches.length === 1) return String(matches[0].mappingId);
+    }
+  }
+
+  const manualType = getCdkeyManualType(row);
+  if (!row.site_id || !manualType) return "";
+  const candidates = db.prepare(`
+    SELECT id
+    FROM store_product_mappings
+    WHERE site_id = ? AND lower(manual_type) = lower(?)
+      AND fulfillment_kind = 'membership_auto' AND enabled = 1
+    ORDER BY id
+  `).all(row.site_id, manualType);
+  return candidates.length === 1 ? String(candidates[0].id) : "";
+}
+
 function isManualProcessingCdkey(row = {}) {
   return getCdkeyProcessingMode(row) === cdkeyProcessingModes.manual;
 }
@@ -6945,16 +6988,18 @@ app.post("/api/public/redeem", async (request, reply) => {
       const membershipAutomation = isMembershipAutomationCdkey(cdkey);
       const manualType = getCdkeyManualType(cdkey);
       const orderNo = `KW${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
-	  const productId = site.product_id || cdkey.product_id;
-	  const automationMapped = Boolean(db.prepare(`
-	    SELECT 1 FROM automation_product_mappings WHERE product_id = ? LIMIT 1
-	  `).get(productId));
-	  const automationOrder = membershipAutomation || automationMapped;
-	  const delegatedMembershipProcessing = manualProcessing || automationOrder;
-	  const jobId = delegatedMembershipProcessing ? null : nanoid(18);
-	  const deliveryEnrollment = automationOrder
-		? { status: null, expiresAt: null, updatedAt: null }
-		: extensionDelivery.enrollmentForSite(site.slug, now);
+      const productId = site.product_id || cdkey.product_id;
+      const storeMappingId = resolveCdkeyStoreProductMappingId(cdkey);
+      const automationMapped = Boolean(storeMappingId && db.prepare(`
+        SELECT 1 FROM automation_product_mappings WHERE product_id = ? LIMIT 1
+      `).get(storeMappingId));
+      const automationOrder = membershipAutomation || automationMapped;
+      const automationRoutingId = storeMappingId || productId;
+      const delegatedMembershipProcessing = manualProcessing || automationOrder;
+      const jobId = delegatedMembershipProcessing ? null : nanoid(18);
+      const deliveryEnrollment = automationOrder
+        ? { status: null, expiresAt: null, updatedAt: null }
+        : extensionDelivery.enrollmentForSite(site.slug, now);
 
       db.prepare(`
         INSERT INTO redeem_orders (
@@ -6969,7 +7014,7 @@ app.post("/api/public/redeem", async (request, reply) => {
         orderNo,
         cdkey.id,
         publicKey,
-		productId,
+        productId,
         site.activation_endpoint_id || cdkey.activation_endpoint_id,
         site.id,
         encryptText(JSON.stringify(session.parsed)),
@@ -6986,17 +7031,17 @@ app.post("/api/public/redeem", async (request, reply) => {
       );
 
       if (automationOrder) {
-		enrollAutomationOrder(db, {
-		  orderId,
-		  orderNo,
-		  productId,
-		  createdAt: now
-		});
+        enrollAutomationOrder(db, {
+          orderId,
+          orderNo,
+          productId: automationRoutingId,
+          createdAt: now
+        });
       } else if (nodeMembershipAutomationTest) {
         createMembershipFulfillmentForOrder(db, {
           orderId,
           orderNo,
-		  productId,
+          productId,
           manualType: delegatedMembershipProcessing ? manualType : null,
           createdAt: now
         });
@@ -7868,25 +7913,34 @@ app.patch("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmi
     WHERE product_id = ? AND sku_id = ? AND id <> ?
   `).get(parsed.data.productId, parsed.data.skuId, existing.id);
   if (duplicate) return reply.code(409).send({ message: "该商品与 SKU 已配置映射" });
-  db.prepare(`
-    UPDATE store_product_mappings
-    SET product_id = ?, sku_id = ?, product_title = ?, manual_type = ?, fulfillment_kind = ?, spacex_plan = ?, site_id = ?, prefix = ?,
-        enabled = ?, updated_at = ?, updated_by = ?
-    WHERE id = ?
-  `).run(
-    parsed.data.productId,
-    parsed.data.skuId,
-    parsed.data.productTitle || null,
-    parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_MANUAL_TYPES[parsed.data.spacexPlan] : parsed.data.manualType,
-    parsed.data.fulfillmentKind,
-    parsed.data.fulfillmentKind === "spacex_cdk" ? parsed.data.spacexPlan : null,
-    parsed.data.siteId,
-    parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_PREFIXES[parsed.data.spacexPlan] : parsed.data.prefix,
-    parsed.data.enabled ? 1 : 0,
-    nowIso(),
-    request.admin.username,
-    existing.id
-  );
+  const updatedAt = nowIso();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE store_product_mappings
+      SET product_id = ?, sku_id = ?, product_title = ?, manual_type = ?, fulfillment_kind = ?, spacex_plan = ?, site_id = ?, prefix = ?,
+          enabled = ?, updated_at = ?, updated_by = ?
+      WHERE id = ?
+    `).run(
+      parsed.data.productId,
+      parsed.data.skuId,
+      parsed.data.productTitle || null,
+      parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_MANUAL_TYPES[parsed.data.spacexPlan] : parsed.data.manualType,
+      parsed.data.fulfillmentKind,
+      parsed.data.fulfillmentKind === "spacex_cdk" ? parsed.data.spacexPlan : null,
+      parsed.data.siteId,
+      parsed.data.fulfillmentKind === "spacex_cdk" ? SPACEX_CDK_PLAN_PREFIXES[parsed.data.spacexPlan] : parsed.data.prefix,
+      parsed.data.enabled ? 1 : 0,
+      updatedAt,
+      request.admin.username,
+      existing.id
+    );
+    db.prepare(`
+      UPDATE automation_product_mappings
+      SET enabled = 0, paused_reason = 'STORE_MAPPING_CHANGED',
+          revision = revision + 1, updated_at = ?, updated_by = ?
+      WHERE product_id = ?
+    `).run(updatedAt, request.admin.username, existing.id);
+  }).immediate();
   createAuditLog({
     action: "store_fulfillment.mapping.update",
     actor: request.admin.username,
@@ -7900,7 +7954,16 @@ app.patch("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmi
 app.delete("/api/admin/store-fulfillment/mappings/:id", { preHandler: requireAdmin }, async (request, reply) => {
   const existing = db.prepare("SELECT * FROM store_product_mappings WHERE id = ?").get(request.params.id);
   if (!existing) return reply.code(404).send({ message: "商品映射不存在" });
-  const result = db.prepare("DELETE FROM store_product_mappings WHERE id = ?").run(existing.id);
+  const updatedAt = nowIso();
+  const result = db.transaction(() => {
+    db.prepare(`
+      UPDATE automation_product_mappings
+      SET enabled = 0, paused_reason = 'STORE_MAPPING_REMOVED',
+          revision = revision + 1, updated_at = ?, updated_by = ?
+      WHERE product_id = ?
+    `).run(updatedAt, request.admin.username, existing.id);
+    return db.prepare("DELETE FROM store_product_mappings WHERE id = ?").run(existing.id);
+  }).immediate();
   if (!result.changes) return reply.code(404).send({ message: "商品映射不存在" });
   createAuditLog({
     action: "store_fulfillment.mapping.delete",

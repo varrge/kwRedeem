@@ -32,6 +32,42 @@ legacy.exec(`
     'legacy-spacex-map', '57', '66', '卡冲PLUS', 'PLUS', 'spacex_cdk', 'plus',
     'site_demo', '91GPTPLUS', 1, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z', 'admin'
   );
+  CREATE TABLE automation_product_mappings (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    external_plan_id TEXT NOT NULL,
+    external_task_type TEXT NOT NULL DEFAULT 'purchase',
+    region_code TEXT,
+    currency TEXT,
+    card_platform_key TEXT NOT NULL,
+    card_product_code TEXT,
+    capacity_key TEXT NOT NULL,
+    card_capacity INTEGER NOT NULL DEFAULT 1,
+    funding_amount_usd REAL NOT NULL,
+    expected_min_amount REAL NOT NULL,
+    expected_max_amount REAL NOT NULL,
+    daily_risk_limit_usd REAL NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    paused_reason TEXT,
+    capability_snapshot TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    UNIQUE(product_id, provider_id, external_plan_id, region_code)
+  );
+  INSERT INTO automation_product_mappings VALUES (
+    'legacy-local-route', 'prod_demo', 'provider-1', 'plus-monthly', 'purchase',
+    'PH', 'PHP', 'efuncard', 'Z-1', 'plus-ph', 5, 80, 900, 990, 16, 100,
+    1, NULL, '{}', 1, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z', 'admin'
+  );
+  INSERT INTO automation_product_mappings VALUES (
+    'store-source-route', 'legacy-spacex-map', 'provider-1', 'plus-monthly', 'purchase',
+    'PH', 'PHP', 'efuncard', 'Z-1', 'plus-ph', 5, 80, 900, 990, 16, 200,
+    1, NULL, '{}', 1, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z', 'admin'
+  );
 `);
 legacy.close();
 
@@ -55,5 +91,15 @@ test("legacy SpaceX store mappings migrate once to local membership automation",
   assert.equal(db.prepare(`
     SELECT COUNT(*) AS count FROM app_migrations
     WHERE id = '2026-08-14-store-membership-automation'
+  `).get().count, 1);
+  const legacyRoute = db.prepare("SELECT * FROM automation_product_mappings WHERE id = 'legacy-local-route'").get();
+  assert.equal(legacyRoute.enabled, 0);
+  assert.equal(legacyRoute.paused_reason, "STORE_MAPPING_REQUIRED");
+  const storeRoute = db.prepare("SELECT * FROM automation_product_mappings WHERE id = 'store-source-route'").get();
+  assert.equal(storeRoute.enabled, 1);
+  assert.equal(storeRoute.paused_reason, null);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM app_migrations
+    WHERE id = '2026-08-15-automation-store-mapping-sources'
   `).get().count, 1);
 });

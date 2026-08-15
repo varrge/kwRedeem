@@ -1578,7 +1578,11 @@ test("store membership wrappers enter protocol automation without legacy Go fulf
     )
   `).run(
     encryptText("membership-wrapper:PLUS:EFUNPLUS-API-WRAPPER"),
-    JSON.stringify({ processingMode: "membership_auto", manualType: "PLUS" }),
+    JSON.stringify({
+      processingMode: "membership_auto",
+      manualType: "PLUS",
+      storeProductMappingId: "store-map-api-plus"
+    }),
     now,
     now
   );
@@ -1612,7 +1616,7 @@ test("store membership wrappers enter protocol automation without legacy Go fulf
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM activation_jobs WHERE order_id = ?").get(order.id).count, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM membership_fulfillments WHERE order_id = ?").get(order.id).count, 0);
   const execution = db.prepare("SELECT * FROM automation_executions WHERE order_id = ?").get(order.id);
-  assert.equal(execution.product_id, "prod_demo");
+  assert.equal(execution.product_id, "store-map-api-plus");
   assert.equal(execution.status, "waiting_gate");
 
   const detail = await app.inject({ method: "GET", url: `/api/public/orders/${redeemed.json().orderNo}` });

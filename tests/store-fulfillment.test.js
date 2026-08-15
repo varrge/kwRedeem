@@ -297,6 +297,8 @@ test("runner issues local membership wrappers without provisioning SpaceX CDKs",
   assert.ok(cards.every((card) => card.processing_mode === "membership_auto"));
   assert.ok(cards.every((card) => card.manual_type === "PLUS" && card.origin === "store_order"));
   assert.ok(cards.every((card) => decryptText(card.source_key).startsWith("membership-wrapper:PLUS:")));
+  assert.ok(cards.every((card) => JSON.parse(card.metadata).storeProductMappingId === "map-membership-auto"));
+  assert.ok(JSON.parse(task.cdkeys_json).every((card) => card.mappingId === "map-membership-auto"));
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spacex_cdk_units WHERE task_id = ?").get(task.id).count, 0);
 });
 

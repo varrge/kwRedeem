@@ -25,8 +25,15 @@ function serializeMapping(row) {
   try { capability = JSON.parse(row.capability_snapshot); } catch {}
   return {
     id: row.id,
+    storeMappingId: row.store_mapping_id || null,
     productId: row.product_id,
-    productTitle: row.product_title || null,
+    productTitle: row.store_product_title || null,
+    storeProductId: row.store_product_id || null,
+    storeSkuId: row.store_sku_id || null,
+    storeManualType: row.store_manual_type || null,
+    storeFulfillmentKind: row.store_fulfillment_kind || null,
+    storeSiteId: row.store_site_id || null,
+    storeSiteName: row.store_site_name || null,
     providerId: row.provider_id,
     providerName: row.provider_name || null,
     externalPlanId: row.external_plan_id,
@@ -50,6 +57,27 @@ function serializeMapping(row) {
     updatedAt: row.updated_at,
     updatedBy: row.updated_by
   };
+}
+
+function loadAutomationStoreSource(db, storeMappingId) {
+  return db.prepare(`
+    SELECT source.*, site.name AS site_name, site.status AS site_status
+    FROM store_product_mappings source
+    JOIN sites site ON site.id = source.site_id
+    WHERE source.id = ?
+  `).get(storeMappingId);
+}
+
+function assertAutomationStoreSource(source, capability) {
+  if (!source || source.enabled !== 1 || source.fulfillment_kind !== "membership_auto") {
+    throw new Error("商城交付商品不存在、未启用或不是会员自动化类型");
+  }
+  if (source.site_status !== "active") throw new Error("商城交付商品绑定的站点未启用");
+  const storeOffer = String(source.manual_type || "").trim().toLowerCase();
+  const protocolOffer = String(capability?.plan?.canonicalOffer || "").trim().toLowerCase();
+  if (!protocolOffer || protocolOffer !== storeOffer) {
+    throw new Error(`商城交付套餐 ${source.manual_type || "-"} 与站点直付套餐不一致`);
+  }
 }
 
 function errorReply(reply, error, fallback = "自动化配置操作失败") {
@@ -228,11 +256,18 @@ export function createAutomationFulfillmentService(options = {}) {
   app.get("/api/admin/automation/mappings", { preHandler: requireAdmin }, async (_request, reply) => {
     setNoStore(reply);
     const items = db.prepare(`
-      SELECT m.*, p.title AS product_title, provider.name AS provider_name
+      SELECT m.*, source.id AS store_mapping_id,
+             source.product_id AS store_product_id, source.sku_id AS store_sku_id,
+             source.product_title AS store_product_title,
+             source.manual_type AS store_manual_type,
+             source.fulfillment_kind AS store_fulfillment_kind,
+             source.site_id AS store_site_id, site.name AS store_site_name,
+             provider.name AS provider_name
       FROM automation_product_mappings m
-      JOIN products p ON p.id = m.product_id
+      LEFT JOIN store_product_mappings source ON source.id = m.product_id
+      LEFT JOIN sites site ON site.id = source.site_id
       JOIN automation_providers provider ON provider.id = m.provider_id
-      ORDER BY p.title, m.priority, provider.name
+      ORDER BY COALESCE(source.product_title, source.product_id, m.product_id), m.priority, provider.name
     `).all().map(serializeMapping);
     return { items };
   });
@@ -240,7 +275,7 @@ export function createAutomationFulfillmentService(options = {}) {
   app.post("/api/admin/automation/mappings", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = z.object({
       id: z.string().regex(SAFE_ID).optional(),
-      productId: z.string().trim().min(1).max(120),
+      storeMappingId: z.string().trim().min(1).max(120),
       providerId: z.string().regex(SAFE_ID),
       externalPlanId: z.string().trim().min(1).max(120),
       regionCode: z.string().trim().min(1).max(20).transform((value) => value.toUpperCase()),
@@ -255,20 +290,20 @@ export function createAutomationFulfillmentService(options = {}) {
       priority: z.number().int().min(1).max(10000),
       enabled: z.boolean().default(false)
     }).safeParse(request.body || {});
-    if (!parsed.success) return reply.code(400).send({ message: "自动化商品映射参数不正确" });
+    if (!parsed.success) return reply.code(400).send({ message: "自动化商城交付映射参数不正确" });
     if (parsed.data.expectedMaxAmount < parsed.data.expectedMinAmount
-      || parsed.data.dailyRiskLimitUsd < parsed.data.fundingAmountUsd) {
+      || parsed.data.dailyRiskLimitUsd < (parsed.data.fundingAmountUsd / parsed.data.cardCapacity)) {
       return reply.code(400).send({ message: "价格或资金上限配置不正确" });
     }
     try {
-      const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(parsed.data.productId);
+      const storeSource = loadAutomationStoreSource(db, parsed.data.storeMappingId);
       const provider = db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(parsed.data.providerId);
       const platform = db.prepare("SELECT key FROM membership_card_platforms WHERE key = ? AND enabled = 1")
         .get(parsed.data.cardPlatformKey);
-      if (!product) throw new Error("商城商品不存在或未启用");
       if (!provider) throw new Error("自动化站点不存在");
       if (!platform) throw new Error("所选卡台未启用");
       const capability = validateAutomationMappingCapability(provider, parsed.data);
+      assertAutomationStoreSource(storeSource, capability);
       const at = nowIso();
       const id = parsed.data.id || `apm_${randomUUID()}`;
       const existing = db.prepare("SELECT * FROM automation_product_mappings WHERE id = ?").get(id);
@@ -288,7 +323,7 @@ export function createAutomationFulfillmentService(options = {}) {
               revision = revision + 1, updated_at = ?, updated_by = ?
           WHERE id = ?
         `).run(
-          parsed.data.productId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
+          parsed.data.storeMappingId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
           capability.region.code, capability.region.currency, parsed.data.cardPlatformKey,
           parsed.data.cardProductCode || null, parsed.data.capacityKey, parsed.data.cardCapacity,
           parsed.data.fundingAmountUsd, parsed.data.expectedMinAmount, parsed.data.expectedMaxAmount,
@@ -305,7 +340,7 @@ export function createAutomationFulfillmentService(options = {}) {
             created_at, updated_at, updated_by
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          id, parsed.data.productId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
+          id, parsed.data.storeMappingId, parsed.data.providerId, capability.plan.id, capability.plan.taskType,
           capability.region.code, capability.region.currency, parsed.data.cardPlatformKey,
           parsed.data.cardProductCode || null, parsed.data.capacityKey, parsed.data.cardCapacity,
           parsed.data.fundingAmountUsd, parsed.data.expectedMinAmount, parsed.data.expectedMaxAmount,
@@ -314,15 +349,26 @@ export function createAutomationFulfillmentService(options = {}) {
         );
       }
       audit(request, "automation.mapping.upsert", "automation_mapping", id, {
-        productId: parsed.data.productId,
+        storeMappingId: parsed.data.storeMappingId,
+        storeProductId: storeSource.product_id,
+        storeSkuId: storeSource.sku_id,
+        storeManualType: storeSource.manual_type,
         providerId: parsed.data.providerId,
         externalPlanId: capability.plan.id,
         regionCode: capability.region.code,
         enabled: parsed.data.enabled
       });
       const row = db.prepare(`
-        SELECT m.*, p.title AS product_title, provider.name AS provider_name
-        FROM automation_product_mappings m JOIN products p ON p.id = m.product_id
+        SELECT m.*, source.id AS store_mapping_id,
+               source.product_id AS store_product_id, source.sku_id AS store_sku_id,
+               source.product_title AS store_product_title,
+               source.manual_type AS store_manual_type,
+               source.fulfillment_kind AS store_fulfillment_kind,
+               source.site_id AS store_site_id, site.name AS store_site_name,
+               provider.name AS provider_name
+        FROM automation_product_mappings m
+        LEFT JOIN store_product_mappings source ON source.id = m.product_id
+        LEFT JOIN sites site ON site.id = source.site_id
         JOIN automation_providers provider ON provider.id = m.provider_id WHERE m.id = ?
       `).get(id);
       return { item: serializeMapping(row) };
@@ -335,6 +381,21 @@ export function createAutomationFulfillmentService(options = {}) {
     const parsed = z.object({ enabled: z.boolean() }).safeParse(request.body || {});
     if (!parsed.success) return reply.code(400).send({ message: "映射状态参数不正确" });
     const id = String(request.params.id || "").trim();
+    const mapping = db.prepare("SELECT * FROM automation_product_mappings WHERE id = ?").get(id);
+    if (!mapping) return reply.code(404).send({ message: "自动化商品映射不存在" });
+    if (parsed.data.enabled) {
+      try {
+        const provider = db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(mapping.provider_id);
+        if (!provider) throw new Error("自动化站点不存在");
+        const capability = validateAutomationMappingCapability(provider, {
+          externalPlanId: mapping.external_plan_id,
+          regionCode: mapping.region_code
+        });
+        assertAutomationStoreSource(loadAutomationStoreSource(db, mapping.product_id), capability);
+      } catch (error) {
+        return errorReply(reply, error);
+      }
+    }
     const at = nowIso();
     const changed = db.prepare(`
       UPDATE automation_product_mappings
@@ -418,4 +479,3 @@ export function createAutomationFulfillmentService(options = {}) {
     }
   });
 }
-

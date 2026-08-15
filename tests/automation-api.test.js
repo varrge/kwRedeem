@@ -21,6 +21,7 @@ globalThis.fetch = async (url, options = {}) => {
       requestId: "REQ-CONFIG",
       plans: [
         { id: "plus-monthly", name: "ChatGPT Plus", label: "Plus", taskType: "purchase" },
+        { id: "pro20x-direct-monthly", name: "ChatGPT Pro 20x", label: "Pro 20x", taskType: "purchase" },
         { id: "subscription-upgrade", name: "Upgrade", label: "Upgrade", taskType: "upgrade" }
       ],
       regions: [{ code: "PH", currency: "PHP", label: "Philippines" }],
@@ -75,13 +76,28 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
   assert.equal(remoteRequests[0].method, "GET");
   assert.match(String(remoteRequests[0].headers["X-Automate-Key"]), /atk_live_once/);
 
+  const storedProvider = db.prepare("SELECT config_snapshot FROM automation_providers WHERE id = ?")
+    .get(provider.json().item.id);
+  const legacyConfigSnapshot = JSON.parse(storedProvider.config_snapshot);
+  legacyConfigSnapshot.plans = legacyConfigSnapshot.plans.map(({ canonicalOffer: _ignored, ...plan }) => plan);
+  db.prepare("UPDATE automation_providers SET config_snapshot = ? WHERE id = ?")
+    .run(JSON.stringify(legacyConfigSnapshot), provider.json().item.id);
+
   db.prepare("UPDATE membership_card_platforms SET enabled = 1 WHERE key = 'spacexcard'").run();
+  const storeMappingAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO store_product_mappings (
+      id, product_id, sku_id, product_title, manual_type, fulfillment_kind,
+      site_id, prefix, enabled, created_at, updated_at, updated_by
+    ) VALUES ('store-map-plus', 'remote-plus', 'sku-plus', '商城 Plus', 'PLUS',
+              'membership_auto', 'site_demo', 'PLUS', 1, ?, ?, 'test')
+  `).run(storeMappingAt, storeMappingAt);
   const mapping = await app.inject({
     method: "POST",
     url: "/api/admin/automation/mappings",
     headers,
     payload: {
-      productId: "prod_demo",
+      storeMappingId: "store-map-plus",
       providerId: provider.json().item.id,
       externalPlanId: "plus-monthly",
       regionCode: "PH",
@@ -98,6 +114,10 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
     }
   });
   assert.equal(mapping.statusCode, 200, mapping.body);
+  assert.equal(mapping.json().item.storeMappingId, "store-map-plus");
+  assert.equal(mapping.json().item.storeProductId, "remote-plus");
+  assert.equal(mapping.json().item.storeSkuId, "sku-plus");
+  assert.equal(mapping.json().item.storeManualType, "PLUS");
   assert.equal(mapping.json().item.externalPlanId, "plus-monthly");
   assert.equal(mapping.json().item.regionCode, "PH");
 
@@ -106,7 +126,7 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
     url: "/api/admin/automation/mappings",
     headers,
     payload: {
-      productId: "prod_demo",
+      storeMappingId: "store-map-plus",
       providerId: provider.json().item.id,
       externalPlanId: "subscription-upgrade",
       regionCode: "PH",
@@ -124,6 +144,30 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
   });
   assert.equal(upgradeMapping.statusCode, 409);
   assert.match(upgradeMapping.json().message, /直付套餐/);
+
+  const mismatchedMapping = await app.inject({
+    method: "POST",
+    url: "/api/admin/automation/mappings",
+    headers,
+    payload: {
+      storeMappingId: "store-map-plus",
+      providerId: provider.json().item.id,
+      externalPlanId: "pro20x-direct-monthly",
+      regionCode: "PH",
+      cardPlatformKey: "spacexcard",
+      cardProductCode: "P5378OX",
+      capacityKey: "x20",
+      cardCapacity: 1,
+      fundingAmountUsd: 149,
+      expectedMinAmount: 9000,
+      expectedMaxAmount: 9999,
+      dailyRiskLimitUsd: 149,
+      priority: 20,
+      enabled: true
+    }
+  });
+  assert.equal(mismatchedMapping.statusCode, 409);
+  assert.match(mismatchedMapping.json().message, /套餐.*不一致/);
 
   const enabled = await app.inject({
     method: "PUT",

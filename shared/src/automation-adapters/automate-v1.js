@@ -5,6 +5,15 @@ const MAX_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "manual_review", "cancelled"]);
 const TASK_STATUSES = new Set(["queued", "running", ...TERMINAL_STATUSES]);
+const DIRECT_OFFER_BY_PLAN_ID = Object.freeze({
+  "plus-monthly": "plus",
+  "go-monthly": "go",
+  "pro20x-direct-monthly": "x20"
+});
+
+export function automateV1CanonicalOffer(planId, taskType = "purchase") {
+  return taskType === "purchase" ? (DIRECT_OFFER_BY_PLAN_ID[String(planId || "")] || null) : null;
+}
 
 export class AutomationAdapterError extends Error {
   constructor(code, message, options = {}) {
@@ -106,14 +115,16 @@ async function readJson(response) {
 
 function normalizePlan(item) {
   const taskType = boundedString(item?.taskType, "plans.taskType", 40);
-  if (!['purchase', 'upgrade'].includes(taskType)) {
+  if (!["purchase", "upgrade"].includes(taskType)) {
     fail("AUTOMATION_CONTRACT_INVALID", "Automate 套餐类型无法识别", { retryable: false });
   }
+  const id = boundedString(item?.id, "plans.id", 120);
   return Object.freeze({
-    id: boundedString(item?.id, "plans.id", 120),
+    id,
     name: boundedString(item?.name, "plans.name", 200),
     label: boundedString(item?.label, "plans.label", 100),
-    taskType
+    taskType,
+    canonicalOffer: automateV1CanonicalOffer(id, taskType)
   });
 }
 

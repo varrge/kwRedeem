@@ -181,7 +181,11 @@ function issueTaskCards(db, task, redeemUrl, spaceXCdkService = null) {
         publicKey,
         mapping.prefix,
         cdkeyStatuses.active,
-        JSON.stringify({ processingMode, manualType: mapping.manualType }),
+        JSON.stringify({
+          processingMode,
+          manualType: mapping.manualType,
+          storeProductMappingId: mapping.mappingId
+        }),
         processingMode,
         mapping.manualType,
         STORE_CDK_ORIGINS.store,
@@ -194,6 +198,7 @@ function issueTaskCards(db, task, redeemUrl, spaceXCdkService = null) {
       cards.push({
         id,
         publicKey,
+        mappingId: mapping.mappingId,
         productId: mapping.productId,
         skuId: mapping.skuId,
         manualType: mapping.manualType,

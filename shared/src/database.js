@@ -169,6 +169,29 @@ function migrateStoreMappingsToMembershipAutomation(db) {
   })();
 }
 
+function migrateAutomationMappingsToStoreSources(db) {
+  const migrationId = "2026-08-15-automation-store-mapping-sources";
+  if (db.prepare("SELECT 1 FROM app_migrations WHERE id = ?").get(migrationId)) return;
+
+  const appliedAt = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE automation_product_mappings
+      SET enabled = 0, paused_reason = 'STORE_MAPPING_REQUIRED',
+          revision = revision + 1, updated_at = ?, updated_by = 'migration'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM store_product_mappings source
+        WHERE source.id = automation_product_mappings.product_id
+          AND source.fulfillment_kind = 'membership_auto'
+          AND source.enabled = 1
+      )
+    `).run(appliedAt);
+    db.prepare("INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)")
+      .run(migrationId, appliedAt);
+  })();
+}
+
 function migrateCardProductPolicyProviderKey(db) {
   const table = db.prepare(`
     SELECT sql FROM sqlite_master
@@ -2029,6 +2052,7 @@ function createSchema(db) {
   ensureColumn(db, "store_product_mappings", "fulfillment_kind", "TEXT NOT NULL DEFAULT 'manual'");
   ensureColumn(db, "store_product_mappings", "spacex_plan", "TEXT");
   migrateStoreMappingsToMembershipAutomation(db);
+  migrateAutomationMappingsToStoreSources(db);
   ensureColumn(db, "spacex_cdk_settings", "unlimited_funding_policy", "TEXT NOT NULL DEFAULT 'block'");
   ensureColumn(db, "spacex_cdks", "funding_liability_minor", "INTEGER");
   ensureColumn(db, "spacex_cdks", "funding_contract_mode", "TEXT NOT NULL DEFAULT 'missing'");

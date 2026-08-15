@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AutomateV1Adapter } from "./automation-adapters/automate-v1.js";
+import { AutomateV1Adapter, automateV1CanonicalOffer } from "./automation-adapters/automate-v1.js";
 
 export const automationAdapterKeys = Object.freeze(["automate_v1"]);
 
@@ -78,9 +78,12 @@ export function validateAutomationMappingCapability(provider, input = {}) {
   if (!config || !Array.isArray(config.plans) || !Array.isArray(config.regions)) {
     throw new Error("自动化站点尚未同步有效能力");
   }
-  const plan = config.plans.find((item) => item.id === input.externalPlanId);
-  if (!plan) throw new Error("站点没有提供所选套餐");
-  if (plan.taskType !== "purchase") throw new Error("当前系统只允许映射站点明确提供的直付套餐");
+  const storedPlan = config.plans.find((item) => item.id === input.externalPlanId);
+  if (!storedPlan) throw new Error("站点没有提供所选套餐");
+  if (storedPlan.taskType !== "purchase") throw new Error("当前系统只允许映射站点明确提供的直付套餐");
+  const plan = provider.adapter_key === "automate_v1" && !storedPlan.canonicalOffer
+    ? { ...storedPlan, canonicalOffer: automateV1CanonicalOffer(storedPlan.id, storedPlan.taskType) }
+    : storedPlan;
   const region = config.regions.find((item) => item.code === input.regionCode);
   if (!region) throw new Error("站点没有提供所选充值区域");
   return Object.freeze({ plan, region, configHash: provider.config_hash });
@@ -105,10 +108,21 @@ export async function syncAutomationProvider(db, input = {}) {
       for (const mapping of mappings) {
         const plan = config.plans.find((item) => item.id === mapping.external_plan_id);
         const region = config.regions.find((item) => item.code === mapping.region_code);
-        if (!plan || plan.taskType !== "purchase" || !region || region.currency !== mapping.currency) {
+        const source = db.prepare(`
+          SELECT mapping.*, site.status AS site_status
+          FROM store_product_mappings mapping
+          JOIN sites site ON site.id = mapping.site_id
+          WHERE mapping.id = ?
+        `).get(mapping.product_id);
+        const sourceOffer = String(source?.manual_type || "").trim().toLowerCase();
+        const planOffer = String(plan?.canonicalOffer || "").trim().toLowerCase();
+        if (!plan || plan.taskType !== "purchase" || !region || region.currency !== mapping.currency
+          || !source || source.enabled !== 1 || source.fulfillment_kind !== "membership_auto"
+          || source.site_status !== "active" || !planOffer || planOffer !== sourceOffer) {
           db.prepare(`
             UPDATE automation_product_mappings
-            SET enabled = 0, paused_reason = 'CAPABILITY_REMOVED', updated_at = ?, revision = revision + 1
+            SET enabled = 0, paused_reason = 'CAPABILITY_OR_STORE_MAPPING_CHANGED',
+                updated_at = ?, revision = revision + 1
             WHERE id = ?
           `).run(at, mapping.id);
         }
@@ -124,4 +138,3 @@ export async function syncAutomationProvider(db, input = {}) {
     throw error;
   }
 }
-

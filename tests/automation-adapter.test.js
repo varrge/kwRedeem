@@ -28,6 +28,7 @@ test("Automate V1 normalizes documented configuration", () => {
     billingAddressSource: "platform_managed"
   });
   assert.deepEqual(config.plans.map((item) => item.id), ["plus-monthly", "subscription-upgrade"]);
+  assert.deepEqual(config.plans.map((item) => item.canonicalOffer), ["plus", null]);
   assert.deepEqual(config.regions, [{ code: "PH", currency: "PHP", label: "Philippines" }]);
 });
 
@@ -102,4 +103,3 @@ test("Automate V1 marks documented 4xx creation rejection as no task created", a
     return true;
   });
 });
-

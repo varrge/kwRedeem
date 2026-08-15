@@ -28,6 +28,31 @@ function usd(value, field, positive = false) {
   return result;
 }
 
+function mappingFundingPolicy(mapping) {
+  const fundingAmount = usd(mapping?.funding_amount_usd, "fundingAmountUsd", true);
+  const capacity = Number(mapping?.card_capacity);
+  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) {
+    throw new TypeError("cardCapacity 无效");
+  }
+  return { fundingAmount, capacity };
+}
+
+export function automationRiskAllocationUsd(mapping) {
+  const { fundingAmount, capacity } = mappingFundingPolicy(mapping);
+  return fundingAmount / capacity;
+}
+
+export function automationCardPoolTargetUsd(mapping, occupiedBefore = 0) {
+  const { fundingAmount, capacity } = mappingFundingPolicy(mapping);
+  const occupied = Number(occupiedBefore);
+  if (!Number.isInteger(occupied) || occupied < 0 || occupied >= capacity) {
+    throw new TypeError("occupiedBefore 无效");
+  }
+  const fundingCents = Math.round(fundingAmount * 100);
+  const remainingSlots = capacity - occupied;
+  return Math.ceil((fundingCents * remainingSlots) / capacity) / 100;
+}
+
 function safeJson(value, fallback = null) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
@@ -109,14 +134,31 @@ function occupiedSlots(db, cardId, capacityKey) {
 
 function firstFreeSlot(db, card, mapping) {
   const capacity = Number(mapping.card_capacity);
-  const occupied = occupiedSlots(db, card.id, mapping.capacity_key);
-  for (let slot = 1; slot <= Math.min(capacity, Number(card.consumed_slots || 0)); slot += 1) {
-    occupied.add(slot);
-  }
+  const occupied = cardOccupiedSlots(db, card, mapping);
   for (let slot = 1; slot <= capacity; slot += 1) {
     if (!occupied.has(slot)) return slot;
   }
   return null;
+}
+
+function cardOccupiedSlots(db, card, mapping) {
+  const capacity = Number(mapping.card_capacity);
+  const occupied = occupiedSlots(db, card.id, mapping.capacity_key);
+  for (const slot of occupied) {
+    if (slot > capacity) occupied.delete(slot);
+  }
+  for (let slot = 1; slot <= Math.min(capacity, Number(card.consumed_slots || 0)); slot += 1) {
+    occupied.add(slot);
+  }
+  return occupied;
+}
+
+function cardPoolTargetForReservation(db, card, mapping, reservation = null) {
+  const occupied = cardOccupiedSlots(db, card, mapping);
+  if (reservation?.card_id === card.id && reservation.state === "reserved") {
+    occupied.delete(Number(reservation.slot_index));
+  }
+  return automationCardPoolTargetUsd(mapping, occupied.size);
 }
 
 function persistedReservation(db, executionId) {
@@ -293,7 +335,7 @@ export async function prepareAutomationCard(db, input = {}) {
     decryptText,
     { fetchImpl: input.fetchImpl }
   );
-  const fundingAmount = usd(mapping.funding_amount_usd, "fundingAmountUsd", true);
+  const fundingAmount = mappingFundingPolicy(mapping).fundingAmount;
   let reservation = persistedReservation(db, execution.id);
   const liveCards = await listLiveCards(provider);
 
@@ -310,7 +352,13 @@ export async function prepareAutomationCard(db, input = {}) {
       const slot = firstFreeSlot(db, card, mapping);
       const live = liveCards.get(Number(card.upstream_card_id));
       if (!slot || !live || String(live.status).toUpperCase() !== "ACTIVE") continue;
-      candidates.push({ card, live, slot, shortfall: Math.max(0, fundingAmount - Number(live.availableAmount || 0)) });
+      const poolTarget = cardPoolTargetForReservation(db, card, mapping);
+      candidates.push({
+        card,
+        live,
+        slot,
+        shortfall: Math.max(0, poolTarget - Number(live.availableAmount || 0))
+      });
     }
     candidates.sort((left, right) => left.shortfall - right.shortfall || left.card.id.localeCompare(right.card.id));
     if (candidates[0]) {
@@ -350,7 +398,8 @@ export async function prepareAutomationCard(db, input = {}) {
   } else {
     const live = liveCards.get(Number(card.upstream_card_id));
     if (!live) fail("AUTOMATION_RESERVED_CARD_STALE", "已预留卡片不在实时卡片列表中", { retryable: true });
-    const shortfall = usd(Math.max(0, fundingAmount - Number(live.availableAmount || 0)), "shortfall");
+    const poolTarget = cardPoolTargetForReservation(db, card, mapping, reservation);
+    const shortfall = usd(Math.max(0, poolTarget - Number(live.availableAmount || 0)), "shortfall");
     if (shortfall > 0) {
       const intent = persistFundingIntent(db, execution, {
         providerKey: mapping.card_platform_key,

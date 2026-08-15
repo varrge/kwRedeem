@@ -11,6 +11,11 @@ process.env.JWT_SECRET = "automation-runner-test-secret";
 const { getDb } = await import("../shared/src/database.js");
 const { encryptText, decryptText } = await import("../shared/src/secure.js");
 const { enrollAutomationOrder } = await import("../shared/src/automation-fulfillment.js");
+const {
+  automationCardPoolTargetUsd,
+  automationRiskAllocationUsd,
+  prepareAutomationCard
+} = await import("../shared/src/automation-card-funding.js");
 const { createAutomationRunner } = await import("../worker/src/automation-runner.js");
 
 const db = getDb();
@@ -19,6 +24,84 @@ let clock = new Date("2026-08-15T00:00:00.000Z");
 after(() => {
   db.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Plus shares one prefunded card across five slots while x5 and x20 keep one card per order", () => {
+  const plus = { funding_amount_usd: 80, card_capacity: 5 };
+  assert.equal(automationRiskAllocationUsd(plus), 16);
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((occupied) => automationCardPoolTargetUsd(plus, occupied)),
+    [80, 64, 48, 32, 16]
+  );
+  for (const mapping of [
+    { funding_amount_usd: 100, card_capacity: 1 },
+    { funding_amount_usd: 200, card_capacity: 1 }
+  ]) {
+    assert.equal(automationRiskAllocationUsd(mapping), mapping.funding_amount_usd);
+    assert.equal(automationCardPoolTargetUsd(mapping, 0), mapping.funding_amount_usd);
+  }
+});
+
+test("the second Plus slot reuses a 64 USD pool balance without topping the card back to 80", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-pool', 'order-pool', 'KWPOOLPLUS2', 'product-pool',
+      'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, provider_key, upstream_card_id, vm_card_id, product_code, last4,
+      upstream_status, cached_available_amount, lane, consumed_slots,
+      capacity_state, reconciliation_state, created_at, updated_at
+    ) VALUES ('card-pool', 'efuncard', 8801, '8801', 'Z-43612081', '4444',
+      'ACTIVE', 64, 'plus-ph', 1, 'AVAILABLE', 'READY', ?, ?)
+  `).run(at, at);
+  let rechargeCalls = 0;
+  const provider = {
+    listCards: async () => ({
+      cards: [{ upstreamCardId: 8801, availableAmount: 64, status: 'ACTIVE' }],
+      total: 1
+    }),
+    rechargeCard: async () => {
+      rechargeCalls += 1;
+      throw new Error("64 USD should satisfy the second pooled slot");
+    },
+    getCardMaterial: async () => ({
+      number: "5555555555554444",
+      cvv: "123",
+      expiryMonth: "12",
+      expiryYear: "2029"
+    })
+  };
+  const result = await prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-pool'").get(),
+    mapping: {
+      card_platform_key: "efuncard",
+      card_product_code: "Z-43612081",
+      capacity_key: "plus-ph",
+      card_capacity: 5,
+      funding_amount_usd: 80
+    },
+    decryptText,
+    encryptText,
+    provider,
+    at
+  });
+  const reservation = db.prepare(`
+    SELECT * FROM automation_card_reservations WHERE execution_id = 'execution-pool'
+  `).get();
+  assert.equal(result.card.id, "card-pool");
+  assert.equal(reservation.slot_index, 2);
+  assert.equal(rechargeCalls, 0);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM automation_funding_intents WHERE execution_id = 'execution-pool'
+  `).get().count, 0);
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-pool'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-pool'").run();
+  db.prepare("DELETE FROM managed_cards WHERE id = 'card-pool'").run();
 });
 
 function seedOrder() {

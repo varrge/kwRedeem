@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { AutomationAdapterError } from "../../shared/src/automation-adapters/automate-v1.js";
 import {
   AutomationFundingError,
+  automationRiskAllocationUsd,
   prepareAutomationCard
 } from "../../shared/src/automation-card-funding.js";
 import { settleAutomationExecution } from "../../shared/src/automation-fulfillment.js";
@@ -452,7 +453,14 @@ export function createAutomationRunner(options = {}) {
       WHERE mapping_id = ? AND substr(created_at, 1, 10) = ?
         AND status NOT IN ('failed', 'cancelled', 'waiting_gate', 'waiting_mapping')
     `).all(mappingId, day);
-    return rows.reduce((sum, row) => sum + Number(parseJson(row.mapping_snapshot)?.fundingAmountUsd || 0), 0);
+    return rows.reduce((sum, row) => {
+      const snapshot = parseJson(row.mapping_snapshot);
+      if (!snapshot) return sum;
+      return sum + automationRiskAllocationUsd({
+        funding_amount_usd: snapshot.fundingAmountUsd,
+        card_capacity: snapshot.cardCapacity
+      });
+    }, 0);
   }
 
   function reservationCompatible(execution, mapping) {
@@ -497,7 +505,7 @@ export function createAutomationRunner(options = {}) {
     `).all(execution.product_id, freshAfter, execution.id);
     const mapping = rows.find((row) => reservationCompatible(execution, row)
       && providerCapacityAvailable(row.provider_id)
-      && dailyRiskUsed(row.id, at) + Number(row.funding_amount_usd) <= Number(row.daily_risk_limit_usd));
+      && dailyRiskUsed(row.id, at) + automationRiskAllocationUsd(row) <= Number(row.daily_risk_limit_usd));
     if (!mapping) {
       schedule(execution, 15, { status: "waiting_mapping", publicMessage: "等待处理" });
       return;

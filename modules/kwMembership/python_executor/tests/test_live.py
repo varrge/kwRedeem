@@ -286,9 +286,16 @@ class LiveContractTest(unittest.TestCase):
         ])
 
     def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:
-        for session_prefix in ("cs", "oaics"):
+        for session_prefix, secret_container in (
+            ("cs", "direct"),
+            ("oaics", "direct"),
+            ("oaics", "processor_entity"),
+        ):
             session_id = f"{session_prefix}_fixture"
             client_secret = f"{session_prefix}_fixture_secret_fixture"
+            response_client_secret: object = client_secret
+            if secret_container == "processor_entity":
+                response_client_secret = {"openai_llc": client_secret}
             node_program = f"""
 const prepare = {json.dumps(PREPARE_PLUS_JS)};
 global.location = {{origin: 'https://chatgpt.com'}};
@@ -319,7 +326,7 @@ global.fetch = async (url, options = {{}}) => {{
         processor_entity: 'openai_llc',
         checkout_session_id: {json.dumps(session_id)},
         publishable_key: 'pk_live_fixture',
-        client_secret: {json.dumps(client_secret)},
+        client_secret: {json.dumps(response_client_secret)},
       }}),
     }};
   }}
@@ -333,7 +340,10 @@ global.fetch = async (url, options = {{}}) => {{
   process.exitCode = 1;
 }});
 """
-            with self.subTest(session_prefix=session_prefix):
+            with self.subTest(
+                session_prefix=session_prefix,
+                secret_container=secret_container,
+            ):
                 completed = subprocess.run(
                     ["node", "-e", node_program],
                     check=False,

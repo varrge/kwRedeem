@@ -197,21 +197,35 @@ async () => {
       const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecretValue = payload?.client_secret;
-      const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : '';
+      const entityClientSecret = clientSecretValue && typeof clientSecretValue === 'object'
+        && !Array.isArray(clientSecretValue)
+        && Object.prototype.hasOwnProperty.call(clientSecretValue, 'openai_llc')
+        && typeof clientSecretValue.openai_llc === 'string'
+        ? clientSecretValue.openai_llc : '';
+      const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : entityClientSecret;
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
-      const secretViolation = clientSecretValue === undefined ? 'client_secret_missing'
-        : (typeof clientSecretValue !== 'string' ? 'client_secret_type'
-          : (clientSecret.length === 0 ? 'client_secret_empty'
-            : (!/^(?:oaics_|cs_)/.test(clientSecret) ? 'client_secret_prefix'
-              : (!clientSecret.includes('_secret_') ? 'client_secret_separator'
-          : (!/^[A-Za-z0-9_]+$/.test(clientSecret) ? 'client_secret_charset'
-            : (clientSecret.length > 4096 ? 'client_secret_length'
-                  : (!clientSecret.startsWith(checkoutSessionClass) ? 'client_secret_class' : '')))))));
+      let secretViolation = '';
+      if (clientSecretValue === undefined) secretViolation = 'client_secret_missing';
+      else if (typeof clientSecretValue !== 'string'
+          && (!clientSecretValue || typeof clientSecretValue !== 'object' || Array.isArray(clientSecretValue))) {
+        secretViolation = 'client_secret_type';
+      } else if (typeof clientSecretValue === 'object'
+          && !Object.prototype.hasOwnProperty.call(clientSecretValue, 'openai_llc')) {
+        secretViolation = 'client_secret_entity_missing';
+      } else if (typeof clientSecretValue === 'object'
+          && typeof clientSecretValue.openai_llc !== 'string') {
+        secretViolation = 'client_secret_entity_type';
+      } else if (clientSecret.length === 0) secretViolation = 'client_secret_empty';
+      else if (!/^(?:oaics_|cs_)/.test(clientSecret)) secretViolation = 'client_secret_prefix';
+      else if (!clientSecret.includes('_secret_')) secretViolation = 'client_secret_separator';
+      else if (!/^[A-Za-z0-9_]+$/.test(clientSecret)) secretViolation = 'client_secret_charset';
+      else if (clientSecret.length > 4096) secretViolation = 'client_secret_length';
+      else if (!clientSecret.startsWith(checkoutSessionClass)) secretViolation = 'client_secret_class';
       const validSecret = secretViolation === '';
       const contractViolation = !safeSessionID ? 'checkout_session_id'
         : (!validKey ? 'publishable_key'
-          : (!validSecret ? secretViolation
-            : (entry.processorEntity !== 'openai_llc' ? 'processor_entity' : '')));
+          : (entry.processorEntity !== 'openai_llc' ? 'processor_entity'
+            : (!validSecret ? secretViolation : '')));
       if (contractViolation) {
         return result({...customEntry,contractViolation,errorKind:'custom_checkout_material_invalid'});
       }

@@ -258,9 +258,23 @@ class LiveContractTest(unittest.TestCase):
                 "responseTag": "custom_checkout_session",
                 "checkoutURL": "",
                 "processorEntity": "openai_llc",
+                "checkoutSessionID": "oaics_fixture",
+                "checkoutSessionClass": "oaics_",
+                "customMaterialReady": False,
+                "customRouteReady": True,
+                "errorKind": "",
+            }),
+            "https://chatgpt.com/checkout/oaics_fixture",
+        )
+        self.assertEqual(
+            _resolve_checkout_entry({
+                "responseTag": "custom_checkout_session",
+                "checkoutURL": "",
+                "processorEntity": "openai_llc",
                 "checkoutSessionID": "",
                 "checkoutSessionClass": "cs_",
                 "customMaterialReady": True,
+                "customRouteReady": False,
                 "errorKind": "",
             }),
             None,
@@ -286,13 +300,13 @@ class LiveContractTest(unittest.TestCase):
         ])
 
     def test_custom_checkout_validates_material_without_request_echoes(self) -> None:
-        for session_prefix, secret_container, rejected_as in (
-            ("cs", "direct", ""),
-            ("oaics", "direct", ""),
-            ("oaics", "null", "client_secret_null_route_id"),
-            ("oaics", "array", "client_secret_array"),
-            ("oaics", "number", "client_secret_number"),
-            ("oaics", "boolean", "client_secret_boolean"),
+        for session_prefix, secret_container, rejected_as, route_ready in (
+            ("cs", "direct", "", False),
+            ("oaics", "direct", "", False),
+            ("oaics", "null", "", True),
+            ("oaics", "array", "client_secret_array", False),
+            ("oaics", "number", "client_secret_number", False),
+            ("oaics", "boolean", "client_secret_boolean", False),
         ):
             session_id = f"{session_prefix}_fixture"
             client_secret = f"{session_prefix}_fixture_secret_fixture"
@@ -366,9 +380,10 @@ global.fetch = async (url, options = {{}}) => {{
                 expected_error = "custom_checkout_material_invalid" if rejected_as else ""
                 self.assertEqual(result["errorKind"], expected_error)
                 self.assertEqual(result["contractViolation"], rejected_as)
-                self.assertEqual(result["customMaterialReady"], not rejected_as)
+                self.assertEqual(result["customMaterialReady"], not rejected_as and not route_ready)
+                self.assertEqual(result.get("customRouteReady", False), route_ready)
                 self.assertEqual(result["checkoutSessionClass"], f"{session_prefix}_")
-                self.assertEqual(result["checkoutSessionID"], "")
+                self.assertEqual(result["checkoutSessionID"], session_id if route_ready else "")
                 self.assertNotIn("pk_live_fixture", completed.stdout)
                 self.assertNotIn(client_secret, completed.stdout)
 
@@ -400,6 +415,7 @@ global.fetch = async (url, options = {{}}) => {{
                         "checkoutSessionID": "",
                         "checkoutSessionClass": "cs_",
                         "customMaterialReady": True,
+                        "customRouteReady": False,
                         "errorKind": "",
                     }
                 if script == MOUNT_CUSTOM_CHECKOUT_JS:

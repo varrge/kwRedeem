@@ -161,7 +161,7 @@ CONTROL_SELECTORS = {
 
 PREPARE_PLUS_JS = r"""
 async () => {
-  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',checkoutSessionClass:'',customMaterialReady:false,contractViolation:'',errorKind:'',httpStatus:0,...overrides});
+  const result = (overrides = {}) => ({responseTag:'',checkoutURL:'',processorEntity:'',checkoutSessionID:'',checkoutSessionClass:'',customMaterialReady:false,customRouteReady:false,contractViolation:'',errorKind:'',httpStatus:0,...overrides});
   if (location.origin !== 'https://chatgpt.com') return result({errorKind:'context_invalid'});
   try { delete window.__kwmembershipCustomCheckout; } catch {}
   const controller = new AbortController(); const abortTimer = setTimeout(() => controller.abort(), 12000);
@@ -192,20 +192,25 @@ async () => {
     const payload = await response.json();
     const entry = {responseTag:typeof payload?.tag==='string'?payload.tag:'',checkoutURL:typeof payload?.url==='string'?payload.url:'',processorEntity:typeof payload?.processor_entity==='string'?payload.processor_entity:'',checkoutSessionID:typeof payload?.checkout_session_id==='string'?payload.checkout_session_id:''};
     if (entry.responseTag === 'custom_checkout_session') {
-      const safeSessionID = /^(?:oaics_|cs_)[A-Za-z0-9_-]+$/.test(entry.checkoutSessionID);
+      const safeSessionID = /^(?:oaics_|cs_)[A-Za-z0-9_-]+$/.test(entry.checkoutSessionID)
+        && entry.checkoutSessionID.length <= 200;
       const checkoutSessionClass = entry.checkoutSessionID.startsWith('oaics_') ? 'oaics_' : (entry.checkoutSessionID.startsWith('cs_') ? 'cs_' : '');
       const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecretValue = payload?.client_secret;
       const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : '';
+      const entryViolation = !safeSessionID ? 'checkout_session_id'
+        : (entry.checkoutURL ? 'checkout_url'
+          : (entry.processorEntity !== 'openai_llc' ? 'processor_entity' : ''));
+      if (entryViolation) {
+        return result({...customEntry,contractViolation:entryViolation,errorKind:'custom_checkout_material_invalid'});
+      }
+      if (clientSecretValue === null) {
+        return result({...entry,checkoutSessionClass,customRouteReady:true});
+      }
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
       let secretViolation = '';
       if (clientSecretValue === undefined) secretViolation = 'client_secret_missing';
-      else if (clientSecretValue === null) {
-        secretViolation = entry.checkoutURL ? 'client_secret_null_url'
-          : (entry.checkoutSessionID.includes('_secret_')
-            ? 'client_secret_null_session_secret' : 'client_secret_null_route_id');
-      }
       else if (Array.isArray(clientSecretValue)) secretViolation = 'client_secret_array';
       else if (typeof clientSecretValue === 'number') secretViolation = 'client_secret_number';
       else if (typeof clientSecretValue === 'boolean') secretViolation = 'client_secret_boolean';
@@ -217,10 +222,8 @@ async () => {
       else if (clientSecret.length > 4096) secretViolation = 'client_secret_length';
       else if (!clientSecret.startsWith(checkoutSessionClass)) secretViolation = 'client_secret_class';
       const validSecret = secretViolation === '';
-      const contractViolation = !safeSessionID ? 'checkout_session_id'
-        : (!validKey ? 'publishable_key'
-          : (entry.processorEntity !== 'openai_llc' ? 'processor_entity'
-            : (!validSecret ? secretViolation : '')));
+      const contractViolation = !validKey ? 'publishable_key'
+        : (!validSecret ? secretViolation : '');
       if (contractViolation) {
         return result({...customEntry,contractViolation,errorKind:'custom_checkout_material_invalid'});
       }
@@ -850,7 +853,7 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
         if error_kind == "custom_checkout_material_invalid":
             violation = entry.get("contractViolation")
             if violation not in {
-                "checkout_session_id", "publishable_key", "processor_entity",
+                "checkout_session_id", "checkout_url", "publishable_key", "processor_entity",
                 "client_secret_missing", "client_secret_null_url", "client_secret_null_session_secret",
                 "client_secret_null_route_id", "client_secret_array",
                 "client_secret_number", "client_secret_boolean", "client_secret_type",
@@ -876,9 +879,17 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
         if not isinstance(entry.get("checkoutURL"), str) or entry.get("processorEntity") or entry.get("checkoutSessionID"): raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
         return validate_checkout_url(entry["checkoutURL"])
     if tag == "custom_checkout_session":
-        if (entry.get("checkoutURL") or entry.get("processorEntity") != "openai_llc"
-                or entry.get("checkoutSessionID") or entry.get("customMaterialReady") is not True
-                or entry.get("checkoutSessionClass") not in {"oaics_", "cs_"}):
+        session_class = entry.get("checkoutSessionClass")
+        if entry.get("checkoutURL") or entry.get("processorEntity") != "openai_llc" or session_class not in {"oaics_", "cs_"}:
+            raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
+        if entry.get("customRouteReady") is True and entry.get("customMaterialReady") is False:
+            session_id = entry.get("checkoutSessionID")
+            if (not isinstance(session_id, str) or len(session_id) > 200
+                    or not session_id.startswith(session_class)
+                    or any(not (char.isalnum() or char in "_-") for char in session_id)):
+                raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
+            return validate_checkout_url(f"{CHATGPT_ORIGIN}/checkout/{session_id}")
+        if entry.get("customMaterialReady") is not True or entry.get("customRouteReady") is not False or entry.get("checkoutSessionID"):
             raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)
         return None
     raise ExecutorAPIError("CHECKOUT_API_CONTRACT_DRIFT", 409)

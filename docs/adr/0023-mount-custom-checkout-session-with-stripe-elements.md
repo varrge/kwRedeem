@@ -28,6 +28,12 @@ memory. Later Stripe Session inspection remains authoritative for the returned c
 OpenAI may issue either `cs_` or `oaics_` custom Session material; the client-secret class must match
 the Checkout Session identifier class.
 
+Production may instead return the same custom response tag with `client_secret: null`, no URL, and
+only a validated Checkout Session route identifier. That is a separate route protocol, not Stripe
+custom material. The executor navigates it through `chatgpt.com/checkout/{id}` without adding the
+processor entity as another path segment. It never passes the route identifier to Stripe.js or
+treats it as a client secret.
+
 Before the mounted surface is eligible for preflight or payment, the executor reads the Stripe
 Checkout Session through `loadActions()`. It derives the PHP major-unit amount from
 `total.total.minorUnitsAmount` and `minorUnitsAmountDivisor`, then exposes only the reviewed plan,

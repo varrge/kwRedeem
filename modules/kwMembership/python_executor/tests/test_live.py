@@ -289,7 +289,6 @@ class LiveContractTest(unittest.TestCase):
         for session_prefix, secret_container, rejected_as in (
             ("cs", "direct", ""),
             ("oaics", "direct", ""),
-            ("oaics", "processor_entity", ""),
             ("oaics", "null", "client_secret_null"),
             ("oaics", "array", "client_secret_array"),
             ("oaics", "number", "client_secret_number"),
@@ -298,9 +297,7 @@ class LiveContractTest(unittest.TestCase):
             session_id = f"{session_prefix}_fixture"
             client_secret = f"{session_prefix}_fixture_secret_fixture"
             response_client_secret: object = client_secret
-            if secret_container == "processor_entity":
-                response_client_secret = {"openai_llc": client_secret}
-            elif secret_container == "null":
+            if secret_container == "null":
                 response_client_secret = None
             elif secret_container == "array":
                 response_client_secret = [client_secret]
@@ -327,6 +324,7 @@ global.fetch = async (url, options = {{}}) => {{
     const request = JSON.parse(options.body);
     if (request.billing_details?.country !== 'PH'
         || request.billing_details?.currency !== 'PHP'
+        || request.checkout_ui_mode !== 'custom'
         || request.plan_name !== 'chatgptplusplan') {{
       throw new Error('checkout request context drifted');
     }}

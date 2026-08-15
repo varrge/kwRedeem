@@ -18,16 +18,15 @@ publishable key and client secret only in page memory, loads Stripe.js directly 
 `js.stripe.com`, initializes the Checkout Elements SDK with the client secret, and mounts the
 Payment Element without opening a ChatGPT checkout-session route.
 
-The checkout request fixes the requested plan and billing context locally. A custom response is
-not required to echo `billing_details`, `checkout_ui_mode`, or `plan_name`; those request fields are
-not response evidence. The executor instead validates the response tag, processor entity, Checkout
-Session identifier class, publishable-key class, and client-secret class before retaining material
-in page memory. Later Stripe Session inspection remains authoritative for the returned currency and
-amount. OpenAI may issue either `cs_` or `oaics_` custom Session material; the client-secret class
-must match the Checkout Session identifier class. The client secret may be returned directly or as
-an object keyed by the validated processor entity. The object form is accepted only through its own
-`openai_llc` string member; generic value or secret members and arbitrary object traversal remain
-rejected.
+The checkout request fixes the requested plan and billing context locally and explicitly requests
+`checkout_ui_mode: custom`; a hosted Checkout Session has a nullable client secret and cannot back
+the custom Checkout SDK. A custom response is not required to echo `billing_details`,
+`checkout_ui_mode`, or `plan_name`; those request fields are not response evidence. The executor
+instead validates the response tag, processor entity, Checkout Session identifier class,
+publishable-key class, and direct string client-secret class before retaining material in page
+memory. Later Stripe Session inspection remains authoritative for the returned currency and amount.
+OpenAI may issue either `cs_` or `oaics_` custom Session material; the client-secret class must match
+the Checkout Session identifier class.
 
 Before the mounted surface is eligible for preflight or payment, the executor reads the Stripe
 Checkout Session through `loadActions()`. It derives the PHP major-unit amount from

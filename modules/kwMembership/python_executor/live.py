@@ -187,7 +187,7 @@ async () => {
       }
     }
     const requestContext = Object.freeze({country:'PH',currency:'PHP',planName:'chatgptplusplan'});
-    const response = await fetch('/backend-api/payments/checkout', {method:'POST', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal, headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({billing_details:{country:requestContext.country,currency:requestContext.currency},checkout_ui_mode:'hosted',entry_point:'all_plans_pricing_modal',plan_name:requestContext.planName})});
+    const response = await fetch('/backend-api/payments/checkout', {method:'POST', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal, headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({billing_details:{country:requestContext.country,currency:requestContext.currency},checkout_ui_mode:'custom',entry_point:'all_plans_pricing_modal',plan_name:requestContext.planName})});
     if (!response.ok) return result({errorKind:response.status===401||response.status===403?'checkout_unauthorized':'checkout_rejected',httpStatus:response.status});
     const payload = await response.json();
     const entry = {responseTag:typeof payload?.tag==='string'?payload.tag:'',checkoutURL:typeof payload?.url==='string'?payload.url:'',processorEntity:typeof payload?.processor_entity==='string'?payload.processor_entity:'',checkoutSessionID:typeof payload?.checkout_session_id==='string'?payload.checkout_session_id:''};
@@ -197,12 +197,7 @@ async () => {
       const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecretValue = payload?.client_secret;
-      const entityClientSecret = clientSecretValue && typeof clientSecretValue === 'object'
-        && !Array.isArray(clientSecretValue)
-        && Object.prototype.hasOwnProperty.call(clientSecretValue, 'openai_llc')
-        && typeof clientSecretValue.openai_llc === 'string'
-        ? clientSecretValue.openai_llc : '';
-      const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : entityClientSecret;
+      const clientSecret = typeof clientSecretValue === 'string' ? clientSecretValue : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
       let secretViolation = '';
       if (clientSecretValue === undefined) secretViolation = 'client_secret_missing';
@@ -210,15 +205,8 @@ async () => {
       else if (Array.isArray(clientSecretValue)) secretViolation = 'client_secret_array';
       else if (typeof clientSecretValue === 'number') secretViolation = 'client_secret_number';
       else if (typeof clientSecretValue === 'boolean') secretViolation = 'client_secret_boolean';
-      else if (typeof clientSecretValue !== 'string' && typeof clientSecretValue !== 'object') {
-        secretViolation = 'client_secret_type';
-      } else if (typeof clientSecretValue === 'object'
-          && !Object.prototype.hasOwnProperty.call(clientSecretValue, 'openai_llc')) {
-        secretViolation = 'client_secret_entity_missing';
-      } else if (typeof clientSecretValue === 'object'
-          && typeof clientSecretValue.openai_llc !== 'string') {
-        secretViolation = 'client_secret_entity_type';
-      } else if (clientSecret.length === 0) secretViolation = 'client_secret_empty';
+      else if (typeof clientSecretValue !== 'string') secretViolation = 'client_secret_type';
+      else if (clientSecret.length === 0) secretViolation = 'client_secret_empty';
       else if (!/^(?:oaics_|cs_)/.test(clientSecret)) secretViolation = 'client_secret_prefix';
       else if (!clientSecret.includes('_secret_')) secretViolation = 'client_secret_separator';
       else if (!/^[A-Za-z0-9_]+$/.test(clientSecret)) secretViolation = 'client_secret_charset';
@@ -861,7 +849,7 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
                 "checkout_session_id", "publishable_key", "processor_entity",
                 "client_secret_missing", "client_secret_null", "client_secret_array",
                 "client_secret_number", "client_secret_boolean", "client_secret_type",
-                "client_secret_entity_missing", "client_secret_entity_type", "client_secret_empty",
+                "client_secret_empty",
                 "client_secret_prefix", "client_secret_separator", "client_secret_charset",
                 "client_secret_length", "client_secret_class",
             }:

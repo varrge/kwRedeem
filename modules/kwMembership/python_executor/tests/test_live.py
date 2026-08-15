@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -278,6 +279,67 @@ class LiveContractTest(unittest.TestCase):
                 "errorKind": "",
             })
         self.assertEqual(raised.exception.code, "CHECKOUT_API_CONTRACT_DRIFT")
+
+    def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:
+        node_program = f"""
+const prepare = {json.dumps(PREPARE_PLUS_JS)};
+global.location = {{origin: 'https://chatgpt.com'}};
+global.window = {{}};
+global.fetch = async (url, options = {{}}) => {{
+  if (url === '/api/auth/session') return {{
+    ok: true,
+    status: 200,
+    json: async () => ({{accessToken: 'header.e30.signature', account: {{id: 'acct_fixture'}}}}),
+  }};
+  if (String(url).startsWith('/backend-api/subscriptions?')) return {{
+    ok: true,
+    status: 200,
+    json: async () => ({{plan_type: 'free'}}),
+  }};
+  if (url === '/backend-api/payments/checkout') {{
+    const request = JSON.parse(options.body);
+    if (request.billing_details?.country !== 'PH'
+        || request.billing_details?.currency !== 'PHP'
+        || request.plan_name !== 'chatgptplusplan') {{
+      throw new Error('checkout request context drifted');
+    }}
+    return {{
+      ok: true,
+      status: 200,
+      json: async () => ({{
+        tag: 'custom_checkout_session',
+        processor_entity: 'openai_llc',
+        checkout_session_id: 'cs_fixture',
+        publishable_key: 'pk_live_fixture',
+        client_secret: 'cs_fixture_secret_fixture',
+      }}),
+    }};
+  }}
+  throw new Error(`unexpected URL: ${{url}}`);
+}};
+(async () => {{
+  const result = await eval(`(${{prepare}})()`);
+  process.stdout.write(JSON.stringify(result));
+}})().catch((error) => {{
+  process.stderr.write(String(error));
+  process.exitCode = 1;
+}});
+"""
+        completed = subprocess.run(
+            ["node", "-e", node_program],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["errorKind"], "")
+        self.assertTrue(result["customMaterialReady"])
+        self.assertEqual(result["checkoutSessionClass"], "cs_")
+        self.assertEqual(result["checkoutSessionID"], "")
+        self.assertNotIn("pk_live_fixture", completed.stdout)
+        self.assertNotIn("cs_fixture_secret_fixture", completed.stdout)
 
     def test_custom_checkout_mounts_without_opening_a_chatgpt_checkout_route(self) -> None:
         navigations: list[str] = []

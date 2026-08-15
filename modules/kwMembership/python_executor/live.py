@@ -186,7 +186,8 @@ async () => {
         if (['plus','prolite','pro','team','business','enterprise'].includes(plan) && Number.isFinite(activeUntil) && activeUntil > Date.now() && subscription?.is_delinquent !== true) return result({errorKind:'already_subscribed'});
       }
     }
-    const response = await fetch('/backend-api/payments/checkout', {method:'POST', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal, headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({billing_details:{country:'PH',currency:'PHP'},checkout_ui_mode:'hosted',entry_point:'all_plans_pricing_modal',plan_name:'chatgptplusplan'})});
+    const requestContext = Object.freeze({country:'PH',currency:'PHP',planName:'chatgptplusplan'});
+    const response = await fetch('/backend-api/payments/checkout', {method:'POST', credentials:'include', cache:'no-store', redirect:'error', signal:controller.signal, headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({billing_details:{country:requestContext.country,currency:requestContext.currency},checkout_ui_mode:'hosted',entry_point:'all_plans_pricing_modal',plan_name:requestContext.planName})});
     if (!response.ok) return result({errorKind:response.status===401||response.status===403?'checkout_unauthorized':'checkout_rejected',httpStatus:response.status});
     const payload = await response.json();
     const entry = {responseTag:typeof payload?.tag==='string'?payload.tag:'',checkoutURL:typeof payload?.url==='string'?payload.url:'',processorEntity:typeof payload?.processor_entity==='string'?payload.processor_entity:'',checkoutSessionID:typeof payload?.checkout_session_id==='string'?payload.checkout_session_id:''};
@@ -196,16 +197,13 @@ async () => {
       const customEntry = {...entry,checkoutSessionID:'',checkoutSessionClass};
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
-      const country = typeof payload?.billing_details?.country === 'string' ? payload.billing_details.country : '';
-      const currency = typeof payload?.billing_details?.currency === 'string' ? payload.billing_details.currency : '';
-      const planName = typeof payload?.plan_name === 'string' ? payload.plan_name : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
       const validSecret = /^cs_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret) && clientSecret.length <= 4096;
-      if (!safeSessionID || !validKey || !validSecret || payload?.checkout_ui_mode !== 'custom' || country !== 'PH' || currency !== 'PHP' || planName !== 'chatgptplusplan') {
+      if (!safeSessionID || !validKey || !validSecret || entry.processorEntity !== 'openai_llc') {
         return result({...customEntry,errorKind:'custom_checkout_material_invalid'});
       }
       Object.defineProperty(window, '__kwmembershipCustomCheckout', {
-        value: Object.freeze({publishableKey,clientSecret,country,currency,plan:'plus'}),
+        value: Object.freeze({publishableKey,clientSecret,country:requestContext.country,currency:requestContext.currency,plan:'plus'}),
         configurable: true,
       });
       return result({...customEntry,customMaterialReady:true});

@@ -198,11 +198,15 @@ async () => {
       const publishableKey = typeof payload?.publishable_key === 'string' ? payload.publishable_key : '';
       const clientSecret = typeof payload?.client_secret === 'string' ? payload.client_secret : '';
       const validKey = /^pk_(?:live|test)_[A-Za-z0-9_]+$/.test(publishableKey) && publishableKey.length <= 512;
-      const validSecret = /^(?:oaics_|cs_)[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+$/.test(clientSecret)
-        && clientSecret.startsWith(checkoutSessionClass) && clientSecret.length <= 4096;
+      const secretViolation = !/^(?:oaics_|cs_)/.test(clientSecret) ? 'client_secret_prefix'
+        : (!clientSecret.includes('_secret_') ? 'client_secret_separator'
+          : (!/^[A-Za-z0-9_]+$/.test(clientSecret) ? 'client_secret_charset'
+            : (clientSecret.length > 4096 ? 'client_secret_length'
+              : (!clientSecret.startsWith(checkoutSessionClass) ? 'client_secret_class' : ''))));
+      const validSecret = secretViolation === '';
       const contractViolation = !safeSessionID ? 'checkout_session_id'
         : (!validKey ? 'publishable_key'
-          : (!validSecret ? 'client_secret'
+          : (!validSecret ? secretViolation
             : (entry.processorEntity !== 'openai_llc' ? 'processor_entity' : '')));
       if (contractViolation) {
         return result({...customEntry,contractViolation,errorKind:'custom_checkout_material_invalid'});
@@ -832,7 +836,11 @@ def _resolve_checkout_entry(entry: Any) -> str | None:
     if error_kind:
         if error_kind == "custom_checkout_material_invalid":
             violation = entry.get("contractViolation")
-            if violation not in {"checkout_session_id", "publishable_key", "client_secret", "processor_entity"}:
+            if violation not in {
+                "checkout_session_id", "publishable_key", "processor_entity",
+                "client_secret_prefix", "client_secret_separator", "client_secret_charset",
+                "client_secret_length", "client_secret_class",
+            }:
                 violation = "unknown"
             LOGGER.warning("custom checkout response rejected field=%s", violation)
         code = {

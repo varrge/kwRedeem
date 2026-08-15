@@ -277,12 +277,12 @@ class LiveContractTest(unittest.TestCase):
                     "checkoutSessionID": "",
                     "checkoutSessionClass": "cs_",
                     "customMaterialReady": False,
-                    "contractViolation": "client_secret",
+                    "contractViolation": "client_secret_class",
                     "errorKind": "custom_checkout_material_invalid",
                 })
         self.assertEqual(raised.exception.code, "CHECKOUT_API_CONTRACT_DRIFT")
         self.assertEqual(captured.output, [
-            "WARNING:kwmembership.python_executor.live:custom checkout response rejected field=client_secret"
+            "WARNING:kwmembership.python_executor.live:custom checkout response rejected field=client_secret_class"
         ])
 
     def test_custom_checkout_accepts_material_without_request_echoes(self) -> None:

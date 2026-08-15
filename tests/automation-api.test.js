@@ -187,6 +187,7 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
 
 test("admin UI exposes protocol sites, mappings, Gate, and manual review controls", async () => {
   const html = fs.readFileSync(path.resolve("admin/index.html"), "utf8");
+  const script = fs.readFileSync(path.resolve("admin/app.js"), "utf8");
   for (const id of [
     "automation-gate-form",
     "automation-provider-form",
@@ -197,6 +198,177 @@ test("admin UI exposes protocol sites, mappings, Gate, and manual review control
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
+  assert.match(script, /retryAutomationExecution/);
+  assert.match(script, /\/api\/admin\/automation\/executions\/\$\{encodeURIComponent\(id\)\}\/retry/);
+  assert.match(script, /takeOverAutomationExecution/);
+  assert.match(script, /\/api\/admin\/automation\/executions\/\$\{encodeURIComponent\(id\)\}\/manual-review/);
+});
+
+test("admin can immediately retry only pre-submit automation states while Gate remains authoritative", async () => {
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const execution = enrollAutomationOrder(db, {
+    id: "execution-manual-retry",
+    orderId: "order-manual-retry",
+    orderNo: "KWMANUALRETRY",
+    productId: "store-map-plus",
+    createdAt: new Date().toISOString()
+  });
+  db.prepare(`
+    UPDATE automation_executions
+    SET status = 'waiting_mapping', next_action_at = '2099-01-01T00:00:00.000Z'
+    WHERE id = ?
+  `).run(execution.id);
+
+  const requestedAt = Date.now();
+  const retried = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${execution.id}/retry`,
+    headers,
+    payload: {}
+  });
+  assert.equal(retried.statusCode, 200, retried.body);
+  const afterRetry = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(execution.id);
+  assert.equal(afterRetry.status, "waiting_mapping");
+  assert.equal(Date.parse(afterRetry.next_action_at) >= requestedAt, true);
+  assert.ok(db.prepare(`
+    SELECT 1 FROM admin_audit_logs
+    WHERE action = 'automation.execution.retry_requested' AND resource_id = ?
+  `).get(execution.id));
+
+  db.prepare(`
+    UPDATE automation_executions
+    SET status = 'submit_unknown', remote_task_id = 'REMOTE-UNKNOWN'
+    WHERE id = ?
+  `).run(execution.id);
+  const unsafe = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${execution.id}/retry`,
+    headers,
+    payload: {}
+  });
+  assert.equal(unsafe.statusCode, 409);
+  assert.match(unsafe.json().message, /不能手动重试/);
+
+  db.prepare(`
+    UPDATE automation_executions
+    SET status = 'waiting_mapping', remote_task_id = NULL
+    WHERE id = ?
+  `).run(execution.id);
+  db.prepare("UPDATE automation_fulfillment_settings SET payment_gate_enabled = 0 WHERE id = 'default'").run();
+  const closedGate = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${execution.id}/retry`,
+    headers,
+    payload: {}
+  });
+  assert.equal(closedGate.statusCode, 409);
+  assert.match(closedGate.json().message, /Gate 已关闭/);
+  db.prepare("UPDATE automation_fulfillment_settings SET payment_gate_enabled = 1 WHERE id = 'default'").run();
+});
+
+test("admin can safely take over an unfunded waiting order and settle an external manual success", async () => {
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const at = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, source_key, public_key,
+      prefix, status, locked_at, locked_by_order_id, processing_mode, created_at, updated_at
+    ) VALUES (
+      'cdkey-manual-takeover', 'batch-manual-takeover', 'prod_demo', 'endpoint_demo',
+      'source-manual-takeover', 'PUBLIC-MANUAL-TAKEOVER', 'MANUAL', 'locked', ?,
+      'order-manual-takeover', 'membership_auto', ?, ?
+    )
+  `).run(at, at, at);
+  db.prepare(`
+    INSERT INTO redeem_orders (
+      id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id,
+      session_payload, status, created_at, updated_at
+    ) VALUES (
+      'order-manual-takeover', 'KWMANUALTAKEOVER', 'cdkey-manual-takeover',
+      'PUBLIC-MANUAL-TAKEOVER', 'prod_demo', 'endpoint_demo',
+      'encrypted-session', 'pending', ?, ?
+    )
+  `).run(at, at);
+  const execution = enrollAutomationOrder(db, {
+    id: "execution-manual-takeover",
+    orderId: "order-manual-takeover",
+    orderNo: "KWMANUALTAKEOVER",
+    productId: "store-map-plus",
+    createdAt: at
+  });
+  db.prepare(`
+    UPDATE automation_executions
+    SET status = 'waiting_mapping', next_action_at = '2099-01-01T00:00:00.000Z'
+    WHERE id = ?
+  `).run(execution.id);
+
+  const takeover = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${execution.id}/manual-review`,
+    headers,
+    payload: {}
+  });
+  assert.equal(takeover.statusCode, 200, takeover.body);
+  assert.equal(takeover.json().item.status, "manual_review");
+  assert.equal(takeover.json().item.lastErrorCode, "ADMIN_MANUAL_TAKEOVER_PRE_PAYMENT");
+  assert.equal(db.prepare("SELECT next_action_at FROM automation_executions WHERE id = ?").get(execution.id).next_action_at, null);
+
+  const resolved = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${execution.id}/resolve`,
+    headers,
+    payload: {
+      outcome: "succeeded",
+      evidenceReference: "MANUAL-KWMANUALTAKEOVER",
+      confirmation: "RESOLVE_AUTOMATION_REVIEW"
+    }
+  });
+  assert.equal(resolved.statusCode, 200, resolved.body);
+  assert.equal(resolved.json().item.status, "succeeded");
+  const completedOrder = db.prepare("SELECT status, session_payload FROM redeem_orders WHERE id = 'order-manual-takeover'").get();
+  assert.equal(completedOrder.status, "succeeded");
+  assert.equal(completedOrder.session_payload, "");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'cdkey-manual-takeover'").get().status, "used");
+  assert.ok(db.prepare(`
+    SELECT 1 FROM admin_audit_logs
+    WHERE action = 'automation.execution.manual_takeover' AND resource_id = ?
+  `).get(execution.id));
+
+  const bounded = enrollAutomationOrder(db, {
+    id: "execution-manual-boundary",
+    orderId: "order-manual-boundary",
+    orderNo: "KWMANUALBOUNDARY",
+    productId: "store-map-plus",
+    createdAt: at
+  });
+  db.prepare("UPDATE automation_executions SET status = 'waiting_mapping' WHERE id = ?").run(bounded.id);
+  db.prepare(`
+    INSERT INTO automation_card_reservations (
+      id, execution_id, provider_key, card_id, planned_product_code,
+      capacity_key, slot_index, state, reserved_at
+    ) VALUES (
+      'reservation-manual-boundary', ?, 'spacexcard', NULL, 'P5378OX',
+      'plus', NULL, 'reserved', ?
+    )
+  `).run(bounded.id, at);
+  const blocked = await app.inject({
+    method: "POST",
+    url: `/api/admin/automation/executions/${bounded.id}/manual-review`,
+    headers,
+    payload: {}
+  });
+  assert.equal(blocked.statusCode, 409);
+  assert.match(blocked.json().message, /卡片或资金边界/);
 });
 
 test("CDK voiding cancels only protocol orders that have not crossed the card boundary", async () => {

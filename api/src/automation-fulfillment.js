@@ -10,6 +10,13 @@ import {
 } from "../../shared/src/automation-provider-registry.js";
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+const SAFE_RETRY_STATUSES = Object.freeze([
+  "waiting_gate",
+  "waiting_mapping",
+  "waiting_capacity",
+  "preparing_card"
+]);
+const MANUAL_TAKEOVER_CODE = "ADMIN_MANUAL_TAKEOVER_PRE_PAYMENT";
 
 function setNoStore(reply) {
   reply.header("Cache-Control", "no-store");
@@ -450,6 +457,77 @@ export function createAutomationFulfillmentService(options = {}) {
     return { ok: true };
   });
 
+  app.post("/api/admin/automation/executions/:id/retry", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = String(request.params.id || "");
+    const current = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id);
+    if (!current) return reply.code(404).send({ message: "自动化履约不存在" });
+    if (!SAFE_RETRY_STATUSES.includes(current.status) || current.remote_task_id) {
+      return reply.code(409).send({ message: "当前状态不能手动重试，只能继续查询或对账" });
+    }
+    const settings = db.prepare("SELECT payment_gate_enabled FROM automation_fulfillment_settings WHERE id = 'default'").get();
+    if (settings?.payment_gate_enabled !== 1) {
+      return reply.code(409).send({ message: "付款 Gate 已关闭，手动重试不会越过 Gate" });
+    }
+    const at = nowIso();
+    db.prepare(`
+      UPDATE automation_executions
+      SET next_action_at = ?, public_message = '等待处理', updated_at = ?
+      WHERE id = ?
+    `).run(at, at, id);
+    audit(request, "automation.execution.retry_requested", "automation_execution", id, {
+      orderNo: current.order_no,
+      status: current.status
+    });
+    return {
+      item: serializeAutomationExecution(
+        db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id),
+        { admin: true }
+      )
+    };
+  });
+
+  app.post("/api/admin/automation/executions/:id/manual-review", { preHandler: requireAdmin }, async (request, reply) => {
+    const id = String(request.params.id || "");
+    const current = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id);
+    if (!current) return reply.code(404).send({ message: "自动化履约不存在" });
+    if (!["waiting_gate", "waiting_mapping"].includes(current.status) || current.remote_task_id) {
+      return reply.code(409).send({ message: "当前订单已越过安全人工接管状态" });
+    }
+    const activeReservation = db.prepare(`
+      SELECT 1 FROM automation_card_reservations
+      WHERE execution_id = ? AND state <> 'released'
+    `).get(id);
+    const fundingIntent = db.prepare(`
+      SELECT 1 FROM automation_funding_intents WHERE execution_id = ?
+    `).get(id);
+    if (activeReservation || fundingIntent) {
+      return reply.code(409).send({ message: "订单已有卡片或资金边界，只能继续对账" });
+    }
+    const at = nowIso();
+    const staleLockAt = new Date(Date.parse(at) - 120_000).toISOString();
+    const changed = db.prepare(`
+      UPDATE automation_executions
+      SET status = 'manual_review', current_phase = 'manual_processing',
+          public_message = '人工核验中', last_error_code = ?,
+          last_error_message = '管理员已接管处理', next_action_at = NULL,
+          locked_at = NULL, locked_by = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('waiting_gate', 'waiting_mapping')
+        AND remote_task_id IS NULL
+        AND (locked_at IS NULL OR locked_at <= ?)
+    `).run(MANUAL_TAKEOVER_CODE, at, id, staleLockAt).changes;
+    if (!changed) return reply.code(409).send({ message: "worker 正在处理该订单，请稍后再接管" });
+    audit(request, "automation.execution.manual_takeover", "automation_execution", id, {
+      orderNo: current.order_no,
+      previousStatus: current.status
+    });
+    return {
+      item: serializeAutomationExecution(
+        db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id),
+        { admin: true }
+      )
+    };
+  });
+
   app.post("/api/admin/automation/executions/:id/resolve", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = z.object({
       outcome: z.enum(["succeeded", "failed"]),
@@ -466,7 +544,7 @@ export function createAutomationFulfillmentService(options = {}) {
       const item = settleAutomationExecution(db, id, parsed.data.outcome, {
         code: parsed.data.outcome === "failed" ? "MANUAL_REVIEW_FAILED" : null,
         message: parsed.data.outcome === "failed" ? "人工核验确认失败" : null,
-        allowNoCard: current.status === "manual_hold",
+        allowNoCard: current.status === "manual_hold" || current.last_error_code === MANUAL_TAKEOVER_CODE,
         at: nowIso()
       });
       audit(request, "automation.execution.resolve", "automation_execution", id, {

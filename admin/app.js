@@ -2136,6 +2136,33 @@ async function queryAutomationExecution(id) {
   }
 }
 
+async function retryAutomationExecution(id) {
+  try {
+    await api(`/api/admin/automation/executions/${encodeURIComponent(id)}/retry`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.automationExecutionResult, "已安排安全重试；不会越过付款 Gate 或重置远端幂等信息");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationExecutionResult, error.message);
+  }
+}
+
+async function takeOverAutomationExecution(id) {
+  if (!window.confirm("确认停止该订单的协议自动化并转为人工处理？接管后必须根据外部证据裁决成功或失败。")) return;
+  try {
+    await api(`/api/admin/automation/executions/${encodeURIComponent(id)}/manual-review`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setHint(refs.automationExecutionResult, "订单已转为人工处理；完成后请使用裁决成功或裁决失败记录结果");
+    await refreshAutomationConsole();
+  } catch (error) {
+    setHint(refs.automationExecutionResult, error.message);
+  }
+}
+
 async function resolveAutomationExecution(id, outcome) {
   const evidenceReference = window.prompt("输入外部证据编号（工单号、远端任务号或对账记录编号；不要粘贴 Session 或卡资料）：", "");
   if (!evidenceReference) return;
@@ -2215,6 +2242,8 @@ async function refreshAutomationConsole() {
     { label: "卡片 / 价格", render: (item) => `${escapeHtml(item.cardBrand || "-")} ${escapeHtml(item.cardLast4 ? `•••• ${item.cardLast4}` : "")}<br/><span class="hint">${escapeHtml(item.pricingCurrency || "-")} ${escapeHtml(item.pricingTotal || "-")}</span>` },
     { label: "错误 / 更新", render: (item) => `<code>${escapeHtml(item.lastErrorCode || "-")}</code><br/><span class="hint">${escapeHtml(item.lastErrorMessage || "-")}<br/>${escapeHtml(item.updatedAt || "-")}</span>` },
     { label: "操作", render: (item) => [
+      ["waiting_gate", "waiting_mapping", "waiting_capacity", "preparing_card"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick='retryAutomationExecution(${JSON.stringify(item.id)})'>立即重试</button>` : "",
+      ["waiting_gate", "waiting_mapping"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick='takeOverAutomationExecution(${JSON.stringify(item.id)})'>人工处理</button>` : "",
       ["queued", "running", "submit_unknown"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick='queryAutomationExecution(${JSON.stringify(item.id)})'>立即查询</button>` : "",
       ["manual_review", "manual_hold"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "succeeded")'>裁决成功</button> <button class="ghost-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "failed")'>裁决失败</button>` : ""
     ].filter(Boolean).join(" ") || "-" }
@@ -2226,6 +2255,8 @@ window.syncAutomationProvider = syncAutomationProvider;
 window.resetAutomationProviderCircuit = resetAutomationProviderCircuit;
 window.loadAutomationMapping = loadAutomationMapping;
 window.toggleAutomationMapping = toggleAutomationMapping;
+window.retryAutomationExecution = retryAutomationExecution;
+window.takeOverAutomationExecution = takeOverAutomationExecution;
 window.queryAutomationExecution = queryAutomationExecution;
 window.resolveAutomationExecution = resolveAutomationExecution;
 

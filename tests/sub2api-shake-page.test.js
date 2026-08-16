@@ -33,6 +33,17 @@ test("admin exposes a dedicated Shake & Win system with campaign, prize, sync, g
   assert.doesNotMatch(html, /id="shake-subscription-threshold"/);
 });
 
+test("Shake admin editor keeps its form and embed card within the responsive layout", () => {
+  const html = fs.readFileSync(path.resolve("admin/index.html"), "utf8");
+  const css = fs.readFileSync(path.resolve("admin/styles.css"), "utf8");
+
+  assert.match(html, /class="grid grid-2 shake-admin-layout"/);
+  assert.match(html, /id="shake-embed-url"[^>]+title="活动页地址"/);
+  assert.match(css, /\.grid-2\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /#shake-campaign-form\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media\s*\(max-width:\s*1200px\)\s*\{[\s\S]*?\.shake-admin-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
 test("Shake campaign numeric inputs accept valid whole-number configuration", () => {
   const html = fs.readFileSync(path.resolve("admin/index.html"), "utf8");
   const script = fs.readFileSync(path.resolve("admin/app.js"), "utf8");

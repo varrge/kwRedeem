@@ -22,6 +22,8 @@ export class AutomationAdapterError extends Error {
     this.code = code;
     this.statusCode = options.statusCode || 502;
     this.definitelyNotCreated = options.definitelyNotCreated === true;
+    this.unsafeToReplay = options.unsafeToReplay === true;
+    this.requestNotSent = options.requestNotSent === true;
     this.retryable = options.retryable !== false;
     this.providerCode = options.providerCode || null;
   }
@@ -227,6 +229,7 @@ export class AutomateV1Adapter {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.lookup = options.lookup || dns.lookup;
     this.timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+    this.createReplaySafe = true;
   }
 
   async request(path, options = {}) {

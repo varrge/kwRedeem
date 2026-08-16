@@ -2022,6 +2022,14 @@ function resetAutomationProviderForm() {
   refs.automationProviderAdapter.value = "automate_v1";
   refs.automationProviderStatus.value = "paused";
   refs.automationProviderApiKey.placeholder = "首次提供一次；后续留空继续使用";
+  updateAutomationProviderBaseUrlPlaceholder();
+}
+
+function updateAutomationProviderBaseUrlPlaceholder() {
+  if (!refs.automationProviderBaseUrl) return;
+  refs.automationProviderBaseUrl.placeholder = refs.automationProviderAdapter?.value === "efun_open_v1"
+    ? "https://example.com/api/v1"
+    : "https://example.com/api/v1/automate";
 }
 
 function resetAutomationMappingForm() {
@@ -2054,6 +2062,7 @@ function loadAutomationProvider(id) {
   refs.automationProviderId.value = item.id;
   refs.automationProviderName.value = item.name;
   refs.automationProviderAdapter.value = item.adapterKey;
+  updateAutomationProviderBaseUrlPlaceholder();
   refs.automationProviderBaseUrl.value = item.baseUrl;
   refs.automationProviderApiKey.value = "";
   refs.automationProviderApiKey.placeholder = item.hasCredential ? "Key 已加密保存；留空保持不变" : "必须提供 Key";
@@ -2089,7 +2098,7 @@ async function syncAutomationProvider(id) {
       method: "POST",
       body: JSON.stringify({})
     });
-    setHint(refs.automationProviderResult, "站点 /config 已同步；被移除的能力映射已自动停用");
+    setHint(refs.automationProviderResult, "站点协议能力已同步；被移除的能力映射已自动停用");
     await refreshAutomationConsole();
   } catch (error) {
     setHint(refs.automationProviderResult, error.message);
@@ -6604,7 +6613,7 @@ refs.automationProviderForm?.addEventListener("submit", async (event) => {
       })
     });
     resetAutomationProviderForm();
-    setHint(refs.automationProviderResult, "站点已保存，API Key 已加密复用，/config 已同步");
+    setHint(refs.automationProviderResult, "站点已保存，API Key 已加密复用，协议能力已同步");
     await refreshAutomationConsole();
   } catch (error) {
     setHint(refs.automationProviderResult, error.message);
@@ -6614,6 +6623,7 @@ refs.automationProviderForm?.addEventListener("submit", async (event) => {
 });
 
 refs.automationProviderCancel?.addEventListener("click", resetAutomationProviderForm);
+refs.automationProviderAdapter?.addEventListener("change", updateAutomationProviderBaseUrlPlaceholder);
 refs.automationProviderRefresh?.addEventListener("click", () => {
   refreshAutomationConsole().catch((error) => setHint(refs.automationProviderResult, error.message));
 });
@@ -6645,7 +6655,7 @@ refs.automationMappingForm?.addEventListener("submit", async (event) => {
       })
     });
     resetAutomationMappingForm();
-    setHint(refs.automationMappingResult, "商品映射已按站点当前 /config 能力保存");
+    setHint(refs.automationMappingResult, "商品映射已按站点当前协议能力保存");
     await refreshAutomationConsole();
   } catch (error) {
     setHint(refs.automationMappingResult, error.message);

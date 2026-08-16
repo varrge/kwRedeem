@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { AutomationAdapterError, normalizeAutomateV1BaseUrl } from "../../shared/src/automation-adapters/automate-v1.js";
+import { AutomationAdapterError } from "../../shared/src/automation-adapters/automate-v1.js";
 import { serializeAutomationExecution, settleAutomationExecution } from "../../shared/src/automation-fulfillment.js";
 import {
   automationAdapterKeys,
+  normalizeAutomationProviderBaseUrl,
   serializeAutomationProvider,
   syncAutomationProvider,
   validateAutomationMappingCapability
@@ -184,7 +185,7 @@ export function createAutomationFulfillmentService(options = {}) {
     const at = nowIso();
     const id = parsed.data.id || `ap_${randomUUID()}`;
     try {
-      const baseUrl = normalizeAutomateV1BaseUrl(parsed.data.baseUrl);
+      const baseUrl = normalizeAutomationProviderBaseUrl(parsed.data.adapterKey, parsed.data.baseUrl);
       const existing = db.prepare("SELECT * FROM automation_providers WHERE id = ?").get(id);
       if (existing && existing.adapter_key !== parsed.data.adapterKey) {
         return reply.code(409).send({ message: "已创建站点不能修改 Adapter 类型" });

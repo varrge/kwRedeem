@@ -141,6 +141,7 @@ function priceProblem(task, snapshot) {
   const total = parseDisplayAmount(task.pricing.displayTotal);
   if (!task.pricing.confirmed) return "REMOTE_PRICE_NOT_CONFIRMED";
   if (currency !== snapshot.currency) return "REMOTE_PRICE_CURRENCY_MISMATCH";
+  if (snapshot.adapterKey === "efun_open_v1" && task.pricing.amountUnavailable === true) return null;
   if (total === null) return "REMOTE_PRICE_UNREADABLE";
   if (total < snapshot.expectedMinAmount || total > snapshot.expectedMaxAmount) {
     return "REMOTE_PRICE_OUT_OF_RANGE";
@@ -726,6 +727,30 @@ export function createAutomationRunner(options = {}) {
         fetchImpl,
         lookup
       });
+      const attempt = db.prepare(`
+        SELECT status FROM automation_execution_attempts
+        WHERE execution_id = ? AND attempt_no = ?
+      `).get(execution.id, execution.attempt_count);
+      if (adapter.createReplaySafe === false && attempt?.status === "submit_started") {
+        markManualReview(
+          execution,
+          "AUTOMATION_SUBMIT_OUTCOME_UNKNOWN",
+          "当前站点协议不支持幂等重放，已停止自动重提"
+        );
+        return;
+      }
+      const submittedAt = iso(now());
+      db.transaction(() => {
+        db.prepare(`
+          UPDATE automation_execution_attempts
+          SET status = 'submit_started', updated_at = ?
+          WHERE execution_id = ? AND attempt_no = ?
+        `).run(submittedAt, execution.id, execution.attempt_count);
+        db.prepare(`
+          UPDATE automation_executions SET current_phase = 'remote_submit_started', updated_at = ?
+          WHERE id = ?
+        `).run(submittedAt, execution.id);
+      }).immediate();
       const result = await adapter.createTask({
         clientOrderId: execution.client_order_id,
         planId: snapshot.externalPlanId,
@@ -738,6 +763,29 @@ export function createAutomationRunner(options = {}) {
     } catch (error) {
       if (error instanceof AutomationAdapterError && error.definitelyNotCreated) {
         markDefinitelyNotCreated(execution, error);
+        return;
+      }
+      if (error instanceof AutomationAdapterError && error.requestNotSent) {
+        const retryAt = iso(now());
+        db.prepare(`
+          UPDATE automation_execution_attempts
+          SET status = 'card_ready', error_code = ?, error_message = ?, updated_at = ?
+          WHERE execution_id = ? AND attempt_no = ?
+        `).run(error.code, boundedError(error.message), retryAt, execution.id, execution.attempt_count);
+        schedule(execution, 30, {
+          status: "submitting",
+          publicMessage: "等待处理",
+          errorCode: error.code,
+          errorMessage: boundedError(error.message)
+        });
+        return;
+      }
+      if (error instanceof AutomationAdapterError && error.unsafeToReplay) {
+        markManualReview(
+          execution,
+          "AUTOMATION_SUBMIT_OUTCOME_UNKNOWN",
+          "远端创建结果不明确且当前协议不支持幂等重放"
+        );
         return;
       }
       if (error instanceof AutomationFundingError) {
@@ -762,7 +810,13 @@ export function createAutomationRunner(options = {}) {
         fetchImpl,
         lookup
       });
-      const result = await adapter.getTask(execution.remote_task_id);
+      const snapshot = parseJson(execution.mapping_snapshot);
+      const result = await adapter.getTask(execution.remote_task_id, {
+        clientOrderId: execution.client_order_id,
+        planId: snapshot?.externalPlanId,
+        checkoutCountry: snapshot?.regionCode,
+        cardLast4: execution.card_last4
+      });
       processRemoteTask(execution, result.task);
     } catch (error) {
       const at = iso(now());

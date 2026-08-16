@@ -17,6 +17,7 @@ const {
   prepareAutomationCard
 } = await import("../shared/src/automation-card-funding.js");
 const { createAutomationRunner } = await import("../worker/src/automation-runner.js");
+const { AutomationAdapterError } = await import("../shared/src/automation-adapters/automate-v1.js");
 
 const db = getDb();
 let clock = new Date("2026-08-15T00:00:00.000Z");
@@ -293,4 +294,96 @@ test("the explicit no-payment order is enrolled directly into manual hold", () =
   assert.equal(execution.status, "manual_hold");
   assert.equal(execution.last_error_code, "NO_PAYMENT_MANUAL_HOLD");
   assert.equal(execution.next_action_at, null);
+});
+
+test("a non-idempotent eFun submit marker is never replayed after worker recovery", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, source_key, public_key,
+      prefix, status, locked_at, locked_by_order_id, processing_mode, created_at, updated_at
+    ) VALUES ('cdkey-efun-recovery', 'batch-efun-recovery', 'product-auto', 'endpoint-auto',
+      'source-efun-recovery', 'PUBLIC-EFUN-RECOVERY', 'EFUN', 'locked', ?,
+      'order-efun-recovery', 'membership_auto', ?, ?)
+  `).run(at, at, at);
+  db.prepare(`
+    INSERT INTO redeem_orders (
+      id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id,
+      session_payload, status, created_at, updated_at
+    ) VALUES ('order-efun-recovery', 'KWEFUNRECOVERY', 'cdkey-efun-recovery',
+      'PUBLIC-EFUN-RECOVERY', 'product-auto', 'endpoint-auto', ?, 'pending', ?, ?)
+  `).run(encryptText(JSON.stringify({ accessToken: "session-secret" })), at, at);
+  enrollAutomationOrder(db, {
+    id: "execution-efun-recovery",
+    orderId: "order-efun-recovery",
+    orderNo: "KWEFUNRECOVERY",
+    productId: "product-auto",
+    createdAt: at
+  });
+  const snapshot = {
+    mappingId: "mapping-auto",
+    mappingRevision: 1,
+    providerId: "provider-auto",
+    providerName: "eFun",
+    adapterKey: "efun_open_v1",
+    configHash: "config-hash",
+    externalPlanId: "plus",
+    externalTaskType: "purchase",
+    regionCode: "PH",
+    currency: "PHP",
+    cardPlatformKey: "spacexcard",
+    cardProductCode: "CARD-PRODUCT",
+    capacityKey: "plus",
+    cardCapacity: 1,
+    fundingAmountUsd: 25,
+    expectedMinAmount: 900,
+    expectedMaxAmount: 1200,
+    dailyRiskLimitUsd: 100,
+    priority: 1
+  };
+  db.prepare(`
+    UPDATE automation_executions
+    SET status = 'submitting', mapping_id = 'mapping-auto', provider_id = 'provider-auto',
+        credential_id = 'credential-auto', client_order_id = 'KWEFUNRECOVERY',
+        mapping_snapshot = ?, attempt_count = 1, current_phase = 'remote_submit_started',
+        next_action_at = ?, updated_at = ?
+    WHERE id = 'execution-efun-recovery'
+  `).run(JSON.stringify(snapshot), at, at);
+  db.prepare(`
+    INSERT INTO automation_execution_attempts (
+      id, execution_id, attempt_no, mapping_id, provider_id, credential_id,
+      client_order_id, status, mapping_snapshot, created_at, updated_at
+    ) VALUES ('attempt-efun-recovery', 'execution-efun-recovery', 1, 'mapping-auto',
+      'provider-auto', 'credential-auto', 'KWEFUNRECOVERY', 'submit_started', ?, ?, ?)
+  `).run(JSON.stringify(snapshot), at, at);
+  let createCalls = 0;
+  const runner = createAutomationRunner({
+    db,
+    decryptText,
+    encryptText,
+    workerId: "efun-recovery-worker",
+    now: () => new Date(clock),
+    prepareCard: async () => ({
+      card: { id: "card-not-needed" },
+      material: { number: "5555555555554444", cvc: "123", expMonth: "12", expYear: "2029" }
+    }),
+    adapterFactory: () => ({
+      adapter: {
+        createReplaySafe: false,
+        createTask: async () => {
+          createCalls += 1;
+          throw new AutomationAdapterError("AUTOMATION_UNAVAILABLE", "must not run", { unsafeToReplay: true });
+        }
+      }
+    }),
+    providerSync: async () => false
+  });
+  await runner.tick();
+  assert.equal(createCalls, 0);
+  const execution = db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-efun-recovery'").get();
+  assert.equal(execution.status, "manual_review");
+  assert.equal(execution.last_error_code, "AUTOMATION_SUBMIT_OUTCOME_UNKNOWN");
+  assert.equal(db.prepare(`
+    SELECT status FROM automation_execution_attempts WHERE id = 'attempt-efun-recovery'
+  `).get().status, "manual_review");
 });

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
-import { AutomateV1Adapter, automateV1CanonicalOffer } from "./automation-adapters/automate-v1.js";
+import {
+  AutomateV1Adapter,
+  automateV1CanonicalOffer,
+  normalizeAutomateV1BaseUrl
+} from "./automation-adapters/automate-v1.js";
+import { EfunOpenV1Adapter, normalizeEfunOpenV1BaseUrl } from "./automation-adapters/efun-open-v1.js";
 
-export const automationAdapterKeys = Object.freeze(["automate_v1"]);
+export const automationAdapterKeys = Object.freeze(["automate_v1", "efun_open_v1"]);
 
 function parseJson(value, fallback = null) {
   if (!value) return fallback;
@@ -18,6 +23,12 @@ function stableJson(value) {
 
 export function automationCapabilityHash(config) {
   return createHash("sha256").update(stableJson(config)).digest("hex");
+}
+
+export function normalizeAutomationProviderBaseUrl(adapterKey, value) {
+  if (adapterKey === "automate_v1") return normalizeAutomateV1BaseUrl(value);
+  if (adapterKey === "efun_open_v1") return normalizeEfunOpenV1BaseUrl(value);
+  throw new TypeError("自动化站点 Adapter 不受支持");
 }
 
 export function serializeAutomationProvider(row) {
@@ -70,6 +81,18 @@ export function createAutomationAdapter(db, input = {}) {
       })
     };
   }
+  if (provider.adapter_key === "efun_open_v1") {
+    return {
+      provider,
+      credential,
+      adapter: new EfunOpenV1Adapter({
+        baseUrl: provider.base_url,
+        apiKey: input.decryptText(credential.api_key_encrypted),
+        fetchImpl: input.fetchImpl,
+        lookup: input.lookup
+      })
+    };
+  }
   throw new Error("自动化站点 Adapter 不受支持");
 }
 
@@ -81,9 +104,13 @@ export function validateAutomationMappingCapability(provider, input = {}) {
   const storedPlan = config.plans.find((item) => item.id === input.externalPlanId);
   if (!storedPlan) throw new Error("站点没有提供所选套餐");
   if (storedPlan.taskType !== "purchase") throw new Error("当前系统只允许映射站点明确提供的直付套餐");
-  const plan = provider.adapter_key === "automate_v1" && !storedPlan.canonicalOffer
-    ? { ...storedPlan, canonicalOffer: automateV1CanonicalOffer(storedPlan.id, storedPlan.taskType) }
-    : storedPlan;
+  let plan = storedPlan;
+  if (!storedPlan.canonicalOffer && provider.adapter_key === "automate_v1") {
+    plan = { ...storedPlan, canonicalOffer: automateV1CanonicalOffer(storedPlan.id, storedPlan.taskType) };
+  } else if (!storedPlan.canonicalOffer && provider.adapter_key === "efun_open_v1") {
+    const canonicalOffer = { plus: "plus", pro5: "x5", pro20: "x20" }[storedPlan.id] || null;
+    plan = { ...storedPlan, canonicalOffer };
+  }
   const region = config.regions.find((item) => item.code === input.regionCode);
   if (!region) throw new Error("站点没有提供所选充值区域");
   return Object.freeze({ plan, region, configHash: provider.config_hash });

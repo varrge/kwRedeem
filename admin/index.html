@@ -532,7 +532,7 @@
         <section class="tab-panel hidden" data-panel="membership-fulfillment">
           <div class="content-header">
             <h2>ChatGPT 会员自动化</h2>
-            <p>按站点协议执行直付任务；站点返回成功即视为订阅完成且自动续费已关闭</p>
+            <p>按站点协议执行直付任务；确认订阅生效且自动续费已关闭后完成订单</p>
           </div>
 
           <div class="grid grid-2">
@@ -557,12 +557,12 @@
                 <input id="automation-provider-id" type="hidden" />
                 <div class="grid grid-2">
                   <label class="field"><span>站点名称</span><input id="automation-provider-name" autocomplete="off" required /></label>
-                  <label class="field"><span>协议 Adapter</span><select id="automation-provider-adapter"><option value="automate_v1">Automate API v1</option></select></label>
+                  <label class="field"><span>协议 Adapter</span><select id="automation-provider-adapter"><option value="automate_v1">Automate API v1</option><option value="efun_open_v1">eFun Open API v1</option></select></label>
                 </div>
                 <label class="field"><span>API Base URL</span><input id="automation-provider-base-url" type="url" autocomplete="off" placeholder="https://example.com/api/v1/automate" required /></label>
                 <label class="field"><span>站点 API Key</span><input id="automation-provider-api-key" type="password" autocomplete="new-password" placeholder="首次提供一次；后续留空继续使用" /></label>
                 <label class="field"><span>状态</span><select id="automation-provider-status"><option value="paused">暂停</option><option value="active">启用</option></select></label>
-                <div class="actions-row"><button type="submit" class="primary-btn">保存并读取 /config</button><button id="automation-provider-cancel" type="button" class="ghost-btn">清空表单</button></div>
+                <div class="actions-row"><button type="submit" class="primary-btn">保存并同步能力</button><button id="automation-provider-cancel" type="button" class="ghost-btn">清空表单</button></div>
               </form>
               <div id="automation-provider-result" class="hint"></div>
             </div>

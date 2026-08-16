@@ -4,13 +4,21 @@
 
 商城订单不再由本地 Go/Python/浏览器执行 ChatGPT Checkout。每个外部站点由一个代码 Adapter 对接其原始 API 文档；同协议的多个站点实例复用同一个 Adapter，不在本系统中虚构站点没有提供的接口、套餐或参数。
 
-首个 Adapter 为 `Automate API v1`，只调用文档已有的三个接口：
+`Automate API v1` Adapter 只调用文档已有的三个接口：
 
 - `GET /api/v1/automate/config`
 - `POST /api/v1/automate/tasks`
 - `GET /api/v1/automate/tasks/{taskId}`
 
 Automate API 的 `task.status=succeeded` 是订单完成的权威结果：目标订阅已生效且自动续费已关闭。本系统不再对该订单调用本地订阅复查或取消续费接口。
+
+`eFun Open API v1` 使用独立 Adapter，只调用开放文档中的三个接口：
+
+- `GET /api/v1/third-party/user`
+- `POST /api/v1/third-party/orders/direct`
+- `POST /api/v1/third-party/orders/status`
+
+eFun 没有能力发现接口。Adapter 在 `GET /third-party/user` 测活后，按版本化文档提供固定的 Plus、5X、20X 与 PH/PHP 能力。eFun 返回 `status=success` 但 `is_subscription_cancelled=0` 时继续查询，不提前完成本地订单；只有取消续费被确认后才投影成功。
 
 ## 完整流程
 
@@ -25,10 +33,10 @@ Automate API 的 `task.status=succeeded` 是订单完成的权威结果：目标
         v
 waiting_gate
         |
-        +-- Gate 关闭 --> 保持等待，不选卡、不充值、不调用 POST /tasks
+        +-- Gate 关闭 --> 保持等待，不选卡、不充值、不创建远端订单
         |
         v
-同步并校验站点 /config（默认每 5 分钟）
+同步并校验站点协议能力（默认每 5 分钟）
         |
         v
 按商城交付商品映射、优先级、并发、日风险额度选择站点
@@ -43,14 +51,16 @@ waiting_gate
 完整卡号/CVC 仅在 Node 进程内存中读取
         |
         v
-POST /tasks（Session + 卡资料）
+调用 Adapter 创建接口（Session + 卡资料）
         |
         +-- 明确未创建任务 --> 记录 attempt，允许路由下一条兼容映射
         |
-        +-- 超时/网络不明 --> 固定原站点、原 Key、原 clientOrderId 幂等重放
+        +-- Automate 超时/网络不明 --> 固定原站点、原 Key、原 clientOrderId 幂等重放
+        |
+        +-- eFun 超时/网络不明 --> 禁止重放，进入人工核验
         |
         v
-queued / running：每 3 秒 GET 原 taskId
+queued / running：每 3 秒使用原远端查询标识对账
         |
         +-- succeeded --> 订单成功、CDK used、容量 consumed、清除 Session
         |
@@ -63,9 +73,10 @@ queued / running：每 3 秒 GET 原 taskId
 
 ## 套餐与地区
 
-后台映射的订单来源只能选择“商城交付”中已启用的 `membership_auto` 商品映射，并只能选择站点最近一次 `/config` 返回的 `taskType=purchase` 套餐和地区。商城交付映射的 `manualType` 必须与协议套餐类型完全一致，例如 `PLUS` 只能映射 `plus-monthly`，`x20` 只能映射 `pro20x-direct-monthly`。能力被站点移除、任务类型改变、地区币种变化或商城交付映射被修改时，相关自动化映射会停用。
+后台映射的订单来源只能选择“商城交付”中已启用的 `membership_auto` 商品映射，并只能选择 Adapter 最近一次同步得到的 `taskType=purchase` 套餐和地区。商城交付映射的 `manualType` 必须与协议套餐类型完全一致，例如 Automate 的 `PLUS` 只能映射 `plus-monthly`，eFun 的 `x5` 只能映射 `pro5`。能力被站点移除、任务类型改变、地区币种变化或商城交付映射被修改时，相关自动化映射会停用。
 
-- Plus、Go、x20 是否可用，以站点 `/config` 为准。
+- Automate 的 Plus、Go、x20 是否可用，以站点 `/config` 为准。
+- eFun 按开放文档提供 `plus`、`pro5`、`pro20`，分别映射 Plus、x5、x20；地区和币种固定为 PH/PHP。
 - x5 与 x20 都按直付商品处理，不先购买 Plus/Go，也不进入升级阶段。
 - 当前 Automate V1 文档提供直付 Plus、Go、Pro 20x，没有直付 x5，因此该 Adapter 当前不能映射 x5。
 - 后续站点如在其协议中明确提供直付 x5，可由对应 Adapter 原样暴露。
@@ -95,6 +106,8 @@ queued / running：每 3 秒 GET 原 taskId
 - 任务进入 manual_review
 - 卡台开卡或充值结果不明
 
+eFun 直充创建接口没有下游幂等键，每次成功请求都会生成新订单和随机 `card_key`。Worker 在发起 POST 前持久化 `submit_started`；若进程在边界后中断，或请求超时、断网、收到无法识别的成功响应或 5xx，不自动重放，直接保留 Session、卡密和卡片容量进入人工核验。只有文档明确在创建前拒绝的 4xx 才允许选择下一条映射。
+
 `automate_points_insufficient` 明确表示未创建任务。系统会暂停当前站点和映射、打开熔断，然后尝试下一条兼容映射。
 
 如果第一次 attempt 已经为卡片建立资金意图，后续映射只能复用同一卡台、容量分组、卡产品，且整卡预存金额不能更高，避免为同一订单建立第二条资金边界。
@@ -103,7 +116,7 @@ queued / running：每 3 秒 GET 原 taskId
 
 ## API Key
 
-API Key 属于站点实例，不属于订单。管理员首次配置时提供一次，之后所有新订单复用当前 Key；编辑站点时留空表示继续使用。
+API Key 属于站点实例，不属于订单。管理员首次配置时提供一次，之后所有新订单复用当前 Key；编辑站点时留空表示继续使用。Automate 使用 `X-Automate-Key`，eFun 使用 `X-API-Key`，两者都只在服务端发送。
 
 站点协议没有 Key 轮换或 Key 查询 API，因此本系统不调用不存在的接口。管理员手动提供新 Key 后：
 
@@ -116,13 +129,14 @@ API Key 属于站点实例，不属于订单。管理员首次配置时提供一
 - 站点 API Key 加密保存。
 - Session 加密保存到订单终态；`manual_review` 保留，成功/失败/取消后立即清除。
 - 完整卡号、CVC、有效期不写入自动化表、审计日志或远端快照。
+- eFun 状态响应中的完整 `bank_card_no`、`token`、邮箱、账单地址和原始 `payment_result` 只在 Adapter 内解析并立即丢弃，不进入远端快照或后台响应。
 - 只持久化卡片内部 ID、品牌和尾四位。
 - 远端响应只保存 Adapter 白名单化后的任务字段。
 - 自动化站点必须使用 HTTPS 固定 Origin；禁止凭据、query/hash、跨 Origin 重定向及私网/回环/链路本地地址。
 
 ## Gate 和熔断
 
-全局付款 Gate 默认关闭。Gate 关闭时允许用 `GET /config` 检查站点能力，但禁止选卡、充值和 `POST /tasks`。已被远端受理的任务仍可继续 GET 对账。
+全局付款 Gate 默认关闭。Gate 关闭时允许读取 Automate `/config` 或调用 eFun `/third-party/user` 检查站点能力，但禁止选卡、充值和创建远端订单。已被远端受理的任务仍可继续查询对账。
 
 以下问题会暂停映射或打开站点熔断：
 
@@ -132,7 +146,7 @@ API Key 属于站点实例，不属于订单。管理员首次配置时提供一
 - 成功任务的价格未确认、币种不符、金额不可识别或超出映射范围
 - 站点能力被移除
 
-价格异常不会推翻已经返回 `succeeded` 的订单，只会完成当前订单后阻止后续订单继续使用该映射。
+价格异常不会推翻已经返回 `succeeded` 的订单，只会完成当前订单后阻止后续订单继续使用该映射。eFun 文档允许 `payment_amount` 和 `payment_currency` 为 `null`；此时以 `status=success` 作为付款证据、按协议固定币种 PHP 校验，并继续受本地整卡预存金额和每日风险上限约束。eFun 返回具体金额时仍执行映射价格区间校验。
 
 ## 人工核验
 

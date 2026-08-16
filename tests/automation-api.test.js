@@ -29,6 +29,13 @@ globalThis.fetch = async (url, options = {}) => {
       billingAddressSource: "platform_managed"
     }), { status: 200, headers: { "content-type": "application/json" } });
   }
+  if (String(url) === "https://198.51.100.2/api/v1/third-party/user") {
+    return new Response(JSON.stringify({
+      code: 0,
+      message: "success",
+      data: { id: "0", username: "api-user", is_active: true }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   throw new Error(`unexpected remote request: ${url}`);
 };
 
@@ -202,6 +209,39 @@ test("admin UI exposes protocol sites, mappings, Gate, and manual review control
   assert.match(script, /\/api\/admin\/automation\/executions\/\$\{encodeURIComponent\(id\)\}\/retry/);
   assert.match(script, /takeOverAutomationExecution/);
   assert.match(script, /\/api\/admin\/automation\/executions\/\$\{encodeURIComponent\(id\)\}\/manual-review/);
+  assert.match(html, /value=["']efun_open_v1["']/);
+});
+
+test("admin can create an eFun protocol site and synchronize its documented capabilities", async () => {
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const provider = await app.inject({
+    method: "POST",
+    url: "/api/admin/automation/providers",
+    headers,
+    payload: {
+      name: "eFun",
+      adapterKey: "efun_open_v1",
+      baseUrl: "https://198.51.100.2/api/v1",
+      apiKey: "efun-fixed-key",
+      status: "paused"
+    }
+  });
+  assert.equal(provider.statusCode, 200, provider.body);
+  assert.equal(provider.json().item.adapterKey, "efun_open_v1");
+  assert.equal(provider.json().item.baseUrl, "https://198.51.100.2/api/v1");
+  assert.equal(provider.json().item.configStatus, "ready");
+  assert.deepEqual(provider.json().item.config.plans.map((item) => item.id), ["plus", "pro5", "pro20"]);
+  assert.deepEqual(provider.json().item.config.regions, [
+    { code: "PH", currency: "PHP", label: "Philippines" }
+  ]);
+  const request = remoteRequests.find((item) => item.url.endsWith("/third-party/user"));
+  assert.equal(request.method, "GET");
+  assert.equal(request.headers["X-API-Key"], "efun-fixed-key");
 });
 
 test("admin can immediately retry only pre-submit automation states while Gate remains authoritative", async () => {

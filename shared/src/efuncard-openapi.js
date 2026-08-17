@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ProxyAgent } from "undici";
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -127,6 +128,29 @@ function normalizeIdempotencyKey(value) {
   return `kwr:${createHash("sha256").update(key).digest("hex")}`;
 }
 
+export function normalizeEfunCardProxyUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  let url;
+  try { url = new URL(raw); } catch {
+    fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 代理地址无效", {
+      retryable: false,
+      knownNoWrite: true
+    });
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (!["http:", "https:"].includes(url.protocol)
+    || !["127.0.0.1", "localhost", "[::1]"].includes(hostname)
+    || url.pathname !== "/" || url.username || url.password || url.search || url.hash) {
+    fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 代理必须是无认证的本机 HTTP/HTTPS 地址", {
+      retryable: false,
+      knownNoWrite: true
+    });
+  }
+  url.pathname = "/";
+  return url.toString().replace(/\/$/, "");
+}
+
 export class EfunCardOpenApiClient {
   constructor(options = {}) {
     this.baseUrl = normalizeEfunCardOpenApiBaseUrl(options.baseUrl);
@@ -140,6 +164,8 @@ export class EfunCardOpenApiClient {
     this.rateKey = createHash("sha256").update(this.apiKey).digest("hex");
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+    this.proxyUrl = normalizeEfunCardProxyUrl(options.proxyUrl);
+    this.dispatcher = this.proxyUrl ? new ProxyAgent(this.proxyUrl) : undefined;
   }
 
   async request(path, options = {}) {
@@ -161,7 +187,8 @@ export class EfunCardOpenApiClient {
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         redirect: "manual",
-        signal: AbortSignal.timeout(this.timeoutMs)
+        signal: AbortSignal.timeout(this.timeoutMs),
+        ...(this.dispatcher ? { dispatcher: this.dispatcher } : {})
       });
     } catch (error) {
       const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";

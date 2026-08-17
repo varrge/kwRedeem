@@ -160,6 +160,7 @@ export function createAutomationRunner(options = {}) {
     encryptText,
     workerId = `automation-worker-${process.pid}`,
     fetchImpl,
+    efuncardProxyUrl,
     lookup,
     audit = () => {},
     notify = () => {},
@@ -570,6 +571,7 @@ export function createAutomationRunner(options = {}) {
         decryptText,
         encryptText,
         fetchImpl,
+        efuncardProxyUrl,
         getCardholder: () => deterministicCardholder(execution.order_no),
         at: iso(now())
       });
@@ -717,6 +719,7 @@ export function createAutomationRunner(options = {}) {
         decryptText,
         encryptText,
         fetchImpl,
+        efuncardProxyUrl,
         getCardholder: () => deterministicCardholder(execution.order_no),
         at: iso(now())
       });

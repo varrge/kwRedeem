@@ -107,7 +107,8 @@ export function createConfiguredAutomationCardProvider(db, providerKey, decryptT
     return new EfunCardOpenApiClient({
       baseUrl: platform.base_url,
       apiKey: decryptedCredentialField(decryptText, platform.credential_encrypted, "apiKey"),
-      fetchImpl: options.fetchImpl
+      fetchImpl: options.fetchImpl,
+      proxyUrl: options.efuncardProxyUrl
     });
   }
   fail("AUTOMATION_CARD_PLATFORM_UNSUPPORTED", "卡台 Adapter 不受支持", { retryable: true });
@@ -345,7 +346,7 @@ export async function prepareAutomationCard(db, input = {}) {
     db,
     mapping.card_platform_key,
     decryptText,
-    { fetchImpl: input.fetchImpl }
+    { fetchImpl: input.fetchImpl, efuncardProxyUrl: input.efuncardProxyUrl }
   );
   const fundingAmount = mappingFundingPolicy(mapping).fundingAmount;
   let reservation = persistedReservation(db, execution.id);

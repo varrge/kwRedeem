@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EfunCardOpenApiClient } from "../shared/src/efuncard-openapi.js";
+import { EfunCardOpenApiClient, normalizeEfunCardProxyUrl } from "../shared/src/efuncard-openapi.js";
 import { createConfiguredAutomationCardProvider } from "../shared/src/automation-card-funding.js";
 
 function response(data, status = 200) {
@@ -151,6 +151,35 @@ test("EfunCard rejects a non-Open-API base URL and non-efk key", () => {
   );
 });
 
+test("EfunCard sends requests through a configured local HTTP proxy", async () => {
+  let requestOptions;
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efk_proxy_test_key",
+    proxyUrl: "http://127.0.0.1:7890",
+    fetchImpl: async (_url, options) => {
+      requestOptions = options;
+      return response({ balance: "100.00", currency: "USDT" });
+    }
+  });
+  await client.getBalance();
+  assert.equal(normalizeEfunCardProxyUrl("http://127.0.0.1:7890"), "http://127.0.0.1:7890");
+  assert.ok(requestOptions.dispatcher);
+});
+
+test("EfunCard rejects non-local or non-HTTP proxy URLs", () => {
+  for (const proxyUrl of ["socks5://127.0.0.1:7890", "http://proxy.example:7890", "http://127.0.0.1:7890/path"]) {
+    assert.throws(
+      () => new EfunCardOpenApiClient({
+        baseUrl: "https://efun.example/api/open/v1",
+        apiKey: "efk_proxy_validation_key",
+        proxyUrl
+      }),
+      (error) => error.code === "EFUNCARD_CONFIGURATION_INVALID"
+    );
+  }
+});
+
 test("EfunCard defaults card listing to active cards", async () => {
   let requestedPath = "";
   const client = new EfunCardOpenApiClient({
@@ -184,9 +213,11 @@ test("EfunCard extracts the API key from the stored credential envelope", () => 
   const provider = createConfiguredAutomationCardProvider(
     db,
     "efuncard",
-    () => JSON.stringify({ apiKey: "efk_envelope_test_key" })
+    () => JSON.stringify({ apiKey: "efk_envelope_test_key" }),
+    { efuncardProxyUrl: "http://127.0.0.1:7890" }
   );
   assert.equal(provider.apiKey, "efk_envelope_test_key");
+  assert.equal(provider.proxyUrl, "http://127.0.0.1:7890");
 });
 
 test("EfunCard rejects fractional USDT recharge amounts before writing", async () => {

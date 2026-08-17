@@ -23,7 +23,8 @@ export const env = {
   adminPassword: process.env.ADMIN_PASSWORD ?? "change-this-password",
   requestTimeoutMs: Number(process.env.DEFAULT_REQUEST_TIMEOUT_MS ?? 15000),
   internalSecret: process.env.INTERNAL_SECRET ?? "",
-  workerInternalPort: Number(process.env.WORKER_INTERNAL_PORT ?? 4301)
+  workerInternalPort: Number(process.env.WORKER_INTERNAL_PORT ?? 4301),
+  efuncardProxyUrl: process.env.KWMEMBERSHIP_EFUNCARD_PROXY_URL ?? ""
 };
 
 export function resolveProjectPath(...parts) {

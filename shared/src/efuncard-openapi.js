@@ -59,7 +59,18 @@ async function readJson(response) {
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength > MAX_RESPONSE_BYTES) fail("EFUNCARD_RESPONSE_TOO_LARGE", "EfunCard 响应过大");
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch {
-    fail("EFUNCARD_RESPONSE_INVALID", "EfunCard 响应不是合法 JSON");
+    const contentType = String(response.headers.get("content-type") || "")
+      .split(";", 1)[0].trim().slice(0, 80);
+    const metadata = [
+      `HTTP ${response.status}`,
+      contentType ? `Content-Type ${contentType}` : null,
+      `${bytes.byteLength} 字节`
+    ].filter(Boolean).join(", ");
+    fail("EFUNCARD_RESPONSE_INVALID", `EfunCard 响应不是合法 JSON（${metadata}）`, {
+      statusCode: response.status,
+      retryable: response.status >= 500 || response.status === 429,
+      knownNoWrite: response.status >= 400 && response.status < 500
+    });
   }
 }
 

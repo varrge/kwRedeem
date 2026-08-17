@@ -88,3 +88,27 @@ test("EfunCard validates recharge receipt before accepting the balance delta", a
   assert.equal(result.taskId, "RECHARGE-1");
   assert.equal(detailCalls, 1);
 });
+
+test("EfunCard reports sanitized metadata when the upstream returns non-JSON", async () => {
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efun-invalid-response-key",
+    fetchImpl: async () => new Response("<html>proxy failure: secret-marker</html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" }
+    })
+  });
+  await assert.rejects(
+    () => client.getBalance(),
+    (error) => {
+      assert.equal(error.code, "EFUNCARD_RESPONSE_INVALID");
+      assert.equal(error.statusCode, 200);
+      assert.equal(error.retryable, false);
+      assert.match(error.message, /HTTP 200/);
+      assert.match(error.message, /Content-Type text\/html/);
+      assert.match(error.message, /字节/);
+      assert.doesNotMatch(error.message, /secret-marker|proxy failure/);
+      return true;
+    }
+  );
+});

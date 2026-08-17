@@ -57,6 +57,16 @@ function safeJson(value, fallback = null) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
+function decryptedCredentialField(decryptText, encrypted, field) {
+  const raw = String(decryptText(encrypted) || "").trim();
+  const parsed = safeJson(raw);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    && typeof parsed[field] === "string" && parsed[field].trim()) {
+    return parsed[field].trim();
+  }
+  return raw;
+}
+
 function fundingFingerprint(body) {
   return createHash("sha256").update(JSON.stringify(body, Object.keys(body).sort())).digest("hex");
 }
@@ -76,9 +86,11 @@ export function createConfiguredAutomationCardProvider(db, providerKey, decryptT
     const settings = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
     const encrypted = platform.credential_encrypted || settings?.spacexcard_app_secret_encrypted;
     if (!encrypted) fail("AUTOMATION_CARD_PLATFORM_NOT_CONFIGURED", "SpaceX Card 凭证未配置", { retryable: true });
+    const rawCredential = String(decryptText(encrypted) || "").trim();
+    const parsedCredential = safeJson(rawCredential);
     const client = new SpaceXCardOpenApiClient({
-      appId: settings?.spacexcard_app_id || "",
-      appSecret: decryptText(encrypted),
+      appId: parsedCredential?.appId || settings?.spacexcard_app_id || "",
+      appSecret: parsedCredential?.appSecret || rawCredential,
       fetchImpl: options.fetchImpl
     });
     client.classifyFundingError = (error) => {
@@ -94,7 +106,7 @@ export function createConfiguredAutomationCardProvider(db, providerKey, decryptT
     }
     return new EfunCardOpenApiClient({
       baseUrl: platform.base_url,
-      apiKey: decryptText(platform.credential_encrypted),
+      apiKey: decryptedCredentialField(decryptText, platform.credential_encrypted, "apiKey"),
       fetchImpl: options.fetchImpl
     });
   }

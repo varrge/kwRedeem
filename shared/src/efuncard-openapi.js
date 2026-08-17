@@ -41,7 +41,7 @@ function closeEnough(left, right, tolerance) {
   return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
 }
 
-function normalizeBaseUrl(value) {
+export function normalizeEfunCardOpenApiBaseUrl(value) {
   let url;
   try { url = new URL(String(value || "").trim()); } catch {
     fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 地址无效", { retryable: false, knownNoWrite: true });
@@ -50,6 +50,9 @@ function normalizeBaseUrl(value) {
     fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 必须使用标准 HTTPS 地址", { retryable: false, knownNoWrite: true });
   }
   url.pathname = url.pathname.replace(/\/+$/, "");
+  if (url.pathname !== "/api/open/v1") {
+    fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 地址必须以 /api/open/v1 结尾", { retryable: false, knownNoWrite: true });
+  }
   return url.toString().replace(/\/$/, "");
 }
 
@@ -126,8 +129,14 @@ function normalizeIdempotencyKey(value) {
 
 export class EfunCardOpenApiClient {
   constructor(options = {}) {
-    this.baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.baseUrl = normalizeEfunCardOpenApiBaseUrl(options.baseUrl);
     this.apiKey = requiredString(options.apiKey, "apiKey");
+    if (!/^efk_.+$/.test(this.apiKey)) {
+      fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard API Key 必须以 efk_ 开头", {
+        retryable: false,
+        knownNoWrite: true
+      });
+    }
     this.rateKey = createHash("sha256").update(this.apiKey).digest("hex");
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
@@ -162,7 +171,28 @@ export class EfunCardOpenApiClient {
     if (response.status >= 300 && response.status < 400) {
       fail("EFUNCARD_REDIRECT_BLOCKED", "EfunCard 返回了不允许的重定向", { retryable: false });
     }
-    const envelope = await readJson(response);
+    let envelope;
+    try {
+      envelope = await readJson(response);
+    } catch (error) {
+      // A WAF commonly returns an HTML 401/403 page. The HTTP status is the
+      // authoritative classification; do not surface it as contract drift.
+      if (error?.code === "EFUNCARD_RESPONSE_INVALID" && response.status === 401) {
+        fail("EFUNCARD_AUTH_FAILED", `EfunCard 鉴权失败（${error.message.match(/（(.+)）$/)?.[1] || `HTTP ${response.status}`}）`, {
+          statusCode: response.status,
+          retryable: false,
+          knownNoWrite: true
+        });
+      }
+      if (error?.code === "EFUNCARD_RESPONSE_INVALID" && response.status === 403) {
+        fail("EFUNCARD_ACCESS_DENIED", `EfunCard 拒绝访问（${error.message.match(/（(.+)）$/)?.[1] || `HTTP ${response.status}`}）`, {
+          statusCode: response.status,
+          retryable: false,
+          knownNoWrite: true
+        });
+      }
+      throw error;
+    }
     if (!response.ok || envelope?.success !== true) {
       const knownNoWrite = [400, 401, 403, 404, 422, 429].includes(response.status);
       const code = response.status === 401
@@ -207,7 +237,11 @@ export class EfunCardOpenApiClient {
       const minAmount = number(item.minAmount, "minAmount");
       const maxAmount = number(item.maxAmount, "maxAmount", { positive: true });
       const requireMinBalance = legacyCny ? 0 : Number(item.requireMinBalance);
-      if (feeRate > 1 || maxAmount < minAmount || ![0, 1].includes(requireMinBalance)) {
+      const minimumRechargeAmount = legacyCny
+        ? minAmount
+        : number(item.minRechargeAmount ?? item.minAmount, "minRechargeAmount");
+      if (feeRate > 1 || maxAmount < minAmount || minimumRechargeAmount > maxAmount
+        || ![0, 1].includes(requireMinBalance)) {
         fail("EFUNCARD_CONTRACT_DRIFT", "EfunCard 卡产品字段无效");
       }
       return Object.freeze({
@@ -219,6 +253,7 @@ export class EfunCardOpenApiClient {
         minimumServiceFee: legacyCny ? 0 : number(item.minServiceFeeUsdt || 0, "minServiceFeeUsdt"),
         minimumPlatformBalance: requireMinBalance === 1 ? number(item.minBalanceUsdt, "minBalanceUsdt") : 0,
         minAmount,
+        minimumRechargeAmount,
         maxAmount,
         roundOpenFeeUp: !legacyCny
       });
@@ -249,7 +284,10 @@ export class EfunCardOpenApiClient {
   async listCards(options = {}) {
     const page = Math.max(1, Number(options.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(options.pageSize) || 20));
-    const data = await this.request(`/cards?page=${page}&pageSize=${pageSize}`);
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    const status = options.status === undefined ? "active" : String(options.status || "").trim();
+    if (status) params.set("status", status);
+    const data = await this.request(`/cards?${params.toString()}`);
     const hasCards = Array.isArray(data?.cards);
     const hasItems = Array.isArray(data?.items);
     const items = hasCards ? data.cards : data?.items;
@@ -379,7 +417,10 @@ export class EfunCardOpenApiClient {
     }
     const catalog = await this.catalog();
     const product = catalog.products.find((item) => item.productCode === requiredString(before.cardType, "cardType"));
-    if (!product || amount < product.minAmount || amount > product.maxAmount) {
+    if (catalog.debitCurrency === "USDT" && !Number.isInteger(amount)) {
+      fail("EFUNCARD_OPERATION_REJECTED", "EfunCard 充值金额必须为正整数", { retryable: false, knownNoWrite: true });
+    }
+    if (!product || amount < product.minimumRechargeAmount || amount > product.maxAmount) {
       fail("EFUNCARD_OPERATION_REJECTED", "EfunCard 充值金额或卡产品无效", { retryable: false, knownNoWrite: true });
     }
     const expectedFee = serviceFee(amount, product.rechargeFeeRate, product.minimumServiceFee, false);

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EfunCardOpenApiClient } from "../shared/src/efuncard-openapi.js";
+import { createConfiguredAutomationCardProvider } from "../shared/src/automation-card-funding.js";
 
 function response(data, status = 200) {
   return new Response(JSON.stringify({ success: status >= 200 && status < 300, data }), {
@@ -17,6 +18,7 @@ const catalog = {
     effectiveFeeRate: "0.0030",
     minServiceFeeUsdt: "0.00",
     minAmount: "5.00",
+    minRechargeAmount: "5.00",
     maxAmount: "200.00",
     requireMinBalance: 1,
     minBalanceUsdt: "20.00"
@@ -28,7 +30,7 @@ test("EfunCard validates opening cost and reconciles the activated card", async 
   const requests = [];
   const client = new EfunCardOpenApiClient({
     baseUrl: "https://efun.example/api/open/v1",
-    apiKey: "efun-open-test-key",
+    apiKey: "efk_open_test_key",
     fetchImpl: async (url, options = {}) => {
       const target = new URL(url);
       requests.push({ path: target.pathname, options });
@@ -61,7 +63,7 @@ test("EfunCard validates recharge receipt before accepting the balance delta", a
   let detailCalls = 0;
   const client = new EfunCardOpenApiClient({
     baseUrl: "https://efun.example/api/open/v1",
-    apiKey: "efun-recharge-test-key",
+    apiKey: "efk_recharge_test_key",
     fetchImpl: async (url, options = {}) => {
       const target = new URL(url);
       if (target.pathname.endsWith("/cards/101") && (options.method || "GET") === "GET") {
@@ -92,7 +94,7 @@ test("EfunCard validates recharge receipt before accepting the balance delta", a
 test("EfunCard reports sanitized metadata when the upstream returns non-JSON", async () => {
   const client = new EfunCardOpenApiClient({
     baseUrl: "https://efun.example/api/open/v1",
-    apiKey: "efun-invalid-response-key",
+    apiKey: "efk_invalid_response_key",
     fetchImpl: async () => new Response("<html>proxy failure: secret-marker</html>", {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" }
@@ -111,4 +113,126 @@ test("EfunCard reports sanitized metadata when the upstream returns non-JSON", a
       return true;
     }
   );
+});
+
+test("EfunCard classifies an HTML 403 as access denied", async () => {
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efk_forbidden_response_key",
+    fetchImpl: async () => new Response("<html>blocked by gateway</html>", {
+      status: 403,
+      headers: { "content-type": "text/html" }
+    })
+  });
+  await assert.rejects(
+    () => client.getBalance(),
+    (error) => {
+      assert.equal(error.code, "EFUNCARD_ACCESS_DENIED");
+      assert.equal(error.statusCode, 403);
+      assert.equal(error.knownNoWrite, true);
+      assert.match(error.message, /拒绝访问/);
+      assert.match(error.message, /HTTP 403/);
+      assert.doesNotMatch(error.message, /blocked by gateway/);
+      return true;
+    }
+  );
+});
+
+test("EfunCard rejects a non-Open-API base URL and non-efk key", () => {
+  assert.throws(
+    () => new EfunCardOpenApiClient({ baseUrl: "https://efun.example/api/v1", apiKey: "efk-valid-key" }),
+    (error) => error.code === "EFUNCARD_CONFIGURATION_INVALID"
+      && /api\/open\/v1/.test(error.message)
+  );
+  assert.throws(
+    () => new EfunCardOpenApiClient({ baseUrl: "https://efun.example/api/open/v1", apiKey: "plain-key" }),
+    (error) => error.code === "EFUNCARD_CONFIGURATION_INVALID"
+      && /efk_/.test(error.message)
+  );
+});
+
+test("EfunCard defaults card listing to active cards", async () => {
+  let requestedPath = "";
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efk_list_test_key",
+    fetchImpl: async (url) => {
+      requestedPath = new URL(url).pathname + new URL(url).search;
+      return response({ total: 0, cards: [] });
+    }
+  });
+  await client.listCards({ page: 2, pageSize: 10 });
+  assert.equal(requestedPath, "/api/open/v1/cards?page=2&pageSize=10&status=active");
+});
+
+test("EfunCard extracts the API key from the stored credential envelope", () => {
+  const db = {
+    prepare(sql) {
+      return {
+        get() {
+          assert.match(sql, /membership_card_platforms/);
+          return {
+            key: "efuncard",
+            enabled: 1,
+            base_url: "https://efun.example/api/open/v1",
+            credential_encrypted: "encrypted-credential"
+          };
+        }
+      };
+    }
+  };
+  const provider = createConfiguredAutomationCardProvider(
+    db,
+    "efuncard",
+    () => JSON.stringify({ apiKey: "efk_envelope_test_key" })
+  );
+  assert.equal(provider.apiKey, "efk_envelope_test_key");
+});
+
+test("EfunCard rejects fractional USDT recharge amounts before writing", async () => {
+  const calls = [];
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efk_fractional_test_key",
+    fetchImpl: async (url) => {
+      const target = new URL(url);
+      calls.push(target.pathname);
+      if (target.pathname.endsWith("/cards/101")) {
+        return response({ id: 101, cardType: "Z-43612081", status: "ACTIVE", cardBalance: "10.00" });
+      }
+      if (target.pathname.endsWith("/card-types")) return response(catalog);
+      throw new Error(`unexpected path ${target.pathname}`);
+    }
+  });
+  await assert.rejects(
+    () => client.rechargeCard({ cardId: 101, amount: 5.5 }),
+    (error) => error.code === "EFUNCARD_OPERATION_REJECTED" && /正整数/.test(error.message)
+  );
+  assert.deepEqual(calls, ["/api/open/v1/cards/101", "/api/open/v1/card-types"]);
+});
+
+test("EfunCard uses minRechargeAmount for recharge validation", async () => {
+  const strictCatalog = {
+    ...catalog,
+    cardTypes: [{ ...catalog.cardTypes[0], minRechargeAmount: "10.00" }]
+  };
+  const calls = [];
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/api/open/v1",
+    apiKey: "efk_min_recharge_test_key",
+    fetchImpl: async (url) => {
+      const target = new URL(url);
+      calls.push(target.pathname);
+      if (target.pathname.endsWith("/cards/101")) {
+        return response({ id: 101, cardType: "Z-43612081", status: "ACTIVE", cardBalance: "10.00" });
+      }
+      if (target.pathname.endsWith("/card-types")) return response(strictCatalog);
+      throw new Error(`unexpected path ${target.pathname}`);
+    }
+  });
+  await assert.rejects(
+    () => client.rechargeCard({ cardId: 101, amount: 5 }),
+    (error) => error.code === "EFUNCARD_OPERATION_REJECTED"
+  );
+  assert.deepEqual(calls, ["/api/open/v1/cards/101", "/api/open/v1/card-types"]);
 });

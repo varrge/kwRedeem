@@ -830,6 +830,24 @@ test("card platform admin keeps Efun credentials secret and isolates inventory b
   assert.equal(missing.statusCode, 409);
   assert.equal(missing.json().code, "CARD_PLATFORM_NOT_CONFIGURED");
 
+  const wrongBasePath = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: { baseUrl: "https://cards.example.test/api/v1", apiKey: "efk_test_redacted" }
+  });
+  assert.equal(wrongBasePath.statusCode, 400);
+  assert.equal(wrongBasePath.json().code, "EFUNCARD_CONFIGURATION_INVALID");
+
+  const wrongKeyPrefix = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/efuncard",
+    headers,
+    payload: { baseUrl: "https://cards.example.test/api/open/v1", apiKey: "plain_test_key" }
+  });
+  assert.equal(wrongKeyPrefix.statusCode, 400);
+  assert.equal(wrongKeyPrefix.json().code, "CARD_PLATFORM_CONFIGURATION_INVALID");
+
   const saved = await app.inject({
     method: "PUT",
     url: "/api/admin/membership-card-platforms/efuncard",

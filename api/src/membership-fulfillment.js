@@ -16,6 +16,7 @@ import {
 } from "../../shared/src/membership-circuits.js";
 import { spaceXCardOpenApiBaseUrl } from "../../shared/src/spacexcard-openapi.js";
 import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
+import { normalizeEfunCardOpenApiBaseUrl } from "../../shared/src/efuncard-openapi.js";
 import {
   createMembershipMaterialGrant,
   evaluateProgressionAuthorizationDelta,
@@ -1714,9 +1715,25 @@ export function createMembershipFulfillmentService(options) {
     if (key === "efuncard" && parsed.data.apiKey) {
       credential = encryptText(JSON.stringify({ apiKey: parsed.data.apiKey }));
     }
-    const baseUrl = key === "efuncard"
+    let baseUrl = key === "efuncard"
       ? (parsed.data.baseUrl ?? current.base_url)
       : null;
+    if (key === "efuncard" && baseUrl) {
+      try {
+        baseUrl = normalizeEfunCardOpenApiBaseUrl(baseUrl);
+      } catch (error) {
+        return reply.code(400).send({
+          code: error?.code || "CARD_PLATFORM_CONFIGURATION_INVALID",
+          message: error?.message || "EfunCard Base URL 无效"
+        });
+      }
+    }
+    if (key === "efuncard" && parsed.data.apiKey && !/^efk_.+$/.test(parsed.data.apiKey)) {
+      return reply.code(400).send({
+        code: "CARD_PLATFORM_CONFIGURATION_INVALID",
+        message: "EfunCard API Key 必须以 efk_ 开头"
+      });
+    }
     const enabled = Object.hasOwn(parsed.data, "enabled") ? parsed.data.enabled : current.enabled === 1;
     if (key === "efuncard" && enabled && (!baseUrl || !credential)) {
       return reply.code(409).send({ code: "CARD_PLATFORM_NOT_CONFIGURED", message: "启用 EfunCard 前必须配置 API Base URL 和 API Key" });

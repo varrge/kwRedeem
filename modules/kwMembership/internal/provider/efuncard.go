@@ -434,7 +434,17 @@ func efunTransactionState(amount float64, status string) (string, string, bool) 
 			return "Refund", "COMPLETE", true
 		}
 		return "Settlement", "COMPLETE", true
-	case "pending", "processing":
+	case "processing":
+		// EfunCard reports an approved purchase as "processing" while its
+		// upstream finishes settlement. For our payment boundary, a negative
+		// purchase has already been paid and must consume capacity immediately.
+		// A positive processing event is a refund and remains pending until it
+		// is actually completed.
+		if amount < 0 {
+			return "Settlement", "COMPLETE", true
+		}
+		return "Refund", "PENDING", true
+	case "pending":
 		return "Authorization", "PENDING", true
 	case "declined", "failed", "failure":
 		return "Authorization", "DECLINED", true

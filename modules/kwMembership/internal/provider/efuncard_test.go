@@ -161,9 +161,32 @@ func TestEfunCurrentTransactionContractIgnoresCardFunding(t *testing.T) {
 		transactions[1].MerchantNormalized != "OPENAI" {
 		t.Fatalf("unexpected settled purchase: %+v", transactions[1])
 	}
-	if transactions[2].AuthID != "purchase-2" || transactions[2].Type != "Authorization" ||
-		transactions[2].Status != "PENDING" || transactions[2].AuthAmount != 19.99 {
-		t.Fatalf("unexpected pending purchase: %+v", transactions[2])
+	if transactions[2].AuthID != "purchase-2" || transactions[2].Type != "Settlement" ||
+		transactions[2].Status != "COMPLETE" || transactions[2].SettleAmount != 19.99 {
+		t.Fatalf("processing purchase must count as settled payment: %+v", transactions[2])
+	}
+}
+
+func TestEfunProcessingStateOnlyCompletesPurchases(t *testing.T) {
+	tests := []struct {
+		name       string
+		amount     float64
+		status     string
+		wantType   string
+		wantStatus string
+	}{
+		{name: "processing purchase", amount: -19.99, status: "processing", wantType: "Settlement", wantStatus: "COMPLETE"},
+		{name: "processing refund", amount: 19.99, status: "processing", wantType: "Refund", wantStatus: "PENDING"},
+		{name: "pending purchase", amount: -19.99, status: "pending", wantType: "Authorization", wantStatus: "PENDING"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotType, gotStatus, ok := efunTransactionState(test.amount, test.status)
+			if !ok || gotType != test.wantType || gotStatus != test.wantStatus {
+				t.Fatalf("efunTransactionState(%v, %q) = (%q, %q, %v), want (%q, %q, true)",
+					test.amount, test.status, gotType, gotStatus, ok, test.wantType, test.wantStatus)
+			}
+		})
 	}
 }
 

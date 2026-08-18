@@ -539,6 +539,13 @@ func providerDomainTransactions(items []provider.Transaction) []domain.CardTrans
 	return result
 }
 
+func classifyInventoryTransactions(platformKey string, transactions []provider.Transaction, knownLane domain.Tier) domain.HistoricalFulfillmentResult {
+	policy := domain.HistoricalFulfillmentPolicy{
+		AllowStandaloneFinal: platformKey == provider.CardPlatformEfun,
+	}
+	return domain.ClassifyHistoricalCardFulfillmentsWithPolicy(providerDomainTransactions(transactions), knownLane, policy)
+}
+
 func (p *Processor) reconcileInventoryCard(ctx context.Context, client provider.CardPlatform, run inventoryRun, item inventoryItem, now time.Time) error {
 	var cardID string
 	var lane sql.NullString
@@ -592,7 +599,7 @@ func (p *Processor) reconcileInventoryCard(ctx context.Context, client provider.
 			knownLane = domain.Tier(lanes[0])
 		}
 	}
-	classification := domain.ClassifyHistoricalCardFulfillments(providerDomainTransactions(transactions), knownLane)
+	classification := classifyInventoryTransactions(client.Key(), transactions, knownLane)
 	upstreamStatus, err = p.freezeCardAfterReconciliation(ctx, client, item.UpstreamCardID, upstreamStatus, classification)
 	if err != nil {
 		return err

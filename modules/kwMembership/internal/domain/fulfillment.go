@@ -708,6 +708,11 @@ type HistoricalFulfillmentResult struct {
 	Reason   string
 }
 
+type HistoricalFulfillmentPolicy struct {
+	// Some providers charge x5/x20 directly instead of emitting a Plus charge followed by an upgrade charge.
+	AllowStandaloneFinal bool
+}
+
 type historicalAuthorization struct {
 	AuthID               string
 	AuthTime             time.Time
@@ -724,6 +729,14 @@ type historicalAuthorization struct {
 }
 
 func ClassifyHistoricalCardFulfillments(transactions []CardTransaction, knownLane Tier) HistoricalFulfillmentResult {
+	return ClassifyHistoricalCardFulfillmentsWithPolicy(transactions, knownLane, HistoricalFulfillmentPolicy{})
+}
+
+func ClassifyHistoricalCardFulfillmentsWithPolicy(
+	transactions []CardTransaction,
+	knownLane Tier,
+	policy HistoricalFulfillmentPolicy,
+) HistoricalFulfillmentResult {
 	authorizations := foldHistoricalAuthorizations(transactions)
 	if !IsMembershipTier(knownLane) {
 		knownLane = ""
@@ -778,7 +791,7 @@ func ClassifyHistoricalCardFulfillments(transactions []CardTransaction, knownLan
 		}
 	}
 
-	pairedTiers := make([]Tier, 0, len(finals))
+	completedTiers := make([]Tier, 0, len(finals))
 	for _, final := range finals {
 		bestIndex := -1
 		bestDelta := time.Duration(math.MaxInt64)
@@ -790,17 +803,21 @@ func ClassifyHistoricalCardFulfillments(transactions []CardTransaction, knownLan
 			}
 		}
 		if bestIndex < 0 {
-			return historicalHold(0, "UPGRADE_PAIR_MISSING")
+			if !policy.AllowStandaloneFinal {
+				return historicalHold(0, "UPGRADE_PAIR_MISSING")
+			}
+			completedTiers = append(completedTiers, final.Tier)
+			continue
 		}
-		pairedTiers = append(pairedTiers, final.Tier)
+		completedTiers = append(completedTiers, final.Tier)
 		unpairedPlus = append(unpairedPlus[:bestIndex], unpairedPlus[bestIndex+1:]...)
 	}
 
-	if len(pairedTiers) > 0 && len(unpairedPlus) > 0 {
+	if len(completedTiers) > 0 && len(unpairedPlus) > 0 {
 		return historicalHold(0, "MIXED_MEMBERSHIP_LANES")
 	}
-	finalTierSet := make(map[Tier]struct{}, len(pairedTiers))
-	for _, tier := range pairedTiers {
+	finalTierSet := make(map[Tier]struct{}, len(completedTiers))
+	for _, tier := range completedTiers {
 		finalTierSet[tier] = struct{}{}
 	}
 	if len(finalTierSet) > 1 {
@@ -808,15 +825,15 @@ func ClassifyHistoricalCardFulfillments(transactions []CardTransaction, knownLan
 	}
 
 	lane := TierPlus
-	if len(pairedTiers) > 0 {
-		lane = pairedTiers[0]
+	if len(completedTiers) > 0 {
+		lane = completedTiers[0]
 	}
 	if knownLane != "" && lane != knownLane {
 		return historicalHold(0, "MIXED_MEMBERSHIP_LANES")
 	}
 	consumed := len(unpairedPlus)
-	if len(pairedTiers) > 0 {
-		consumed = len(pairedTiers)
+	if len(completedTiers) > 0 {
+		consumed = len(completedTiers)
 	}
 	capacity, _ := CapacityForTier(lane)
 	if consumed > capacity {

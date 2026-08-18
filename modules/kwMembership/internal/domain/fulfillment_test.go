@@ -682,6 +682,58 @@ func TestHistoricalCapacityExceeded(t *testing.T) {
 	}
 }
 
+func TestHistoricalStandaloneFinalPolicy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		transactions []CardTransaction
+		wantLane     Tier
+		wantCount    int
+		wantState    HistoricalFulfillmentState
+		wantReason   string
+	}{
+		{
+			name:         "standalone x20 fills its lane",
+			transactions: []CardTransaction{settled("x20-direct", "2026-08-18T13:06:31+08:00", 14500)},
+			wantLane:     TierX20,
+			wantCount:    1,
+			wantState:    HistoricalStateCapacityFull,
+		},
+		{
+			name: "two standalone x5 payments fill their lane",
+			transactions: []CardTransaction{
+				settled("x5-direct-1", "2026-08-18T13:06:31+08:00", 9500),
+				settled("x5-direct-2", "2026-08-19T13:06:31+08:00", 9500),
+			},
+			wantLane:  TierX5,
+			wantCount: 2,
+			wantState: HistoricalStateCapacityFull,
+		},
+		{
+			name: "mixed standalone final tiers still hold",
+			transactions: []CardTransaction{
+				settled("x5-direct", "2026-08-18T13:06:31+08:00", 9500),
+				settled("x20-direct", "2026-08-19T13:06:31+08:00", 14500),
+			},
+			wantState:  HistoricalStateReconciliationHold,
+			wantReason: "MIXED_FINAL_TIERS",
+		},
+	}
+	policy := HistoricalFulfillmentPolicy{AllowStandaloneFinal: true}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := ClassifyHistoricalCardFulfillmentsWithPolicy(test.transactions, "", policy)
+			gotLane := Tier("")
+			if got.Lane != nil {
+				gotLane = *got.Lane
+			}
+			if gotLane != test.wantLane || got.Consumed != test.wantCount || got.State != test.wantState || got.Reason != test.wantReason {
+				t.Fatalf("got %+v (lane %q), want lane=%q count=%d state=%q reason=%q", got, gotLane, test.wantLane, test.wantCount, test.wantState, test.wantReason)
+			}
+		})
+	}
+}
+
 func validEnvelopeWith(replacement string) string {
 	fields := map[string]string{
 		"account_type":  `"free"`,

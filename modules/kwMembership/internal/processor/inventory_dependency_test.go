@@ -13,10 +13,35 @@ import (
 	"time"
 
 	"kwmembership/internal/config"
+	"kwmembership/internal/domain"
 	"kwmembership/internal/provider"
 	"kwmembership/internal/secure"
 	"kwmembership/internal/store"
 )
+
+func TestInventoryAllowsStandaloneFinalOnlyForEfunCard(t *testing.T) {
+	t.Parallel()
+	transactions := []provider.Transaction{{
+		AuthID:             "efun-x20-direct",
+		AuthTime:           "2026-08-18T13:06:31+08:00",
+		SettleAmount:       145,
+		SettleCurrency:     "USD",
+		Status:             domain.TransactionStatusComplete,
+		Type:               domain.TransactionTypeSettlement,
+		MerchantNormalized: "OPENAI",
+	}}
+
+	efun := classifyInventoryTransactions(provider.CardPlatformEfun, transactions, "")
+	if efun.Lane == nil || *efun.Lane != domain.TierX20 || efun.Consumed != 1 ||
+		efun.State != domain.HistoricalStateCapacityFull || efun.Reason != "" {
+		t.Fatalf("EfunCard classification = %+v", efun)
+	}
+
+	spaceX := classifyInventoryTransactions(provider.CardPlatformSpaceX, transactions, "")
+	if spaceX.State != domain.HistoricalStateReconciliationHold || spaceX.Reason != "UPGRADE_PAIR_MISSING" {
+		t.Fatalf("SpaceX Card classification = %+v", spaceX)
+	}
+}
 
 func TestInventoryRejectsEmptyPageBeforeReportedTotal(t *testing.T) {
 	ctx := context.Background()

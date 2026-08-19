@@ -4722,27 +4722,51 @@ function raidShakeCampaignOptions(selected = "") {
 
 function renderRaidRewardRow(scope, reward = {}) {
   const value = reward.type === "shake_card" ? reward.quantity : reward.amount;
+  const advancedOptions = scope === "clear" ? "" : `
+      <label class="field raid-reward-advanced" data-reward-field="subscriptionGroupId"><span>订阅分组 ID</span><input data-field="subscriptionGroupId" type="number" min="1" step="1" value="${escapeHtml(reward.subscriptionGroupId ?? "")}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="validityDays"><span>订阅天数</span><input data-field="validityDays" type="number" min="1" max="365" step="1" value="${escapeHtml(reward.validityDays ?? 7)}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="rateGroupId"><span>倍率分组 ID</span><input data-field="rateGroupId" type="number" min="1" step="1" value="${escapeHtml(reward.rateGroupId ?? "")}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="rateMultiplier"><span>绝对倍率</span><input data-field="rateMultiplier" type="number" min="0.01" max="1" step="0.01" value="${escapeHtml(reward.rateMultiplier ?? 0.8)}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="durationDays"><span>倍率天数</span><input data-field="durationDays" type="number" min="1" max="90" step="1" value="${escapeHtml(reward.durationDays ?? 7)}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="usageCap"><span>优惠用量上限</span><input data-field="usageCap" type="number" min="0.01" step="0.01" value="${escapeHtml(reward.usageCap ?? 100)}" /></label>
+      <label class="field raid-reward-advanced" data-reward-field="fallbackAmount"><span>冲突备用额度</span><input data-field="fallbackAmount" type="number" min="0" step="0.01" value="${escapeHtml(reward.fallbackAmount ?? 0)}" /></label>`;
   return `
     <div class="raid-reward-row" data-raid-reward="${escapeHtml(scope)}">
       <strong>${escapeHtml({ clear: "共享", mvp1: "MVP 1", mvp2: "MVP 2", mvp3: "MVP 3" }[scope] || scope)}</strong>
       <label class="field"><span>奖品名称</span><input data-field="name" maxlength="100" value="${escapeHtml(reward.name || "")}" required /></label>
-      <label class="field"><span>类型</span><select data-field="type"><option value="balance" ${reward.type !== "shake_card" ? "selected" : ""}>额度</option><option value="shake_card" ${reward.type === "shake_card" ? "selected" : ""}>抽奖卡</option></select></label>
+      <label class="field"><span>类型</span><select data-field="type"><option value="balance" ${reward.type === "balance" || !reward.type ? "selected" : ""}>额度</option><option value="shake_card" ${reward.type === "shake_card" ? "selected" : ""}>抽奖卡</option>${scope === "clear" ? "" : `<option value="subscription" ${reward.type === "subscription" ? "selected" : ""}>订阅套餐</option><option value="rate_multiplier" ${reward.type === "rate_multiplier" ? "selected" : ""}>限时倍率</option>`}</select></label>
       <label class="field"><span>金额 / 数量</span><input data-field="value" type="number" min="0.01" step="0.01" value="${escapeHtml(value ?? 1)}" required /></label>
       <label class="field"><span>绑定活动</span><select data-field="shakeCampaignId">${raidShakeCampaignOptions(reward.shakeCampaignId || "")}</select></label>
       <label class="field"><span>卡种</span><select data-field="cardTier"><option value="low" ${reward.cardTier !== "medium" && reward.cardTier !== "high" ? "selected" : ""}>低级</option><option value="medium" ${reward.cardTier === "medium" ? "selected" : ""}>中级</option><option value="high" ${reward.cardTier === "high" ? "selected" : ""}>高级</option></select></label>
       <label class="field"><span>内部成本</span><input data-field="cost" type="number" min="0" step="0.01" value="${escapeHtml(reward.cost ?? value ?? 0)}" required /></label>
       <label class="field"><span>发放</span><select data-field="fulfillmentMode"><option value="auto" ${reward.fulfillmentMode !== "review" ? "selected" : ""}>自动</option><option value="review" ${reward.fulfillmentMode === "review" ? "selected" : ""}>审核后</option></select></label>
+      ${advancedOptions}
     </div>`;
 }
 
 function updateRaidRewardControls(row) {
-  const shakeCard = row.querySelector('[data-field="type"]')?.value === "shake_card";
+  if (!row) return;
+  const type = row.querySelector('[data-field="type"]')?.value || "balance";
+  const shakeCard = type === "shake_card";
   for (const field of ["shakeCampaignId", "cardTier"]) {
     const input = row.querySelector(`[data-field="${field}"]`);
     if (input) input.disabled = !shakeCard;
   }
+  for (const field of ["subscriptionGroupId", "validityDays"]) {
+    const wrapper = row.querySelector(`[data-reward-field="${field}"]`);
+    if (wrapper) wrapper.hidden = type !== "subscription";
+    const input = row.querySelector(`[data-field="${field}"]`);
+    if (input) input.disabled = type !== "subscription";
+  }
+  for (const field of ["rateGroupId", "rateMultiplier", "durationDays", "usageCap", "fallbackAmount"]) {
+    const wrapper = row.querySelector(`[data-reward-field="${field}"]`);
+    if (wrapper) wrapper.hidden = type !== "rate_multiplier";
+    const input = row.querySelector(`[data-field="${field}"]`);
+    if (input) input.disabled = type !== "rate_multiplier";
+  }
   const value = row.querySelector('[data-field="value"]');
   if (value) {
+    value.disabled = type === "subscription" || type === "rate_multiplier";
     value.min = shakeCard ? "1" : "0.01";
     value.step = shakeCard ? "1" : "0.01";
   }
@@ -4784,11 +4808,24 @@ function collectRaidReward(row) {
   };
   if (!reward.name) throw new Error("每项奖励都必须填写名称");
   if (type === "balance") reward.amount = value;
-  else {
+  else if (type === "shake_card") {
     reward.quantity = Math.round(value);
     reward.shakeCampaignId = row.querySelector('[data-field="shakeCampaignId"]').value;
     reward.cardTier = row.querySelector('[data-field="cardTier"]').value;
     if (!reward.shakeCampaignId) throw new Error("抽奖卡奖励必须绑定摇摇乐活动");
+  } else if (type === "subscription") {
+    reward.subscriptionGroupId = Number(row.querySelector('[data-field="subscriptionGroupId"]').value);
+    reward.validityDays = Number(row.querySelector('[data-field="validityDays"]').value);
+    if (!(reward.subscriptionGroupId > 0) || !(reward.validityDays > 0)) throw new Error("订阅套餐奖励必须填写分组 ID 和有效天数");
+  } else if (type === "rate_multiplier") {
+    reward.rateGroupId = Number(row.querySelector('[data-field="rateGroupId"]').value);
+    reward.rateMultiplier = Number(row.querySelector('[data-field="rateMultiplier"]').value);
+    reward.durationDays = Number(row.querySelector('[data-field="durationDays"]').value);
+    reward.usageCap = Number(row.querySelector('[data-field="usageCap"]').value);
+    reward.fallbackAmount = Number(row.querySelector('[data-field="fallbackAmount"]').value);
+    if (!(reward.rateGroupId > 0) || !(reward.rateMultiplier > 0 && reward.rateMultiplier <= 1) || !(reward.durationDays > 0) || !(reward.usageCap > 0)) {
+      throw new Error("限时倍率奖励必须填写分组、0-1 倍率、天数和用量上限");
+    }
   }
   return reward;
 }
@@ -4997,7 +5034,15 @@ async function refreshRaidRewards() {
   const payload = await api(`/api/admin/sub2api/raid/rewards${params.size ? `?${params}` : ""}`);
   renderTable(refs.raidRewardList, [
     { label: "用户", render: (item) => `<code>${escapeHtml(item.userId)}</code><br><span class="hint">${item.scope === "mvp" ? `MVP ${escapeHtml(item.finalRank)}` : "共享奖励"}</span>` },
-    { label: "奖品", render: (item) => `<strong>${escapeHtml(item.reward?.name || "-")}</strong><br><span class="hint">成本 ${escapeHtml(item.cost)} · ${item.fulfillmentMode === "review" ? "审核后发放" : "自动发放"}</span>` },
+    { label: "奖品", render: (item) => {
+      const reward = item.reward || {};
+      const detail = reward.type === "subscription"
+        ? `订阅 ${reward.subscriptionGroupId} · ${reward.validityDays} 天`
+        : reward.type === "rate_multiplier"
+          ? `倍率 ${reward.rateMultiplier}x · ${reward.durationDays} 天 · 上限 ${reward.usageCap}`
+          : reward.type === "shake_card" ? `抽奖卡 ×${reward.quantity}` : `额度 ${reward.amount}`;
+      return `<strong>${escapeHtml(reward.name || "-")}</strong><br><span class="hint">${escapeHtml(detail)} · 成本 ${escapeHtml(item.cost)} · ${item.fulfillmentMode === "review" ? "审核后发放" : "自动发放"}</span>`;
+    } },
     { label: "状态", render: (item) => `${renderStatus(item.status)}${item.errorMessage ? `<br><span style="color:var(--error)">${escapeHtml(item.errorMessage)}</span>` : ""}` },
     { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.createdAt))}</span>` },
     { label: "操作", render: (item) => `

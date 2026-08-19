@@ -61,6 +61,7 @@ tests/*
 !tests/sub2api-raid.test.js
 !tests/sub2api-raid-api.test.js
 !tests/sub2api-raid-page.test.js
+!tests/sub2api-raid-phase2.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const BOSS_ASSETS = ["leviathan", "sentinel", "prism", "zero-core", "warden", "overmind", "behemoth", "singularity"];
-const REWARD_TYPES = ["balance", "shake_card"];
+const REWARD_TYPES = ["balance", "shake_card", "subscription", "rate_multiplier"];
 const FULFILLMENT_MODES = ["auto", "review"];
 const ACTIVE_SYNC_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +24,13 @@ const rewardSchema = z.object({
   quantity: z.number().int().min(1).max(100).optional(),
   shakeCampaignId: z.string().trim().min(1).optional(),
   cardTier: z.enum(["low", "medium", "high"]).optional().default("low"),
+  subscriptionGroupId: z.number().int().positive().optional(),
+  validityDays: z.number().int().min(1).max(365).optional(),
+  rateGroupId: z.number().int().positive().optional(),
+  rateMultiplier: z.number().finite().gt(0).lte(1).optional(),
+  durationDays: z.number().int().min(1).max(90).optional(),
+  usageCap: z.number().finite().positive().max(100000).optional(),
+  fallbackAmount: z.number().finite().positive().optional(),
   cost: z.number().finite().nonnegative(),
   fulfillmentMode: z.enum(FULFILLMENT_MODES)
 }).superRefine((reward, context) => {
@@ -32,6 +39,18 @@ const rewardSchema = z.object({
   }
   if (reward.type === "shake_card" && (!reward.shakeCampaignId || !(Number(reward.quantity) > 0))) {
     context.addIssue({ code: "custom", path: ["shakeCampaignId"], message: "抽奖卡奖励必须指定活动和数量" });
+  }
+  if (reward.type === "subscription" && (!(Number(reward.subscriptionGroupId) > 0) || !(Number(reward.validityDays) > 0))) {
+    context.addIssue({ code: "custom", path: ["subscriptionGroupId"], message: "订阅套餐奖励必须指定分组和有效天数" });
+  }
+  if (reward.type === "rate_multiplier" && (
+    !(Number(reward.rateGroupId) > 0)
+    || !(Number(reward.rateMultiplier) > 0 && Number(reward.rateMultiplier) <= 1)
+    || !(Number(reward.durationDays) > 0)
+    || !(Number(reward.usageCap) > 0)
+    || !(Number(reward.fallbackAmount) > 0)
+  )) {
+    context.addIssue({ code: "custom", path: ["rateGroupId"], message: "限时倍率奖励必须指定分组、0-1 绝对倍率、天数、优惠用量上限和备用额度" });
   }
 });
 
@@ -69,6 +88,11 @@ const campaignSchema = z.object({
   }
   if (new Set(campaign.bosses.map((boss) => boss.level)).size !== campaign.bosses.length) {
     context.addIssue({ code: "custom", path: ["bosses"], message: "Boss 等级不能重复" });
+  }
+  for (const boss of campaign.bosses) {
+    if (boss.clearReward.type === "subscription" || boss.clearReward.type === "rate_multiplier") {
+      context.addIssue({ code: "custom", path: ["bosses"], message: "共享奖励暂只支持小额额度或活动抽奖卡；订阅套餐和限时倍率请配置为 MVP 奖励" });
+    }
   }
 });
 
@@ -125,9 +149,10 @@ function maskIdentity(identity) {
 function rewardWorstCaseCost(boss, threshold) {
   const maxRaiders = Math.ceil(Number(boss.health) / Number(threshold));
   const slots = getRaidMvpSlots(maxRaiders);
+  const rewardCost = (reward) => Math.max(Number(reward.cost), reward.type === "rate_multiplier" ? Number(reward.fallbackAmount || 0) : 0);
   return roundAmount(
-    Number(boss.clearReward.cost) * maxRaiders
-      + boss.mvpRewards.slice(0, slots).reduce((sum, reward) => sum + Number(reward.cost), 0)
+    rewardCost(boss.clearReward) * maxRaiders
+      + boss.mvpRewards.slice(0, slots).reduce((sum, reward) => sum + rewardCost(reward), 0)
   );
 }
 
@@ -156,7 +181,10 @@ export function createSub2ApiRaidService({
   id = (prefix) => `${prefix}-${crypto.randomUUID()}`,
   listUsagePage = async () => { throw new Error("Sub2api 用量同步适配器未配置"); },
   getUserProfile = async (identity) => ({ createdAt: identity.accountCreatedAt || "" }),
-  creditBalance = async () => { throw new Error("Sub2api 余额奖励适配器未配置"); }
+  creditBalance = async () => { throw new Error("Sub2api 余额奖励适配器未配置"); },
+  grantSubscription = async () => { throw new Error("Sub2api 订阅奖励适配器未配置"); },
+  getUserGroupRate = async () => null,
+  applyRateEntitlement = async () => { throw new Error("Sub2api 倍率奖励适配器未配置"); }
 }) {
   const syncingConnections = new Set();
 
@@ -186,6 +214,13 @@ export function createSub2ApiRaidService({
       quantity: reward.quantity ?? null,
       shakeCampaignId: reward.shakeCampaignId || null,
       cardTier: reward.cardTier || "low",
+      subscriptionGroupId: reward.subscriptionGroupId ?? null,
+      validityDays: reward.validityDays ?? null,
+      rateGroupId: reward.rateGroupId ?? null,
+      rateMultiplier: reward.rateMultiplier ?? null,
+      durationDays: reward.durationDays ?? null,
+      usageCap: reward.usageCap ?? null,
+      fallbackAmount: reward.fallbackAmount ?? null,
       cost: Number(reward.cost),
       fulfillmentMode: reward.fulfillmentMode
     };
@@ -644,6 +679,156 @@ export function createSub2ApiRaidService({
     return rewardId;
   }
 
+  function getRateEntitlement(id) {
+    return db.prepare("SELECT * FROM sub2api_raid_rate_entitlements WHERE id = ?").get(id);
+  }
+
+  function getActiveRateEntitlement(connectionId, userId, groupId, at = now()) {
+    return db.prepare(`
+      SELECT * FROM sub2api_raid_rate_entitlements
+      WHERE connection_id = ? AND sub2api_user_id = ? AND group_id = ? AND status = 'active'
+        AND starts_at <= ? AND expires_at > ?
+      ORDER BY multiplier ASC, starts_at ASC, created_at ASC
+      LIMIT 1
+    `).get(connectionId, String(userId), Number(groupId), at, at);
+  }
+
+  async function activateRateEntitlement(entitlement, reward, at = now(), inheritedPreviousMultiplier = undefined) {
+    const current = getActiveRateEntitlement(entitlement.connection_id, entitlement.sub2api_user_id, entitlement.group_id, at);
+    if (current && Number(current.multiplier) <= Number(entitlement.multiplier)) return current;
+    const previousMultiplier = inheritedPreviousMultiplier !== undefined
+      ? inheritedPreviousMultiplier
+      : await getUserGroupRate({
+        connectionId: entitlement.connection_id,
+        userId: entitlement.sub2api_user_id,
+        groupId: entitlement.group_id
+      });
+    await applyRateEntitlement({
+      connectionId: entitlement.connection_id,
+      userId: entitlement.sub2api_user_id,
+      groupId: entitlement.group_id,
+      multiplier: Number(entitlement.multiplier),
+      rewardId: entitlement.reward_id,
+      idempotencyKey: `${entitlement.reward_id}:rate:activate`,
+      notes: `KaWang Boss Raid 限时倍率：${reward.name} / ${entitlement.reward_id}`
+    });
+    const startedAt = at;
+    const expiresAt = new Date(Date.parse(startedAt) + Number(entitlement.duration_days) * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE sub2api_raid_rate_entitlements
+      SET status = 'active', starts_at = ?, expires_at = ?, previous_multiplier = ?, error_message = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(startedAt, expiresAt, previousMultiplier === null || previousMultiplier === undefined ? null : Number(previousMultiplier), startedAt, entitlement.id);
+    return getRateEntitlement(entitlement.id);
+  }
+
+  async function createRateEntitlement(rewardRow, reward) {
+    const campaign = getCampaign(rewardRow.campaign_id);
+    const existing = db.prepare("SELECT * FROM sub2api_raid_rate_entitlements WHERE reward_id = ?").get(rewardRow.id);
+    if (existing && ["active", "queued", "fallback_delivered"].includes(existing.status)) return existing;
+    const createdAt = now();
+    const idValue = existing?.id || id("raid-rate");
+    const current = getActiveRateEntitlement(campaign.connection_id, rewardRow.sub2api_user_id, reward.rateGroupId, createdAt);
+    const status = current && Number(current.multiplier) <= Number(reward.rateMultiplier) ? "queued" : "pending";
+    if (!existing) db.prepare(`
+      INSERT INTO sub2api_raid_rate_entitlements (
+        id, reward_id, campaign_id, connection_id, sub2api_user_id, group_id,
+        multiplier, usage_cap, discounted_usage, duration_days, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+    `).run(
+      idValue, rewardRow.id, rewardRow.campaign_id, campaign.connection_id, rewardRow.sub2api_user_id,
+      Number(reward.rateGroupId), Number(reward.rateMultiplier), Number(reward.usageCap),
+      Number(reward.durationDays), status, createdAt, createdAt
+    );
+    else db.prepare("UPDATE sub2api_raid_rate_entitlements SET status = ?, error_message = NULL, updated_at = ? WHERE id = ?")
+      .run(status, createdAt, existing.id);
+    const entitlement = getRateEntitlement(idValue);
+    if (status === "queued") return entitlement;
+    try {
+      const remoteMultiplier = await getUserGroupRate({
+        connectionId: campaign.connection_id,
+        userId: rewardRow.sub2api_user_id,
+        groupId: reward.rateGroupId
+      });
+      if (remoteMultiplier !== null && Number(remoteMultiplier) <= Number(reward.rateMultiplier)) {
+        const response = await creditBalance({
+          connectionId: campaign.connection_id,
+          userId: rewardRow.sub2api_user_id,
+          amount: Number(reward.fallbackAmount),
+          rewardId: rewardRow.id,
+          idempotencyKey: `${rewardRow.id}:rate:fallback`,
+          notes: `KaWang Boss Raid 倍率冲突备用额度：${reward.name} / ${rewardRow.id}`
+        });
+        db.prepare("UPDATE sub2api_raid_rate_entitlements SET status = 'fallback_delivered', previous_multiplier = ?, updated_at = ? WHERE id = ?")
+          .run(Number(remoteMultiplier), now(), entitlement.id);
+        return { ...getRateEntitlement(entitlement.id), fallbackResponse: response };
+      }
+      return await activateRateEntitlement(entitlement, reward, createdAt);
+    } catch (error) {
+      db.prepare("UPDATE sub2api_raid_rate_entitlements SET status = 'delivery_failed', error_message = ?, updated_at = ? WHERE id = ?")
+        .run(error.message || "倍率权益写入失败", now(), idValue);
+      throw error;
+    }
+  }
+
+  async function maintainRateEntitlements(at = now()) {
+    const rows = db.prepare(`
+      SELECT * FROM sub2api_raid_rate_entitlements
+      WHERE status = 'active' ORDER BY expires_at ASC
+    `).all();
+    let ended = 0;
+    for (const row of rows) {
+      const usage = Number(db.prepare(`
+        SELECT COALESCE(SUM(actual_cost), 0) AS total FROM sub2api_raid_usage_records
+        WHERE connection_id = ? AND sub2api_user_id = ? AND subscription_group_id = ?
+          AND occurred_at >= ? AND occurred_at < ?
+      `).get(row.connection_id, row.sub2api_user_id, row.group_id, row.starts_at, at).total);
+      const reachedCap = usage >= Number(row.usage_cap);
+      const expired = String(row.expires_at) <= String(at);
+      db.prepare("UPDATE sub2api_raid_rate_entitlements SET discounted_usage = ?, updated_at = ? WHERE id = ?")
+        .run(roundAmount(usage), at, row.id);
+      if (!reachedCap && !expired) continue;
+      db.prepare("UPDATE sub2api_raid_rate_entitlements SET status = 'ended', updated_at = ? WHERE id = ?")
+        .run(at, row.id);
+      ended += 1;
+      const next = db.prepare(`
+        SELECT * FROM sub2api_raid_rate_entitlements
+        WHERE connection_id = ? AND sub2api_user_id = ? AND group_id = ? AND status = 'queued'
+        ORDER BY multiplier ASC, created_at ASC LIMIT 1
+      `).get(row.connection_id, row.sub2api_user_id, row.group_id);
+      if (next) {
+        const rewardRow = db.prepare("SELECT * FROM sub2api_raid_rewards WHERE id = ?").get(next.reward_id);
+        const reward = parseJson(rewardRow?.reward_snapshot, null);
+        if (rewardRow && reward) {
+          try {
+            await activateRateEntitlement(next, reward, at, row.previous_multiplier === null ? null : Number(row.previous_multiplier));
+          } catch (error) {
+            db.prepare("UPDATE sub2api_raid_rate_entitlements SET error_message = ?, updated_at = ? WHERE id = ?")
+              .run(error.message || "排队倍率激活失败", at, next.id);
+          }
+        }
+      } else {
+        const currentMultiplier = await getUserGroupRate({
+          connectionId: row.connection_id,
+          userId: row.sub2api_user_id,
+          groupId: row.group_id
+        });
+        if (currentMultiplier === null || Math.abs(Number(currentMultiplier) - Number(row.multiplier)) < 1e-9) {
+          await applyRateEntitlement({
+            connectionId: row.connection_id,
+            userId: row.sub2api_user_id,
+            groupId: row.group_id,
+            multiplier: row.previous_multiplier === null ? null : Number(row.previous_multiplier),
+            rewardId: row.reward_id,
+            idempotencyKey: `${row.reward_id}:rate:clear:${at}`,
+            notes: `KaWang Boss Raid 限时倍率到期：${row.reward_id}`
+          }).catch((error) => console.error(`[sub2api-raid-rate:${row.id}]`, error));
+        }
+      }
+    }
+    return ended;
+  }
+
   function settleBoss(campaign, boss) {
     if (boss.status !== "settling" || Number(boss.stable_sync_count) < 2) return null;
     const ranking = getRanking(boss.id);
@@ -745,6 +930,25 @@ export function createSub2ApiRaidService({
           }
         })();
         response = { campaignId: target.id, cardsGranted: Math.max(0, quantity - existing) };
+      } else if (reward.type === "subscription") {
+        response = await grantSubscription({
+          connectionId: getCampaign(row.campaign_id).connection_id,
+          userId: row.sub2api_user_id,
+          groupId: Number(reward.subscriptionGroupId),
+          validityDays: Number(reward.validityDays),
+          rewardId: row.id,
+          idempotencyKey: `${row.id}:subscription`,
+          notes: `KaWang Boss Raid 订阅套餐：${reward.name} / ${row.id}`
+        });
+      } else if (reward.type === "rate_multiplier") {
+        const entitlement = await createRateEntitlement(row, reward);
+        response = {
+          groupId: Number(entitlement.group_id),
+          multiplier: Number(entitlement.multiplier),
+          status: entitlement.status,
+          expiresAt: entitlement.expires_at || null,
+          usageCap: Number(entitlement.usage_cap)
+        };
       }
       const deliveredAt = now();
       db.prepare(`
@@ -1283,6 +1487,7 @@ export function createSub2ApiRaidService({
         }
       }
     }
+    await maintainRateEntitlements(at);
     const expired = db.prepare(`
       SELECT * FROM sub2api_raid_campaigns WHERE status = 'settling' AND settlement_end_at <= ?
     `).all(at);

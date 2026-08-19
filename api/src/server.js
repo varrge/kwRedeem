@@ -3628,6 +3628,79 @@ const sub2apiRaidService = createSub2ApiRaidService({
       }
     );
     return unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text;
+  },
+  async grantSubscription({ connectionId, userId, groupId, validityDays, rewardId, idempotencyKey, notes }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const subscriptions = await listSub2ApiRemotePages(connection, "/api/v1/admin/subscriptions", {
+      user_id: String(userId),
+      group_id: String(groupId)
+    });
+    const active = subscriptions
+      .filter((item) => getRemainingSubscriptionDays(item) > 0)
+      .sort((left, right) => (readRemoteSubscriptionExpiresAt(right)?.getTime() || 0) - (readRemoteSubscriptionExpiresAt(left)?.getTime() || 0));
+    if (active[0]) {
+      const subscriptionId = readRemoteSubscriptionId(active[0]);
+      if (!subscriptionId) throw new Error("远程订阅缺少有效 ID，无法安全延期");
+      const result = await callSub2ApiRemote(
+        connection,
+        `/api/v1/admin/subscriptions/${encodeURIComponent(String(subscriptionId))}/extend`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+          body: { days: Number(validityDays), notes: notes || `Boss Raid 订阅奖励 ${rewardId}` }
+        }
+      );
+      return { mode: "extended", subscriptionId, response: unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text };
+    }
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/subscriptions/assign", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: {
+        user_id: Number(userId),
+        group_id: Number(groupId),
+        validity_days: Number(validityDays),
+        notes: notes || `Boss Raid 订阅奖励 ${rewardId}`
+      }
+    });
+    return { mode: "assigned", response: unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text };
+  },
+  async getUserGroupRate({ connectionId, userId, groupId }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const result = await callSub2ApiRemote(connection, `/api/v1/admin/users/${encodeURIComponent(String(userId))}`);
+    const user = unwrapSub2ApiRemoteData(result.json) || {};
+    const rate = user.group_rates?.[String(groupId)] ?? user.groupRates?.[String(groupId)] ?? null;
+    return Number.isFinite(Number(rate)) ? Number(rate) : null;
+  },
+  async applyRateEntitlement({ connectionId, userId, groupId, multiplier, idempotencyKey, notes }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const result = await callSub2ApiRemote(
+      connection,
+      `/api/v1/admin/users/${encodeURIComponent(String(userId))}`,
+      {
+        method: "PUT",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: {
+          group_rates: { [String(groupId)]: multiplier === null ? null : Number(multiplier) },
+          notes: notes || "Boss Raid 限时倍率权益"
+        }
+      }
+    );
+    return unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text;
   }
 });
 

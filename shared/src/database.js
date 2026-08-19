@@ -1158,6 +1158,26 @@ function createSchema(db) {
       UNIQUE(settlement_id, sub2api_user_id, reward_scope, final_rank)
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_raid_rate_entitlements (
+      id TEXT PRIMARY KEY,
+      reward_id TEXT NOT NULL UNIQUE,
+      campaign_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      group_id INTEGER NOT NULL,
+      multiplier REAL NOT NULL,
+      usage_cap REAL NOT NULL,
+      discounted_usage REAL NOT NULL DEFAULT 0,
+      duration_days INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      starts_at TEXT,
+      expires_at TEXT,
+      previous_multiplier REAL,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS sub2api_raid_disqualifications (
       id TEXT PRIMARY KEY,
       campaign_id TEXT NOT NULL,
@@ -2318,6 +2338,7 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_shake_eligibility_rules", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
   ensureColumn(db, "sub2api_shake_eligibility_rules", "subscription_group_id", "INTEGER");
   ensureColumn(db, "sub2api_shake_eligibility_rules", "card_quantity", "INTEGER");
+  ensureColumn(db, "sub2api_raid_rate_entitlements", "previous_multiplier", "REAL");
   migrateShakeEligibilityRuleUniqueness(db);
   ensureColumn(db, "sub2api_shake_prizes", "low_weight", "REAL");
   ensureColumn(db, "sub2api_shake_prizes", "medium_weight", "REAL");
@@ -2427,6 +2448,7 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_raid_damage_boss ON sub2api_raid_damage_assignments(boss_id, occurred_at, remote_usage_id);
     CREATE INDEX IF NOT EXISTS idx_sub2api_raid_contributions_rank ON sub2api_raid_contributions(boss_id, damage DESC, reached_at, sub2api_user_id);
     CREATE INDEX IF NOT EXISTS idx_sub2api_raid_rewards_status ON sub2api_raid_rewards(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_rate_entitlements_active ON sub2api_raid_rate_entitlements(connection_id, sub2api_user_id, group_id, status, expires_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_user ON sub2api_shake_draws(campaign_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_status ON sub2api_shake_draws(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_usage_user ON sub2api_shake_usage_records(connection_id, sub2api_user_id, occurred_at);

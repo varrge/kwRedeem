@@ -276,6 +276,130 @@ test("automation runner keeps Gate closed, then settles one accepted remote task
   assert.equal(db.prepare("SELECT consumed_slots FROM managed_cards WHERE id = 'card-auto'").get().consumed_slots, 1);
 });
 
+test("renewal cancellation does not occupy provider checkout concurrency", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    UPDATE automation_fulfillment_settings
+    SET payment_gate_enabled = 1, mode = 'automatic', updated_at = ?
+    WHERE id = 'default'
+  `).run(at);
+  const snapshot = JSON.stringify({
+    mappingId: "mapping-auto",
+    providerId: "provider-auto",
+    externalPlanId: "plus-monthly",
+    regionCode: "PH",
+    currency: "PHP",
+    cardPlatformKey: "spacexcard",
+    cardProductCode: "CARD-PRODUCT",
+    capacityKey: "plus",
+    cardCapacity: 1,
+    fundingAmountUsd: 25,
+    expectedMinAmount: 900,
+    expectedMaxAmount: 1200,
+    dailyRiskLimitUsd: 100
+  });
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, mapping_id, provider_id,
+      credential_id, client_order_id, remote_task_id, remote_status,
+      current_phase, mapping_snapshot, remote_snapshot, attempt_count, next_action_at,
+      accepted_at, created_at, updated_at
+    ) VALUES ('execution-renewal-busy', 'order-renewal-busy', 'KWRENEWALBUSY',
+      'product-auto', 'running', 'mapping-auto', 'provider-auto', 'credential-auto',
+      'KWRENEWALBUSY', 'REMOTE-RENEWAL-BUSY', 'running', 'renewal_cancellation',
+      ?, ?, 1, '2099-01-01T00:00:00.000Z', ?, ?, ?)
+  `).run(snapshot, JSON.stringify({
+    renewalStatus: { status: "pending", verified: true, willRenew: true }
+  }), at, at, at);
+  enrollAutomationOrder(db, {
+    id: "execution-after-renewal",
+    orderId: "order-after-renewal",
+    orderNo: "KWAFTERRENEWAL",
+    productId: "product-auto",
+    createdAt: at
+  });
+
+  const runner = createAutomationRunner({
+    db,
+    decryptText,
+    encryptText,
+    workerId: "renewal-capacity-worker",
+    now: () => new Date(clock),
+    providerSync: async () => false
+  });
+  await runner.tick();
+
+  assert.equal(db.prepare(`
+    SELECT status FROM automation_executions WHERE id = 'execution-after-renewal'
+  `).get().status, "preparing_card");
+  db.prepare("DELETE FROM automation_executions WHERE id IN ('execution-renewal-busy', 'execution-after-renewal')").run();
+});
+
+test("an overdue renewal cancellation moves to manual review", async () => {
+  const at = clock.toISOString();
+  const acceptedAt = new Date(clock.getTime() - (30 * 60 + 1) * 1000).toISOString();
+  const snapshot = JSON.stringify({
+    mappingId: "mapping-auto",
+    providerId: "provider-auto",
+    externalPlanId: "plus-monthly",
+    regionCode: "PH",
+    currency: "PHP"
+  });
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, mapping_id, provider_id,
+      credential_id, client_order_id, remote_task_id, remote_status,
+      current_phase, mapping_snapshot, attempt_count, next_action_at,
+      accepted_at, created_at, updated_at
+    ) VALUES ('execution-renewal-overdue', 'order-renewal-overdue', 'KWRENEWALOVERDUE',
+      'product-auto', 'running', 'mapping-auto', 'provider-auto', 'credential-auto',
+      'KWRENEWALOVERDUE', 'REMOTE-RENEWAL-OVERDUE', 'running', 'renewal_cancellation',
+      ?, 1, ?, ?, ?, ?)
+  `).run(snapshot, at, acceptedAt, acceptedAt, at);
+  db.prepare(`
+    INSERT INTO automation_execution_attempts (
+      id, execution_id, attempt_no, mapping_id, provider_id, credential_id,
+      client_order_id, status, mapping_snapshot, remote_task_id, created_at, updated_at
+    ) VALUES ('attempt-renewal-overdue', 'execution-renewal-overdue', 1,
+      'mapping-auto', 'provider-auto', 'credential-auto', 'KWRENEWALOVERDUE',
+      'accepted', ?, 'REMOTE-RENEWAL-OVERDUE', ?, ?)
+  `).run(snapshot, acceptedAt, at);
+  const task = {
+    id: "REMOTE-RENEWAL-OVERDUE",
+    clientOrderId: "KWRENEWALOVERDUE",
+    status: "running",
+    terminal: false,
+    planId: "plus-monthly",
+    checkoutCountry: "PH",
+    checkoutCurrency: "PHP",
+    currentPhase: "renewal_cancellation",
+    message: "已开通，等待取消自动续费",
+    card: { brand: null, last4: "4444" },
+    pricing: { currency: "PHP", displayTotal: null, confirmed: true },
+    renewalStatus: { status: "pending", verified: true, willRenew: true },
+    error: null
+  };
+  const runner = createAutomationRunner({
+    db,
+    decryptText,
+    encryptText,
+    workerId: "renewal-review-worker",
+    now: () => new Date(clock),
+    adapterFactory: () => ({ adapter: { getTask: async () => ({ task }) } }),
+    providerSync: async () => false
+  });
+  await runner.tick();
+
+  const execution = db.prepare(`
+    SELECT status, last_error_code FROM automation_executions
+    WHERE id = 'execution-renewal-overdue'
+  `).get();
+  assert.equal(execution.status, "manual_review");
+  assert.equal(execution.last_error_code, "AUTOMATION_RENEWAL_CANCELLATION_REQUIRED");
+  db.prepare("DELETE FROM automation_execution_attempts WHERE id = 'attempt-renewal-overdue'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-renewal-overdue'").run();
+});
+
 test("the explicit no-payment order is enrolled directly into manual hold", () => {
   const at = clock.toISOString();
   db.prepare(`

@@ -382,6 +382,22 @@ export function createAutomationRunner(options = {}) {
       markManualReview(execution, contractCode, "远端任务身份与本地订单不一致", task);
       return;
     }
+    const acceptedAt = Date.parse(execution.accepted_at || "");
+    const renewalCancellationOverdue = task.status === "running"
+      && task.currentPhase === "renewal_cancellation"
+      && task.renewalStatus?.verified === true
+      && task.renewalStatus?.willRenew === true
+      && Number.isFinite(acceptedAt)
+      && now().getTime() - acceptedAt >= LONG_RUNNING_ALERT_SECONDS * 1000;
+    if (renewalCancellationOverdue) {
+      markManualReview(
+        execution,
+        "AUTOMATION_RENEWAL_CANCELLATION_REQUIRED",
+        "会员已开通，但自动续费仍未关闭，请人工处理",
+        task
+      );
+      return;
+    }
     persistRemoteTask(execution, task);
     if (["queued", "running"].includes(task.status)) {
       const at = iso(now());
@@ -445,6 +461,18 @@ export function createAutomationRunner(options = {}) {
     const active = db.prepare(`
       SELECT COUNT(*) AS count FROM automation_executions
       WHERE provider_id = ? AND status IN (${placeholders(PROVIDER_BUSY_STATUSES)})
+        AND NOT (
+          (
+            status = 'running'
+            AND current_phase = 'renewal_cancellation'
+            AND json_valid(remote_snapshot) = 1
+            AND json_extract(remote_snapshot, '$.renewalStatus.verified') = 1
+            AND json_extract(remote_snapshot, '$.renewalStatus.willRenew') = 1
+          ) OR (
+            status = 'manual_review'
+            AND last_error_code = 'AUTOMATION_RENEWAL_CANCELLATION_REQUIRED'
+          )
+        )
     `).get(providerId, ...PROVIDER_BUSY_STATUSES).count;
     return Number(active) < Math.max(1, Number(provider.max_concurrency || 1));
   }

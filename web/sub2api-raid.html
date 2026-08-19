@@ -307,7 +307,13 @@
         const number = (value) => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
         const formatTime = (value) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未同步";
-        const rewardText = (reward) => reward?.type === "balance" ? `额度 ${number(reward.amount)}` : `${reward?.name || "抽奖卡"} ×${reward?.quantity || 1}`;
+        const rewardText = (reward) => {
+          if (reward?.type === "balance") return `额度 ${number(reward.amount)}`;
+          if (reward?.type === "shake_card") return `${reward?.name || "抽奖卡"} ×${reward?.quantity || 1}`;
+          if (reward?.type === "subscription") return `订阅套餐 · ${reward?.validityDays || 0} 天`;
+          if (reward?.type === "rate_multiplier") return `限时 ${number(reward?.rateMultiplier)}x · ${reward?.durationDays || 0} 天`;
+          return reward?.name || "Boss 奖励";
+        };
         const rewardStatus = (status) => ({ awaiting_review: "待审核", pending: "待发放", delivery_failed: "发放失败", delivered: "已发放", disqualified: "已取消资格", voided: "已作废" }[status] || status);
 
         async function request(path, options = {}) {

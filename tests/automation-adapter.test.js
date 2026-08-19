@@ -8,6 +8,7 @@ import {
 } from "../shared/src/automation-adapters/automate-v1.js";
 import {
   EfunOpenV1Adapter,
+  normalizeEfunAutomationProxyUrl,
   normalizeEfunOpenV1BaseUrl
 } from "../shared/src/automation-adapters/efun-open-v1.js";
 
@@ -132,6 +133,40 @@ test("eFun Open V1 validates its documented user endpoint and exposes fixed capa
     ["pro20", "x20"]
   ]);
   assert.deepEqual(config.regions, [{ code: "PH", currency: "PHP", label: "Philippines" }]);
+});
+
+test("eFun Open V1 sends requests through its configured local proxy", async () => {
+  let requestOptions;
+  const adapter = new EfunOpenV1Adapter({
+    baseUrl: "https://efun.example/api/v1",
+    apiKey: "fixed-downstream-key",
+    proxyUrl: "http://127.0.0.1:7890",
+    lookup: publicLookup,
+    fetchImpl: async (_url, options) => {
+      requestOptions = options;
+      return response({
+        code: 0,
+        message: "success",
+        data: { id: "0", username: "api-user", is_active: true }
+      });
+    }
+  });
+
+  await adapter.discoverCapabilities();
+  assert.ok(requestOptions.dispatcher);
+  const secondAdapter = new EfunOpenV1Adapter({
+    baseUrl: "https://efun.example/api/v1",
+    apiKey: "fixed-downstream-key",
+    proxyUrl: "http://127.0.0.1:7890",
+    lookup: publicLookup,
+    fetchImpl: async () => response({ code: 0, data: { is_active: true } })
+  });
+  assert.equal(secondAdapter.dispatcher, adapter.dispatcher);
+  assert.equal(normalizeEfunAutomationProxyUrl("http://127.0.0.1:7890"), "http://127.0.0.1:7890");
+  assert.throws(
+    () => normalizeEfunAutomationProxyUrl("http://proxy.example:7890"),
+    AutomationAdapterError
+  );
 });
 
 test("eFun Open V1 sends direct card orders and keeps sensitive response fields out of normalized tasks", async () => {

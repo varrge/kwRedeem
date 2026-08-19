@@ -118,6 +118,7 @@ const automationRunner = createAutomationRunner({
   encryptText,
   workerId: `${workerId}-automation`,
   efuncardProxyUrl: env.efuncardProxyUrl,
+  efunAutomationProxyUrl: env.efunAutomationProxyUrl,
   audit: writeAuditLog,
   notify: notifyAutomationIntervention
 });

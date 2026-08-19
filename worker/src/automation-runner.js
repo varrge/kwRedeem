@@ -161,6 +161,7 @@ export function createAutomationRunner(options = {}) {
     workerId = `automation-worker-${process.pid}`,
     fetchImpl,
     efuncardProxyUrl,
+    efunAutomationProxyUrl,
     lookup,
     audit = () => {},
     notify = () => {},
@@ -728,7 +729,8 @@ export function createAutomationRunner(options = {}) {
         credentialId: execution.credential_id,
         decryptText,
         fetchImpl,
-        lookup
+        lookup,
+        efunAutomationProxyUrl
       });
       const attempt = db.prepare(`
         SELECT status FROM automation_execution_attempts
@@ -811,7 +813,8 @@ export function createAutomationRunner(options = {}) {
         credentialId: execution.credential_id,
         decryptText,
         fetchImpl,
-        lookup
+        lookup,
+        efunAutomationProxyUrl
       });
       const snapshot = parseJson(execution.mapping_snapshot);
       const result = await adapter.getTask(execution.remote_task_id, {
@@ -880,7 +883,14 @@ export function createAutomationRunner(options = {}) {
     `).get(staleBefore, failedRetryBefore);
     if (!row) return false;
     try {
-      await providerSync(db, { providerId: row.id, decryptText, fetchImpl, lookup, at });
+      await providerSync(db, {
+        providerId: row.id,
+        decryptText,
+        fetchImpl,
+        lookup,
+        efunAutomationProxyUrl,
+        at
+      });
     } catch (error) {
       if (error instanceof AutomationAdapterError
         && ([401, 403].includes(Number(error.statusCode))

@@ -776,6 +776,7 @@ createAutomationFulfillmentService({
   requireAdmin,
   encryptText,
   decryptText,
+  efunAutomationProxyUrl: env.efunAutomationProxyUrl,
   createAuditLog,
   verifyFreshAdmin: (credentials) => verifyFreshAdminCredentials(credentials, {
     username: env.adminUsername,

@@ -219,6 +219,78 @@ _Avoid_: Refunding the draw for a reroll, issuing a different prize after timeou
 An audited administrator action on the delivery state of a fixed Shake Draw, such as retrying delivery, confirming externally verified delivery, or voiding an undeliverable reward with a reason. It never changes the selected prize, and voiding does not automatically reverse a balance reward already credited remotely.
 _Avoid_: Editing a winning result, unaudited manual completion, automatic clawback on void
 
+**Boss Raid Campaign**:
+A monthly KaWang activity in which enrolled players jointly damage an ordered sequence of Raid Bosses. Each campaign starts from its first configured Raid Boss and may advance through further configured bosses until the campaign ends.
+_Avoid_: Monthly consumption leaderboard, one manually triggered balance deduction
+
+**Raid Boss**:
+One independently settled stage of a Boss Raid Campaign, with administrator-configured health and rewards. Defeating it freezes that stage's contributions and opens the next configured Raid Boss with fresh contributions.
+_Avoid_: One month-long shared leaderboard, hard-coded health formula
+
+**Raid Enrollment**:
+A player's explicit opt-in to the current Boss Raid Campaign. Only Actual Sub2api Balance Consumption recorded after enrollment can become Raid Damage for that campaign.
+_Avoid_: Automatically enrolling every consuming user, retroactively counting pre-enrollment usage
+
+**Raid Damage**:
+The damage derived from an enrolled player's Actual Sub2api Balance Consumption under the active campaign theme. It is observed from authoritative usage records and never created by a separate attack-button balance deduction.
+_Avoid_: Recharge amount, balance delta, client-reported damage, direct pay-to-attack debit
+
+**Boss Contribution**:
+One player's accumulated Raid Damage against one Raid Boss. It is frozen when that boss is defeated and starts from zero for the next boss.
+_Avoid_: Campaign-wide contribution, carrying rank progress into the next boss
+
+**Effective Raider**:
+An enrolled player whose Boss Contribution reaches that Raid Boss's configured minimum. Sub-threshold Raid Damage still reduces boss health, but the player does not count toward MVP Winner Slots or receive a Boss Clear Reward.
+_Avoid_: Counting zero-damage or token-damage accounts as reward participants
+
+**Boss Clear Reward**:
+The shared reward granted when a Raid Boss is defeated to every Effective Raider for that boss.
+_Avoid_: Winner-only reward, reward for merely viewing or enrolling
+
+**Boss MVP Reward**:
+A ranked reward granted after a Raid Boss is defeated to its highest Boss Contributors. The number of winners grows by one for each ten Effective Raiders and is capped at three.
+_Avoid_: Random winner, fixed top-three reward regardless of participation
+
+**Raid Month**:
+The Boss Raid Campaign window defined in `Asia/Shanghai` time for one calendar month. The campaign is single-connection in its first release and ends after its configured month-end settlement window.
+_Avoid_: Server-local month, cross-connection global month, rolling 30-day activity
+
+**Boss Settlement Snapshot**:
+The immutable server record created after a Raid Boss receives its final authoritative usage synchronization. It contains the boss health result, per-player contributions, effective raider count, MVP Winner Slots, ordered winners, and reward assignments.
+_Avoid_: Recomputing winners from a live leaderboard, frontend kill time, mutable historical ranking
+
+**MVP Winner Slots**:
+The number of Boss MVP Reward recipients for one defeated Raid Boss: zero below ten Effective Raiders, then one additional slot per ten Effective Raiders, capped at three.
+_Avoid_: Fixed top-three slots, counting unenrolled viewers, rounding partial groups up
+
+**Raid Theme Multiplier**:
+An activity configuration that multiplies Raid Damage for selected Sub2api groups or routing targets without changing the user's billed balance consumption. It is locked when the Raid Month starts.
+_Avoid_: Billing discount, retroactive damage rewrite, client-selected multiplier
+
+**Timed Group Rate Reward**:
+A Boss MVP Reward that temporarily sets a user's effective Sub2api group rate multiplier for a configured group and time window. It is scoped to the user and group and must expire without changing unrelated group-rate settings.
+_Avoid_: Global discount, permanent rate override, unbounded user-wide discount
+
+**Raid Settlement Window**:
+The ten-minute period after a Raid Month closes in which KaWang imports authoritative usage that occurred before month end, while rejecting new-month usage as raid damage. No result is final until this window closes and the settlement snapshot is frozen.
+_Avoid_: Frontend-clock cutoff, counting next-month usage, immediate close before final synchronization
+
+**Published Raid Configuration**:
+The complete monthly configuration of Raid Boss health, effective-raider threshold, theme multipliers, rewards, and schedule. It becomes immutable when the Raid Month starts and cannot be published if its maximum reward cost exceeds the configured budget.
+_Avoid_: Live health adjustment, undisclosed reward replacement, active-campaign multiplier edits
+
+**Raid Reward Budget**:
+The maximum administrator-approved cost of all Boss Clear Rewards and Boss MVP Rewards in one Raid Month, evaluated against the published configuration's worst-case fulfillment cost.
+_Avoid_: Best-case prize estimate, stopping promised rewards after the campaign starts, unpriced reward types
+
+**Raid Reward Grant**:
+An idempotent reward obligation created from a Boss Settlement Snapshot. Low-value grants may enter automatic delivery, while high-value MVP grants await fraud review without allowing the reviewer to change their recorded recipient or reward.
+_Avoid_: Direct unrecorded payout, rerolling a failed reward, editing winners during review
+
+**Disqualified MVP**:
+A ranked raider whose pending MVP grant is denied for a recorded fraud reason before delivery. The reward slot passes to the next eligible Boss Contributor while preserving both the original ranking and final recipient audit trail.
+_Avoid_: Silently deleting the ranking, leaving the slot empty, disqualification after delivery without a separate recovery decision
+
 **Sub2api User Tutorial**:
 A publicly readable learning unit embedded in the Sub2api experience that explains how a user calls the API or purchases a configured subscription plan.
 _Avoid_: Operator runbook, administrator manual, generic public documentation

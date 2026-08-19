@@ -4,7 +4,10 @@ import {
   automateV1CanonicalOffer,
   normalizeAutomateV1BaseUrl
 } from "./automation-adapters/automate-v1.js";
-import { EfunOpenV1Adapter, normalizeEfunOpenV1BaseUrl } from "./automation-adapters/efun-open-v1.js";
+import {
+  EfunOpenV1Adapter,
+  normalizeEfunOpenV1BaseUrl
+} from "./automation-adapters/efun-open-v1.js";
 
 export const automationAdapterKeys = Object.freeze(["automate_v1", "efun_open_v1"]);
 
@@ -77,7 +80,8 @@ export function createAutomationAdapter(db, input = {}) {
         baseUrl: provider.base_url,
         apiKey: input.decryptText(credential.api_key_encrypted),
         fetchImpl: input.fetchImpl,
-        lookup: input.lookup
+        lookup: input.lookup,
+        proxyUrl: input.efunAutomationProxyUrl
       })
     };
   }

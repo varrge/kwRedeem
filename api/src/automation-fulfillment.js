@@ -106,6 +106,7 @@ export function createAutomationFulfillmentService(options = {}) {
     requireAdmin,
     encryptText,
     decryptText,
+    efunAutomationProxyUrl,
     createAuditLog,
     verifyFreshAdmin
   } = options;
@@ -222,7 +223,7 @@ export function createAutomationFulfillmentService(options = {}) {
             .run(credentialId, id);
         }
       }).immediate();
-      await syncAutomationProvider(db, { providerId: id, decryptText });
+      await syncAutomationProvider(db, { providerId: id, decryptText, efunAutomationProxyUrl });
       db.prepare("UPDATE automation_providers SET status = ?, updated_at = ? WHERE id = ?")
         .run(parsed.data.status, nowIso(), id);
       audit(request, "automation.provider.upsert", "automation_provider", id, {
@@ -240,7 +241,7 @@ export function createAutomationFulfillmentService(options = {}) {
     const id = String(request.params.id || "").trim();
     if (!SAFE_ID.test(id)) return reply.code(400).send({ message: "站点 ID 无效" });
     try {
-      const item = await syncAutomationProvider(db, { providerId: id, decryptText });
+      const item = await syncAutomationProvider(db, { providerId: id, decryptText, efunAutomationProxyUrl });
       audit(request, "automation.provider.sync", "automation_provider", id, { configHash: item.configHash });
       return { item };
     } catch (error) {

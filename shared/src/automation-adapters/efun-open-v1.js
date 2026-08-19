@@ -1,9 +1,11 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { ProxyAgent } from "undici";
 import { AutomationAdapterError } from "./automate-v1.js";
 
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const PROXY_AGENTS = new Map();
 const PLAN_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "plus", name: "ChatGPT Plus", label: "Plus", taskType: "purchase", canonicalOffer: "plus" }),
   Object.freeze({ id: "pro5", name: "ChatGPT Pro 5X", label: "Pro 5X", taskType: "purchase", canonicalOffer: "x5" }),
@@ -75,6 +77,30 @@ export function normalizeEfunOpenV1BaseUrl(value) {
   }
   url.pathname = path;
   return url.toString().replace(/\/$/, "");
+}
+
+export function normalizeEfunAutomationProxyUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  let url;
+  try { url = new URL(raw); } catch {
+    fail("AUTOMATION_PROXY_INVALID", "eFun 自动化代理地址无效", { retryable: false });
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (!["http:", "https:"].includes(url.protocol)
+    || !["127.0.0.1", "localhost", "[::1]"].includes(hostname)
+    || url.pathname !== "/" || url.username || url.password || url.search || url.hash) {
+    fail("AUTOMATION_PROXY_INVALID", "eFun 自动化代理必须是无认证的本机 HTTP/HTTPS 地址", {
+      retryable: false
+    });
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function proxyAgent(proxyUrl) {
+  if (!proxyUrl) return undefined;
+  if (!PROXY_AGENTS.has(proxyUrl)) PROXY_AGENTS.set(proxyUrl, new ProxyAgent(proxyUrl));
+  return PROXY_AGENTS.get(proxyUrl);
 }
 
 async function assertPublicEfunOrigin(baseUrl, lookup = dns.lookup) {
@@ -259,6 +285,8 @@ export class EfunOpenV1Adapter {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.lookup = options.lookup || dns.lookup;
     this.timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+    this.proxyUrl = normalizeEfunAutomationProxyUrl(options.proxyUrl);
+    this.dispatcher = proxyAgent(this.proxyUrl);
     this.createReplaySafe = false;
   }
 
@@ -285,7 +313,8 @@ export class EfunOpenV1Adapter {
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         redirect: "manual",
-        signal: AbortSignal.timeout(this.timeoutMs)
+        signal: AbortSignal.timeout(this.timeoutMs),
+        ...(this.dispatcher ? { dispatcher: this.dispatcher } : {})
       });
     } catch (error) {
       const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";

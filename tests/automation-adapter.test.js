@@ -11,6 +11,7 @@ import {
   normalizeEfunAutomationProxyUrl,
   normalizeEfunOpenV1BaseUrl
 } from "../shared/src/automation-adapters/efun-open-v1.js";
+import { createAutomationAdapter } from "../shared/src/automation-provider-registry.js";
 
 function response(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -167,6 +168,36 @@ test("eFun Open V1 sends requests through its configured local proxy", async () 
     () => normalizeEfunAutomationProxyUrl("http://proxy.example:7890"),
     AutomationAdapterError
   );
+});
+
+test("automation provider registry passes the eFun automation proxy to the eFun adapter", () => {
+  const provider = {
+    id: "provider-efun",
+    adapter_key: "efun_open_v1",
+    base_url: "https://efun.example/api/v1",
+    current_credential_id: "credential-efun"
+  };
+  const credential = {
+    id: "credential-efun",
+    provider_id: provider.id,
+    api_key_encrypted: "encrypted-key"
+  };
+  const db = {
+    prepare(sql) {
+      return {
+        get: () => sql.includes("automation_providers") ? provider : credential
+      };
+    }
+  };
+
+  const result = createAutomationAdapter(db, {
+    providerId: provider.id,
+    decryptText: () => "fixed-downstream-key",
+    efunAutomationProxyUrl: "http://127.0.0.1:7890"
+  });
+
+  assert.equal(result.adapter.proxyUrl, "http://127.0.0.1:7890");
+  assert.ok(result.adapter.dispatcher);
 });
 
 test("eFun Open V1 sends direct card orders and keeps sensitive response fields out of normalized tasks", async () => {

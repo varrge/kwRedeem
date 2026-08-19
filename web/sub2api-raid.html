@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>全域突袭</title>
+    <style>
+      :root {
+        --glass: rgba(5, 15, 18, 0.58);
+        --glass-strong: rgba(5, 15, 18, 0.76);
+        --line: rgba(151, 233, 232, 0.25);
+        --text: #eefaf8;
+        --muted: rgba(224, 242, 240, 0.66);
+        --cyan: #55e3e0;
+        --red: #f25a3b;
+        --amber: #f7bd44;
+        --green: #4bcb89;
+      }
+
+      * { box-sizing: border-box; }
+      html { min-width: 320px; scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        overflow-x: hidden;
+        background: #061013 url("./assets/boss-raid-leviathan.jpg") center 42% / cover fixed no-repeat;
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button { font: inherit; }
+      button:focus-visible { outline: 3px solid rgba(85, 227, 224, 0.5); outline-offset: 3px; }
+      [hidden] { display: none !important; }
+
+      .glass {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--glass);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+      }
+
+      .battlefield {
+        position: relative;
+        height: max(620px, calc(100svh - 54px));
+        min-height: 620px;
+        overflow: hidden;
+        perspective: 1100px;
+      }
+
+      .boss-scene {
+        position: absolute;
+        inset: -4%;
+        width: 108%;
+        height: 108%;
+        object-fit: cover;
+        object-position: center 43%;
+        filter: saturate(1.04) contrast(1.08) brightness(1.02) drop-shadow(0 32px 44px rgba(0, 0, 0, 0.45));
+        transform: translate3d(var(--scene-x, -7vw), var(--scene-y, 0), 30px) scale(1.1);
+        transition: transform 180ms ease, filter 180ms ease;
+        will-change: transform;
+      }
+
+      .battlefield.is-hit .boss-scene {
+        filter: saturate(1.28) contrast(1.16) brightness(1.17) drop-shadow(0 30px 44px rgba(242, 90, 59, 0.45));
+        transform: translate3d(calc(var(--scene-x, -7vw) + 7px), calc(var(--scene-y, 0px) + 2px), 18px) scale(1.09);
+      }
+
+      .hud {
+        position: relative;
+        z-index: 2;
+        width: min(1380px, calc(100% - 48px));
+        height: 100%;
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: absolute;
+        top: 20px;
+        right: 0;
+        left: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .live, .sync {
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 8px 12px;
+      }
+
+      .live { font-size: 12px; font-weight: 800; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 5px rgba(242, 90, 59, 0.16); }
+      .sync { color: var(--muted); font-size: 11px; }
+      .sync button { width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: rgba(3, 12, 14, 0.5); color: white; cursor: pointer; font-size: 18px; }
+
+      .identity {
+        position: absolute;
+        top: 37%;
+        left: 0;
+        max-width: 330px;
+        text-shadow: 0 3px 18px rgba(0, 0, 0, 0.96);
+      }
+
+      .eyebrow { margin: 0 0 10px; color: var(--cyan); font-size: 12px; font-weight: 900; text-transform: uppercase; }
+      .identity h1 { margin: 0; max-width: 8ch; font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif; font-size: 58px; line-height: 0.96; }
+      .identity p:last-child { margin: 14px 0 0; color: rgba(250, 255, 255, 0.86); font-size: 13px; line-height: 1.6; }
+
+      .metrics {
+        position: absolute;
+        top: 39%;
+        right: 0;
+        width: 238px;
+        overflow: hidden;
+      }
+
+      .metric { padding: 13px 14px; border-bottom: 1px solid rgba(151, 233, 232, 0.15); }
+      .metric:last-child { border-bottom: 0; }
+      .metric span, .metric strong { display: block; }
+      .metric span { color: var(--muted); font-size: 10px; }
+      .metric strong { margin-top: 5px; overflow-wrap: anywhere; font-size: 15px; }
+      .cyan { color: var(--cyan); }
+      .amber { color: var(--amber); }
+
+      .health {
+        position: absolute;
+        bottom: 34px;
+        left: 50%;
+        width: min(570px, 45vw);
+        padding: 14px;
+        transform: translateX(-50%) translateZ(20px);
+      }
+
+      .health-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 9px; }
+      .health-head span { color: var(--muted); font-size: 11px; }
+      .health-head strong { font-size: 19px; font-variant-numeric: tabular-nums; }
+      .health-track { height: 14px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.34); background: rgba(0, 0, 0, 0.56); }
+      .health-fill { width: 0; height: 100%; background: linear-gradient(90deg, #b93824, #ff714e); transition: width 650ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+      .player-action { position: absolute; bottom: 34px; left: 0; display: flex; align-items: center; gap: 12px; }
+      .primary { min-height: 46px; padding: 0 22px; border: 1px solid #ff9b7e; border-radius: 6px; background: var(--red); color: white; cursor: pointer; font-weight: 850; }
+      .primary:disabled { border-color: var(--line); background: rgba(10, 25, 28, 0.65); color: var(--muted); cursor: default; }
+      .player-note { max-width: 290px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+      .damage-float { position: absolute; top: 35%; left: 64%; z-index: 3; opacity: 0; pointer-events: none; font-family: Impact, sans-serif; font-size: 46px; text-shadow: 0 2px 15px black, 0 0 18px var(--red); }
+      .damage-float.show { animation: damage 850ms ease-out; }
+
+      .empty-state { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 24px; }
+      .empty-panel { width: min(520px, 100%); padding: 28px; text-align: center; }
+      .empty-panel h1 { margin: 0; font-size: 26px; }
+      .empty-panel p { margin: 12px 0 0; color: var(--muted); line-height: 1.7; }
+
+      .content { position: relative; z-index: 2; width: min(1240px, calc(100% - 40px)); margin: 18px auto 56px; display: grid; gap: 18px; }
+      .route, .panel { padding: 20px; }
+      .section-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+      .section-head h2 { margin: 0; font-size: 18px; }
+      .section-head p { max-width: 560px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+      .route-list { display: grid; grid-template-columns: repeat(var(--boss-count, 4), minmax(0, 1fr)); gap: 1px; background: var(--line); }
+      .route-node { min-width: 0; padding: 13px; background: rgba(4, 14, 17, 0.78); border-top: 3px solid rgba(151, 233, 232, 0.25); }
+      .route-node.active { border-top-color: var(--red); }
+      .route-node.defeated { border-top-color: var(--green); }
+      .route-node span, .route-node strong { display: block; }
+      .route-node span { color: var(--muted); font-size: 10px; }
+      .route-node strong { margin-top: 5px; overflow-wrap: anywhere; font-size: 13px; }
+      .battle-grid { display: grid; grid-template-columns: 1.35fr 0.85fr; gap: 18px; }
+      .list { border-top: 1px solid var(--line); }
+      #battle-log, #ranking { max-height: 430px; overflow-y: auto; overscroll-behavior: contain; }
+      .row { min-height: 56px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid rgba(151, 233, 232, 0.16); }
+      .row strong { font-size: 13px; }
+      .row span { color: var(--muted); font-size: 11px; }
+      .row-value { text-align: right; font-variant-numeric: tabular-nums; }
+      .rank-row { grid-template-columns: 34px minmax(0, 1fr) auto; }
+      .rank-row.is-own { margin: 0 -9px; padding: 0 9px; background: rgba(85, 227, 224, 0.13); }
+      .rank { color: var(--muted); font-size: 11px; font-weight: 900; }
+      .rank.mvp { color: var(--amber); }
+      .rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .reward { min-height: 108px; padding: 14px; border-top: 3px solid var(--amber); }
+      .reward.clear { border-top-color: var(--green); }
+      .reward span, .reward strong, .reward small { display: block; }
+      .reward span { color: var(--muted); font-size: 10px; }
+      .reward strong { margin-top: 10px; font-size: 16px; }
+      .reward small { margin-top: 7px; color: var(--muted); line-height: 1.4; }
+      .history-tabs { display: flex; gap: 1px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+      .history-tab { flex: 0 0 auto; min-height: 44px; padding: 0 16px; border: 0; border-bottom: 3px solid transparent; background: rgba(4, 14, 17, 0.56); color: var(--muted); cursor: pointer; }
+      .history-tab[aria-selected="true"] { border-bottom-color: var(--cyan); color: var(--text); }
+      .history-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 14px; background: var(--line); }
+      .history-summary > div { min-width: 0; padding: 12px; background: rgba(4, 14, 17, 0.72); }
+      .history-summary span, .history-summary strong { display: block; overflow-wrap: anywhere; }
+      .history-summary span { color: var(--muted); font-size: 10px; }
+      .history-summary strong { margin-top: 5px; font-size: 13px; }
+      .site-foot { padding: 24px 16px; border-top: 1px solid var(--line); background: rgba(2, 8, 10, 0.78); color: var(--muted); text-align: center; font-size: 10px; }
+      .site-foot a { color: var(--cyan); }
+
+      @keyframes damage { 0% { opacity: 0; transform: translateY(16px) scale(.8); } 22% { opacity: 1; } 100% { opacity: 0; transform: translateY(-52px) scale(1.08); } }
+
+      @media (max-width: 820px) {
+        body { background-attachment: scroll; }
+        .battlefield { height: calc(100svh - 16px); min-height: 610px; }
+        .boss-scene { object-position: 50% 43%; transform: translate3d(var(--scene-x, 0px), var(--scene-y, 0px), 30px) scale(1.2); }
+        .hud { width: calc(100% - 22px); }
+        .sync > span { display: none; }
+        .identity { top: 28%; max-width: 275px; }
+        .identity h1 { font-size: 42px; }
+        .identity p:last-child { max-width: 260px; font-size: 11px; }
+        .health { right: 0; bottom: 200px; left: 0; width: 100%; transform: translateZ(20px); }
+        .metrics { top: auto; right: 0; bottom: 78px; left: 0; width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .metric:nth-child(odd) { border-right: 1px solid rgba(151, 233, 232, 0.15); }
+        .player-action { right: 0; bottom: 10px; }
+        .player-note { flex: 1; }
+        .damage-float { top: 31%; left: 56%; font-size: 36px; }
+        .content { width: calc(100% - 22px); }
+        .route-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .battle-grid { grid-template-columns: minmax(0, 1fr); }
+        .rewards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .section-head { align-items: flex-start; flex-direction: column; }
+      }
+
+      @media (max-width: 480px) {
+        .identity h1 { font-size: 38px; }
+        .identity p:last-child { display: none; }
+        .rewards { grid-template-columns: minmax(0, 1fr); }
+        .health-head strong { font-size: 16px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="battlefield" id="battlefield">
+        <img class="boss-scene" id="boss-scene" src="./assets/boss-raid-leviathan.jpg" alt="当前月度 Boss" />
+        <div class="damage-float" id="damage-float" aria-hidden="true"></div>
+        <div class="hud" id="battle-hud" hidden>
+          <div class="topbar">
+            <div class="live glass"><span class="dot"></span><span id="campaign-state">等待战报</span></div>
+            <div class="sync glass"><span>伤害最多延迟约 60 秒 · <b id="sync-time">尚未同步</b></span><button id="refresh-btn" type="button" title="刷新战报" aria-label="刷新战报">↻</button></div>
+          </div>
+          <div class="identity">
+            <p class="eyebrow" id="boss-level">Relay Defense</p>
+            <h1 id="boss-name">全域突袭</h1>
+            <p id="boss-title">真实 API 消耗自动转换为全站伤害。</p>
+          </div>
+          <div class="metrics glass">
+            <div class="metric"><span>全站伤害</span><strong id="total-damage">0.00</strong></div>
+            <div class="metric"><span>有效参战者</span><strong id="raider-count">0 人</strong></div>
+            <div class="metric"><span>主题分组</span><strong class="cyan" id="theme-group">标准伤害 · 1.0x</strong></div>
+            <div class="metric"><span>当前 MVP 名额</span><strong class="amber" id="mvp-slots">TOP 0</strong></div>
+          </div>
+          <div class="health glass">
+            <div class="health-head"><span>核心耐久</span><strong><b id="health-current">0.00</b> / <b id="health-max">0.00</b></strong></div>
+            <div class="health-track" id="health-track" role="progressbar" aria-label="Boss 剩余血量" aria-valuemin="0" aria-valuenow="0"><div class="health-fill" id="health-fill"></div></div>
+          </div>
+          <div class="player-action">
+            <button class="primary" id="enroll-btn" type="button">加入本月战斗</button>
+            <span class="player-note" id="player-note">加入后仅统计此刻之后的真实消耗</span>
+          </div>
+        </div>
+        <div class="empty-state" id="empty-state">
+          <div class="empty-panel glass"><h1>正在连接战场</h1><p id="status-message">正在验证 Sub2api 登录状态并载入本月活动。</p></div>
+        </div>
+      </section>
+
+      <div class="content" id="battle-content" hidden>
+        <section class="route glass">
+          <div class="section-head"><h2>本月突袭路线</h2><p>每只 Boss 独立结算，击败后个人贡献归零并进入下一战。</p></div>
+          <div class="route-list" id="route-list"></div>
+        </section>
+        <div class="battle-grid">
+          <section class="panel glass"><div class="section-head"><h2>全站战报</h2><p>只播放服务端新增的权威伤害。</p></div><div class="list" id="battle-log"></div></section>
+          <section class="panel glass"><div class="section-head"><h2>当前贡献榜</h2><p id="rank-note">达到门槛后计入有效参战者。</p></div><div class="list" id="ranking"></div></section>
+        </div>
+        <section class="panel glass"><div class="section-head"><h2 id="reward-heading">当前 Boss 奖励</h2><p>共享奖励覆盖有效参战者，MVP 名额随有效人数浮动。</p></div><div class="rewards" id="reward-list"></div></section>
+        <section class="panel glass" id="history-panel" hidden><div class="section-head"><h2>历次 Boss 战绩</h2><p>结算榜冻结后不会被后续用量改写；月末未击败也保留参战纪念。</p></div><div class="history-tabs" id="history-tabs" role="tablist" aria-label="历次 Boss 战绩"></div><div id="history-detail"></div></section>
+        <section class="panel glass" id="my-reward-panel" hidden><div class="section-head"><h2>我的奖励</h2><p>奖励由系统生成并按配置自动发放或进入审核。</p></div><div class="list" id="my-reward-list"></div></section>
+      </div>
+    </main>
+    <footer class="site-foot">Boss photo: <a id="asset-source" href="https://www.flickr.com/photos/22007612@N05/4840240932" target="_blank" rel="noreferrer">Gage Skidmore</a>, licensed under <a id="asset-license" href="https://creativecommons.org/licenses/by-sa/2.0/" target="_blank" rel="noreferrer">CC BY-SA 2.0</a>.</footer>
+    <script src="./runtime-config.js"></script>
+    <script>
+      (() => {
+        const API_BASE = String(globalThis.KAWANG_CONFIG?.apiUrl || "").replace(/\/+$/, "");
+        const BOSS_ASSETS = {
+          leviathan: { src: "./assets/boss-raid-leviathan.jpg", credit: "Gage Skidmore", source: "https://www.flickr.com/photos/22007612@N05/4840240932", license: "CC BY-SA 2.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/2.0/" },
+          sentinel: { src: "./assets/boss-raid-sentinel.jpg", credit: "Tohaomg", source: "https://commons.wikimedia.org/wiki/File:Robot_statue_at_the_entrance_of_%27Classe_numerique%27_at_Wikimania_2026,_day_3_(front).jpg", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
+          prism: { src: "./assets/boss-raid-prism.jpg", credit: "Jiuguang Wang", source: "https://commons.wikimedia.org/wiki/File:Maria_from_the_film_Metropolis,_on_display_at_the_Robot_Hall_of_Fame.jpg", license: "CC BY-SA 2.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/2.0/" },
+          "zero-core": { src: "./assets/boss-raid-zero-core.jpg", credit: "Rico Shen", source: "https://commons.wikimedia.org/wiki/File:2008Computex_iBase_the_Robot.jpg", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/" },
+          warden: { src: "./assets/boss-raid-warden.jpg", credit: "Benjaminpvera", source: "https://commons.wikimedia.org/wiki/File:Robot_en_Rengo.jpg", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/" },
+          overmind: { src: "./assets/boss-raid-overmind.jpg", credit: "Solomon203", source: "https://commons.wikimedia.org/wiki/File:TRA_robot_at_Taipei_Station_20170131.jpg", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/" },
+          behemoth: { src: "./assets/boss-raid-behemoth.jpg", credit: "Fry72", source: "https://commons.wikimedia.org/wiki/File:Plastika_Robot_Ren%C3%A9,_FEI,_V%C5%A0B-TU_Ostrava,_Poruba,_Ostrava,_Slezsko_04.jpg", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/" },
+          singularity: { src: "./assets/boss-raid-singularity.jpg", credit: "Jeremy Tarling", source: "https://commons.wikimedia.org/wiki/File:Science_Museum_-_Robots_-_Metropolis_(33268065925).jpg", license: "CC BY-SA 2.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/2.0/" }
+        };
+        const refs = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id.replace(/-([a-z])/g, (_, value) => value.toUpperCase()), node]));
+        const state = { sessionToken: "", payload: null, lastDamageIds: new Set(), initialized: false, timer: null, historyBossId: "" };
+        const number = (value) => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+        const formatTime = (value) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未同步";
+        const rewardText = (reward) => reward?.type === "balance" ? `额度 ${number(reward.amount)}` : `${reward?.name || "抽奖卡"} ×${reward?.quantity || 1}`;
+        const rewardStatus = (status) => ({ awaiting_review: "待审核", pending: "待发放", delivery_failed: "发放失败", delivered: "已发放", disqualified: "已取消资格", voided: "已作废" }[status] || status);
+
+        async function request(path, options = {}) {
+          const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+          if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
+          const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.message || `请求失败 (${response.status})`);
+          return payload;
+        }
+
+        function readAccessToken() {
+          return localStorage.getItem("auth_token") || localStorage.getItem("access_token") || localStorage.getItem("token") || "";
+        }
+
+        function persistRefreshedAuth(payload) {
+          if (payload.refreshedAuth?.accessToken) localStorage.setItem("auth_token", payload.refreshedAuth.accessToken);
+          if (payload.refreshedAuth?.refreshToken) localStorage.setItem("refresh_token", payload.refreshedAuth.refreshToken);
+        }
+
+        function showStatus(message) {
+          refs.emptyState.hidden = false;
+          refs.statusMessage.textContent = message;
+        }
+
+        function renderRoute(campaign) {
+          refs.routeList.style.setProperty("--boss-count", Math.min(campaign.bosses.length, 4));
+          refs.routeList.innerHTML = campaign.bosses.map((boss) => `<div class="route-node ${escapeHtml(boss.status)}"><span>LV.${String(boss.level).padStart(2, "0")} · ${escapeHtml(boss.status)}</span><strong>${escapeHtml(boss.name)} / ${number(boss.health)} HP</strong></div>`).join("");
+        }
+
+        function renderLog(items) {
+          refs.battleLog.innerHTML = items.length ? items.map((item) => `<div class="row"><div><strong>${escapeHtml(item.maskedName)} 命中核心</strong><br><span>实际消耗 ${number(item.actualCost)}${item.bonusDamage > 0 ? ` · 主题加成 +${number(item.bonusDamage)}` : ""}</span></div><div class="row-value"><strong>+${number(item.damage)}</strong><br><span>${escapeHtml(formatTime(item.occurredAt))}</span></div></div>`).join("") : `<div class="row"><span>等待第一条权威战报</span></div>`;
+        }
+
+        function renderRanking(items, own, slots) {
+          refs.ranking.innerHTML = items.length ? items.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>${item.effective ? "有效参战" : "尚未达到门槛"}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无贡献记录</span></div>`;
+        }
+
+        function renderRewards(boss, effectiveRaiders, slots) {
+          const rewards = [
+            { label: "击杀共享奖励", reward: boss.clearReward, unlocked: effectiveRaiders > 0, clear: true },
+            ...boss.mvpRewards.map((reward, index) => ({ label: `MVP · 第 ${index + 1} 名`, reward, unlocked: slots > index }))
+          ];
+          refs.rewardList.innerHTML = rewards.map((item) => `<article class="reward glass ${item.clear ? "clear" : ""}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(rewardText(item.reward))}</strong><small>${item.unlocked ? "当前已解锁" : item.clear ? "达到有效伤害门槛后解锁" : `需要 ${Math.max(10, (Number(item.label.match(/\d+/)?.[0]) || 1) * 10)} 名有效参战者`}</small></article>`).join("");
+        }
+
+        function renderOwnRewards(items) {
+          refs.myRewardPanel.hidden = !items.length;
+          refs.myRewardList.innerHTML = items.map((item) => `<div class="row"><div><strong>${escapeHtml(item.reward?.name || "Boss 奖励")}</strong><br><span>${escapeHtml(item.scope === "mvp" ? `MVP 第 ${item.finalRank || item.originalRank} 名` : "击杀共享奖励")} · ${escapeHtml(rewardText(item.reward))}</span></div><div class="row-value"><strong>${escapeHtml(rewardStatus(item.status))}</strong>${item.errorMessage ? `<br><span>${escapeHtml(item.errorMessage)}</span>` : ""}</div></div>`).join("");
+        }
+
+        function renderHistory(items) {
+          refs.historyPanel.hidden = !items.length;
+          if (!items.length) return;
+          if (!items.some((item) => item.boss.id === state.historyBossId)) state.historyBossId = items.at(-1).boss.id;
+          refs.historyTabs.innerHTML = items.map((item) => `<button class="history-tab" type="button" role="tab" data-history-boss="${escapeHtml(item.boss.id)}" aria-selected="${item.boss.id === state.historyBossId}">LV.${String(item.boss.level).padStart(2, "0")} ${escapeHtml(item.boss.name)}</button>`).join("");
+          const selected = items.find((item) => item.boss.id === state.historyBossId) || items.at(-1);
+          const winners = selected.finalWinners?.length
+            ? selected.finalWinners.map((winner) => `${winner.rank}. ${winner.maskedName}`).join(" · ")
+            : "本场未解锁 MVP";
+          const result = selected.defeatedAt ? "已击败" : selected.boss.status === "aborted" ? "活动中止" : "月末未击败 · 参战纪念";
+          refs.historyDetail.innerHTML = `
+            <div class="history-summary">
+              <div><span>战斗结果</span><strong>${escapeHtml(result)}</strong></div>
+              <div><span>全站伤害</span><strong>${number(selected.totalDamage)}</strong></div>
+              <div><span>有效参战 / MVP</span><strong>${selected.effectiveRaiderCount} 人 / ${selected.mvpSlots} 席</strong></div>
+              <div><span>我的战绩</span><strong>${selected.own ? `第 ${selected.own.rank} 名 · ${number(selected.own.damage)}` : "未产生贡献"}</strong></div>
+            </div>
+            <div class="section-head" style="margin-top:18px"><h2>最终贡献榜</h2><p>${escapeHtml(winners)}</p></div>
+            <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>${item.effective ? "有效参战" : "未达到门槛"}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无贡献记录</span></div>`}</div>`;
+        }
+
+        function renderBossAsset(assetKey) {
+          const key = BOSS_ASSETS[assetKey] ? assetKey : "leviathan";
+          if (refs.bossScene.dataset.assetKey === key) return;
+          const asset = BOSS_ASSETS[key];
+          refs.bossScene.src = asset.src;
+          refs.bossScene.dataset.assetKey = key;
+          document.body.style.backgroundImage = `url("${asset.src}")`;
+          refs.assetSource.textContent = asset.credit;
+          refs.assetSource.href = asset.source;
+          refs.assetLicense.textContent = asset.license;
+          refs.assetLicense.href = asset.licenseUrl;
+        }
+
+        function playDamage(items) {
+          if (!state.initialized) return;
+          const added = items.filter((item) => !state.lastDamageIds.has(item.id));
+          if (!added.length) return;
+          const total = added.reduce((sum, item) => sum + item.damage, 0);
+          refs.damageFloat.textContent = `-${number(total)}`;
+          refs.damageFloat.classList.remove("show");
+          void refs.damageFloat.offsetWidth;
+          refs.damageFloat.classList.add("show");
+          refs.battlefield.classList.add("is-hit");
+          window.setTimeout(() => refs.battlefield.classList.remove("is-hit"), 240);
+        }
+
+        function render(payload) {
+          persistRefreshedAuth(payload);
+          if (payload.sessionToken) state.sessionToken = payload.sessionToken;
+          if (!payload.campaign) return showStatus("当前连接没有已开始的 Boss 活动。");
+          const boss = payload.currentBoss || [...payload.campaign.bosses].reverse().find((item) => item.status !== "locked");
+          if (!boss) return showStatus("本月活动尚未开放战斗。");
+          const historical = (payload.history || []).find((item) => item.boss.id === boss.id);
+          const battleFinished = ["cleared", "ended", "aborted"].includes(payload.campaign.status)
+            || ["defeated", "ended", "aborted"].includes(payload.currentBoss?.status);
+          playDamage(payload.battleLog || []);
+          state.lastDamageIds = new Set((payload.battleLog || []).map((item) => item.id));
+          state.payload = payload;
+          refs.emptyState.hidden = true;
+          refs.battleHud.hidden = false;
+          refs.battleContent.hidden = false;
+          refs.campaignState.textContent = battleFinished
+            ? `${payload.campaign.name} · ${payload.campaign.status === "cleared" ? "全服通关" : "战斗已结束"}`
+            : `${payload.campaign.name} · BOSS ${boss.sequence} / ${payload.campaign.bosses.length}`;
+          refs.bossLevel.textContent = `Relay Defense / Lv.${String(boss.level).padStart(2, "0")}`;
+          refs.bossName.textContent = boss.name;
+          refs.bossTitle.textContent = boss.title || "全站真实消耗自动转化为攻击能量。";
+          renderBossAsset(boss.assetKey);
+          refs.healthCurrent.textContent = number(boss.remainingHealth);
+          refs.healthMax.textContent = number(boss.health);
+          refs.healthTrack.setAttribute("aria-valuemax", String(boss.health));
+          refs.healthTrack.setAttribute("aria-valuenow", String(boss.remainingHealth));
+          refs.healthFill.style.width = `${Math.max(0, Math.min(100, boss.remainingHealth / boss.health * 100))}%`;
+          refs.totalDamage.textContent = number(historical?.totalDamage ?? boss.totalDamage);
+          refs.raiderCount.textContent = `${historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount} 人`;
+          refs.themeGroup.textContent = boss.themeGroupId ? `${boss.themeGroupName || `分组 ${boss.themeGroupId}`} · ${boss.themeMultiplier}x` : "标准伤害 · 1.0x";
+          refs.mvpSlots.textContent = `TOP ${historical?.mvpSlots ?? payload.mvpSlots}`;
+          refs.syncTime.textContent = payload.sync?.lastSyncedAt ? `上次同步 ${formatTime(payload.sync.lastSyncedAt)}` : "尚未同步";
+          refs.rankNote.textContent = `有效门槛 ${number(payload.campaign.effectiveDamageThreshold)} · 当前 ${payload.mvpSlots} 个 MVP 名额`;
+          refs.enrollBtn.disabled = battleFinished || Boolean(payload.enrollment) || payload.campaign.status !== "active";
+          refs.enrollBtn.textContent = battleFinished ? "本月战斗已结束" : payload.enrollment ? "已加入本月战斗" : payload.campaign.status === "active" ? "加入本月战斗" : "当前不可加入";
+          refs.playerNote.textContent = battleFinished
+            ? (historical?.own ? `最终战绩：第 ${historical.own.rank} 名 · ${number(historical.own.damage)} 伤害` : "本月未产生个人战绩")
+            : payload.enrollment
+            ? (payload.own ? `本 Boss：实际消耗 ${number(payload.own.actualCost)} + 加成 ${number(payload.own.bonusDamage)} = ${number(payload.own.damage)} 伤害` : "已加入，等待下一条权威用量")
+            : "加入后仅统计此刻之后的真实消耗";
+          renderRoute(payload.campaign);
+          renderLog(payload.battleLog || []);
+          renderRanking(battleFinished ? historical?.ranking || [] : payload.ranking || [], battleFinished ? historical?.own : payload.own, historical?.mvpSlots ?? payload.mvpSlots);
+          refs.rewardHeading.textContent = battleFinished ? "最终 Boss 奖励" : "当前 Boss 奖励";
+          renderRewards(boss, historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount, historical?.mvpSlots ?? payload.mvpSlots);
+          renderHistory(payload.history || []);
+          renderOwnRewards(payload.rewards || []);
+          document.title = `${boss.name} · ${payload.campaign.name}`;
+          state.initialized = true;
+        }
+
+        async function refresh() {
+          if (!state.sessionToken) return;
+          refs.refreshBtn.disabled = true;
+          try {
+            render(await request("/api/public/sub2api/raid/bootstrap"));
+          } catch (error) {
+            showStatus(error.message);
+          } finally {
+            refs.refreshBtn.disabled = false;
+          }
+        }
+
+        async function initialize() {
+          const params = new URLSearchParams(location.search);
+          const sso = params.get("sso") || "";
+          const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+          const accessToken = params.get("token") || readAccessToken();
+          const refreshToken = localStorage.getItem("refresh_token") || "";
+          const userId = params.get("user_id") || params.get("userId") || "";
+          if (!sso && !connectionId) return showStatus("缺少 SSO token 或 connectionId。");
+          try {
+            const payload = sso
+              ? await request("/api/public/sub2api/raid/session", { method: "POST", body: JSON.stringify({ sso }) })
+              : await request("/api/public/sub2api/raid/session-from-token", { method: "POST", body: JSON.stringify({ connectionId, accessToken, refreshToken, userId }) });
+            render(payload);
+            state.timer = window.setInterval(refresh, 8000);
+          } catch (error) {
+            showStatus(error.message);
+          }
+        }
+
+        refs.enrollBtn.addEventListener("click", async () => {
+          refs.enrollBtn.disabled = true;
+          try {
+            render(await request("/api/public/sub2api/raid/enroll", { method: "POST", body: "{}" }));
+          } catch (error) {
+            refs.playerNote.textContent = error.message;
+            refs.enrollBtn.disabled = false;
+          }
+        });
+        refs.refreshBtn.addEventListener("click", refresh);
+        refs.historyTabs.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-history-boss]");
+          if (!button || !state.payload) return;
+          state.historyBossId = button.dataset.historyBoss;
+          renderHistory(state.payload.history || []);
+        });
+        refs.battlefield.addEventListener("pointermove", (event) => {
+          const bounds = refs.battlefield.getBoundingClientRect();
+          const x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
+          const y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
+          refs.battlefield.style.setProperty("--scene-x", `${x * 11 - (innerWidth > 820 ? innerWidth * 0.07 : 0)}px`);
+          refs.battlefield.style.setProperty("--scene-y", `${y * 6}px`);
+        });
+        refs.battlefield.addEventListener("pointerleave", () => {
+          refs.battlefield.style.removeProperty("--scene-x");
+          refs.battlefield.style.removeProperty("--scene-y");
+        });
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden && state.sessionToken) refresh();
+        });
+        initialize();
+      })();
+    </script>
+  </body>
+</html>

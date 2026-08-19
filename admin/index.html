@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KaWang Admin Console</title>
-    <link rel="stylesheet" href="./styles.css?v=20260816-shake-layout" />
+    <link rel="stylesheet" href="./styles.css?v=20260819-boss-raid" />
     <link rel="stylesheet" href="./apple-design.css" />
   </head>
   <body>
@@ -90,6 +90,9 @@
           </button>
           <button class="nav-item" data-tab="sub2api-shake">
             <span class="icon">◆</span> 摇摇乐系统
+          </button>
+          <button class="nav-item" data-tab="sub2api-raid">
+            <span class="icon">◇</span> Boss 突袭
           </button>
           <button class="nav-item" data-tab="sub2api-rebates">
             <span class="icon">🤝</span> 邀请返利
@@ -2097,6 +2100,98 @@
           </div>
         </section>
 
+        <!-- Sub2api Raid -->
+        <section class="tab-panel hidden" data-panel="sub2api-raid">
+          <div class="content-header">
+            <h2>月度 Boss 突袭</h2>
+            <p>配置逐级 Boss、主题伤害、动态 MVP 奖励与履约队列</p>
+          </div>
+
+          <div class="grid grid-2 raid-admin-layout">
+            <div class="card">
+              <div class="card-header">
+                <h3 id="raid-campaign-form-title">创建月度活动</h3>
+                <button id="raid-campaign-reset-btn" type="button" class="ghost-btn small hidden">取消编辑</button>
+              </div>
+              <form id="raid-campaign-form" class="form-stack">
+                <input id="raid-campaign-edit-id" type="hidden" />
+                <div class="grid grid-2">
+                  <label class="field"><span>Sub2api 连接</span><select id="raid-campaign-connection" required><option value="">选择连接</option></select></label>
+                  <label class="field"><span>活动名称</span><input id="raid-campaign-name" maxlength="100" value="全域突袭 · 第一赛季" required /></label>
+                  <label class="field"><span>活动月份（北京时间）</span><input id="raid-campaign-month" type="month" required /></label>
+                  <label class="field"><span>有效伤害门槛</span><input id="raid-damage-threshold" type="number" min="0.01" step="0.01" value="10" required /></label>
+                  <label class="field"><span>月度奖励预算</span><input id="raid-reward-budget" type="number" min="0" step="0.01" value="500" required /></label>
+                  <label class="field"><span>排除用户 ID</span><input id="raid-excluded-users" placeholder="多个 ID 用逗号分隔" /></label>
+                </div>
+                <div class="shake-editor-heading">
+                  <strong>Boss 路线</strong>
+                  <button id="raid-add-boss-btn" type="button" class="ghost-btn small">添加 Boss</button>
+                </div>
+                <div id="raid-boss-editor" class="raid-boss-editor"></div>
+                <div class="actions-row">
+                  <button id="raid-campaign-submit-btn" type="submit" class="primary-btn">保存草稿</button>
+                </div>
+              </form>
+              <div id="raid-campaign-result" class="hint"></div>
+            </div>
+
+            <div class="stack raid-side-panel">
+              <div class="card">
+                <div class="card-header"><h3>战场地址</h3></div>
+                <label class="field"><span>活动页</span><input id="raid-embed-url" readonly title="Boss 活动页地址" value="sub2api-raid.html?connectionId=" /></label>
+                <div class="actions-row mt-16">
+                  <button id="raid-copy-embed-btn" type="button" class="ghost-btn">复制地址</button>
+                  <a id="raid-preview-link" class="primary-btn" href="../sub2api-raid.html?connectionId=" target="_blank" rel="noopener">预览</a>
+                </div>
+                <div id="raid-embed-result" class="hint"></div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>权威用量同步</h3></div>
+                <label class="field"><span>Sub2api 连接</span><select id="raid-sync-connection"><option value="">选择连接</option></select></label>
+                <div class="actions-row mt-16"><button id="raid-sync-usage-btn" type="button" class="primary-btn">立即同步</button></div>
+                <div id="raid-sync-result" class="hint"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>活动管理</h3>
+              <div class="header-actions">
+                <select id="raid-campaign-filter" class="small-select"><option value="">全部连接</option></select>
+                <button id="raid-campaign-refresh-btn" type="button" class="ghost-btn small">刷新</button>
+              </div>
+            </div>
+            <div id="raid-campaign-list" class="table-wrapper"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header"><h3 id="raid-history-title">结算历史榜</h3></div>
+            <div id="raid-history-list" class="table-wrapper"><p class="hint centered">从活动管理中选择“历史榜”查看冻结结果</p></div>
+            <div id="raid-history-result" class="hint"></div>
+          </div>
+
+          <div class="card mt-24">
+            <div class="card-header">
+              <h3>奖励履约</h3>
+              <div class="header-actions">
+                <select id="raid-reward-status-filter" class="small-select">
+                  <option value="">全部状态</option>
+                  <option value="awaiting_review">待审核</option>
+                  <option value="pending">待发放</option>
+                  <option value="delivery_failed">发放失败</option>
+                  <option value="delivered">已发放</option>
+                  <option value="disqualified">已取消资格</option>
+                  <option value="voided">已作废</option>
+                </select>
+                <button id="raid-reward-refresh-btn" type="button" class="ghost-btn small">查询</button>
+              </div>
+            </div>
+            <div id="raid-reward-list" class="table-wrapper"></div>
+            <div id="raid-reward-result" class="hint"></div>
+          </div>
+        </section>
+
         <!-- Sub2api Rebates -->
         <section class="tab-panel hidden" data-panel="sub2api-rebates">
           <div class="content-header">
@@ -2209,6 +2304,6 @@
 
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script src="./runtime-config.js?v=20260713-checkcx-off"></script>
-    <script type="module" src="./app.js?v=20260812-active-subscription-guard-shake-usage-rules"></script>
+    <script type="module" src="./app.js?v=20260819-boss-raid"></script>
   </body>
 </html>

@@ -1011,6 +1011,168 @@ function createSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sub2api_raid_campaigns (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      month TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      settlement_end_at TEXT NOT NULL,
+      effective_damage_threshold REAL NOT NULL,
+      reward_budget REAL NOT NULL,
+      worst_case_cost REAL NOT NULL DEFAULT 0,
+      excluded_user_ids TEXT NOT NULL DEFAULT '[]',
+      current_boss_id TEXT,
+      abort_reason TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      published_at TEXT,
+      ended_at TEXT,
+      UNIQUE(connection_id, month)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_bosses (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      level INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      title TEXT,
+      asset_key TEXT NOT NULL,
+      max_health REAL NOT NULL,
+      remaining_health REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'locked',
+      theme_group_id INTEGER,
+      theme_group_name TEXT,
+      theme_multiplier REAL NOT NULL DEFAULT 1,
+      clear_reward TEXT NOT NULL,
+      mvp_rewards TEXT NOT NULL,
+      started_at TEXT,
+      provisional_defeated_at TEXT,
+      provisional_defeat_usage_id TEXT,
+      stable_sync_count INTEGER NOT NULL DEFAULT 0,
+      defeated_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(campaign_id, sequence)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_enrollments (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      email TEXT,
+      username TEXT,
+      masked_name TEXT NOT NULL,
+      account_created_at TEXT NOT NULL,
+      enrolled_at TEXT NOT NULL,
+      UNIQUE(campaign_id, sub2api_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_usage_records (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      remote_usage_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      subscription_group_id INTEGER,
+      actual_cost REAL NOT NULL,
+      occurred_at TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      UNIQUE(connection_id, remote_usage_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_usage_sync (
+      connection_id TEXT PRIMARY KEY,
+      cursor TEXT,
+      last_synced_at TEXT,
+      last_error TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_damage_assignments (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      boss_id TEXT NOT NULL,
+      usage_record_id TEXT NOT NULL UNIQUE,
+      remote_usage_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      subscription_group_id INTEGER,
+      actual_cost REAL NOT NULL,
+      multiplier REAL NOT NULL,
+      bonus_damage REAL NOT NULL,
+      damage REAL NOT NULL,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_contributions (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      boss_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      actual_cost REAL NOT NULL DEFAULT 0,
+      bonus_damage REAL NOT NULL DEFAULT 0,
+      damage REAL NOT NULL DEFAULT 0,
+      reached_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(boss_id, sub2api_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_settlements (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      boss_id TEXT NOT NULL UNIQUE,
+      defeated_at TEXT NOT NULL,
+      defeat_usage_id TEXT NOT NULL,
+      total_damage REAL NOT NULL,
+      effective_raider_count INTEGER NOT NULL,
+      mvp_slots INTEGER NOT NULL,
+      ranking_snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_rewards (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      boss_id TEXT NOT NULL,
+      settlement_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      reward_scope TEXT NOT NULL,
+      original_rank INTEGER,
+      final_rank INTEGER,
+      reward_snapshot TEXT NOT NULL,
+      fulfillment_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      cost REAL NOT NULL,
+      delivery_response TEXT,
+      error_message TEXT,
+      disposition_reason TEXT,
+      disposition_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      delivered_at TEXT,
+      UNIQUE(settlement_id, sub2api_user_id, reward_scope, final_rank)
+    );
+
+    CREATE TABLE IF NOT EXISTS sub2api_raid_disqualifications (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      boss_id TEXT NOT NULL,
+      settlement_id TEXT NOT NULL,
+      sub2api_user_id TEXT NOT NULL,
+      original_rank INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      evidence TEXT,
+      replacement_user_id TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(settlement_id, sub2api_user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS sub2api_worldcup_matches (
       id TEXT PRIMARY KEY,
       connection_id TEXT NOT NULL,
@@ -2258,6 +2420,13 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_prizes_version ON sub2api_shake_prizes(config_version_id, status, sort_order);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_consumptions_user ON sub2api_shake_consumptions(campaign_id, sub2api_user_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_cards_user ON sub2api_shake_cards(campaign_id, sub2api_user_id, status, granted_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_campaigns_connection ON sub2api_raid_campaigns(connection_id, status, start_at, end_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_bosses_campaign ON sub2api_raid_bosses(campaign_id, sequence, status);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_enrollments_campaign ON sub2api_raid_enrollments(campaign_id, enrolled_at);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_usage_occurred ON sub2api_raid_usage_records(connection_id, occurred_at, remote_usage_id);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_damage_boss ON sub2api_raid_damage_assignments(boss_id, occurred_at, remote_usage_id);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_contributions_rank ON sub2api_raid_contributions(boss_id, damage DESC, reached_at, sub2api_user_id);
+    CREATE INDEX IF NOT EXISTS idx_sub2api_raid_rewards_status ON sub2api_raid_rewards(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_user ON sub2api_shake_draws(campaign_id, sub2api_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_draws_status ON sub2api_shake_draws(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_sub2api_shake_usage_user ON sub2api_shake_usage_records(connection_id, sub2api_user_id, occurred_at);

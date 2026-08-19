@@ -268,8 +268,20 @@ An activity configuration that multiplies Raid Damage for selected Sub2api group
 _Avoid_: Billing discount, retroactive damage rewrite, client-selected multiplier
 
 **Timed Group Rate Reward**:
-A Boss MVP Reward that temporarily sets a user's effective Sub2api group rate multiplier for a configured group and time window. It is scoped to the user and group and must expire without changing unrelated group-rate settings.
-_Avoid_: Global discount, permanent rate override, unbounded user-wide discount
+A Boss MVP Reward entitlement that offers an absolute Sub2api group rate multiplier to one user until either its configured duration or discounted-usage cap is exhausted. The lowest applicable rate wins; an entitlement waits behind a better temporary rate and uses its configured fallback reward when a better permanent rate would make it valueless.
+_Avoid_: Global discount, permanent rate override, unbounded user-wide discount, overwriting an existing better rate
+
+**Raid Subscription Reward**:
+A Boss MVP Reward that grants a configured Sub2api subscription group for a fixed number of days. An existing subscription in that group is extended without discarding its remaining time, and an unsafe automatic extension waits for manual delivery.
+_Avoid_: Replacing an active subscription from the current date, silently losing remaining days, charging balance for the reward
+
+**Raid Shake Card Reward**:
+A Boss Clear Reward or Boss MVP Reward that grants one or more campaign-bound Shake Cards for an explicitly selected active or scheduled Shake & Win Campaign whose end time permits redemption after raid settlement.
+_Avoid_: Generic cross-campaign draw voucher, card for an ended campaign, unspecified future lottery
+
+**Raid Reward Fallback**:
+The fixed alternative reward published with a conditional Raid Reward Grant, used only when its primary reward cannot provide value under the published conflict rules.
+_Avoid_: Administrator-selected replacement after winners are known, rerolled reward, undisclosed substitution
 
 **Raid Settlement Window**:
 The ten-minute period after a Raid Month closes in which KaWang imports authoritative usage that occurred before month end, while rejecting new-month usage as raid damage. No result is final until this window closes and the settlement snapshot is frozen.
@@ -290,6 +302,10 @@ _Avoid_: Direct unrecorded payout, rerolling a failed reward, editing winners du
 **Disqualified MVP**:
 A ranked raider whose pending MVP grant is denied for a recorded fraud reason before delivery. The reward slot passes to the next eligible Boss Contributor while preserving both the original ranking and final recipient audit trail.
 _Avoid_: Silently deleting the ranking, leaving the slot empty, disqualification after delivery without a separate recovery decision
+
+**Aborted Raid Campaign**:
+A Boss Raid Campaign stopped because its authoritative data or reward fulfillment cannot be trusted. Previously settled boss rewards remain owed, the active boss produces no normal rewards, and any compensation is recorded separately without rewriting combat history.
+_Avoid_: Normal campaign end, fabricated boss defeat, editing the leaderboard to justify compensation
 
 **Sub2api User Tutorial**:
 A publicly readable learning unit embedded in the Sub2api experience that explains how a user calls the API or purchases a configured subscription plan.

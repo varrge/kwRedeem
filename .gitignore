@@ -20,6 +20,7 @@ admin/runtime-config.js
 .vscode
 docs/*
 !docs/adr/
+!docs/boss-raid-campaign-plan.md
 !docs/sub2api-home-content.html
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 !docs/python-membership-payment-executor-spec.md
@@ -56,6 +57,10 @@ tests/*
 !tests/sub2api-shake-api.test.js
 !tests/sub2api-shake-page.test.js
 !tests/sub2api-shake-tier-migration.test.js
+!tests/boss-raid-plan.test.js
+!tests/sub2api-raid.test.js
+!tests/sub2api-raid-api.test.js
+!tests/sub2api-raid-page.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

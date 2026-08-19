@@ -454,6 +454,37 @@ const refs = {
   shakeDrawRefreshBtn: document.querySelector("#shake-draw-refresh-btn"),
   shakeDrawList: document.querySelector("#shake-draw-list"),
   shakeDrawResult: document.querySelector("#shake-draw-result"),
+  raidCampaignForm: document.querySelector("#raid-campaign-form"),
+  raidCampaignFormTitle: document.querySelector("#raid-campaign-form-title"),
+  raidCampaignEditId: document.querySelector("#raid-campaign-edit-id"),
+  raidCampaignConnection: document.querySelector("#raid-campaign-connection"),
+  raidCampaignName: document.querySelector("#raid-campaign-name"),
+  raidCampaignMonth: document.querySelector("#raid-campaign-month"),
+  raidDamageThreshold: document.querySelector("#raid-damage-threshold"),
+  raidRewardBudget: document.querySelector("#raid-reward-budget"),
+  raidExcludedUsers: document.querySelector("#raid-excluded-users"),
+  raidBossEditor: document.querySelector("#raid-boss-editor"),
+  raidAddBossBtn: document.querySelector("#raid-add-boss-btn"),
+  raidCampaignSubmitBtn: document.querySelector("#raid-campaign-submit-btn"),
+  raidCampaignResetBtn: document.querySelector("#raid-campaign-reset-btn"),
+  raidCampaignResult: document.querySelector("#raid-campaign-result"),
+  raidEmbedUrl: document.querySelector("#raid-embed-url"),
+  raidCopyEmbedBtn: document.querySelector("#raid-copy-embed-btn"),
+  raidPreviewLink: document.querySelector("#raid-preview-link"),
+  raidEmbedResult: document.querySelector("#raid-embed-result"),
+  raidSyncConnection: document.querySelector("#raid-sync-connection"),
+  raidSyncUsageBtn: document.querySelector("#raid-sync-usage-btn"),
+  raidSyncResult: document.querySelector("#raid-sync-result"),
+  raidCampaignFilter: document.querySelector("#raid-campaign-filter"),
+  raidCampaignRefreshBtn: document.querySelector("#raid-campaign-refresh-btn"),
+  raidCampaignList: document.querySelector("#raid-campaign-list"),
+  raidHistoryTitle: document.querySelector("#raid-history-title"),
+  raidHistoryList: document.querySelector("#raid-history-list"),
+  raidHistoryResult: document.querySelector("#raid-history-result"),
+  raidRewardStatusFilter: document.querySelector("#raid-reward-status-filter"),
+  raidRewardRefreshBtn: document.querySelector("#raid-reward-refresh-btn"),
+  raidRewardList: document.querySelector("#raid-reward-list"),
+  raidRewardResult: document.querySelector("#raid-reward-result"),
   sub2apiUpstreamMonitorConnection: document.querySelector("#sub2api-upstream-monitor-connection"),
   sub2apiUpstreamMonitorRefreshBtn: document.querySelector("#sub2api-upstream-monitor-refresh-btn"),
   sub2apiUpstreamMonitorList: document.querySelector("#sub2api-upstream-monitor-list"),
@@ -575,6 +606,8 @@ const quotaSubCardState = {
 };
 let sub2apiConnectionsCache = [];
 let shakeCampaignsCache = [];
+let raidCampaignsCache = [];
+let raidShakeCampaignsCache = [];
 let sub2apiInvitesCache = [];
 let sub2apiRebatesCache = [];
 let sub2apiLevelsCache = [];
@@ -1019,6 +1052,9 @@ function switchTab(tabName) {
   }
   if (tabName === "sub2api-shake" && getToken()) {
     refreshShakeConsole().catch((error) => setHint(refs.shakeCampaignResult, error.message));
+  }
+  if (tabName === "sub2api-raid" && getToken()) {
+    refreshRaidConsole().catch((error) => setHint(refs.raidCampaignResult, error.message));
   }
   if (tabName === "store-fulfillment" && getToken()) {
     refreshStoreFulfillmentConsole().catch((error) => setHint(refs.storeTaskResult, error.message));
@@ -4646,6 +4682,378 @@ window.activateShakeCampaign = activateShakeCampaign;
 window.endShakeCampaign = endShakeCampaign;
 window.dispositionShakeDraw = dispositionShakeDraw;
 
+const RAID_ASSETS = {
+  leviathan: "装甲利维坦",
+  sentinel: "边界哨兵",
+  prism: "棱镜母体",
+  "zero-core": "零号主机",
+  warden: "深空典狱长",
+  overmind: "集群主脑",
+  behemoth: "轨道巨像",
+  singularity: "奇点核心"
+};
+
+function defaultRaidReward(name, amount, fulfillmentMode = "auto") {
+  return { name, type: "balance", amount, cost: amount, fulfillmentMode, cardTier: "low" };
+}
+
+function defaultRaidBosses() {
+  return [
+    { level: 1, name: "封锁者", title: "边界防御节点", assetKey: "sentinel", health: 2000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1 },
+    { level: 2, name: "装甲核心·利维坦", title: "中转网络重装核心", assetKey: "leviathan", health: 4000, themeGroupId: null, themeGroupName: "高速中转", themeMultiplier: 1.25 },
+    { level: 3, name: "棱镜母体", title: "多路复用控制母体", assetKey: "prism", health: 7000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1.5 },
+    { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1.5 }
+  ].map((boss) => ({
+    ...boss,
+    clearReward: defaultRaidReward("低额共享额度", 1, "auto"),
+    mvpRewards: [
+      defaultRaidReward("MVP 第 1 名额度", 100, "review"),
+      defaultRaidReward("MVP 第 2 名额度", 60, "review"),
+      defaultRaidReward("MVP 第 3 名额度", 30, "review")
+    ]
+  }));
+}
+
+function raidShakeCampaignOptions(selected = "") {
+  return [`<option value="">选择摇摇乐活动</option>`]
+    .concat(raidShakeCampaignsCache.map((campaign) => `<option value="${escapeHtml(campaign.id)}" ${campaign.id === selected ? "selected" : ""}>${escapeHtml(campaign.name)} · ${escapeHtml(getStatusLabel(campaign.status))}</option>`))
+    .join("");
+}
+
+function renderRaidRewardRow(scope, reward = {}) {
+  const value = reward.type === "shake_card" ? reward.quantity : reward.amount;
+  return `
+    <div class="raid-reward-row" data-raid-reward="${escapeHtml(scope)}">
+      <strong>${escapeHtml({ clear: "共享", mvp1: "MVP 1", mvp2: "MVP 2", mvp3: "MVP 3" }[scope] || scope)}</strong>
+      <label class="field"><span>奖品名称</span><input data-field="name" maxlength="100" value="${escapeHtml(reward.name || "")}" required /></label>
+      <label class="field"><span>类型</span><select data-field="type"><option value="balance" ${reward.type !== "shake_card" ? "selected" : ""}>额度</option><option value="shake_card" ${reward.type === "shake_card" ? "selected" : ""}>抽奖卡</option></select></label>
+      <label class="field"><span>金额 / 数量</span><input data-field="value" type="number" min="0.01" step="0.01" value="${escapeHtml(value ?? 1)}" required /></label>
+      <label class="field"><span>绑定活动</span><select data-field="shakeCampaignId">${raidShakeCampaignOptions(reward.shakeCampaignId || "")}</select></label>
+      <label class="field"><span>卡种</span><select data-field="cardTier"><option value="low" ${reward.cardTier !== "medium" && reward.cardTier !== "high" ? "selected" : ""}>低级</option><option value="medium" ${reward.cardTier === "medium" ? "selected" : ""}>中级</option><option value="high" ${reward.cardTier === "high" ? "selected" : ""}>高级</option></select></label>
+      <label class="field"><span>内部成本</span><input data-field="cost" type="number" min="0" step="0.01" value="${escapeHtml(reward.cost ?? value ?? 0)}" required /></label>
+      <label class="field"><span>发放</span><select data-field="fulfillmentMode"><option value="auto" ${reward.fulfillmentMode !== "review" ? "selected" : ""}>自动</option><option value="review" ${reward.fulfillmentMode === "review" ? "selected" : ""}>审核后</option></select></label>
+    </div>`;
+}
+
+function updateRaidRewardControls(row) {
+  const shakeCard = row.querySelector('[data-field="type"]')?.value === "shake_card";
+  for (const field of ["shakeCampaignId", "cardTier"]) {
+    const input = row.querySelector(`[data-field="${field}"]`);
+    if (input) input.disabled = !shakeCard;
+  }
+  const value = row.querySelector('[data-field="value"]');
+  if (value) {
+    value.min = shakeCard ? "1" : "0.01";
+    value.step = shakeCard ? "1" : "0.01";
+  }
+}
+
+function renderRaidBossEditor(bosses = defaultRaidBosses()) {
+  if (!refs.raidBossEditor) return;
+  refs.raidBossEditor.innerHTML = bosses.map((boss, index) => `
+    <section class="raid-boss-row" data-raid-boss-row>
+      <div class="raid-boss-head"><strong>Boss ${index + 1}</strong><button type="button" class="icon-btn" data-remove-raid-boss="${index}" title="删除 Boss" aria-label="删除 Boss">×</button></div>
+      <div class="raid-boss-fields">
+        <label class="field"><span>等级</span><input data-field="level" type="number" min="1" max="99" value="${escapeHtml(boss.level ?? index + 1)}" required /></label>
+        <label class="field"><span>名称</span><input data-field="name" maxlength="100" value="${escapeHtml(boss.name || "")}" required /></label>
+        <label class="field"><span>称号</span><input data-field="title" maxlength="120" value="${escapeHtml(boss.title || "")}" /></label>
+        <label class="field"><span>内置素材</span><select data-field="assetKey">${Object.entries(RAID_ASSETS).map(([key, label]) => `<option value="${escapeHtml(key)}" ${boss.assetKey === key ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
+        <label class="field"><span>血量</span><input data-field="health" type="number" min="0.01" step="0.01" value="${escapeHtml(boss.health ?? 2000)}" required /></label>
+        <label class="field"><span>主题分组 ID</span><input data-field="themeGroupId" type="number" min="1" step="1" value="${escapeHtml(boss.themeGroupId ?? "")}" placeholder="留空为全站 1.0x" /></label>
+        <label class="field"><span>主题分组名称</span><input data-field="themeGroupName" maxlength="100" value="${escapeHtml(boss.themeGroupName || "")}" /></label>
+        <label class="field"><span>主题伤害倍率</span><input data-field="themeMultiplier" type="number" min="1" max="5" step="0.01" value="${escapeHtml(boss.themeMultiplier ?? 1)}" required /></label>
+      </div>
+      <div class="raid-reward-editor">
+        ${renderRaidRewardRow("clear", boss.clearReward)}
+        ${renderRaidRewardRow("mvp1", boss.mvpRewards?.[0])}
+        ${renderRaidRewardRow("mvp2", boss.mvpRewards?.[1])}
+        ${renderRaidRewardRow("mvp3", boss.mvpRewards?.[2])}
+      </div>
+    </section>`).join("");
+  refs.raidBossEditor.querySelectorAll("[data-raid-reward]").forEach(updateRaidRewardControls);
+}
+
+function collectRaidReward(row) {
+  const type = row.querySelector('[data-field="type"]').value;
+  const value = Number(row.querySelector('[data-field="value"]').value);
+  const reward = {
+    name: row.querySelector('[data-field="name"]').value.trim(),
+    type,
+    cost: Number(row.querySelector('[data-field="cost"]').value),
+    fulfillmentMode: row.querySelector('[data-field="fulfillmentMode"]').value
+  };
+  if (!reward.name) throw new Error("每项奖励都必须填写名称");
+  if (type === "balance") reward.amount = value;
+  else {
+    reward.quantity = Math.round(value);
+    reward.shakeCampaignId = row.querySelector('[data-field="shakeCampaignId"]').value;
+    reward.cardTier = row.querySelector('[data-field="cardTier"]').value;
+    if (!reward.shakeCampaignId) throw new Error("抽奖卡奖励必须绑定摇摇乐活动");
+  }
+  return reward;
+}
+
+function collectRaidBosses() {
+  const rows = [...refs.raidBossEditor.querySelectorAll("[data-raid-boss-row]")];
+  if (!rows.length) throw new Error("至少配置一只 Boss");
+  return rows.map((row) => {
+    const rewardRows = Object.fromEntries([...row.querySelectorAll("[data-raid-reward]")].map((rewardRow) => [rewardRow.dataset.raidReward, rewardRow]));
+    const groupId = Number(row.querySelector('[data-field="themeGroupId"]').value);
+    return {
+      level: Number(row.querySelector('[data-field="level"]').value),
+      name: row.querySelector('[data-field="name"]').value.trim(),
+      title: row.querySelector('[data-field="title"]').value.trim(),
+      assetKey: row.querySelector('[data-field="assetKey"]').value,
+      health: Number(row.querySelector('[data-field="health"]').value),
+      themeGroupId: groupId > 0 ? groupId : null,
+      themeGroupName: row.querySelector('[data-field="themeGroupName"]').value.trim(),
+      themeMultiplier: Number(row.querySelector('[data-field="themeMultiplier"]').value),
+      clearReward: collectRaidReward(rewardRows.clear),
+      mvpRewards: ["mvp1", "mvp2", "mvp3"].map((scope) => collectRaidReward(rewardRows[scope]))
+    };
+  });
+}
+
+function getRaidMonthWindow(month) {
+  const [year, monthNumber] = String(month).split("-").map(Number);
+  if (!year || !monthNumber) throw new Error("请选择活动月份");
+  const offset = 8 * 60 * 60 * 1000;
+  const start = new Date(Date.UTC(year, monthNumber - 1, 1) - offset);
+  const end = new Date(Date.UTC(year, monthNumber, 1) - offset);
+  return {
+    startAt: start.toISOString(),
+    endAt: end.toISOString(),
+    settlementEndAt: new Date(end.getTime() + 10 * 60 * 1000).toISOString()
+  };
+}
+
+function collectRaidCampaign() {
+  const month = refs.raidCampaignMonth.value;
+  return {
+    connectionId: refs.raidCampaignConnection.value,
+    name: refs.raidCampaignName.value.trim(),
+    month,
+    ...getRaidMonthWindow(month),
+    effectiveDamageThreshold: Number(refs.raidDamageThreshold.value),
+    rewardBudget: Number(refs.raidRewardBudget.value),
+    excludedUserIds: refs.raidExcludedUsers.value.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean),
+    bosses: collectRaidBosses()
+  };
+}
+
+function updateRaidEmbedUrl() {
+  if (!refs.raidEmbedUrl) return;
+  const connectionId = refs.raidCampaignConnection?.value || refs.raidCampaignFilter?.value || sub2apiConnectionsCache[0]?.id || "";
+  const connection = sub2apiConnectionsCache.find((item) => item.id === connectionId);
+  let sub2ApiOrigin = "https://sub.vsakura.top";
+  try {
+    if (connection?.baseUrl) sub2ApiOrigin = new URL(connection.baseUrl).origin;
+  } catch {
+    // Keep the official Sub2api origin when an older connection URL is invalid.
+  }
+  const url = new URL("/_kwredeem/sub2api-raid.html", sub2ApiOrigin);
+  if (connectionId) url.searchParams.set("connectionId", connectionId);
+  refs.raidEmbedUrl.value = url.href;
+  refs.raidPreviewLink.href = url.href;
+}
+
+function resetRaidCampaignForm() {
+  if (!refs.raidCampaignForm) return;
+  refs.raidCampaignForm.reset();
+  refs.raidCampaignEditId.value = "";
+  refs.raidCampaignFormTitle.textContent = "创建月度活动";
+  refs.raidCampaignSubmitBtn.textContent = "保存草稿";
+  refs.raidCampaignResetBtn.classList.add("hidden");
+  refs.raidCampaignMonth.value = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  refs.raidCampaignName.value = "全域突袭 · 第一赛季";
+  refs.raidDamageThreshold.value = "10";
+  refs.raidRewardBudget.value = "500";
+  refs.raidExcludedUsers.value = "";
+  refs.raidCampaignConnection.disabled = false;
+  refs.raidCampaignMonth.disabled = false;
+  if (sub2apiConnectionsCache.length === 1) refs.raidCampaignConnection.value = sub2apiConnectionsCache[0].id;
+  renderRaidBossEditor();
+  updateRaidEmbedUrl();
+}
+
+function editRaidCampaign(id) {
+  const campaign = raidCampaignsCache.find((item) => item.id === id);
+  if (!campaign || campaign.status !== "draft") return;
+  refs.raidCampaignEditId.value = campaign.id;
+  refs.raidCampaignConnection.value = campaign.connectionId;
+  refs.raidCampaignName.value = campaign.name;
+  refs.raidCampaignMonth.value = campaign.month;
+  refs.raidDamageThreshold.value = campaign.effectiveDamageThreshold;
+  refs.raidRewardBudget.value = campaign.rewardBudget;
+  refs.raidExcludedUsers.value = (campaign.excludedUserIds || []).join(", ");
+  renderRaidBossEditor(campaign.bosses);
+  refs.raidCampaignFormTitle.textContent = `编辑草稿：${campaign.name}`;
+  refs.raidCampaignSubmitBtn.textContent = "更新草稿";
+  refs.raidCampaignResetBtn.classList.remove("hidden");
+  refs.raidCampaignForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveRaidCampaign() {
+  try {
+    const editId = refs.raidCampaignEditId.value;
+    const body = collectRaidCampaign();
+    const path = editId
+      ? `/api/admin/sub2api/raid/campaigns/${encodeURIComponent(editId)}/config`
+      : "/api/admin/sub2api/raid/campaigns";
+    setHint(refs.raidCampaignResult, editId ? "正在更新草稿..." : "正在创建草稿...");
+    await api(path, { method: "POST", body: JSON.stringify(body) });
+    setHint(refs.raidCampaignResult, "草稿已保存，确认预算后可以发布");
+    resetRaidCampaignForm();
+    await refreshRaidCampaigns();
+  } catch (error) {
+    setHint(refs.raidCampaignResult, `保存失败：${error.message}`);
+  }
+}
+
+function renderRaidCampaigns() {
+  renderTable(refs.raidCampaignList, [
+    { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br><code>${escapeHtml(item.month)} · ${escapeHtml(item.id)}</code>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}<br><span class="hint">${item.bosses.filter((boss) => boss.status === "defeated").length} / ${item.bosses.length} 已击败</span>` },
+    { label: "门槛 / 预算", render: (item) => `门槛 ${escapeHtml(item.effectiveDamageThreshold)}<br><span class="hint">最坏 ${escapeHtml(item.worstCaseCost)} / 预算 ${escapeHtml(item.rewardBudget)}</span>` },
+    { label: "当前 Boss", render: (item) => { const boss = item.bosses.find((entry) => entry.id === item.currentBossId); return boss ? `<strong>LV.${escapeHtml(boss.level)} ${escapeHtml(boss.name)}</strong><br><span class="hint">${escapeHtml(boss.remainingHealth)} / ${escapeHtml(boss.health)} HP</span>` : "-"; } },
+    { label: "同步", render: (item) => item.sync ? `<span class="hint">${escapeHtml(item.sync.lastSyncedAt ? formatWorldCupTime(item.sync.lastSyncedAt) : "尚未同步")}<br>${item.sync.error ? `<span style="color:var(--error)">${escapeHtml(item.sync.error)}</span>` : `游标 ${escapeHtml(item.sync.cursor || "-")}`}</span>` : "尚未同步" },
+    { label: "操作", render: (item) => `
+      ${item.status === "draft" ? `<button class="ghost-btn small" type="button" onclick="editRaidCampaign('${escapeHtml(item.id)}')">编辑</button><button class="primary-btn small" type="button" onclick="publishRaidCampaign('${escapeHtml(item.id)}')">发布</button>` : ""}
+      ${item.status !== "draft" ? `<button class="ghost-btn small" type="button" onclick="viewRaidHistory('${escapeHtml(item.id)}')">历史榜</button>` : ""}
+      ${["scheduled", "active", "settling"].includes(item.status) ? `<button class="ghost-btn small" type="button" style="color:var(--error)" onclick="abortRaidCampaign('${escapeHtml(item.id)}')">中止</button>` : ""}
+    ` }
+  ], raidCampaignsCache, "暂无 Boss 活动");
+}
+
+async function refreshRaidCampaigns() {
+  const params = new URLSearchParams();
+  if (refs.raidCampaignFilter?.value) params.set("connectionId", refs.raidCampaignFilter.value);
+  const payload = await api(`/api/admin/sub2api/raid/campaigns${params.size ? `?${params}` : ""}`);
+  raidCampaignsCache = payload.items || [];
+  renderRaidCampaigns();
+}
+
+async function viewRaidHistory(campaignId) {
+  const campaign = raidCampaignsCache.find((item) => item.id === campaignId);
+  refs.raidHistoryTitle.textContent = campaign ? `结算历史榜 · ${campaign.name}` : "结算历史榜";
+  setHint(refs.raidHistoryResult, "正在读取冻结榜单...");
+  try {
+    const payload = await api(`/api/admin/sub2api/raid/campaigns/${encodeURIComponent(campaignId)}/history`);
+    renderTable(refs.raidHistoryList, [
+      { label: "Boss", render: (item) => `<strong>LV.${escapeHtml(item.boss.level)} ${escapeHtml(item.boss.name)}</strong><br><span class="hint">${item.defeatedAt ? `击败于 ${escapeHtml(formatWorldCupTime(item.defeatedAt))}` : escapeHtml(getStatusLabel(item.boss.status))}</span>` },
+      { label: "结算", render: (item) => `伤害 ${escapeHtml(item.totalDamage)}<br><span class="hint">有效 ${escapeHtml(item.effectiveRaiderCount)} 人 · MVP ${escapeHtml(item.mvpSlots)} 席</span>` },
+      { label: "原始榜单", render: (item) => item.ranking.slice(0, 10).map((rank) => `<span class="hint">#${escapeHtml(rank.rank)} <code>${escapeHtml(rank.identity?.userId || rank.userId)}</code> · ${escapeHtml(rank.damage)}</span>`).join("<br>") || "-" },
+      { label: "最终 MVP", render: (item) => item.finalWinners.length ? item.finalWinners.map((winner) => `<span class="hint">#${escapeHtml(winner.rank)} <code>${escapeHtml(winner.userId)}</code> · ${escapeHtml(getStatusLabel(winner.status))}</span>`).join("<br>") : "未解锁" },
+      { label: "资格顺延", render: (item) => item.disqualifications.length ? item.disqualifications.map((entry) => `<span class="hint"><code>${escapeHtml(entry.userId)}</code> → <code>${escapeHtml(entry.replacementUserId || "无替补")}</code><br>${escapeHtml(entry.reason)}</span>`).join("<br>") : "-" }
+    ], payload.bosses || [], "该活动暂无已冻结或月末保留的榜单");
+    setHint(refs.raidHistoryResult, payload.bosses?.length ? "榜单来自不可变结算快照；中止与月末未击败记录按最终保留数据显示" : "暂无历史结果");
+  } catch (error) {
+    refs.raidHistoryList.innerHTML = "";
+    setHint(refs.raidHistoryResult, `读取失败：${error.message}`);
+  }
+}
+
+async function publishRaidCampaign(id) {
+  if (!window.confirm("确认发布？活动开始后血量、倍率、门槛和奖励将全部锁定。")) return;
+  try {
+    await api(`/api/admin/sub2api/raid/campaigns/${encodeURIComponent(id)}/publish`, { method: "POST", body: "{}" });
+    setHint(refs.raidCampaignResult, "活动已发布，规则已锁定");
+    await refreshRaidCampaigns();
+  } catch (error) {
+    setHint(refs.raidCampaignResult, `发布失败：${error.message}`);
+  }
+}
+
+async function abortRaidCampaign(id) {
+  const reason = window.prompt("请输入中止原因。当前 Boss 不产生正常奖励：");
+  if (!reason) return;
+  try {
+    await api(`/api/admin/sub2api/raid/campaigns/${encodeURIComponent(id)}/abort`, { method: "POST", body: JSON.stringify({ reason }) });
+    setHint(refs.raidCampaignResult, "活动已中止，已结算 Boss 奖励继续履约");
+    await refreshRaidCampaigns();
+  } catch (error) {
+    setHint(refs.raidCampaignResult, `中止失败：${error.message}`);
+  }
+}
+
+async function syncRaidUsage() {
+  const connectionId = refs.raidSyncConnection.value;
+  if (!connectionId) return setHint(refs.raidSyncResult, "请选择 Sub2api 连接");
+  setButtonBusy(refs.raidSyncUsageBtn, true, "同步中...");
+  try {
+    const result = await api(`/api/admin/sub2api/raid/connections/${encodeURIComponent(connectionId)}/sync-usage`, { method: "POST", body: "{}" });
+    setHint(refs.raidSyncResult, `导入 ${result.imported} 条用量 · 结算 ${result.bossesSettled} 只 Boss${result.pendingSettlement ? ` · 最终战报确认 ${result.stableSyncCount}/2` : ""}`);
+    await Promise.all([refreshRaidCampaigns(), refreshRaidRewards()]);
+  } catch (error) {
+    setHint(refs.raidSyncResult, `同步失败：${error.message}`);
+  } finally {
+    setButtonBusy(refs.raidSyncUsageBtn, false);
+  }
+}
+
+async function refreshRaidRewards() {
+  const params = new URLSearchParams();
+  if (refs.raidRewardStatusFilter.value) params.set("status", refs.raidRewardStatusFilter.value);
+  const payload = await api(`/api/admin/sub2api/raid/rewards${params.size ? `?${params}` : ""}`);
+  renderTable(refs.raidRewardList, [
+    { label: "用户", render: (item) => `<code>${escapeHtml(item.userId)}</code><br><span class="hint">${item.scope === "mvp" ? `MVP ${escapeHtml(item.finalRank)}` : "共享奖励"}</span>` },
+    { label: "奖品", render: (item) => `<strong>${escapeHtml(item.reward?.name || "-")}</strong><br><span class="hint">成本 ${escapeHtml(item.cost)} · ${item.fulfillmentMode === "review" ? "审核后发放" : "自动发放"}</span>` },
+    { label: "状态", render: (item) => `${renderStatus(item.status)}${item.errorMessage ? `<br><span style="color:var(--error)">${escapeHtml(item.errorMessage)}</span>` : ""}` },
+    { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.createdAt))}</span>` },
+    { label: "操作", render: (item) => `
+      ${item.status === "awaiting_review" ? `<button class="primary-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','approve')">通过并发放</button>` : ""}
+      ${item.status === "delivery_failed" ? `<button class="primary-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','retry')">重试</button><button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','confirm')">确认到账</button>` : ""}
+      ${!["delivered", "voided", "disqualified"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','void')">作废</button>` : ""}
+      ${item.scope === "mvp" && !["delivered", "disqualified"].includes(item.status) ? `<button class="ghost-btn small" type="button" style="color:var(--error)" onclick="disqualifyRaidWinner('${escapeHtml(item.settlementId)}','${escapeHtml(item.userId)}')">取消资格</button>` : ""}
+    ` }
+  ], payload.items || [], "暂无奖励记录");
+}
+
+async function dispositionRaidReward(id, action) {
+  const reason = window.prompt("请输入奖励处置原因：");
+  if (!reason) return;
+  try {
+    await api(`/api/admin/sub2api/raid/rewards/${encodeURIComponent(id)}/disposition`, { method: "POST", body: JSON.stringify({ action, reason }) });
+    setHint(refs.raidRewardResult, "奖励状态已更新");
+    await refreshRaidRewards();
+  } catch (error) {
+    setHint(refs.raidRewardResult, `处置失败：${error.message}`);
+  }
+}
+
+async function disqualifyRaidWinner(settlementId, userId) {
+  const reason = window.prompt(`请输入取消用户 ${userId} 获奖资格的原因：`);
+  if (!reason) return;
+  const evidence = window.prompt("证据引用（可留空）：") || "";
+  try {
+    const result = await api(`/api/admin/sub2api/raid/settlements/${encodeURIComponent(settlementId)}/disqualify`, { method: "POST", body: JSON.stringify({ userId, reason, evidence }) });
+    setHint(refs.raidRewardResult, result.replacement ? `已取消资格并顺延给用户 ${result.replacement.userId}` : "已取消资格，没有下一名有效参战者可顺延");
+    await refreshRaidRewards();
+  } catch (error) {
+    setHint(refs.raidRewardResult, `取消资格失败：${error.message}`);
+  }
+}
+
+async function refreshRaidConsole() {
+  if (!sub2apiConnectionsCache.length) await refreshSub2ApiConnections();
+  const shakePayload = await api("/api/admin/sub2api/shake/campaigns");
+  raidShakeCampaignsCache = shakePayload.items || [];
+  refs.raidBossEditor?.querySelectorAll('[data-field="shakeCampaignId"]').forEach((select) => {
+    const current = select.value;
+    select.innerHTML = raidShakeCampaignOptions(current);
+    select.value = current;
+  });
+  await Promise.all([refreshRaidCampaigns(), refreshRaidRewards()]);
+  updateRaidEmbedUrl();
+}
+
+window.editRaidCampaign = editRaidCampaign;
+window.publishRaidCampaign = publishRaidCampaign;
+window.abortRaidCampaign = abortRaidCampaign;
+window.viewRaidHistory = viewRaidHistory;
+window.dispositionRaidReward = dispositionRaidReward;
+window.disqualifyRaidWinner = disqualifyRaidWinner;
+
 function resetSub2ApiConnectionForm() {
   if (!refs.sub2apiConnectionForm) return;
   refs.sub2apiConnectionForm.reset();
@@ -4746,7 +5154,12 @@ function populateSub2ApiConnectionFilter() {
     }
   }
 
-  for (const select of [refs.shakeCampaignConnection, refs.shakeSyncConnection]) {
+  for (const select of [
+    refs.shakeCampaignConnection,
+    refs.shakeSyncConnection,
+    refs.raidCampaignConnection,
+    refs.raidSyncConnection
+  ]) {
     if (!select) continue;
     const current = select.value;
     select.innerHTML = formOptions;
@@ -4761,7 +5174,13 @@ function populateSub2ApiConnectionFilter() {
     refs.shakeCampaignFilter.innerHTML = filterOptions;
     if (sub2apiConnectionsCache.some((item) => item.id === current)) refs.shakeCampaignFilter.value = current;
   }
+  if (refs.raidCampaignFilter) {
+    const current = refs.raidCampaignFilter.value;
+    refs.raidCampaignFilter.innerHTML = filterOptions;
+    if (sub2apiConnectionsCache.some((item) => item.id === current)) refs.raidCampaignFilter.value = current;
+  }
   updateShakeEmbedUrl();
+  updateRaidEmbedUrl();
 }
 
 async function refreshSub2ApiConnections() {
@@ -6121,6 +6540,72 @@ refs.shakeCopyEmbedBtn?.addEventListener("click", async () => {
   } catch {
     refs.shakeEmbedUrl.select();
     setHint(refs.shakeEmbedResult, "已选中地址，请手动复制");
+  }
+});
+
+if (refs.raidCampaignForm) {
+  refs.raidCampaignForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveRaidCampaign().catch(() => {});
+  });
+  resetRaidCampaignForm();
+}
+
+if (refs.raidBossEditor) {
+  refs.raidBossEditor.addEventListener("change", (event) => {
+    if (!event.target.matches('[data-field="type"]')) return;
+    updateRaidRewardControls(event.target.closest("[data-raid-reward]"));
+  });
+  refs.raidBossEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-raid-boss]");
+    if (!button) return;
+    const bosses = collectRaidBosses();
+    if (bosses.length === 1) return setHint(refs.raidCampaignResult, "活动至少需要一只 Boss");
+    bosses.splice(Number(button.dataset.removeRaidBoss), 1);
+    renderRaidBossEditor(bosses);
+  });
+}
+
+refs.raidAddBossBtn?.addEventListener("click", () => {
+  try {
+    const bosses = collectRaidBosses();
+    if (bosses.length >= 12) return setHint(refs.raidCampaignResult, "一期最多配置 12 只 Boss");
+    const level = Math.max(0, ...bosses.map((boss) => boss.level)) + 1;
+    const nextBoss = defaultRaidBosses()[0];
+    nextBoss.level = level;
+    nextBoss.name = `Boss ${level}`;
+    renderRaidBossEditor(bosses.concat(nextBoss));
+  } catch (error) {
+    setHint(refs.raidCampaignResult, error.message);
+  }
+});
+
+refs.raidCampaignResetBtn?.addEventListener("click", () => {
+  resetRaidCampaignForm();
+  setHint(refs.raidCampaignResult, "");
+});
+refs.raidCampaignConnection?.addEventListener("change", updateRaidEmbedUrl);
+refs.raidCampaignFilter?.addEventListener("change", () => {
+  updateRaidEmbedUrl();
+  refreshRaidCampaigns().catch((error) => setHint(refs.raidCampaignResult, error.message));
+});
+refs.raidCampaignRefreshBtn?.addEventListener("click", () => {
+  refreshRaidCampaigns().catch((error) => setHint(refs.raidCampaignResult, error.message));
+});
+refs.raidSyncUsageBtn?.addEventListener("click", () => syncRaidUsage().catch(() => {}));
+refs.raidRewardStatusFilter?.addEventListener("change", () => {
+  refreshRaidRewards().catch((error) => setHint(refs.raidRewardResult, error.message));
+});
+refs.raidRewardRefreshBtn?.addEventListener("click", () => {
+  refreshRaidRewards().catch((error) => setHint(refs.raidRewardResult, error.message));
+});
+refs.raidCopyEmbedBtn?.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(refs.raidEmbedUrl.value);
+    setHint(refs.raidEmbedResult, "战场地址已复制");
+  } catch {
+    refs.raidEmbedUrl.select();
+    setHint(refs.raidEmbedResult, "已选中地址，请手动复制");
   }
 });
 

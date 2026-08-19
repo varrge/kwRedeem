@@ -80,8 +80,7 @@ export function createAutomationAdapter(db, input = {}) {
         baseUrl: provider.base_url,
         apiKey: input.decryptText(credential.api_key_encrypted),
         fetchImpl: input.fetchImpl,
-        lookup: input.lookup,
-        proxyUrl: input.efunAutomationProxyUrl
+        lookup: input.lookup
       })
     };
   }
@@ -93,7 +92,8 @@ export function createAutomationAdapter(db, input = {}) {
         baseUrl: provider.base_url,
         apiKey: input.decryptText(credential.api_key_encrypted),
         fetchImpl: input.fetchImpl,
-        lookup: input.lookup
+        lookup: input.lookup,
+        proxyUrl: input.efunAutomationProxyUrl
       })
     };
   }

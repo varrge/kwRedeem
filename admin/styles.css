@@ -399,6 +399,51 @@ body {
 .shake-prize-row input, .shake-prize-row select { width: 100%; min-width: 0; }
 .shake-remove-prize { margin-bottom: 4px; }
 
+.raid-admin-layout {
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.75fr);
+  align-items: start;
+}
+
+.raid-admin-layout > * { min-width: 0; }
+.raid-side-panel { position: sticky; top: 24px; }
+.raid-boss-editor { display: grid; gap: 16px; }
+
+.raid-boss-row {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.raid-boss-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.raid-boss-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.raid-reward-editor { display: grid; gap: 8px; margin-top: 14px; }
+
+.raid-reward-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(110px, 0.7fr) minmax(100px, 0.7fr) minmax(120px, 1fr) minmax(90px, 0.6fr) minmax(90px, 0.6fr);
+  gap: 8px;
+  align-items: end;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.raid-reward-row > *, .raid-boss-fields > * { min-width: 0; }
+.raid-reward-row input, .raid-reward-row select, .raid-boss-fields input, .raid-boss-fields select { min-width: 0; width: 100%; }
+
 .field { display: grid; gap: 8px; }
 .field span { font-size: 13px; color: var(--muted); font-weight: 600; }
 .field > input, .field > select, .field > textarea { width: 100%; min-width: 0; }
@@ -851,6 +896,7 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
   .shake-subscription-rule-row { grid-template-columns: 1fr; }
   .shake-usage-rule-row { grid-template-columns: 1fr; }
   .shake-remove-prize { justify-self: end; }
+  .raid-boss-fields, .raid-reward-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 1200px) {
@@ -861,6 +907,9 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
   .shake-admin-layout > .card:nth-child(2) {
     position: static;
   }
+
+  .raid-admin-layout { grid-template-columns: minmax(0, 1fr); }
+  .raid-side-panel { position: static; }
 }
 
 @media (min-width: 721px) and (max-width: 1800px) {
@@ -871,6 +920,9 @@ code { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;
   .shake-remove-prize {
     justify-self: end;
   }
+
+  .raid-boss-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .raid-reward-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (min-width: 721px) and (max-width: 1400px) {

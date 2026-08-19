@@ -95,7 +95,7 @@ test("EfunCard treats minimum balance as a floor instead of an additive cost", a
       const path = new URL(url).pathname;
       if (path.endsWith("/card-types")) return response(catalog);
       if (path.endsWith("/account/balance")) return response({ balance: "99.31", currency: "USDT" });
-      if (path.endsWith("/cards/purchase")) return response({ cards: [{ id: 102 }], totalCostUsdt: "82.45" });
+      if (path.endsWith("/cards/purchase")) return response({ cards: [{ id: 102 }], totalCostUsdt: "82.25" });
       if (path.endsWith("/cards/102")) return response({ id: 102, cardType: "Z-43612081", status: "ACTIVE", cardBalance: "82.00" });
       throw new Error(`unexpected path ${path}`);
     }

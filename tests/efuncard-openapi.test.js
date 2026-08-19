@@ -10,6 +10,13 @@ function response(data, status = 200) {
   });
 }
 
+function errorResponse(message, status, code = "E_API_ERROR", headers = {}) {
+  return new Response(JSON.stringify({ success: false, code, message, data: null }), {
+    status,
+    headers: { "content-type": "application/json", ...headers }
+  });
+}
+
 const catalog = {
   cardTypes: [{
     id: 29,
@@ -59,6 +66,67 @@ test("EfunCard validates opening cost and reconciles the activated card", async 
   assert.ok(requests.some((item) => item.path.endsWith("/cards/purchase")));
 });
 
+test("EfunCard accepts the new Open API path and sk keys while retaining both auth headers", async () => {
+  let request;
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/openapi/v1/",
+    apiKey: "sk_open_test_key",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return response({ balance: "100.00", currency: "USDT" });
+    }
+  });
+  await client.getBalance();
+  assert.equal(new URL(request.url).pathname, "/openapi/v1/account/balance");
+  assert.equal(request.options.headers["X-API-Key"], "sk_open_test_key");
+  assert.equal(request.options.headers.Authorization, "Bearer sk_open_test_key");
+});
+
+test("EfunCard preserves provider business messages and retry metadata", async () => {
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/openapi/v1",
+    apiKey: "sk_error_test_key",
+    fetchImpl: async (_url, options) => {
+      if (options.method === "POST") {
+        return errorResponse("无权购买此卡段", 400, "CARD_TYPE_NOT_ALLOWED");
+      }
+      return response({ balance: "100.00", currency: "USDT" });
+    }
+  });
+  await assert.rejects(
+    () => client.request("/cards/purchase", {
+      method: "POST",
+      body: { cardTypeId: 29 },
+      idempotencyKey: "kwa:business-message:v1"
+    }),
+    (error) => error.code === "EFUNCARD_OPERATION_REJECTED"
+      && /无权购买此卡段/.test(error.message)
+      && error.providerCode === "CARD_TYPE_NOT_ALLOWED"
+  );
+
+  const busy = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/openapi/v1",
+    apiKey: "sk_busy_test_key",
+    fetchImpl: async () => errorResponse(
+      "Request is being processed, please do not resubmit",
+      409,
+      "IDEMPOTENCY_IN_PROGRESS",
+      { "retry-after": "3" }
+    )
+  });
+  await assert.rejects(
+    () => busy.request("/cards/purchase", {
+      method: "POST",
+      body: { cardTypeId: 29 },
+      idempotencyKey: "kwa:busy-message:v1"
+    }),
+    (error) => error.code === "EFUNCARD_IDEMPOTENCY_IN_PROGRESS"
+      && error.retryable === true
+      && error.retryAfterSeconds === 3
+      && /Request is being processed/.test(error.message)
+  );
+});
+
 test("EfunCard validates recharge receipt before accepting the balance delta", async () => {
   let detailCalls = 0;
   const client = new EfunCardOpenApiClient({
@@ -73,6 +141,8 @@ test("EfunCard validates recharge receipt before accepting the balance delta", a
       if (target.pathname.endsWith("/card-types")) return response(catalog);
       if (target.pathname.endsWith("/account/balance")) return response({ balance: "100.00", currency: "USDT" });
       if (target.pathname.endsWith("/cards/101/recharge")) {
+        assert.equal(options.headers["X-Idempotency-Key"], "kwa:KWTEST:recharge:v1");
+        assert.equal(options.headers["Idempotency-Key"], "kwa:KWTEST:recharge:v1");
         assert.deepEqual(JSON.parse(options.body), { amount: 5 });
         return response({
           taskId: "RECHARGE-1",
@@ -85,7 +155,7 @@ test("EfunCard validates recharge receipt before accepting the balance delta", a
       throw new Error(`unexpected path ${target.pathname}`);
     }
   });
-  const result = await client.rechargeCard({ cardId: 101, amount: 5 });
+  const result = await client.rechargeCard({ cardId: 101, amount: 5 }, "kwa:KWTEST:recharge:v1");
   assert.equal(result.succeeded, true);
   assert.equal(result.taskId, "RECHARGE-1");
   assert.equal(detailCalls, 1);

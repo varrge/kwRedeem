@@ -105,6 +105,78 @@ test("the second Plus slot reuses a 64 USD pool balance without topping the card
   db.prepare("DELETE FROM managed_cards WHERE id = 'card-pool'").run();
 });
 
+test("a retryable Efun funding rejection keeps the intent prepared for the same-key retry", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-retryable-funding', 'order-retryable-funding', 'KWRETRYFUNDING',
+      'product-retryable-funding', 'preparing_card', '处理中', 'reserved', ?, ?)
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, provider_key, upstream_card_id, vm_card_id, product_code, last4,
+      upstream_status, cached_available_amount, lane, consumed_slots,
+      capacity_state, reconciliation_state, created_at, updated_at
+    ) VALUES ('card-retryable-funding', 'efuncard', 8811, '8811', 'Z-43612081', '4411',
+      'ACTIVE', 0, 'x20', 0, 'AVAILABLE', 'READY', ?, ?)
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO automation_card_reservations (
+      id, execution_id, provider_key, card_id, capacity_key, slot_index, state, reserved_at
+    ) VALUES ('reservation-retryable-funding', 'execution-retryable-funding', 'efuncard',
+      'card-retryable-funding', 'x20', 1, 'reserved', ?)
+  `).run(at);
+
+  const provider = {
+    listCards: async () => ({
+      cards: [{ upstreamCardId: 8811, availableAmount: 0, status: "ACTIVE" }],
+      total: 1
+    }),
+    rechargeCard: async () => {
+      const error = new Error("Request is being processed, please do not resubmit");
+      error.code = "EFUNCARD_IDEMPOTENCY_IN_PROGRESS";
+      error.retryAfterSeconds = 3;
+      throw error;
+    },
+    classifyFundingError: (error) => [
+      "EFUNCARD_IDEMPOTENCY_IN_PROGRESS",
+      "EFUNCARD_RATE_LIMITED"
+    ].includes(error?.code) ? "retryable_no_write" : "unknown"
+  };
+  await assert.rejects(
+    () => prepareAutomationCard(db, {
+      execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-retryable-funding'").get(),
+      mapping: {
+        card_platform_key: "efuncard",
+        card_product_code: "Z-43612081",
+        capacity_key: "x20",
+        card_capacity: 1,
+        funding_amount_usd: 82
+      },
+      decryptText,
+      encryptText,
+      provider,
+      at
+    }),
+    (error) => error.code === "AUTOMATION_FUNDING_RETRYABLE"
+      && /Request is being processed/.test(error.message)
+      && error.retryAfterSeconds === 3
+  );
+  const intent = db.prepare(`
+    SELECT state, submitted_at, resolved_at
+    FROM automation_funding_intents WHERE execution_id = 'execution-retryable-funding'
+  `).get();
+  assert.equal(intent.state, "prepared");
+  assert.equal(intent.submitted_at, null);
+  assert.equal(intent.resolved_at, null);
+  db.prepare("DELETE FROM automation_funding_intents WHERE execution_id = 'execution-retryable-funding'").run();
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-retryable-funding'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-retryable-funding'").run();
+  db.prepare("DELETE FROM managed_cards WHERE id = 'card-retryable-funding'").run();
+});
+
 function seedOrder() {
   const at = clock.toISOString();
   db.prepare(`

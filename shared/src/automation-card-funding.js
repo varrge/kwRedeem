@@ -9,6 +9,8 @@ export class AutomationFundingError extends Error {
     this.code = code;
     this.retryable = options.retryable === true;
     this.unknownOutcome = options.unknownOutcome === true;
+    this.providerCode = options.providerCode || null;
+    this.retryAfterSeconds = Number.isFinite(options.retryAfterSeconds) ? options.retryAfterSeconds : null;
   }
 }
 
@@ -315,9 +317,24 @@ async function executeFundingIntent(db, execution, mapping, provider, intent, de
     const classification = typeof provider.classifyFundingError === "function"
       ? provider.classifyFundingError(error)
       : "unknown";
+    if (classification === "retryable_no_write") {
+      db.prepare(`
+        UPDATE automation_funding_intents
+        SET state = 'prepared', submitted_at = NULL, resolved_at = NULL
+        WHERE id = ?
+      `).run(intent.id);
+      fail("AUTOMATION_FUNDING_RETRYABLE", `卡台暂时未受理资金操作：${error?.message || "请稍后重试"}`, {
+        retryable: true,
+        providerCode: error?.providerCode || error?.code || null,
+        retryAfterSeconds: error?.retryAfterSeconds
+      });
+    }
     if (classification === "known_no_write") {
       db.prepare(`UPDATE automation_funding_intents SET state = 'failed', resolved_at = ? WHERE id = ?`).run(at, intent.id);
-      fail("AUTOMATION_FUNDING_REJECTED", "卡台明确拒绝了资金操作", { retryable: true });
+      fail("AUTOMATION_FUNDING_REJECTED", `卡台明确拒绝了资金操作：${error?.message || "未提供原因"}`, {
+        retryable: true,
+        providerCode: error?.providerCode || error?.code || null
+      });
     }
     db.prepare(`UPDATE automation_funding_intents SET state = 'outcome_unknown' WHERE id = ?`).run(intent.id);
     fail("AUTOMATION_FUNDING_OUTCOME_UNKNOWN", "卡片资金操作结果不确定", { unknownOutcome: true });

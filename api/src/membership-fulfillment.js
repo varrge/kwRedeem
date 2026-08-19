@@ -1728,10 +1728,10 @@ export function createMembershipFulfillmentService(options) {
         });
       }
     }
-    if (key === "efuncard" && parsed.data.apiKey && !/^efk_.+$/.test(parsed.data.apiKey)) {
+    if (key === "efuncard" && parsed.data.apiKey && !/^(?:efk_|sk_).+$/.test(parsed.data.apiKey)) {
       return reply.code(400).send({
         code: "CARD_PLATFORM_CONFIGURATION_INVALID",
-        message: "EfunCard API Key 必须以 efk_ 开头"
+        message: "EfunCard API Key 必须以 efk_ 或 sk_ 开头"
       });
     }
     const enabled = Object.hasOwn(parsed.data, "enabled") ? parsed.data.enabled : current.enabled === 1;

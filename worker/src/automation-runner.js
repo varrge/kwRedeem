@@ -620,9 +620,19 @@ export function createAutomationRunner(options = {}) {
         markManualReview(execution, error.code, error.message);
         return;
       }
-      if (error instanceof AutomationFundingError && error.retryable
-        && !db.prepare("SELECT 1 FROM automation_funding_intents WHERE execution_id = ?").get(execution.id)) {
-        schedule(execution, 30, {
+      if (error instanceof AutomationFundingError && error.retryable) {
+        const intent = db.prepare("SELECT state FROM automation_funding_intents WHERE execution_id = ?").get(execution.id);
+        if (intent && intent.state !== "prepared") {
+          settleAutomationExecution(db, execution.id, "failed", {
+            code: error?.code || "AUTOMATION_CARD_PREPARATION_FAILED",
+            message: boundedError(error?.message, "卡片准备失败"),
+            at: iso(now())
+          });
+          writeAudit("automation.card_failed", execution, { code: error?.code || null });
+          return;
+        }
+        const retryAfter = Number(error.retryAfterSeconds);
+        schedule(execution, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30, {
           status: "waiting_capacity",
           publicMessage: "等待处理",
           errorCode: error.code,

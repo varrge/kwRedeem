@@ -14,6 +14,8 @@ export class EfunCardOpenApiError extends Error {
     this.retryable = options.retryable !== false;
     this.knownNoWrite = options.knownNoWrite === true;
     this.statusCode = options.statusCode || 502;
+    this.providerCode = options.providerCode || null;
+    this.retryAfterSeconds = Number.isFinite(options.retryAfterSeconds) ? options.retryAfterSeconds : null;
   }
 }
 
@@ -51,8 +53,8 @@ export function normalizeEfunCardOpenApiBaseUrl(value) {
     fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 必须使用标准 HTTPS 地址", { retryable: false, knownNoWrite: true });
   }
   url.pathname = url.pathname.replace(/\/+$/, "");
-  if (url.pathname !== "/api/open/v1") {
-    fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 地址必须以 /api/open/v1 结尾", { retryable: false, knownNoWrite: true });
+  if (!["/api/open/v1", "/openapi/v1"].includes(url.pathname)) {
+    fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard 地址必须以 /api/open/v1 或 /openapi/v1 结尾", { retryable: false, knownNoWrite: true });
   }
   return url.toString().replace(/\/$/, "");
 }
@@ -155,8 +157,8 @@ export class EfunCardOpenApiClient {
   constructor(options = {}) {
     this.baseUrl = normalizeEfunCardOpenApiBaseUrl(options.baseUrl);
     this.apiKey = requiredString(options.apiKey, "apiKey");
-    if (!/^efk_.+$/.test(this.apiKey)) {
-      fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard API Key 必须以 efk_ 开头", {
+    if (!/^(?:efk_|sk_).+$/.test(this.apiKey)) {
+      fail("EFUNCARD_CONFIGURATION_INVALID", "EfunCard API Key 必须以 efk_ 或 sk_ 开头", {
         retryable: false,
         knownNoWrite: true
       });
@@ -179,9 +181,16 @@ export class EfunCardOpenApiClient {
     }
     let response;
     try {
-      const headers = { Accept: "application/json", "X-API-Key": this.apiKey };
+      const headers = {
+        Accept: "application/json",
+        "X-API-Key": this.apiKey,
+        Authorization: `Bearer ${this.apiKey}`
+      };
       if (options.body !== undefined) headers["Content-Type"] = "application/json";
-      if (options.idempotencyKey) headers["X-Idempotency-Key"] = options.idempotencyKey;
+      if (options.idempotencyKey) {
+        headers["X-Idempotency-Key"] = options.idempotencyKey;
+        headers["Idempotency-Key"] = options.idempotencyKey;
+      }
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers,
@@ -221,16 +230,23 @@ export class EfunCardOpenApiClient {
       throw error;
     }
     if (!response.ok || envelope?.success !== true) {
-      const knownNoWrite = [400, 401, 403, 404, 422, 429].includes(response.status);
+      const knownNoWrite = envelope?.success === false
+        || [400, 401, 403, 404, 422, 429].includes(response.status);
+      const providerCode = typeof envelope?.code === "string" ? envelope.code.trim() : "";
+      const providerMessage = typeof envelope?.message === "string" ? envelope.message.trim() : "";
+      const retryAfter = Number(response.headers.get("retry-after"));
       const code = response.status === 401
         ? "EFUNCARD_AUTH_FAILED"
         : (response.status === 403 ? "EFUNCARD_ACCESS_DENIED"
-            : (response.status === 429 ? "EFUNCARD_RATE_LIMITED" : "EFUNCARD_OPERATION_REJECTED"));
+            : (response.status === 409 ? "EFUNCARD_IDEMPOTENCY_IN_PROGRESS"
+              : (response.status === 429 ? "EFUNCARD_RATE_LIMITED" : "EFUNCARD_OPERATION_REJECTED")));
       fail(code,
-        response.status === 401 ? "EfunCard 鉴权失败" : "EfunCard 拒绝了操作", {
+        providerMessage || (response.status === 401 ? "EfunCard 鉴权失败" : "EfunCard 拒绝了操作"), {
           statusCode: response.status,
-          retryable: response.status >= 500 || response.status === 429,
-          knownNoWrite
+          retryable: response.status >= 500 || [409, 429].includes(response.status),
+          knownNoWrite: response.status !== 409,
+          providerCode,
+          retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : null
         });
     }
     return envelope.data;
@@ -434,7 +450,7 @@ export class EfunCardOpenApiClient {
     fail("EFUNCARD_FUNDING_OUTCOME_UNKNOWN", "EfunCard 开卡结果仍未确认", { retryable: false });
   }
 
-  async rechargeCard(input) {
+  async rechargeCard(input, idempotencyKey) {
     const cardId = number(input.cardId, "cardId", { positive: true });
     const amount = number(input.amount, "amount", { positive: true });
     const before = await this.getCardDetail(cardId);
@@ -456,7 +472,11 @@ export class EfunCardOpenApiClient {
     if (platformBalance.currency !== "USD" || platformBalance.balance + 0.001 < requiredBalance) {
       fail("EFUNCARD_BALANCE_INSUFFICIENT", "EfunCard 平台余额不足", { retryable: false, knownNoWrite: true });
     }
-    const receipt = await this.request(`/cards/${cardId}/recharge`, { method: "POST", body: { amount } });
+    const receipt = await this.request(`/cards/${cardId}/recharge`, {
+      method: "POST",
+      body: { amount },
+      idempotencyKey
+    });
     const totalCost = catalog.debitCurrency === "CNY" ? Number(receipt?.totalCostCny) : Number(receipt?.totalCostUsdt);
     const expectedTotal = catalog.debitCurrency === "CNY"
       ? (amount + expectedFee) * catalog.exchangeRate
@@ -481,6 +501,9 @@ export class EfunCardOpenApiClient {
   }
 
   classifyFundingError(error) {
+    if (["EFUNCARD_IDEMPOTENCY_IN_PROGRESS", "EFUNCARD_RATE_LIMITED"].includes(error?.code)) {
+      return "retryable_no_write";
+    }
     return error?.knownNoWrite === true ? "known_no_write" : "unknown";
   }
 }

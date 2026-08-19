@@ -399,10 +399,18 @@ export class EfunCardOpenApiClient {
     }
     const expectedFee = product.openFee
       + serviceFee(amount, product.openFeeRate, product.minimumServiceFee, product.roundOpenFeeUp);
-    const requiredBalance = amount + expectedFee + product.minimumPlatformBalance;
+    const debit = amount + expectedFee;
+    // minBalanceUsdt is a provider account-balance floor, not an additional debit.
+    const requiredBalance = Math.max(debit, product.minimumPlatformBalance);
     const platformBalance = await this.getBalance();
     if (platformBalance.currency !== "USD" || platformBalance.balance + 0.001 < requiredBalance) {
-      fail("EFUNCARD_BALANCE_INSUFFICIENT", "EfunCard 平台余额不足", { retryable: false, knownNoWrite: true });
+      const actual = Number(platformBalance.balance);
+      const observed = Number.isFinite(actual) ? actual.toFixed(2) : "未知";
+      const required = requiredBalance.toFixed(2);
+      const currency = platformBalance.currency || "未知";
+      fail("EFUNCARD_BALANCE_INSUFFICIENT",
+        `EfunCard 平台余额不足（实际 ${observed} ${currency}，至少需要 ${required} USD；实际扣款 ${debit.toFixed(2)}，最低余额门槛 ${product.minimumPlatformBalance.toFixed(2)}，取两者较大值）`,
+        { retryable: false, knownNoWrite: true });
     }
     const normalizedKey = normalizeIdempotencyKey(idempotencyKey);
     const data = await this.request("/cards/purchase", {
@@ -467,10 +475,18 @@ export class EfunCardOpenApiClient {
       fail("EFUNCARD_OPERATION_REJECTED", "EfunCard 充值金额或卡产品无效", { retryable: false, knownNoWrite: true });
     }
     const expectedFee = serviceFee(amount, product.rechargeFeeRate, product.minimumServiceFee, false);
-    const requiredBalance = amount + expectedFee + product.minimumPlatformBalance;
+    const debit = amount + expectedFee;
+    // minBalanceUsdt is a provider account-balance floor, not an additional debit.
+    const requiredBalance = Math.max(debit, product.minimumPlatformBalance);
     const platformBalance = await this.getBalance();
     if (platformBalance.currency !== "USD" || platformBalance.balance + 0.001 < requiredBalance) {
-      fail("EFUNCARD_BALANCE_INSUFFICIENT", "EfunCard 平台余额不足", { retryable: false, knownNoWrite: true });
+      const actual = Number(platformBalance.balance);
+      const observed = Number.isFinite(actual) ? actual.toFixed(2) : "未知";
+      const required = requiredBalance.toFixed(2);
+      const currency = platformBalance.currency || "未知";
+      fail("EFUNCARD_BALANCE_INSUFFICIENT",
+        `EfunCard 平台余额不足（实际 ${observed} ${currency}，至少需要 ${required} USD；实际扣款 ${debit.toFixed(2)}，最低余额门槛 ${product.minimumPlatformBalance.toFixed(2)}，取两者较大值）`,
+        { retryable: false, knownNoWrite: true });
     }
     const receipt = await this.request(`/cards/${cardId}/recharge`, {
       method: "POST",

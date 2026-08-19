@@ -66,6 +66,44 @@ test("EfunCard validates opening cost and reconciles the activated card", async 
   assert.ok(requests.some((item) => item.path.endsWith("/cards/purchase")));
 });
 
+test("EfunCard explains the observed and required balances before rejecting an open", async () => {
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/openapi/v1",
+    apiKey: "sk_balance_test_key",
+    fetchImpl: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/card-types")) return response(catalog);
+      if (path.endsWith("/account/balance")) return response({ balance: "100.00", currency: "USDT" });
+      throw new Error(`unexpected path ${path}`);
+    }
+  });
+  await assert.rejects(
+    () => client.openCard({ productCode: "Z-43612081", initAmount: 100 }, "kwa:KWTEST:balance:v1"),
+    (error) => error.code === "EFUNCARD_BALANCE_INSUFFICIENT"
+      && /实际 100\.00 USD/.test(error.message)
+      && /至少需要 100\.30 USD/.test(error.message)
+      && /实际扣款 100\.30/.test(error.message)
+      && /最低余额门槛 20\.00/.test(error.message)
+  );
+});
+
+test("EfunCard treats minimum balance as a floor instead of an additive cost", async () => {
+  const client = new EfunCardOpenApiClient({
+    baseUrl: "https://efun.example/openapi/v1",
+    apiKey: "sk_floor_test_key",
+    fetchImpl: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/card-types")) return response(catalog);
+      if (path.endsWith("/account/balance")) return response({ balance: "99.31", currency: "USDT" });
+      if (path.endsWith("/cards/purchase")) return response({ cards: [{ id: 102 }], totalCostUsdt: "82.45" });
+      if (path.endsWith("/cards/102")) return response({ id: 102, cardType: "Z-43612081", status: "ACTIVE", cardBalance: "82.00" });
+      throw new Error(`unexpected path ${path}`);
+    }
+  });
+  const opened = await client.openCard({ productCode: "Z-43612081", initAmount: 82 }, "kwa:KWTEST:floor:v1");
+  assert.equal(opened.upstreamCardId, 102);
+});
+
 test("EfunCard accepts the new Open API path and sk keys while retaining both auth headers", async () => {
   let request;
   const client = new EfunCardOpenApiClient({

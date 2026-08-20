@@ -4950,8 +4950,16 @@ function editRaidCampaign(id) {
 
 async function saveRaidCampaign() {
   try {
-    const editId = refs.raidCampaignEditId.value;
+    let editId = refs.raidCampaignEditId.value;
     const body = collectRaidCampaign();
+    if (!editId) {
+      const existing = raidCampaignsCache.find((item) => item.connectionId === body.connectionId && item.month === body.month);
+      if (existing?.status === "draft") {
+        editId = existing.id;
+      } else if (existing) {
+        throw new Error(`该连接在 ${body.month} 已有${getStatusLabel(existing.status)}活动，发布后不能修改`);
+      }
+    }
     const path = editId
       ? `/api/admin/sub2api/raid/campaigns/${encodeURIComponent(editId)}/config`
       : "/api/admin/sub2api/raid/campaigns";

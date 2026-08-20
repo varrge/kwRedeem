@@ -298,6 +298,34 @@ export function createSub2ApiRaidService({
     }
   }
 
+  function findCampaignByConnectionMonth(connectionId, month, excludeId = "") {
+    return excludeId
+      ? db.prepare("SELECT * FROM sub2api_raid_campaigns WHERE connection_id = ? AND month = ? AND id <> ?").get(connectionId, month, excludeId)
+      : db.prepare("SELECT * FROM sub2api_raid_campaigns WHERE connection_id = ? AND month = ?").get(connectionId, month);
+  }
+
+  function duplicateCampaignError(data, existing = null) {
+    const suffix = existing?.status === "draft"
+      ? "请编辑现有草稿"
+      : "该月活动已发布，不能重复创建";
+    return Object.assign(
+      new Error(`该连接在 ${data.month} 已存在 Boss 活动，${suffix}`),
+      { statusCode: 409 }
+    );
+  }
+
+  function runCampaignWrite(data, callback, excludeId = "") {
+    try {
+      return db.transaction(callback)();
+    } catch (error) {
+      if (String(error?.code || "").startsWith("SQLITE_CONSTRAINT")) {
+        const existing = findCampaignByConnectionMonth(data.connectionId, data.month, excludeId);
+        if (existing) throw duplicateCampaignError(data, existing);
+      }
+      throw error;
+    }
+  }
+
   function createCampaign(input, actor) {
     const parsed = campaignSchema.safeParse(input);
     if (!parsed.success) {
@@ -312,6 +340,8 @@ export function createSub2ApiRaidService({
       error.statusCode = 404;
       throw error;
     }
+    const existing = findCampaignByConnectionMonth(data.connectionId, data.month);
+    if (existing) throw duplicateCampaignError(data, existing);
     const worstCaseCost = campaignWorstCaseCost(data);
     if (worstCaseCost > data.rewardBudget) {
       const error = new Error(`最坏奖励成本 ${worstCaseCost} 超过月度预算 ${data.rewardBudget}`);
@@ -320,7 +350,7 @@ export function createSub2ApiRaidService({
     }
     const campaignId = id("raid-campaign");
     const createdAt = now();
-    db.transaction(() => {
+    runCampaignWrite(data, () => {
       db.prepare(`
         INSERT INTO sub2api_raid_campaigns (
           id, connection_id, name, month, status, start_at, end_at, settlement_end_at,
@@ -345,7 +375,7 @@ export function createSub2ApiRaidService({
         boss.themeMultiplier, JSON.stringify(serializeRewardConfig(boss.clearReward)),
         JSON.stringify(boss.mvpRewards.map(serializeRewardConfig)), createdAt, createdAt
       ));
-    })();
+    });
     createAuditLog({
       action: "sub2api.raid.campaign.create",
       actor,
@@ -371,6 +401,8 @@ export function createSub2ApiRaidService({
     const data = parsed.data;
     const connection = db.prepare("SELECT id FROM sub2api_connections WHERE id = ? AND status = 'active'").get(data.connectionId);
     if (!connection) throw Object.assign(new Error("Sub2api 连接不存在或未启用"), { statusCode: 404 });
+    const existing = findCampaignByConnectionMonth(data.connectionId, data.month, campaign.id);
+    if (existing) throw duplicateCampaignError(data, existing);
     const worstCaseCost = campaignWorstCaseCost(data);
     if (worstCaseCost > data.rewardBudget) {
       throw Object.assign(
@@ -379,7 +411,7 @@ export function createSub2ApiRaidService({
       );
     }
     const updatedAt = now();
-    db.transaction(() => {
+    runCampaignWrite(data, () => {
       db.prepare(`
         UPDATE sub2api_raid_campaigns SET
           connection_id = ?, name = ?, month = ?, start_at = ?, end_at = ?,
@@ -405,7 +437,7 @@ export function createSub2ApiRaidService({
         boss.themeMultiplier, JSON.stringify(serializeRewardConfig(boss.clearReward)),
         JSON.stringify(boss.mvpRewards.map(serializeRewardConfig)), updatedAt, updatedAt
       ));
-    })();
+    }, campaign.id);
     createAuditLog({
       action: "sub2api.raid.campaign.update",
       actor,

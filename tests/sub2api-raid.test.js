@@ -248,6 +248,37 @@ test("raid ignores duplicate usage and refuses a budget-overflowing campaign", a
   assert.equal(rejected.statusCode, 409);
 });
 
+test("raid reports an existing connection-month campaign without leaking a SQLite constraint", async () => {
+  const config = {
+    connectionId: "raid-main",
+    name: "十月活动",
+    month: "2026-10",
+    startAt: "2026-09-30T16:00:00.000Z",
+    endAt: "2026-10-31T16:00:00.000Z",
+    settlementEndAt: "2026-10-31T16:10:00.000Z",
+    effectiveDamageThreshold: 10,
+    rewardBudget: 100,
+    bosses: [boss(1, 10)]
+  };
+  const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", { body: config });
+  assert.equal(created.statusCode, 201);
+  const duplicate = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
+    body: { ...config, name: "重复月份活动" }
+  });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.body.message, "该连接在 2026-10 已存在 Boss 活动，请编辑现有草稿");
+
+  const published = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", {
+    params: { id: created.body.campaign.id }
+  });
+  assert.equal(published.statusCode, 200);
+  const locked = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
+    body: { ...config, name: "不能覆盖已发布活动" }
+  });
+  assert.equal(locked.statusCode, 409);
+  assert.equal(locked.body.message, "该连接在 2026-10 已存在 Boss 活动，该月活动已发布，不能重复创建");
+});
+
 test("raid refuses a shake-card reward without a positive internal cost", async () => {
   const invalidBoss = boss(1, 10);
   invalidBoss.mvpRewards[0] = {

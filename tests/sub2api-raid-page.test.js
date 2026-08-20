@@ -26,6 +26,8 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.match(script, /\/api\/admin\/sub2api\/raid\/campaigns\/\$\{encodeURIComponent\(id\)\}/);
   assert.match(script, /item\.canDelete/);
   assert.match(script, /options\.body === undefined \|\| options\.body === null/);
+  assert.doesNotMatch(html, /raid-damage-threshold/);
+  assert.match(script, /data-field="entryCostThreshold"/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {
@@ -43,6 +45,7 @@ test("production battlefield uses server-confirmed damage and eight switchable l
   assert.match(html, /id="history-tabs"/);
   assert.match(html, /payload\.history/);
   assert.match(html, /payload\.currentBoss \|\|/);
+  assert.match(html, /boss\.entryCostThreshold/);
   assert.match(html, /pointermove/);
   assert.match(html, /prefers-reduced-motion/);
   assert.doesNotMatch(html, /@keyframes\s+(breathe|pulseBoss|bossIdle)/i);

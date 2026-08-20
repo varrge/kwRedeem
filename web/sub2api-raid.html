@@ -341,7 +341,7 @@
 
         function renderRoute(campaign) {
           refs.routeList.style.setProperty("--boss-count", Math.min(campaign.bosses.length, 4));
-          refs.routeList.innerHTML = campaign.bosses.map((boss) => `<div class="route-node ${escapeHtml(boss.status)}"><span>LV.${String(boss.level).padStart(2, "0")} · ${escapeHtml(boss.status)}</span><strong>${escapeHtml(boss.name)} / ${number(boss.health)} HP</strong></div>`).join("");
+          refs.routeList.innerHTML = campaign.bosses.map((boss) => `<div class="route-node ${escapeHtml(boss.status)}"><span>LV.${String(boss.level).padStart(2, "0")} · ${escapeHtml(boss.status)}</span><strong>${escapeHtml(boss.name)} / ${number(boss.health)} HP · 入榜 ${number(boss.entryCostThreshold)}</strong></div>`).join("");
         }
 
         function renderLog(items) {
@@ -349,7 +349,7 @@
         }
 
         function renderRanking(items, own, slots) {
-          refs.ranking.innerHTML = items.length ? items.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>${item.effective ? "有效参战" : "尚未达到门槛"}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无贡献记录</span></div>`;
+          refs.ranking.innerHTML = items.length ? items.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`;
         }
 
         function renderRewards(boss, effectiveRaiders, slots) {
@@ -357,7 +357,7 @@
             { label: "击杀共享奖励", reward: boss.clearReward, unlocked: effectiveRaiders > 0, clear: true },
             ...boss.mvpRewards.map((reward, index) => ({ label: `MVP · 第 ${index + 1} 名`, reward, unlocked: slots > index }))
           ];
-          refs.rewardList.innerHTML = rewards.map((item) => `<article class="reward glass ${item.clear ? "clear" : ""}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(rewardText(item.reward))}</strong><small>${item.unlocked ? "当前已解锁" : item.clear ? "达到有效伤害门槛后解锁" : `需要 ${Math.max(10, (Number(item.label.match(/\d+/)?.[0]) || 1) * 10)} 名有效参战者`}</small></article>`).join("");
+          refs.rewardList.innerHTML = rewards.map((item) => `<article class="reward glass ${item.clear ? "clear" : ""}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(rewardText(item.reward))}</strong><small>${item.unlocked ? "当前已解锁" : item.clear ? "达到本 Boss 入榜消耗门槛后解锁" : `需要 ${Math.max(10, (Number(item.label.match(/\d+/)?.[0]) || 1) * 10)} 名有效参战者`}</small></article>`).join("");
         }
 
         function renderOwnRewards(items) {
@@ -380,10 +380,10 @@
               <div><span>战斗结果</span><strong>${escapeHtml(result)}</strong></div>
               <div><span>全站伤害</span><strong>${number(selected.totalDamage)}</strong></div>
               <div><span>有效参战 / MVP</span><strong>${selected.effectiveRaiderCount} 人 / ${selected.mvpSlots} 席</strong></div>
-              <div><span>我的战绩</span><strong>${selected.own ? `第 ${selected.own.rank} 名 · ${number(selected.own.damage)}` : "未产生贡献"}</strong></div>
+              <div><span>我的战绩</span><strong>${selected.own ? selected.own.effective ? `第 ${selected.own.rank} 名 · ${number(selected.own.damage)}` : `消耗 ${number(selected.own.actualCost)} · 未入榜` : "未产生贡献"}</strong></div>
             </div>
             <div class="section-head" style="margin-top:18px"><h2>最终贡献榜</h2><p>${escapeHtml(winners)}</p></div>
-            <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>${item.effective ? "有效参战" : "未达到门槛"}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无贡献记录</span></div>`}</div>`;
+            <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`}</div>`;
         }
 
         function renderBossAsset(assetKey) {
@@ -444,13 +444,13 @@
           refs.themeGroup.textContent = boss.themeGroupId ? `${boss.themeGroupName || `分组 ${boss.themeGroupId}`} · ${boss.themeMultiplier}x` : "标准伤害 · 1.0x";
           refs.mvpSlots.textContent = `TOP ${historical?.mvpSlots ?? payload.mvpSlots}`;
           refs.syncTime.textContent = payload.sync?.lastSyncedAt ? `上次同步 ${formatTime(payload.sync.lastSyncedAt)}` : "尚未同步";
-          refs.rankNote.textContent = `有效门槛 ${number(payload.campaign.effectiveDamageThreshold)} · 当前 ${payload.mvpSlots} 个 MVP 名额`;
+          refs.rankNote.textContent = `本 Boss 实际消耗达到 ${number(boss.entryCostThreshold)} 后入榜 · 当前 ${payload.mvpSlots} 个 MVP 名额`;
           refs.enrollBtn.disabled = battleFinished || Boolean(payload.enrollment) || payload.campaign.status !== "active";
           refs.enrollBtn.textContent = battleFinished ? "本月战斗已结束" : payload.enrollment ? "已加入本月战斗" : payload.campaign.status === "active" ? "加入本月战斗" : "当前不可加入";
           refs.playerNote.textContent = battleFinished
-            ? (historical?.own ? `最终战绩：第 ${historical.own.rank} 名 · ${number(historical.own.damage)} 伤害` : "本月未产生个人战绩")
+            ? (historical?.own ? historical.own.effective ? `最终战绩：第 ${historical.own.rank} 名 · ${number(historical.own.damage)} 伤害` : `最终实际消耗 ${number(historical.own.actualCost)}，未达到本 Boss 入榜门槛` : "本月未产生个人战绩")
             : payload.enrollment
-            ? (payload.own ? `本 Boss：实际消耗 ${number(payload.own.actualCost)} + 加成 ${number(payload.own.bonusDamage)} = ${number(payload.own.damage)} 伤害` : "已加入，等待下一条权威用量")
+            ? (payload.own ? `本 Boss：实际消耗 ${number(payload.own.actualCost)} / 入榜 ${number(boss.entryCostThreshold)} · 加成后 ${number(payload.own.damage)} 伤害` : "已加入，等待下一条权威用量")
             : "加入后仅统计此刻之后的真实消耗";
           renderRoute(payload.campaign);
           renderLog(payload.battleLog || []);

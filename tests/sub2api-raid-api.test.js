@@ -63,6 +63,7 @@ test("production routes authenticate raid administration and keep published rule
       title: "第一防线",
       assetKey: "sentinel",
       health: 2000,
+      entryCostThreshold: 25,
       themeGroupId: 101,
       themeGroupName: "高速中转",
       themeMultiplier: 1.25,
@@ -111,6 +112,7 @@ test("production routes authenticate raid administration and keep published rule
   assert.equal(bootstrap.statusCode, 200);
   assert.equal(bootstrap.json().campaign.name, "八月全域突袭");
   assert.equal(bootstrap.json().currentBoss.assetKey, "sentinel");
+  assert.equal(bootstrap.json().currentBoss.entryCostThreshold, 25);
 
   const leaderboard = await app.inject({
     method: "GET",

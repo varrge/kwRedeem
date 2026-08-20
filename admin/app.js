@@ -460,7 +460,6 @@ const refs = {
   raidCampaignConnection: document.querySelector("#raid-campaign-connection"),
   raidCampaignName: document.querySelector("#raid-campaign-name"),
   raidCampaignMonth: document.querySelector("#raid-campaign-month"),
-  raidDamageThreshold: document.querySelector("#raid-damage-threshold"),
   raidRewardBudget: document.querySelector("#raid-reward-budget"),
   raidExcludedUsers: document.querySelector("#raid-excluded-users"),
   raidBossEditor: document.querySelector("#raid-boss-editor"),
@@ -4717,6 +4716,7 @@ function defaultRaidBosses() {
     { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, clearAmount: 1 }
   ].map((boss) => ({
     ...boss,
+    entryCostThreshold: 10,
     themeGroupId: null,
     themeGroupName: "",
     themeMultiplier: 1,
@@ -4800,6 +4800,7 @@ function renderRaidBossEditor(bosses = defaultRaidBosses()) {
         <label class="field"><span>称号</span><input data-field="title" maxlength="120" value="${escapeHtml(boss.title || "")}" /></label>
         <label class="field"><span>内置素材</span><select data-field="assetKey">${Object.entries(RAID_ASSETS).map(([key, label]) => `<option value="${escapeHtml(key)}" ${boss.assetKey === key ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
         <label class="field"><span>血量</span><input data-field="health" type="number" min="0.01" step="0.01" value="${escapeHtml(boss.health ?? 2000)}" required /></label>
+        <label class="field"><span>入榜消耗额度</span><input data-field="entryCostThreshold" type="number" min="0.01" step="0.01" value="${escapeHtml(boss.entryCostThreshold ?? 10)}" required /></label>
         <label class="field"><span>主题分组 ID</span><input data-field="themeGroupId" type="number" min="1" step="1" value="${escapeHtml(boss.themeGroupId ?? "")}" placeholder="留空为全站 1.0x" /></label>
         <label class="field"><span>主题分组名称</span><input data-field="themeGroupName" maxlength="100" value="${escapeHtml(boss.themeGroupName || "")}" /></label>
         <label class="field"><span>主题伤害倍率</span><input data-field="themeMultiplier" type="number" min="1" max="5" step="0.01" value="${escapeHtml(boss.themeMultiplier ?? 1)}" required /></label>
@@ -4860,6 +4861,7 @@ function collectRaidBosses() {
       title: row.querySelector('[data-field="title"]').value.trim(),
       assetKey: row.querySelector('[data-field="assetKey"]').value,
       health: Number(row.querySelector('[data-field="health"]').value),
+      entryCostThreshold: Number(row.querySelector('[data-field="entryCostThreshold"]').value),
       themeGroupId: groupId > 0 ? groupId : null,
       themeGroupName: row.querySelector('[data-field="themeGroupName"]').value.trim(),
       themeMultiplier: Number(row.querySelector('[data-field="themeMultiplier"]').value),
@@ -4884,15 +4886,16 @@ function getRaidMonthWindow(month) {
 
 function collectRaidCampaign() {
   const month = refs.raidCampaignMonth.value;
+  const bosses = collectRaidBosses();
   return {
     connectionId: refs.raidCampaignConnection.value,
     name: refs.raidCampaignName.value.trim(),
     month,
     ...getRaidMonthWindow(month),
-    effectiveDamageThreshold: Number(refs.raidDamageThreshold.value),
+    effectiveDamageThreshold: bosses[0].entryCostThreshold,
     rewardBudget: Number(refs.raidRewardBudget.value),
     excludedUserIds: refs.raidExcludedUsers.value.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean),
-    bosses: collectRaidBosses()
+    bosses
   };
 }
 
@@ -4921,7 +4924,6 @@ function resetRaidCampaignForm() {
   refs.raidCampaignResetBtn.classList.add("hidden");
   refs.raidCampaignMonth.value = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 7);
   refs.raidCampaignName.value = "全域突袭 · 第一赛季";
-  refs.raidDamageThreshold.value = "10";
   refs.raidRewardBudget.value = "2800";
   refs.raidExcludedUsers.value = "";
   refs.raidCampaignConnection.disabled = false;
@@ -4938,7 +4940,6 @@ function editRaidCampaign(id) {
   refs.raidCampaignConnection.value = campaign.connectionId;
   refs.raidCampaignName.value = campaign.name;
   refs.raidCampaignMonth.value = campaign.month;
-  refs.raidDamageThreshold.value = campaign.effectiveDamageThreshold;
   refs.raidRewardBudget.value = campaign.rewardBudget;
   refs.raidExcludedUsers.value = (campaign.excludedUserIds || []).join(", ");
   renderRaidBossEditor(campaign.bosses);
@@ -4977,7 +4978,7 @@ function renderRaidCampaigns() {
   renderTable(refs.raidCampaignList, [
     { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br><code>${escapeHtml(item.month)} · ${escapeHtml(item.id)}</code>` },
     { label: "状态", render: (item) => `${renderStatus(item.status)}<br><span class="hint">${item.bosses.filter((boss) => boss.status === "defeated").length} / ${item.bosses.length} 已击败</span>` },
-    { label: "门槛 / 预算", render: (item) => `门槛 ${escapeHtml(item.effectiveDamageThreshold)}<br><span class="hint">最坏 ${escapeHtml(item.worstCaseCost)} / 预算 ${escapeHtml(item.rewardBudget)}</span>` },
+    { label: "入榜门槛 / 预算", render: (item) => `${item.bosses.map((boss) => `LV.${escapeHtml(boss.level)} · ${escapeHtml(boss.entryCostThreshold)}`).join("<br>")}<br><span class="hint">最坏 ${escapeHtml(item.worstCaseCost)} / 预算 ${escapeHtml(item.rewardBudget)}</span>` },
     { label: "当前 Boss", render: (item) => { const boss = item.bosses.find((entry) => entry.id === item.currentBossId); return boss ? `<strong>LV.${escapeHtml(boss.level)} ${escapeHtml(boss.name)}</strong><br><span class="hint">${escapeHtml(boss.remainingHealth)} / ${escapeHtml(boss.health)} HP</span>` : "-"; } },
     { label: "同步", render: (item) => item.sync ? `<span class="hint">${escapeHtml(item.sync.lastSyncedAt ? formatWorldCupTime(item.sync.lastSyncedAt) : "尚未同步")}<br>${item.sync.error ? `<span style="color:var(--error)">${escapeHtml(item.sync.error)}</span>` : `游标 ${escapeHtml(item.sync.cursor || "-")}`}</span>` : "尚未同步" },
     { label: "操作", render: (item) => `
@@ -5006,7 +5007,7 @@ async function viewRaidHistory(campaignId) {
     renderTable(refs.raidHistoryList, [
       { label: "Boss", render: (item) => `<strong>LV.${escapeHtml(item.boss.level)} ${escapeHtml(item.boss.name)}</strong><br><span class="hint">${item.defeatedAt ? `击败于 ${escapeHtml(formatWorldCupTime(item.defeatedAt))}` : escapeHtml(getStatusLabel(item.boss.status))}</span>` },
       { label: "结算", render: (item) => `伤害 ${escapeHtml(item.totalDamage)}<br><span class="hint">有效 ${escapeHtml(item.effectiveRaiderCount)} 人 · MVP ${escapeHtml(item.mvpSlots)} 席</span>` },
-      { label: "原始榜单", render: (item) => item.ranking.slice(0, 10).map((rank) => `<span class="hint">#${escapeHtml(rank.rank)} <code>${escapeHtml(rank.identity?.userId || rank.userId)}</code> · ${escapeHtml(rank.damage)}</span>`).join("<br>") || "-" },
+      { label: "原始榜单", render: (item) => item.ranking.slice(0, 10).map((rank) => `<span class="hint">${rank.effective ? `#${escapeHtml(rank.rank)}` : "未入榜"} <code>${escapeHtml(rank.identity?.userId || rank.userId)}</code> · 消耗 ${escapeHtml(rank.actualCost)} · 伤害 ${escapeHtml(rank.damage)}</span>`).join("<br>") || "-" },
       { label: "最终 MVP", render: (item) => item.finalWinners.length ? item.finalWinners.map((winner) => `<span class="hint">#${escapeHtml(winner.rank)} <code>${escapeHtml(winner.userId)}</code> · ${escapeHtml(getStatusLabel(winner.status))}</span>`).join("<br>") : "未解锁" },
       { label: "资格顺延", render: (item) => item.disqualifications.length ? item.disqualifications.map((entry) => `<span class="hint"><code>${escapeHtml(entry.userId)}</code> → <code>${escapeHtml(entry.replacementUserId || "无替补")}</code><br>${escapeHtml(entry.reason)}</span>`).join("<br>") : "-" }
     ], payload.bosses || [], "该活动暂无已冻结或月末保留的榜单");

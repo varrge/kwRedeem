@@ -1636,7 +1636,7 @@
             </div>
 
             <div class="reward-strip" aria-label="当前 Boss 奖励">
-              <article class="reward-card is-shared"><span>击杀共享奖励</span><strong>0.30 额度</strong><small>达到本 Boss 统一伤害门槛即可获得</small></article>
+              <article class="reward-card is-shared"><span>击杀共享奖励</span><strong>0.30 额度</strong><small>达到本 Boss 入榜消耗门槛即可获得</small></article>
               <article class="reward-card is-mvp"><span>MVP · 第 1 名</span><strong>低级抽奖卡 ×6</strong><small>有效参战达到 10 人后解锁</small></article>
               <article class="reward-card is-mvp"><span>MVP · 第 2 名</span><strong>低级抽奖卡 ×4</strong><small>有效参战达到 20 人后解锁</small></article>
               <article class="reward-card is-mvp"><span>MVP · 第 3 名</span><strong>低级抽奖卡 ×2</strong><small>还需 7 名有效参战者解锁</small></article>
@@ -1668,15 +1668,15 @@
         <section class="plan-band"><div class="plan-inner">
           <div class="section-head"><div><h2>首月数值草案</h2><p>正式发布前使用最近三个月真实用量回放，活动开始后不可临时加血或减血。</p></div></div>
           <table class="data-table">
-            <thead><tr><th>Boss</th><th>血量</th><th>主题倍率</th><th>目标</th></tr></thead>
-            <tbody><tr><td>LV.01 封锁者</td><td>2,000</td><td>1.0x</td><td>低门槛验证参与率</td></tr><tr><td>LV.02 利维坦</td><td>4,000</td><td>1.0x</td><td>连续推进第二阶段</td></tr><tr><td>LV.03 棱镜母体</td><td>7,000</td><td>1.0x</td><td>中段协作目标</td></tr><tr><td>LV.04 零号主机</td><td>11,000</td><td>1.0x</td><td>月度最终 Boss</td></tr></tbody>
+            <thead><tr><th>Boss</th><th>血量</th><th>入榜消耗</th><th>主题倍率</th><th>目标</th></tr></thead>
+            <tbody><tr><td>LV.01 封锁者</td><td>2,000</td><td>10</td><td>1.0x</td><td>低门槛验证参与率</td></tr><tr><td>LV.02 利维坦</td><td>4,000</td><td>10</td><td>1.0x</td><td>连续推进第二阶段</td></tr><tr><td>LV.03 棱镜母体</td><td>7,000</td><td>10</td><td>1.0x</td><td>中段协作目标</td></tr><tr><td>LV.04 零号主机</td><td>11,000</td><td>10</td><td>1.0x</td><td>月度最终 Boss</td></tr></tbody>
           </table>
         </div></section>
       </section>
 
       <!-- View 3: Rewards -->
       <section class="page-view" data-view="rewards" hidden>
-        <div class="view-intro"><div class="plan-inner"><div class="section-head"><div><p class="eyebrow">Reward economy</p><h1>名额随有效参与人数增长，成本在发布前封顶</h1><p>统一伤害门槛建议首月为 10。低于门槛的伤害仍削减血量，但不计入奖励人数。</p></div></div></div></div>
+        <div class="view-intro"><div class="plan-inner"><div class="section-head"><div><p class="eyebrow">Reward economy</p><h1>名额随有效参与人数增长，成本在发布前封顶</h1><p>每只 Boss 独立配置实际消耗入榜门槛。低于门槛的伤害仍削减血量，但不计入奖励人数。</p></div></div></div></div>
         <section class="plan-band"><div class="plan-inner">
           <div class="section-head"><div><h2>浮动 MVP 名额</h2><p>MVP 名额 = min(3, floor(有效参战人数 / 10))</p></div></div>
           <div class="slot-grid"><div class="slot"><strong>0</strong><span>0–9 名有效参战者</span></div><div class="slot"><strong>1</strong><span>10–19 名有效参战者</span></div><div class="slot"><strong>2</strong><span>20–29 名有效参战者</span></div><div class="slot"><strong>3</strong><span>30 名及以上，上限固定</span></div></div>
@@ -1687,7 +1687,7 @@
             <thead><tr><th>奖品</th><th>适用</th><th>阶段</th><th>交付规则</th></tr></thead>
             <tbody><tr><td>额度</td><td>共享</td><td>一期</td><td>远端 admin balance 幂等发放；首期 MVP 不使用</td></tr><tr><td>活动抽奖卡</td><td>MVP</td><td>一期</td><td>必须绑定结算后仍有效的摇摇乐活动</td></tr><tr><td>订阅套餐</td><td>MVP</td><td>二期</td><td>延长同分组有效期，不损失剩余天数</td></tr><tr><td>限时倍率</td><td>MVP</td><td>二期</td><td>绝对倍率 + 时长 + 优惠用量上限</td></tr></tbody>
           </table>
-          <div class="budget-bar"><div class="budget-main"><p class="section-label">发布校验</p><code>月度最坏成本 = Σ（共享奖单价 × ceil(Boss 血量 / 门槛) + 可解锁 MVP 奖励）</code></div><div class="budget-status"><strong>预算内</strong><span>超出预算时禁止发布</span></div></div>
+          <div class="budget-bar"><div class="budget-main"><p class="section-label">发布校验</p><code>月度最坏成本 = Σ（共享奖单价 × ceil(Boss 血量 / 本 Boss 入榜门槛) + 可解锁 MVP 奖励）</code></div><div class="budget-status"><strong>预算内</strong><span>超出预算时禁止发布</span></div></div>
         </div></section>
         <section class="plan-band"><div class="plan-inner">
           <div class="rule-grid"><div class="rule-block"><h3>自动发放</h3><ul><li>Boss Clear Reward 默认自动</li><li>小额额度与抽奖卡默认自动</li><li>失败保持原奖品并幂等重试</li></ul></div><div class="rule-block"><h3>审核后发放</h3><ul><li>大额额度、订阅与倍率默认审核</li><li>作弊取消资格后顺延下一名</li><li>保留原始排名与最终获奖审计</li></ul></div></div>
@@ -1701,7 +1701,7 @@
           <div class="section-head"><div><h2>活动状态</h2><p>提前中止不伪造击杀：已结算奖励继续履约，当前 Boss 不发正常奖励。</p></div></div>
           <div class="state-line"><span class="state-pill">草稿</span><span class="state-arrow">→</span><span class="state-pill">已发布</span><span class="state-arrow">→</span><span class="state-pill active">战斗中</span><span class="state-arrow">→</span><span class="state-pill">结算中</span><span class="state-arrow">→</span><span class="state-pill safe">通关 / 正常结束</span></div>
           <div class="ops-grid">
-            <div class="config-preview"><div class="config-head"><strong>2026-09 全域突袭</strong><span>发布校验通过</span></div><div class="config-row"><span>连接范围</span><strong>主站 Sub2api</strong></div><div class="config-row"><span>有效伤害门槛</span><strong>10</strong></div><div class="config-row"><span>Boss 数量</span><strong>4</strong></div><div class="config-row"><span>奖励最坏成本</span><strong>预算的 72%</strong></div><div class="config-row"><span>规则变更</span><strong>开始后锁定</strong></div></div>
+            <div class="config-preview"><div class="config-head"><strong>2026-09 全域突袭</strong><span>发布校验通过</span></div><div class="config-row"><span>连接范围</span><strong>主站 Sub2api</strong></div><div class="config-row"><span>Boss 入榜消耗</span><strong>10 / 10 / 15 / 20</strong></div><div class="config-row"><span>Boss 数量</span><strong>4</strong></div><div class="config-row"><span>奖励最坏成本</span><strong>预算的 72%</strong></div><div class="config-row"><span>规则变更</span><strong>开始后锁定</strong></div></div>
             <div class="rule-block"><h3>运营后台必须看见</h3><ul><li>远端同步游标、最后成功时间与错误</li><li>Boss 血量构成及单条权威用量</li><li>原始排行、获奖名单与顺延记录</li><li>奖励审核、重试和倍率权益状态</li><li>全部高风险操作审计日志</li></ul></div>
           </div>
         </div></section>

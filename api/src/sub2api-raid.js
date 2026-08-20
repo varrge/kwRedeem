@@ -63,6 +63,7 @@ const bossSchema = z.object({
   title: z.string().trim().max(120).optional().default(""),
   assetKey: z.enum(BOSS_ASSETS),
   health: z.number().finite().positive(),
+  entryCostThreshold: z.number().finite().positive(),
   themeGroupId: z.number().int().positive().nullable().optional().default(null),
   themeGroupName: z.string().trim().max(100).optional().default(""),
   themeMultiplier: z.number().finite().min(1).max(5).optional().default(1),
@@ -161,9 +162,20 @@ function rewardWorstCaseCost(boss, threshold) {
 
 function campaignWorstCaseCost(campaign) {
   return roundAmount(campaign.bosses.reduce(
-    (sum, boss) => sum + rewardWorstCaseCost(boss, campaign.effectiveDamageThreshold),
+    (sum, boss) => sum + rewardWorstCaseCost(boss, boss.entryCostThreshold),
     0
   ));
+}
+
+function normalizeCampaignInput(input) {
+  const fallbackThreshold = input?.effectiveDamageThreshold ?? input?.bosses?.[0]?.entryCostThreshold;
+  return {
+    ...input,
+    effectiveDamageThreshold: fallbackThreshold,
+    bosses: Array.isArray(input?.bosses)
+      ? input.bosses.map((boss) => ({ ...boss, entryCostThreshold: boss?.entryCostThreshold ?? fallbackThreshold }))
+      : input?.bosses
+  };
 }
 
 function parseJson(value, fallback) {
@@ -243,6 +255,7 @@ export function createSub2ApiRaidService({
       title: row.title || "",
       assetKey: row.asset_key,
       health: Number(row.max_health),
+      entryCostThreshold: Number(row.entry_cost_threshold),
       remainingHealth: Math.max(0, Number(row.remaining_health)),
       totalDamage: roundAmount(damage),
       status: row.status,
@@ -327,7 +340,7 @@ export function createSub2ApiRaidService({
   }
 
   function createCampaign(input, actor) {
-    const parsed = campaignSchema.safeParse(input);
+    const parsed = campaignSchema.safeParse(normalizeCampaignInput(input));
     if (!parsed.success) {
       const error = new Error(parsed.error.issues[0]?.message || "Boss 活动配置无效");
       error.statusCode = 400;
@@ -366,13 +379,13 @@ export function createSub2ApiRaidService({
         INSERT INTO sub2api_raid_bosses (
           id, campaign_id, sequence, level, name, title, asset_key, max_health,
           remaining_health, status, theme_group_id, theme_group_name, theme_multiplier,
-          clear_reward, mvp_rewards, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'locked', ?, ?, ?, ?, ?, ?, ?)
+          entry_cost_threshold, clear_reward, mvp_rewards, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'locked', ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       data.bosses.forEach((boss, index) => insertBoss.run(
         id("raid-boss"), campaignId, index + 1, boss.level, boss.name, boss.title || null,
         boss.assetKey, boss.health, boss.health, boss.themeGroupId, boss.themeGroupName || null,
-        boss.themeMultiplier, JSON.stringify(serializeRewardConfig(boss.clearReward)),
+        boss.themeMultiplier, boss.entryCostThreshold, JSON.stringify(serializeRewardConfig(boss.clearReward)),
         JSON.stringify(boss.mvpRewards.map(serializeRewardConfig)), createdAt, createdAt
       ));
     });
@@ -387,7 +400,7 @@ export function createSub2ApiRaidService({
   }
 
   function updateDraftCampaign(campaignId, input, actor) {
-    const parsed = campaignSchema.safeParse(input);
+    const parsed = campaignSchema.safeParse(normalizeCampaignInput(input));
     if (!parsed.success) {
       const error = new Error(parsed.error.issues[0]?.message || "Boss 活动配置无效");
       error.statusCode = 400;
@@ -428,13 +441,13 @@ export function createSub2ApiRaidService({
         INSERT INTO sub2api_raid_bosses (
           id, campaign_id, sequence, level, name, title, asset_key, max_health,
           remaining_health, status, theme_group_id, theme_group_name, theme_multiplier,
-          clear_reward, mvp_rewards, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'locked', ?, ?, ?, ?, ?, ?, ?)
+          entry_cost_threshold, clear_reward, mvp_rewards, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'locked', ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       data.bosses.forEach((boss, index) => insertBoss.run(
         id("raid-boss"), campaign.id, index + 1, boss.level, boss.name, boss.title || null,
         boss.assetKey, boss.health, boss.health, boss.themeGroupId, boss.themeGroupName || null,
-        boss.themeMultiplier, JSON.stringify(serializeRewardConfig(boss.clearReward)),
+        boss.themeMultiplier, boss.entryCostThreshold, JSON.stringify(serializeRewardConfig(boss.clearReward)),
         JSON.stringify(boss.mvpRewards.map(serializeRewardConfig)), updatedAt, updatedAt
       ));
     }, campaign.id);
@@ -556,7 +569,6 @@ export function createSub2ApiRaidService({
   function getRanking(bossId) {
     const boss = getBoss(bossId);
     if (!boss) return [];
-    const campaign = getCampaign(boss.campaign_id);
     const rows = db.prepare(`
       SELECT c.*, e.masked_name, e.username, e.email
       FROM sub2api_raid_contributions c
@@ -568,16 +580,20 @@ export function createSub2ApiRaidService({
         || String(left.reached_at).localeCompare(String(right.reached_at))
         || compareStableIds(left.sub2api_user_id, right.sub2api_user_id)
     ));
-    return rows.map((row, index) => ({
-      rank: index + 1,
-      userId: row.sub2api_user_id,
-      maskedName: row.masked_name || maskIdentity({ userId: row.sub2api_user_id }),
-      actualCost: Number(row.actual_cost),
-      bonusDamage: Number(row.bonus_damage),
-      damage: Number(row.damage),
-      reachedAt: row.reached_at,
-      effective: Number(row.damage) >= Number(campaign.effective_damage_threshold)
-    }));
+    let effectiveRank = 0;
+    return rows.map((row) => {
+      const effective = Number(row.actual_cost) >= Number(boss.entry_cost_threshold);
+      return {
+        rank: effective ? ++effectiveRank : null,
+        userId: row.sub2api_user_id,
+        maskedName: row.masked_name || maskIdentity({ userId: row.sub2api_user_id }),
+        actualCost: Number(row.actual_cost),
+        bonusDamage: Number(row.bonus_damage),
+        damage: Number(row.damage),
+        reachedAt: row.reached_at,
+        effective
+      };
+    });
   }
 
   function rebuildCurrentBoss(campaign) {
@@ -1163,7 +1179,7 @@ export function createSub2ApiRaidService({
       SELECT sub2api_user_id, email, username, masked_name
       FROM sub2api_raid_enrollments WHERE campaign_id = ?
     `).all(campaign.id).map((row) => [row.sub2api_user_id, row]));
-    const publicRanking = ranking.slice(0, 10).map((item) => ({
+    const publicRanking = ranking.filter((item) => item.effective).slice(0, 10).map((item) => ({
       ...item,
       userId: item.userId === userId ? item.userId : undefined
     }));
@@ -1302,7 +1318,7 @@ export function createSub2ApiRaidService({
       effectiveRaiderCount: effectiveRaiders,
       mvpSlots: getRaidMvpSlots(effectiveRaiders),
       nextMvpSlotAt: effectiveRaiders >= 30 ? null : (Math.floor(effectiveRaiders / 10) + 1) * 10,
-      ranking: ranking.slice(0, 10).map((item) => ({ ...item, userId: item.userId === userId ? item.userId : undefined })),
+      ranking: ranking.filter((item) => item.effective).slice(0, 10).map((item) => ({ ...item, userId: item.userId === userId ? item.userId : undefined })),
       own,
       battleLog,
       rewards,

@@ -1048,6 +1048,7 @@ function createSchema(db) {
       theme_group_id INTEGER,
       theme_group_name TEXT,
       theme_multiplier REAL NOT NULL DEFAULT 1,
+      entry_cost_threshold REAL NOT NULL,
       clear_reward TEXT NOT NULL,
       mvp_rewards TEXT NOT NULL,
       started_at TEXT,
@@ -2338,6 +2339,16 @@ function createSchema(db) {
   ensureColumn(db, "sub2api_shake_eligibility_rules", "card_tier", "TEXT NOT NULL DEFAULT 'low'");
   ensureColumn(db, "sub2api_shake_eligibility_rules", "subscription_group_id", "INTEGER");
   ensureColumn(db, "sub2api_shake_eligibility_rules", "card_quantity", "INTEGER");
+  ensureColumn(db, "sub2api_raid_bosses", "entry_cost_threshold", "REAL");
+  db.exec(`
+    UPDATE sub2api_raid_bosses
+    SET entry_cost_threshold = (
+      SELECT effective_damage_threshold
+      FROM sub2api_raid_campaigns
+      WHERE sub2api_raid_campaigns.id = sub2api_raid_bosses.campaign_id
+    )
+    WHERE entry_cost_threshold IS NULL
+  `);
   ensureColumn(db, "sub2api_raid_rate_entitlements", "previous_multiplier", "REAL");
   migrateShakeEligibilityRuleUniqueness(db);
   ensureColumn(db, "sub2api_shake_prizes", "low_weight", "REAL");

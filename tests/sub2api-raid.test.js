@@ -110,13 +110,14 @@ function reward(name, cost = 1) {
   return { name, type: "balance", amount: 1, cost, fulfillmentMode: "auto" };
 }
 
-function boss(level, health) {
+function boss(level, health, entryCostThreshold) {
   return {
     level,
     name: `Boss ${level}`,
     title: "测试核心",
     assetKey: "leviathan",
     health,
+    entryCostThreshold,
     themeGroupId: 101,
     themeGroupName: "高速中转",
     themeMultiplier: 1.25,
@@ -140,12 +141,13 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
     settlementEndAt: "2026-08-31T16:10:00.000Z",
     effectiveDamageThreshold: 10,
     rewardBudget: 100,
-    bosses: [boss(1, 10), boss(2, 10)]
+    bosses: [boss(1, 10, 9), boss(2, 10, 15)]
   };
   const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
     body: campaignConfig
   });
   assert.equal(created.statusCode, 201);
+  assert.deepEqual(created.body.campaign.bosses.map((item) => item.entryCostThreshold), [9, 15]);
   campaignId = created.body.campaign.id;
   const published = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", {
     params: { id: created.body.campaign.id }
@@ -203,9 +205,12 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
 
   current = await bootstrap();
   assert.equal(current.body.currentBoss.level, 2);
+  assert.equal(current.body.currentBoss.entryCostThreshold, 15);
   secondBossId = current.body.currentBoss.id;
   assert.equal(current.body.currentBoss.totalDamage, 11.25);
   assert.equal(current.body.own.damage, 11.25);
+  assert.equal(current.body.own.effective, false);
+  assert.equal(current.body.ranking.length, 0);
   assert.equal(current.body.rewards.length, 1);
   assert.equal(balanceDeliveries, 1);
   assert.equal(current.body.history.length, 1);
@@ -322,7 +327,9 @@ test("raid tie ordering is deterministic by the stable numeric user ID", () => {
   `);
   insert.run("tie-10", campaignId, secondBossId, "10", currentNow, currentNow);
   insert.run("tie-2", campaignId, secondBossId, "2", currentNow, currentNow);
-  assert.deepEqual(raid.getRanking(secondBossId).map((item) => item.userId), ["2", "10", "7"]);
+  const ranking = raid.getRanking(secondBossId);
+  assert.deepEqual(ranking.map((item) => item.userId), ["2", "10", "7"]);
+  assert.deepEqual(ranking.map((item) => item.rank), [1, 2, null]);
 });
 
 test("raid disqualification preserves the original ranking and promotes the next eligible raider", async () => {

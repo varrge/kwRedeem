@@ -256,7 +256,7 @@
           <div class="metrics glass">
             <div class="metric"><span>全站伤害</span><strong id="total-damage">0.00</strong></div>
             <div class="metric"><span>有效参战者</span><strong id="raider-count">0 人</strong></div>
-            <div class="metric"><span>主题分组</span><strong class="cyan" id="theme-group">标准伤害 · 1.0x</strong></div>
+            <div class="metric"><span>伤害倍率</span><strong class="cyan" id="theme-group">全站伤害 · 1.0x</strong></div>
             <div class="metric"><span>当前 MVP 名额</span><strong class="amber" id="mvp-slots">TOP 0</strong></div>
           </div>
           <div class="health glass">
@@ -441,7 +441,7 @@
           refs.healthFill.style.width = `${Math.max(0, Math.min(100, boss.remainingHealth / boss.health * 100))}%`;
           refs.totalDamage.textContent = number(historical?.totalDamage ?? boss.totalDamage);
           refs.raiderCount.textContent = `${historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount} 人`;
-          refs.themeGroup.textContent = boss.themeGroupId ? `${boss.themeGroupName || `分组 ${boss.themeGroupId}`} · ${boss.themeMultiplier}x` : "标准伤害 · 1.0x";
+          refs.themeGroup.textContent = boss.themeGroupId ? `${boss.themeGroupName || `分组 ${boss.themeGroupId}`} · ${boss.themeMultiplier}x` : `全站伤害 · ${boss.themeMultiplier}x`;
           refs.mvpSlots.textContent = `TOP ${historical?.mvpSlots ?? payload.mvpSlots}`;
           refs.syncTime.textContent = payload.sync?.lastSyncedAt ? `上次同步 ${formatTime(payload.sync.lastSyncedAt)}` : "尚未同步";
           refs.rankNote.textContent = `本 Boss 实际消耗达到 ${number(boss.entryCostThreshold)} 后入榜 · 当前 ${payload.mvpSlots} 个 MVP 名额`;

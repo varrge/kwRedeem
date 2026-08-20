@@ -110,7 +110,7 @@ function reward(name, cost = 1) {
   return { name, type: "balance", amount: 1, cost, fulfillmentMode: "auto" };
 }
 
-function boss(level, health, entryCostThreshold) {
+function boss(level, health, entryCostThreshold, options = {}) {
   return {
     level,
     name: `Boss ${level}`,
@@ -122,7 +122,8 @@ function boss(level, health, entryCostThreshold) {
     themeGroupName: "高速中转",
     themeMultiplier: 1.25,
     clearReward: reward(`Clear ${level}`),
-    mvpRewards: [reward(`MVP ${level}-1`), reward(`MVP ${level}-2`), reward(`MVP ${level}-3`)]
+    mvpRewards: [reward(`MVP ${level}-1`), reward(`MVP ${level}-2`), reward(`MVP ${level}-3`)],
+    ...options
   };
 }
 
@@ -141,7 +142,11 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
     settlementEndAt: "2026-08-31T16:10:00.000Z",
     effectiveDamageThreshold: 10,
     rewardBudget: 100,
-    bosses: [boss(1, 10, 9), boss(2, 10, 15)]
+    bosses: [boss(1, 10, 9), boss(2, 10, 15, {
+      themeGroupId: null,
+      themeGroupName: "",
+      themeMultiplier: 2
+    })]
   };
   const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
     body: campaignConfig
@@ -207,8 +212,10 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(current.body.currentBoss.level, 2);
   assert.equal(current.body.currentBoss.entryCostThreshold, 15);
   secondBossId = current.body.currentBoss.id;
-  assert.equal(current.body.currentBoss.totalDamage, 11.25);
-  assert.equal(current.body.own.damage, 11.25);
+  assert.equal(current.body.currentBoss.totalDamage, 18);
+  assert.equal(current.body.own.actualCost, 9);
+  assert.equal(current.body.own.bonusDamage, 9);
+  assert.equal(current.body.own.damage, 18);
   assert.equal(current.body.own.effective, false);
   assert.equal(current.body.ranking.length, 0);
   assert.equal(current.body.rewards.length, 1);

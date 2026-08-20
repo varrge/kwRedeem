@@ -28,6 +28,7 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.match(script, /options\.body === undefined \|\| options\.body === null/);
   assert.doesNotMatch(html, /raid-damage-threshold/);
   assert.match(script, /data-field="entryCostThreshold"/);
+  assert.match(script, /留空则倍率作用于全站/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {
@@ -46,6 +47,7 @@ test("production battlefield uses server-confirmed damage and eight switchable l
   assert.match(html, /payload\.history/);
   assert.match(html, /payload\.currentBoss \|\|/);
   assert.match(html, /boss\.entryCostThreshold/);
+  assert.match(html, /全站伤害 · \$\{boss\.themeMultiplier\}x/);
   assert.match(html, /pointermove/);
   assert.match(html, /prefers-reduced-motion/);
   assert.doesNotMatch(html, /@keyframes\s+(breathe|pulseBoss|bossIdle)/i);

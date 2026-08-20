@@ -4801,7 +4801,7 @@ function renderRaidBossEditor(bosses = defaultRaidBosses()) {
         <label class="field"><span>内置素材</span><select data-field="assetKey">${Object.entries(RAID_ASSETS).map(([key, label]) => `<option value="${escapeHtml(key)}" ${boss.assetKey === key ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
         <label class="field"><span>血量</span><input data-field="health" type="number" min="0.01" step="0.01" value="${escapeHtml(boss.health ?? 2000)}" required /></label>
         <label class="field"><span>入榜消耗额度</span><input data-field="entryCostThreshold" type="number" min="0.01" step="0.01" value="${escapeHtml(boss.entryCostThreshold ?? 10)}" required /></label>
-        <label class="field"><span>主题分组 ID</span><input data-field="themeGroupId" type="number" min="1" step="1" value="${escapeHtml(boss.themeGroupId ?? "")}" placeholder="留空为全站 1.0x" /></label>
+        <label class="field"><span>主题分组 ID</span><input data-field="themeGroupId" type="number" min="1" step="1" value="${escapeHtml(boss.themeGroupId ?? "")}" placeholder="留空则倍率作用于全站" /></label>
         <label class="field"><span>主题分组名称</span><input data-field="themeGroupName" maxlength="100" value="${escapeHtml(boss.themeGroupName || "")}" /></label>
         <label class="field"><span>主题伤害倍率</span><input data-field="themeMultiplier" type="number" min="1" max="5" step="0.01" value="${escapeHtml(boss.themeMultiplier ?? 1)}" required /></label>
       </div>

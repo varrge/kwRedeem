@@ -638,8 +638,8 @@ export function createSub2ApiRaidService({
     for (const usage of allUsage) {
       const actualCost = Number(usage.actual_cost);
       if (!(actualCost > 0)) continue;
-      const multiplier = Number(usage.subscription_group_id) === Number(boss.theme_group_id)
-        && boss.theme_group_id !== null
+      const multiplier = boss.theme_group_id === null
+        || Number(usage.subscription_group_id) === Number(boss.theme_group_id)
         ? Number(boss.theme_multiplier)
         : 1;
       const damage = roundAmount(actualCost * multiplier);

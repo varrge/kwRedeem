@@ -1541,14 +1541,14 @@
               <div class="boss-info-panel">
                 <p class="eyebrow">Relay Defense / Lv.02</p>
                 <h1 class="boss-title">装甲核心<br />利维坦</h1>
-                <p class="boss-subtitle">指定分组调用转化为额外攻击能量，全站共同突破装甲。</p>
+                <p class="boss-subtitle">正常 API 使用按实际消耗 1:1 转化为伤害，全站共同突破装甲。</p>
               </div>
 
               <!-- Stage Metrics (Right Overlay) -->
               <div class="stage-metrics">
                 <div class="stage-metric"><span>全站总输出</span><strong id="total-damage">1,285.62</strong></div>
                 <div class="stage-metric"><span>有效参战者</span><strong>23 人</strong></div>
-                <div class="stage-metric"><span>主题分组</span><strong class="cyan">高速中转 · 1.25x</strong></div>
+                <div class="stage-metric"><span>首期倍率</span><strong class="cyan">全站用量 · 1.0x</strong></div>
                 <div class="stage-metric"><span>当前 MVP 名额</span><strong class="amber">TOP 2</strong></div>
               </div>
 
@@ -1619,9 +1619,9 @@
               <section class="battle-panel" aria-labelledby="feed-title">
                 <p class="section-label" id="feed-title">全站战报</p>
                 <div class="feed-list" id="battle-feed" aria-live="polite">
-                  <div class="feed-row"><span class="feed-signal"></span><div><strong>ka***27 命中核心</strong><br /><span>高速中转 · 1.25x 加成</span></div><div class="feed-damage"><strong>+96.50</strong><br /><span>18 秒前</span></div></div>
+                  <div class="feed-row"><span class="feed-signal"></span><div><strong>ka***27 命中核心</strong><br /><span>实际消耗 · 1.0x</span></div><div class="feed-damage"><strong>+96.50</strong><br /><span>18 秒前</span></div></div>
                   <div class="feed-row"><span class="feed-signal"></span><div><strong>li***08 突破护盾</strong><br /><span>标准分组 · 1.0x</span></div><div class="feed-damage"><strong>+42.18</strong><br /><span>35 秒前</span></div></div>
-                  <div class="feed-row"><span class="feed-signal"></span><div><strong>mo***51 命中核心</strong><br /><span>高速中转 · 1.25x 加成</span></div><div class="feed-damage"><strong>+71.25</strong><br /><span>1 分钟前</span></div></div>
+                  <div class="feed-row"><span class="feed-signal"></span><div><strong>mo***51 命中核心</strong><br /><span>实际消耗 · 1.0x</span></div><div class="feed-damage"><strong>+71.25</strong><br /><span>1 分钟前</span></div></div>
                 </div>
               </section>
               <section class="battle-panel" aria-labelledby="rank-title">
@@ -1636,10 +1636,10 @@
             </div>
 
             <div class="reward-strip" aria-label="当前 Boss 奖励">
-              <article class="reward-card is-shared"><span>击杀共享奖励</span><strong>低级抽奖卡 ×1</strong><small>达到本 Boss 统一伤害门槛即可获得</small></article>
-              <article class="reward-card is-mvp"><span>MVP · 第 1 名</span><strong>额度 100</strong><small>有效参战达到 10 人后解锁</small></article>
-              <article class="reward-card is-mvp"><span>MVP · 第 2 名</span><strong>额度 60</strong><small>有效参战达到 20 人后解锁</small></article>
-              <article class="reward-card is-mvp"><span>MVP · 第 3 名</span><strong>额度 30</strong><small>还需 7 名有效参战者解锁</small></article>
+              <article class="reward-card is-shared"><span>击杀共享奖励</span><strong>0.30 额度</strong><small>达到本 Boss 统一伤害门槛即可获得</small></article>
+              <article class="reward-card is-mvp"><span>MVP · 第 1 名</span><strong>低级抽奖卡 ×6</strong><small>有效参战达到 10 人后解锁</small></article>
+              <article class="reward-card is-mvp"><span>MVP · 第 2 名</span><strong>低级抽奖卡 ×4</strong><small>有效参战达到 20 人后解锁</small></article>
+              <article class="reward-card is-mvp"><span>MVP · 第 3 名</span><strong>低级抽奖卡 ×2</strong><small>还需 7 名有效参战者解锁</small></article>
             </div>
           </div>
         </section>
@@ -1652,14 +1652,14 @@
           <div class="flow-grid">
             <div class="flow-step"><b>01</b><strong>主动加入</strong><p>每月加入一次，只统计加入后的真实使用。</p></div>
             <div class="flow-step"><b>02</b><strong>正常调用</strong><p>API 使用产生 actual_cost，不额外烧余额。</p></div>
-            <div class="flow-step"><b>03</b><strong>伤害转换</strong><p>实际消耗乘主题倍率，同时进入血量和个人贡献。</p></div>
+            <div class="flow-step"><b>03</b><strong>伤害转换</strong><p>首期实际消耗按 1.0x 同时进入血量和个人贡献。</p></div>
             <div class="flow-step"><b>04</b><strong>Boss 结算</strong><p>最终同步后冻结排名、人数与奖励。</p></div>
             <div class="flow-step"><b>05</b><strong>连续推进</strong><p>下一只贡献归零，最终 Boss 通关即结束。</p></div>
           </div>
         </div></section>
         <section class="plan-band"><div class="plan-inner">
           <div class="section-head"><div><h2>伤害只认权威发生时间</h2><p>远端用量 ID 去重，按 created_at 分配。单条用量不可拆，溢出伤害不进入下一只 Boss。</p></div></div>
-          <div class="formula">基础伤害 = remote actual_cost<br />最终伤害 = 基础伤害 × 命中的活动主题倍率</div>
+          <div class="formula">基础伤害 = remote actual_cost<br />首期最终伤害 = 基础伤害 × 1.0x</div>
           <div class="rule-grid">
             <div class="rule-block"><h3>参战边界</h3><ul><li>账号须在活动开始前注册</li><li>允许中途加入，不追溯历史消费</li><li>所有 API Key 按稳定用户 ID 合并</li><li>内部与测试账号明确排除</li></ul></div>
             <div class="rule-block"><h3>结算边界</h3><ul><li>每只 Boss 独立贡献与奖励</li><li>月末 10 分钟仅补同步月末前用量</li><li>未击败 Boss 不发物质奖励</li><li>结算快照冻结后不改写排名</li></ul></div>
@@ -1669,7 +1669,7 @@
           <div class="section-head"><div><h2>首月数值草案</h2><p>正式发布前使用最近三个月真实用量回放，活动开始后不可临时加血或减血。</p></div></div>
           <table class="data-table">
             <thead><tr><th>Boss</th><th>血量</th><th>主题倍率</th><th>目标</th></tr></thead>
-            <tbody><tr><td>LV.01 封锁者</td><td>2,000</td><td>1.0x</td><td>低门槛验证参与率</td></tr><tr><td>LV.02 利维坦</td><td>4,000</td><td>指定分组 1.25x</td><td>开始引导中转分组</td></tr><tr><td>LV.03 棱镜母体</td><td>7,000</td><td>指定分组 1.5x</td><td>中段协作目标</td></tr><tr><td>LV.04 零号主机</td><td>11,000</td><td>指定分组 1.5x</td><td>月度最终 Boss</td></tr></tbody>
+            <tbody><tr><td>LV.01 封锁者</td><td>2,000</td><td>1.0x</td><td>低门槛验证参与率</td></tr><tr><td>LV.02 利维坦</td><td>4,000</td><td>1.0x</td><td>连续推进第二阶段</td></tr><tr><td>LV.03 棱镜母体</td><td>7,000</td><td>1.0x</td><td>中段协作目标</td></tr><tr><td>LV.04 零号主机</td><td>11,000</td><td>1.0x</td><td>月度最终 Boss</td></tr></tbody>
           </table>
         </div></section>
       </section>
@@ -1685,7 +1685,7 @@
           <div class="section-head"><div><h2>奖品边界</h2><p>共享奖励小而确定，MVP 奖励高价值但受预算与审核约束。</p></div></div>
           <table class="data-table">
             <thead><tr><th>奖品</th><th>适用</th><th>阶段</th><th>交付规则</th></tr></thead>
-            <tbody><tr><td>额度</td><td>共享 / MVP</td><td>一期</td><td>远端 admin balance 幂等发放</td></tr><tr><td>活动抽奖卡</td><td>共享 / MVP</td><td>一期</td><td>必须绑定尚未结束的摇摇乐活动</td></tr><tr><td>订阅套餐</td><td>MVP</td><td>二期</td><td>延长同分组有效期，不损失剩余天数</td></tr><tr><td>限时倍率</td><td>MVP</td><td>二期</td><td>绝对倍率 + 时长 + 优惠用量上限</td></tr></tbody>
+            <tbody><tr><td>额度</td><td>共享</td><td>一期</td><td>远端 admin balance 幂等发放；首期 MVP 不使用</td></tr><tr><td>活动抽奖卡</td><td>MVP</td><td>一期</td><td>必须绑定结算后仍有效的摇摇乐活动</td></tr><tr><td>订阅套餐</td><td>MVP</td><td>二期</td><td>延长同分组有效期，不损失剩余天数</td></tr><tr><td>限时倍率</td><td>MVP</td><td>二期</td><td>绝对倍率 + 时长 + 优惠用量上限</td></tr></tbody>
           </table>
           <div class="budget-bar"><div class="budget-main"><p class="section-label">发布校验</p><code>月度最坏成本 = Σ（共享奖单价 × ceil(Boss 血量 / 门槛) + 可解锁 MVP 奖励）</code></div><div class="budget-status"><strong>预算内</strong><span>超出预算时禁止发布</span></div></div>
         </div></section>
@@ -1707,7 +1707,7 @@
         </div></section>
         <section class="plan-band"><div class="plan-inner">
           <div class="section-head"><div><h2>上线分期</h2><p>先验证真实消耗增量和参与结构，再承担订阅与倍率的复杂履约。</p></div></div>
-          <div class="phase-list"><div class="phase-row"><strong>上线前模拟</strong><p>回放最近三个月用量，校准 2,000 / 4,000 / 7,000 / 11,000 血量、门槛和最坏预算。</p></div><div class="phase-row"><strong>一期</strong><p>真实用量伤害、连续 Boss、主题倍率、浮动名额、额度/抽奖卡、后台审计与当前互动页面。</p></div><div class="phase-row"><strong>二期</strong><p>订阅安全延期、限时倍率权益、用量封顶、排队生效、备用奖励和冲突告警。</p></div><div class="phase-row"><strong>暂不进入</strong><p>跨连接聚合、SSE/WebSocket、任意素材上传与无限关卡，等一期数据证明必要性后评估。</p></div></div>
+          <div class="phase-list"><div class="phase-row"><strong>上线前模拟</strong><p>回放最近三个月用量，校准 2,000 / 4,000 / 7,000 / 11,000 血量、门槛和最坏预算。</p></div><div class="phase-row"><strong>一期</strong><p>真实用量伤害、连续 Boss、全程 1.0x、浮动名额、共享额度、MVP 抽奖卡、后台审计与当前互动页面。</p></div><div class="phase-row"><strong>二期</strong><p>订阅安全延期、限时倍率权益、用量封顶、排队生效、备用奖励和冲突告警。</p></div><div class="phase-row"><strong>暂不进入</strong><p>跨连接聚合、SSE/WebSocket、任意素材上传与无限关卡，等一期数据证明必要性后评估。</p></div></div>
         </div></section>
       </section>
     </main>
@@ -1738,10 +1738,10 @@
 
         const state = { maxHealth: 4000, health: 2714.38, totalDamage: 1285.62, joined: false, ownDamage: 0, syncIndex: 0 };
         const syncs = [
-          { damage: 128.60, user: "ch***16", route: "高速中转 · 1.25x 加成", isCrit: true },
-          { damage: 74.25, user: "你", route: "高速中转 · 1.25x 加成", own: true, isCrit: false },
+          { damage: 128.60, user: "ch***16", route: "实际消耗 · 1.0x", isCrit: true },
+          { damage: 74.25, user: "你", route: "实际消耗 · 1.0x", own: true, isCrit: false },
           { damage: 161.80, user: "su***44", route: "标准分组 · 1.0x", isCrit: true },
-          { damage: 86.42, user: "你", route: "高速中转 · 1.25x 加成", own: true, isCrit: false }
+          { damage: 86.42, user: "你", route: "实际消耗 · 1.0x", own: true, isCrit: false }
         ];
 
         // 3D Tilt Parallax Tracking

@@ -17,6 +17,9 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.match(script, /viewRaidHistory\(campaignId\)/);
   assert.match(script, /updateRaidRewardControls/);
   assert.match(script, /_kwredeem\/sub2api-raid\.html/);
+  assert.match(script, /defaultRaidCardReward\("MVP 第 1 名低级抽奖卡", boss\.level \* 3\)/);
+  assert.match(script, /defaultRaidCardReward\("MVP 第 3 名低级抽奖卡", boss\.level\)/);
+  assert.doesNotMatch(script, /MVP 第 [123] 名额度/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {

@@ -248,6 +248,34 @@ test("raid ignores duplicate usage and refuses a budget-overflowing campaign", a
   assert.equal(rejected.statusCode, 409);
 });
 
+test("raid refuses a shake-card reward without a positive internal cost", async () => {
+  const invalidBoss = boss(1, 10);
+  invalidBoss.mvpRewards[0] = {
+    name: "MVP 高级抽奖卡",
+    type: "shake_card",
+    quantity: 1,
+    shakeCampaignId: "shake-campaign-1",
+    cardTier: "high",
+    cost: 0,
+    fulfillmentMode: "auto"
+  };
+  const rejected = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
+    body: {
+      connectionId: "raid-main",
+      name: "无成本抽奖卡",
+      month: "2026-09",
+      startAt: "2026-08-31T16:00:00.000Z",
+      endAt: "2026-09-30T16:00:00.000Z",
+      settlementEndAt: "2026-09-30T16:10:00.000Z",
+      effectiveDamageThreshold: 10,
+      rewardBudget: 100,
+      bosses: [invalidBoss]
+    }
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.match(rejected.body.message, /内部成本/);
+});
+
 test("raid MVP slots follow the confirmed participant boundaries", () => {
   assert.deepEqual([9, 10, 19, 20, 29, 30].map(getRaidMvpSlots), [0, 1, 1, 2, 2, 3]);
 });

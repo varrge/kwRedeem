@@ -4693,23 +4693,38 @@ const RAID_ASSETS = {
   singularity: "奇点核心"
 };
 
-function defaultRaidReward(name, amount, fulfillmentMode = "auto") {
+function defaultRaidBalanceReward(name, amount, fulfillmentMode = "auto") {
   return { name, type: "balance", amount, cost: amount, fulfillmentMode, cardTier: "low" };
+}
+
+function defaultRaidCardReward(name, quantity) {
+  return {
+    name,
+    type: "shake_card",
+    quantity,
+    shakeCampaignId: "",
+    cardTier: "low",
+    cost: 0,
+    fulfillmentMode: "auto"
+  };
 }
 
 function defaultRaidBosses() {
   return [
-    { level: 1, name: "封锁者", title: "边界防御节点", assetKey: "sentinel", health: 2000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1 },
-    { level: 2, name: "装甲核心·利维坦", title: "中转网络重装核心", assetKey: "leviathan", health: 4000, themeGroupId: null, themeGroupName: "高速中转", themeMultiplier: 1.25 },
-    { level: 3, name: "棱镜母体", title: "多路复用控制母体", assetKey: "prism", health: 7000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1.5 },
-    { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, themeGroupId: null, themeGroupName: "", themeMultiplier: 1.5 }
+    { level: 1, name: "封锁者", title: "边界防御节点", assetKey: "sentinel", health: 2000, clearAmount: 0.2 },
+    { level: 2, name: "装甲核心·利维坦", title: "中转网络重装核心", assetKey: "leviathan", health: 4000, clearAmount: 0.3 },
+    { level: 3, name: "棱镜母体", title: "多路复用控制母体", assetKey: "prism", health: 7000, clearAmount: 0.5 },
+    { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, clearAmount: 1 }
   ].map((boss) => ({
     ...boss,
-    clearReward: defaultRaidReward("低额共享额度", 1, "auto"),
+    themeGroupId: null,
+    themeGroupName: "",
+    themeMultiplier: 1,
+    clearReward: defaultRaidBalanceReward(`LV.${boss.level} 共享额度`, boss.clearAmount),
     mvpRewards: [
-      defaultRaidReward("MVP 第 1 名额度", 100, "review"),
-      defaultRaidReward("MVP 第 2 名额度", 60, "review"),
-      defaultRaidReward("MVP 第 3 名额度", 30, "review")
+      defaultRaidCardReward("MVP 第 1 名低级抽奖卡", boss.level * 3),
+      defaultRaidCardReward("MVP 第 2 名低级抽奖卡", boss.level * 2),
+      defaultRaidCardReward("MVP 第 3 名低级抽奖卡", boss.level)
     ]
   }));
 }
@@ -4752,6 +4767,8 @@ function updateRaidRewardControls(row) {
     const input = row.querySelector(`[data-field="${field}"]`);
     if (input) input.disabled = !shakeCard;
   }
+  const cost = row.querySelector('[data-field="cost"]');
+  if (cost) cost.min = shakeCard ? "0.01" : "0";
   for (const field of ["subscriptionGroupId", "validityDays"]) {
     const wrapper = row.querySelector(`[data-reward-field="${field}"]`);
     if (wrapper) wrapper.hidden = type !== "subscription";
@@ -4813,6 +4830,7 @@ function collectRaidReward(row) {
     reward.shakeCampaignId = row.querySelector('[data-field="shakeCampaignId"]').value;
     reward.cardTier = row.querySelector('[data-field="cardTier"]').value;
     if (!reward.shakeCampaignId) throw new Error("抽奖卡奖励必须绑定摇摇乐活动");
+    if (!(reward.cost > 0)) throw new Error("抽奖卡奖励必须填写大于 0 的内部成本");
   } else if (type === "subscription") {
     reward.subscriptionGroupId = Number(row.querySelector('[data-field="subscriptionGroupId"]').value);
     reward.validityDays = Number(row.querySelector('[data-field="validityDays"]').value);
@@ -4904,7 +4922,7 @@ function resetRaidCampaignForm() {
   refs.raidCampaignMonth.value = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 7);
   refs.raidCampaignName.value = "全域突袭 · 第一赛季";
   refs.raidDamageThreshold.value = "10";
-  refs.raidRewardBudget.value = "500";
+  refs.raidRewardBudget.value = "2800";
   refs.raidExcludedUsers.value = "";
   refs.raidCampaignConnection.disabled = false;
   refs.raidCampaignMonth.disabled = false;

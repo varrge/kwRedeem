@@ -26,6 +26,9 @@ test("Boss Raid plan page exposes the confirmed rules and working demo interacti
   assert.ok(document.querySelector('img[src="./assets/boss-raid-leviathan.jpg"]'));
   assert.match(document.body.textContent, /MVP 名额 = min\(3, floor\(有效参战人数 \/ 10\)\)/);
   assert.match(document.body.textContent, /最多延迟约 60 秒/);
+  assert.match(document.body.textContent, /低级抽奖卡 ×6/);
+  assert.doesNotMatch(document.body.textContent, /高级抽奖卡|中级抽奖卡/);
+  assert.match(document.body.textContent, /首期 MVP 不使用/);
   assert.match(document.body.textContent, /CC BY-SA 2\.0/);
   assert.match(source, /@keyframes bossBreath/);
   assert.match(source, /backdrop-filter: blur/);

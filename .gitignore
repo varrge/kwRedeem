@@ -21,6 +21,7 @@ admin/runtime-config.js
 docs/*
 !docs/adr/
 !docs/boss-raid-campaign-plan.md
+!docs/boss-raid-rules.md
 !docs/sub2api-home-content.html
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 !docs/python-membership-payment-executor-spec.md

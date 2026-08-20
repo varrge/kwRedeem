@@ -40,6 +40,9 @@ const rewardSchema = z.object({
   if (reward.type === "shake_card" && (!reward.shakeCampaignId || !(Number(reward.quantity) > 0))) {
     context.addIssue({ code: "custom", path: ["shakeCampaignId"], message: "抽奖卡奖励必须指定活动和数量" });
   }
+  if (reward.type === "shake_card" && !(Number(reward.cost) > 0)) {
+    context.addIssue({ code: "custom", path: ["cost"], message: "抽奖卡奖励必须填写大于 0 的内部成本" });
+  }
   if (reward.type === "subscription" && (!(Number(reward.subscriptionGroupId) > 0) || !(Number(reward.validityDays) > 0))) {
     context.addIssue({ code: "custom", path: ["subscriptionGroupId"], message: "订阅套餐奖励必须指定分组和有效天数" });
   }

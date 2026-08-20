@@ -1104,8 +1104,11 @@
       Boss 视觉素材由 <a id="asset-source" href="https://www.flickr.com/photos/22007612@N05/4840240932" target="_blank" rel="noreferrer">Gage Skidmore</a> 提供，基于 <a id="asset-license" href="https://creativecommons.org/licenses/by-sa/2.0/" target="_blank" rel="noreferrer">CC BY-SA 2.0</a> 授权使用。
     </footer>
 
+    <script src="./runtime-config.js"></script>
     <script>
       (() => {
+        const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
+        const API_BASE = configuredApiBase ? configuredApiBase.replace(/\/+$/, "") : "";
         const BOSS_ASSETS = {
           leviathan: { src: "./assets/boss-raid-leviathan.jpg", credit: "Gage Skidmore", source: "https://www.flickr.com/photos/22007612@N05/4840240932", license: "CC BY-SA 2.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/2.0/" },
           sentinel: { src: "./assets/boss-raid-sentinel.jpg", credit: "Tohaomg", source: "https://commons.wikimedia.org/wiki/File:Robot_statue_at_the_entrance_of_%27Classe_numerique%27_at_Wikimania_2026,_day_3_(front).jpg", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
@@ -1251,49 +1254,39 @@
           if (!reward) return "待结算奖励";
           if (reward.type === "balance") return `额度 ${number(reward.amount)}`;
           if (reward.type === "shake_card") return `${reward.name || "活动抽奖卡"} ×${reward.quantity || 1}`;
-          if (reward.type === "subscription") return `${reward.planName || "分组套餐"} +${reward.days || 30} 天`;
-          if (reward.type === "rate_limit_override") return `${reward.multiplier}x 专属倍率 (${reward.hours || 24}h)`;
+          if (reward.type === "subscription") return `订阅套餐 · ${reward.validityDays || 0} 天`;
+          if (reward.type === "rate_multiplier") return `限时 ${number(reward.rateMultiplier)}x · ${reward.durationDays || 0} 天`;
           return reward.name || "全域奖励";
         }
 
         function rewardStatus(status) {
           return {
-            pending_review: "待人工审核",
-            approved: "已通过审核",
+            awaiting_review: "待审核",
+            pending: "待发放",
+            delivery_failed: "发放失败",
             delivered: "已成功发放",
-            failed: "发放重试中",
-            rejected: "未通过审核"
+            disqualified: "已取消资格",
+            voided: "已作废"
           }[status] || status;
         }
 
-        function getStoredAuth() {
-          const hashMatch = window.location.hash.match(/[#&]token=([^&]+)/);
-          const queryMatch = window.location.search.match(/[?&]token=([^&]+)/);
-          const token = (hashMatch && hashMatch[1]) || (queryMatch && queryMatch[1]);
-          if (token) {
-            sessionStorage.setItem("sub2api_token", decodeURIComponent(token));
-            return decodeURIComponent(token);
-          }
-          return sessionStorage.getItem("sub2api_token") || localStorage.getItem("sub2api_token") || "";
+        function readAccessToken() {
+          return localStorage.getItem("auth_token") || localStorage.getItem("access_token") || localStorage.getItem("token") || "";
         }
 
         function persistRefreshedAuth(payload) {
-          if (!payload) return;
-          if (payload.token) {
-            sessionStorage.setItem("sub2api_token", payload.token);
-            state.sessionToken = payload.token;
-          }
-          if (payload.user) {
-            sessionStorage.setItem("sub2api_user", JSON.stringify(payload.user));
-          }
+          const auth = payload?.refreshedAuth;
+          if (!auth) return;
+          if (auth.accessToken) localStorage.setItem("auth_token", auth.accessToken);
+          if (auth.refreshToken) localStorage.setItem("refresh_token", auth.refreshToken);
         }
 
-        async function request(url, options = {}) {
+        async function request(path, options = {}) {
           const headers = new Headers(options.headers || {});
           headers.set("Accept", "application/json");
           if (!headers.has("Content-Type") && options.body) headers.set("Content-Type", "application/json");
           if (state.sessionToken) headers.set("Authorization", `Bearer ${state.sessionToken}`);
-          const response = await fetch(url, { credentials: "same-origin", ...options, headers });
+          const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
             const error = new Error(payload.message || `请求失败 (${response.status})`);
@@ -1326,24 +1319,13 @@
           }).join("");
         }
 
-        function renderRewards(boss, payload) {
-          const rewards = [];
-          if (boss.clearReward) {
-            rewards.push({
-              label: "击杀共享奖励",
-              reward: boss.clearReward,
-              clear: true,
-              unlocked: payload.effectiveRaiderCount > 0
-            });
-          }
-          (boss.mvpRewards || []).forEach((item, index) => {
-            rewards.push({
-              label: `MVP · 第 ${item.rank || index + 1} 名`,
-              reward: item.reward,
-              clear: false,
-              unlocked: (item.rank || index + 1) <= payload.mvpSlots
-            });
-          });
+        function renderRewards(boss, effectiveRaiders, mvpSlots) {
+          const rewards = [
+            { label: "击杀共享奖励", reward: boss.clearReward, clear: true, unlocked: effectiveRaiders > 0 },
+            ...(boss.mvpRewards || []).map((reward, index) => ({
+              label: `MVP · 第 ${index + 1} 名`, reward, clear: false, unlocked: mvpSlots > index
+            }))
+          ];
           refs.rewardList.innerHTML = rewards.map((item) => `<article class="reward glass ${item.clear ? "clear" : ""}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(rewardText(item.reward))}</strong><small>${item.unlocked ? "当前已解锁" : item.clear ? "达到本 Boss 入榜消耗门槛后解锁" : `需要 ${Math.max(10, (Number(item.label.match(/\d+/)?.[0]) || 1) * 10)} 名有效参战者`}</small></article>`).join("");
         }
 
@@ -1448,21 +1430,22 @@
             : "加入后仅统计此刻之后的真实消耗";
 
           renderRoute(payload.campaign.bosses || [], boss.id);
-          renderRewards(boss, payload);
-          renderOwnRewards(payload.myRewards || []);
+          renderRewards(boss, historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount, historical?.mvpSlots ?? payload.mvpSlots);
+          renderOwnRewards(payload.rewards || []);
           renderHistory(payload.history || []);
 
           const items = payload.battleLog || [];
           refs.battleLog.innerHTML = items.length ? items.map((item) => `<div class="row"><div><strong>${escapeHtml(item.maskedName)} 命中核心</strong><br><span>实际消耗 ${number(item.actualCost)}${item.bonusDamage > 0 ? ` · 主题加成 +${number(item.bonusDamage)}` : ""}</span></div><div class="row-value"><strong>+${number(item.damage)}</strong><br><span>${escapeHtml(formatTime(item.occurredAt))}</span></div></div>`).join("") : `<div class="row"><span>等待第一条权威战报</span></div>`;
-          const own = payload.own;
-          const slots = payload.mvpSlots;
-          refs.ranking.innerHTML = items.length ? items.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`;
+          const ranking = battleFinished ? historical?.ranking || [] : payload.ranking || [];
+          const own = battleFinished ? historical?.own : payload.own;
+          const slots = historical?.mvpSlots ?? payload.mvpSlots;
+          refs.ranking.innerHTML = ranking.length ? ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`;
         }
 
         async function refresh() {
           refs.refreshBtn.classList.add("is-loading");
           try {
-            render(await request("/api/public/sub2api/raid/state"));
+            render(await request("/api/public/sub2api/raid/bootstrap"));
           } catch (error) {
             showStatus("战报同步失败", error.message);
           } finally {
@@ -1471,13 +1454,28 @@
         }
 
         async function initialize() {
-          if (window.self !== window.top || new URLSearchParams(window.location.search).get("ui_mode") === "embedded") {
+          const params = new URLSearchParams(window.location.search);
+          if (window.self !== window.top || params.get("ui_mode") === "embedded") {
             document.body.classList.add("embedded");
           }
-          state.sessionToken = getStoredAuth();
-          await refresh();
-          state.initialized = true;
-          setInterval(refresh, 60000);
+          const sso = params.get("sso") || "";
+          const connectionId = params.get("connectionId") || params.get("connection_id") || params.get("connection") || "";
+          const accessToken = params.get("token") || readAccessToken();
+          const refreshToken = localStorage.getItem("refresh_token") || "";
+          const userId = params.get("user_id") || params.get("userId") || "";
+          if (!sso && !connectionId) return showStatus("无法进入战斗", "缺少 SSO token 或 connectionId");
+          try {
+            const payload = sso
+              ? await request("/api/public/sub2api/raid/session", { method: "POST", body: JSON.stringify({ sso }) })
+              : await request("/api/public/sub2api/raid/session-from-token", {
+                  method: "POST", body: JSON.stringify({ connectionId, accessToken, refreshToken, userId })
+                });
+            render(payload);
+            state.initialized = true;
+            setInterval(refresh, 60000);
+          } catch (error) {
+            showStatus("战斗加载失败", error.message);
+          }
         }
 
         refs.enrollBtn.addEventListener("click", async () => {

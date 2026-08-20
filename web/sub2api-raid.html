@@ -279,7 +279,7 @@
           <div class="route-list" id="route-list"></div>
         </section>
         <div class="battle-grid">
-          <section class="panel glass"><div class="section-head"><h2>全站战报</h2><p>只播放服务端新增的权威伤害。</p></div><div class="list" id="battle-log"></div></section>
+          <section class="panel glass"><div class="section-head"><h2>全站战报</h2><p>每分钟汇总同一玩家的实际消耗与伤害。</p></div><div class="list" id="battle-log"></div></section>
           <section class="panel glass"><div class="section-head"><h2>当前贡献榜</h2><p id="rank-note">达到门槛后计入有效参战者。</p></div><div class="list" id="ranking"></div></section>
         </div>
         <section class="panel glass"><div class="section-head"><h2 id="reward-heading">当前 Boss 奖励</h2><p>共享奖励覆盖有效参战者，MVP 名额随有效人数浮动。</p></div><div class="rewards" id="reward-list"></div></section>
@@ -488,7 +488,7 @@
               ? await request("/api/public/sub2api/raid/session", { method: "POST", body: JSON.stringify({ sso }) })
               : await request("/api/public/sub2api/raid/session-from-token", { method: "POST", body: JSON.stringify({ connectionId, accessToken, refreshToken, userId }) });
             render(payload);
-            state.timer = window.setInterval(refresh, 8000);
+            state.timer = window.setInterval(refresh, 60000);
           } catch (error) {
             showStatus(error.message);
           }

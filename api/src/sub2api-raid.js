@@ -1293,20 +1293,30 @@ export function createSub2ApiRaidService({
     const effectiveRaiders = ranking.filter((item) => item.effective).length;
     const own = ranking.find((item) => item.userId === userId) || null;
     const battleLog = currentBoss ? db.prepare(`
-      SELECT d.*, e.masked_name FROM sub2api_raid_damage_assignments d
-      LEFT JOIN sub2api_raid_enrollments e
+      SELECT e.id AS enrollment_id, e.masked_name, d.sub2api_user_id,
+        substr(d.occurred_at, 1, 16) AS minute_bucket,
+        SUM(d.actual_cost) AS actual_cost, SUM(d.bonus_damage) AS bonus_damage,
+        SUM(d.damage) AS damage
+      FROM sub2api_raid_damage_assignments d
+      INNER JOIN sub2api_raid_enrollments e
         ON e.campaign_id = d.campaign_id AND e.sub2api_user_id = d.sub2api_user_id
-      WHERE d.boss_id = ? ORDER BY d.occurred_at DESC, d.remote_usage_id DESC LIMIT 20
-    `).all(currentBoss.id).map((row) => ({
-      id: row.id,
-      maskedName: row.masked_name || maskIdentity({ userId: row.sub2api_user_id }),
-      actualCost: Number(row.actual_cost),
-      bonusDamage: Number(row.bonus_damage),
-      damage: Number(row.damage),
-      multiplier: Number(row.multiplier),
-      occurredAt: row.occurred_at,
-      own: row.sub2api_user_id === userId
-    })) : [];
+      WHERE d.boss_id = ?
+      GROUP BY e.id, e.masked_name, d.sub2api_user_id, substr(d.occurred_at, 1, 16)
+      ORDER BY MAX(d.occurred_at) DESC, d.sub2api_user_id ASC LIMIT 20
+    `).all(currentBoss.id).map((row) => {
+      const actualCost = roundAmount(row.actual_cost);
+      const damage = roundAmount(row.damage);
+      return {
+        id: `${row.enrollment_id}:${row.minute_bucket}`,
+        maskedName: row.masked_name,
+        actualCost,
+        bonusDamage: roundAmount(row.bonus_damage),
+        damage,
+        multiplier: actualCost > 0 ? roundAmount(damage / actualCost) : 1,
+        occurredAt: `${row.minute_bucket}:00.000Z`,
+        own: row.sub2api_user_id === userId
+      };
+    }) : [];
     const rewards = db.prepare(`
       SELECT * FROM sub2api_raid_rewards WHERE campaign_id = ? AND sub2api_user_id = ? ORDER BY created_at DESC
     `).all(campaign.id, userId).map(serializeReward);

@@ -246,6 +246,50 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(balanceDeliveries, 1);
 });
 
+test("raid battle log aggregates each player's damage by authoritative minute", async () => {
+  db.prepare(`
+    INSERT INTO sub2api_connections (
+      id, name, base_url, admin_token, status, created_by, created_at, updated_at
+    ) VALUES ('raid-battle-log', '战报聚合测试', 'https://battle-log.example.com', 'token', 'active', 'admin', ?, ?)
+  `).run(currentNow, currentNow);
+  const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
+    body: {
+      connectionId: "raid-battle-log",
+      name: "八月聚合战报",
+      month: "2026-08",
+      startAt: "2026-07-31T16:00:00.000Z",
+      endAt: "2026-08-31T16:00:00.000Z",
+      settlementEndAt: "2026-08-31T16:10:00.000Z",
+      effectiveDamageThreshold: 10,
+      rewardBudget: 100,
+      bosses: [boss(1, 100, 10)]
+    }
+  });
+  await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", {
+    params: { id: created.body.campaign.id }
+  });
+  const identity = { connectionId: "raid-battle-log", userId: "53", username: "player53" };
+  await app.injectRoute("POST", "/api/public/sub2api/raid/enroll", { sub2apiRaid: identity });
+  remoteUsageItems.push(
+    { connection_id: "raid-battle-log", id: 401, user_id: 53, actual_cost: 4, group_id: 101, created_at: "2026-08-01T00:01:05.000Z" },
+    { connection_id: "raid-battle-log", id: 402, user_id: 53, actual_cost: 4, group_id: 101, created_at: "2026-08-01T00:01:55.000Z" }
+  );
+  await app.injectRoute("POST", "/api/admin/sub2api/raid/connections/:id/sync-usage", {
+    params: { id: "raid-battle-log" }
+  });
+
+  const state = await app.injectRoute("GET", "/api/public/sub2api/raid/bootstrap", { sub2apiRaid: identity });
+  assert.equal(state.body.battleLog.length, 1);
+  assert.equal(state.body.battleLog[0].actualCost, 8);
+  assert.equal(state.body.battleLog[0].bonusDamage, 2);
+  assert.equal(state.body.battleLog[0].damage, 10);
+  assert.equal(state.body.battleLog[0].occurredAt, "2026-08-01T00:01:00.000Z");
+  await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/abort", {
+    params: { id: created.body.campaign.id },
+    body: { reason: "聚合测试完成" }
+  });
+});
+
 test("raid ignores duplicate usage and refuses a budget-overflowing campaign", async () => {
   const rejected = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
     body: {

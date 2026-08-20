@@ -40,7 +40,8 @@ test("production battlefield uses server-confirmed damage and eight switchable l
   assert.match(html, /backdrop-filter:\s*blur/);
   assert.match(html, /state\.lastDamageIds/);
   assert.match(html, /item\.id/);
-  assert.match(html, /setInterval\(refresh, 8000\)/);
+  assert.match(html, /setInterval\(refresh, 60000\)/);
+  assert.match(html, /每分钟汇总同一玩家的实际消耗与伤害/);
   assert.match(html, /id="sync-time"/);
   assert.match(html, /id="my-reward-list"/);
   assert.match(html, /id="history-tabs"/);

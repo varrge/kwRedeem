@@ -1106,7 +1106,7 @@ function stopUpdatePolling() {
 
 async function api(path, options = {}) {
   const headers = {
-    "Content-Type": "application/json",
+    ...(options.body === undefined || options.body === null ? {} : { "Content-Type": "application/json" }),
     ...(options.headers || {})
   };
   const token = getToken();

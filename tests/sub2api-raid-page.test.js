@@ -25,6 +25,7 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.match(script, /deleteRaidCampaign\(id\)/);
   assert.match(script, /\/api\/admin\/sub2api\/raid\/campaigns\/\$\{encodeURIComponent\(id\)\}/);
   assert.match(script, /item\.canDelete/);
+  assert.match(script, /options\.body === undefined \|\| options\.body === null/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {

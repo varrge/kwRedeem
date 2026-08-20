@@ -18,6 +18,7 @@ class FakeApp {
   }
   post(route, options, handler) { this.register("POST", route, options, handler); }
   get(route, options, handler) { this.register("GET", route, options, handler); }
+  delete(route, options, handler) { this.register("DELETE", route, options, handler); }
 }
 
 const db = getDb();

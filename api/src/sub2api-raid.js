@@ -1326,10 +1326,63 @@ export function createSub2ApiRaidService({
       const sync = db.prepare("SELECT * FROM sub2api_raid_usage_sync WHERE connection_id = ?").get(row.connection_id);
       return {
         ...serializeCampaign(row, { includeExcluded: true }),
+        canDelete: canDeleteCampaign(row),
         rewardCounts: Object.fromEntries(rewards.map((item) => [item.status, Number(item.count)])),
         sync: sync ? { cursor: sync.cursor || "", lastSyncedAt: sync.last_synced_at || null, error: sync.last_error || "" } : null
       };
     });
+  }
+
+  function hasProtectedCampaignRecords(campaignId) {
+    return Boolean(db.prepare(`
+      SELECT
+        EXISTS(SELECT 1 FROM sub2api_raid_settlements WHERE campaign_id = ?) OR
+        EXISTS(SELECT 1 FROM sub2api_raid_rewards WHERE campaign_id = ?) OR
+        EXISTS(SELECT 1 FROM sub2api_raid_rate_entitlements WHERE campaign_id = ?) AS found
+    `).get(campaignId, campaignId, campaignId).found);
+  }
+
+  function canDeleteCampaign(campaign) {
+    return ["draft", "aborted"].includes(campaign.status) && !hasProtectedCampaignRecords(campaign.id);
+  }
+
+  function deleteCampaign(campaignId, actor) {
+    db.transaction(() => {
+      const campaign = getCampaign(campaignId);
+      if (!campaign) throw Object.assign(new Error("Boss 活动不存在"), { statusCode: 404 });
+      if (!["draft", "aborted"].includes(campaign.status)) {
+        throw Object.assign(new Error("只有草稿或已中止活动可以删除"), { statusCode: 409 });
+      }
+      if (hasProtectedCampaignRecords(campaign.id)) {
+        throw Object.assign(new Error("活动已有结算、奖励或倍率权益记录，不能删除"), { statusCode: 409 });
+      }
+      for (const table of [
+        "sub2api_raid_disqualifications",
+        "sub2api_raid_rate_entitlements",
+        "sub2api_raid_rewards",
+        "sub2api_raid_settlements",
+        "sub2api_raid_contributions",
+        "sub2api_raid_damage_assignments",
+        "sub2api_raid_enrollments",
+        "sub2api_raid_bosses"
+      ]) {
+        db.prepare(`DELETE FROM ${table} WHERE campaign_id = ?`).run(campaign.id);
+      }
+      db.prepare("DELETE FROM sub2api_raid_campaigns WHERE id = ?").run(campaign.id);
+      createAuditLog({
+        action: "sub2api.raid.campaign.delete",
+        actor,
+        resourceType: "sub2api_raid_campaign",
+        resourceId: campaign.id,
+        detail: {
+          connectionId: campaign.connection_id,
+          month: campaign.month,
+          name: campaign.name,
+          previousStatus: campaign.status
+        }
+      });
+    })();
+    return { success: true, id: campaignId };
   }
 
   function abortCampaign(campaignId, input, actor) {
@@ -1602,6 +1655,14 @@ export function createSub2ApiRaidService({
   app.post("/api/admin/sub2api/raid/campaigns/:id/abort", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       return { campaign: serializeCampaign(abortCampaign(request.params.id, parseBody(request), request.admin?.username || "admin"), { includeExcluded: true }) };
+    } catch (error) {
+      return reply.code(error.statusCode || 400).send({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/sub2api/raid/campaigns/:id", { preHandler: requireAdmin }, async (request, reply) => {
+    try {
+      return deleteCampaign(request.params.id, request.admin?.username || "admin");
     } catch (error) {
       return reply.code(error.statusCode || 400).send({ message: error.message });
     }

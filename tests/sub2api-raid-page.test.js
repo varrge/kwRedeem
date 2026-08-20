@@ -22,6 +22,9 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.doesNotMatch(script, /MVP 第 [123] 名额度/);
   assert.match(script, /existing\?\.status === "draft"/);
   assert.match(script, /发布后不能修改/);
+  assert.match(script, /deleteRaidCampaign\(id\)/);
+  assert.match(script, /\/api\/admin\/sub2api\/raid\/campaigns\/\$\{encodeURIComponent\(id\)\}/);
+  assert.match(script, /item\.canDelete/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {

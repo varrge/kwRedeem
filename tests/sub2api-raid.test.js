@@ -42,6 +42,7 @@ class FakeApp {
 
   get(pathName, options, handler) { this.register("GET", pathName, options, handler); }
   post(pathName, options, handler) { this.register("POST", pathName, options, handler); }
+  delete(pathName, options, handler) { this.register("DELETE", pathName, options, handler); }
 
   async injectRoute(method, pathName, request = {}) {
     const route = this.routes.get(`${method} ${pathName}`);
@@ -69,6 +70,7 @@ const app = new FakeApp();
 let currentNow = "2026-08-01T00:00:00.000Z";
 let remoteUsageItems = [];
 let balanceDeliveries = 0;
+const auditLogs = [];
 let campaignId = "";
 let secondBossId = "";
 
@@ -98,6 +100,7 @@ const raid = createSub2ApiRaidService({
     return { ok: true };
   },
   requireAdmin: async (request) => { request.admin ||= { username: "admin" }; },
+  createAuditLog: (entry) => auditLogs.push(entry),
   requireSession: async (request, reply) => {
     if (!request.sub2apiRaid) reply.code(401).send({ message: "缺少 Boss 活动会话" });
   }
@@ -368,6 +371,52 @@ test("aborting a raid preserves settled rewards and creates none for the active 
   assert.equal(result.body.campaign.status, "aborted");
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_rewards WHERE campaign_id = ?").get(campaignId).count, rewardCount);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_settlements WHERE campaign_id = ?").get(campaignId).count, settlementCount);
+});
+
+test("raid deletion removes drafts and empty aborted campaigns but preserves audited campaigns", async () => {
+  const config = (month, name) => ({
+    connectionId: "raid-main",
+    name,
+    month,
+    startAt: `${month}-01T00:00:00.000Z`,
+    endAt: month === "2026-11" ? "2026-11-30T16:00:00.000Z" : "2026-12-31T16:00:00.000Z",
+    settlementEndAt: month === "2026-11" ? "2026-11-30T16:10:00.000Z" : "2026-12-31T16:10:00.000Z",
+    effectiveDamageThreshold: 10,
+    rewardBudget: 100,
+    bosses: [boss(1, 100)]
+  });
+  const draftConfig = {
+    ...config("2026-11", "十一月草稿"),
+    startAt: "2026-10-31T16:00:00.000Z"
+  };
+  const draft = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", { body: draftConfig });
+  const draftId = draft.body.campaign.id;
+  assert.equal(draft.statusCode, 201);
+  assert.equal((await app.injectRoute("DELETE", "/api/admin/sub2api/raid/campaigns/:id", { params: { id: draftId } })).statusCode, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_campaigns WHERE id = ?").get(draftId).count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_bosses WHERE campaign_id = ?").get(draftId).count, 0);
+
+  const abortedConfig = {
+    ...config("2026-12", "十二月中止活动"),
+    startAt: "2026-11-30T16:00:00.000Z"
+  };
+  const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", { body: abortedConfig });
+  const abortedId = created.body.campaign.id;
+  await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", { params: { id: abortedId } });
+  const publishedDelete = await app.injectRoute("DELETE", "/api/admin/sub2api/raid/campaigns/:id", { params: { id: abortedId } });
+  assert.equal(publishedDelete.statusCode, 409);
+  await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/abort", {
+    params: { id: abortedId },
+    body: { reason: "测试中止后删除活动" }
+  });
+  const deleted = await app.injectRoute("DELETE", "/api/admin/sub2api/raid/campaigns/:id", { params: { id: abortedId } });
+  assert.deepEqual(deleted.body, { success: true, id: abortedId });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_campaigns WHERE id = ?").get(abortedId).count, 0);
+
+  const protectedDelete = await app.injectRoute("DELETE", "/api/admin/sub2api/raid/campaigns/:id", { params: { id: campaignId } });
+  assert.equal(protectedDelete.statusCode, 409);
+  assert.match(protectedDelete.body.message, /结算、奖励或倍率权益/);
+  assert.equal(auditLogs.at(-1).action, "sub2api.raid.campaign.delete");
 });
 
 test("month-end maintenance imports the final usage before ending an uncleared boss without rewards", async () => {

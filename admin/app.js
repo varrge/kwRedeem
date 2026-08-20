@@ -4984,6 +4984,7 @@ function renderRaidCampaigns() {
       ${item.status === "draft" ? `<button class="ghost-btn small" type="button" onclick="editRaidCampaign('${escapeHtml(item.id)}')">编辑</button><button class="primary-btn small" type="button" onclick="publishRaidCampaign('${escapeHtml(item.id)}')">发布</button>` : ""}
       ${item.status !== "draft" ? `<button class="ghost-btn small" type="button" onclick="viewRaidHistory('${escapeHtml(item.id)}')">历史榜</button>` : ""}
       ${["scheduled", "active", "settling"].includes(item.status) ? `<button class="ghost-btn small" type="button" style="color:var(--error)" onclick="abortRaidCampaign('${escapeHtml(item.id)}')">中止</button>` : ""}
+      ${item.canDelete ? `<button class="danger-btn small" type="button" onclick="deleteRaidCampaign('${escapeHtml(item.id)}')">删除</button>` : ""}
     ` }
   ], raidCampaignsCache, "暂无 Boss 活动");
 }
@@ -5036,6 +5037,19 @@ async function abortRaidCampaign(id) {
     await refreshRaidCampaigns();
   } catch (error) {
     setHint(refs.raidCampaignResult, `中止失败：${error.message}`);
+  }
+}
+
+async function deleteRaidCampaign(id) {
+  const campaign = raidCampaignsCache.find((item) => item.id === id);
+  if (!campaign || !window.confirm(`确认永久删除活动“${campaign.name}”？\n\n活动配置、Boss、参战与伤害数据将被删除，且无法恢复。`)) return;
+  try {
+    await api(`/api/admin/sub2api/raid/campaigns/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (refs.raidCampaignEditId.value === id) resetRaidCampaignForm();
+    setHint(refs.raidCampaignResult, "活动已删除");
+    await refreshRaidCampaigns();
+  } catch (error) {
+    setHint(refs.raidCampaignResult, `删除失败：${error.message}`);
   }
 }
 
@@ -5121,6 +5135,7 @@ async function refreshRaidConsole() {
 window.editRaidCampaign = editRaidCampaign;
 window.publishRaidCampaign = publishRaidCampaign;
 window.abortRaidCampaign = abortRaidCampaign;
+window.deleteRaidCampaign = deleteRaidCampaign;
 window.viewRaidHistory = viewRaidHistory;
 window.dispositionRaidReward = dispositionRaidReward;
 window.disqualifyRaidWinner = disqualifyRaidWinner;

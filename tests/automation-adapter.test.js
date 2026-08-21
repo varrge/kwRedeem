@@ -337,6 +337,7 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
             version: 3,
             plans: {
               go: { key: "go", label: "Go", currency: "PHP", enabled: true },
+              business: { key: "business", label: "Business", currency: "PHP", enabled: true },
               plus: { key: "plus", label: "Plus", currency: "PHP", enabled: true },
               pro_5x: { key: "pro_5x", label: "Pro 5X", currency: "PHP", enabled: true },
               pro_20x: { key: "pro_20x", label: "Pro 20X", currency: "PHP", enabled: false }

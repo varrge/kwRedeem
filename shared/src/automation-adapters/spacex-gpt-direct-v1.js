@@ -142,7 +142,8 @@ function normalizeCapabilities(payload) {
   for (const [id, item] of Object.entries(data.plans)) {
     if (item?.enabled !== true) continue;
     const definition = PLAN_DEFINITIONS[id];
-    if (!definition || item.key !== id) {
+    if (!definition) continue;
+    if (item.key !== id) {
       fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 返回了未知套餐", { retryable: false });
     }
     if (!SUPPORTED_PLAN_IDS.has(id)) continue;

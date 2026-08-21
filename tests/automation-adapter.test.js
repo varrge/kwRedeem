@@ -420,11 +420,15 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
     providerCardId: 123
   }), (error) => error.code === "SPACEX_GPT_PLAN_UNSUPPORTED" && error.definitelyNotCreated === true);
 
+  const authSessionJson = {
+    accessToken: "secret-access-token",
+    sessionToken: "secret-session-token"
+  };
   const created = await adapter.createTask({
     clientOrderId: "KW-SPACEX-1",
     planId: "plus",
     checkoutCountry: "PH",
-    authSessionJson: { accessToken: "secret-access-token" },
+    authSessionJson,
     cardProviderKey: "spacexcard",
     providerCardId: 123,
     card: { number: "5555555555554444" },
@@ -433,15 +437,15 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   assert.equal(adapter.createReplaySafe, true);
   assert.equal(created.task.id, "981");
   assert.equal(created.task.status, "queued");
+  const preflightRequest = requests.find((item) => item.path.endsWith("/gpt-direct/preflight"));
   const createRequest = requests.find((item) => item.path.endsWith("/gpt-direct/orders"));
   assert.equal(createRequest.options.headers["Idempotency-Key"], "KW-SPACEX-1");
   assert.equal(createRequest.body.card_id, 123);
   assert.equal(createRequest.body.no_auto_card_switch, true);
   assert.equal(createRequest.body.pricing_version, 3);
-  assert.deepEqual(createRequest.body.credential, {
-    mode: "access_token",
-    accessToken: "secret-access-token"
-  });
+  const expectedCredential = { mode: "session", session: JSON.stringify(authSessionJson) };
+  assert.deepEqual(preflightRequest.body.credential, expectedCredential);
+  assert.deepEqual(createRequest.body.credential, expectedCredential);
 
   const completed = await adapter.getTask("981", {
     clientOrderId: "KW-SPACEX-1",

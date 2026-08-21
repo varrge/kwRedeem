@@ -180,6 +180,20 @@ function sessionCredential(value) {
       definitelyNotCreated: true
     });
   }
+  const sessionCookieName = /^(?:__Secure-)?next-auth\.session-token(?:\.\d+)?$/;
+  const hasSessionCookie = [value.sessionToken, value.session_token]
+    .some((item) => typeof item === "string" && item.trim())
+    || Object.entries(value).some(([name, item]) => sessionCookieName.test(name)
+      && typeof item === "string" && item.trim())
+    || (value.cookies && typeof value.cookies === "object" && !Array.isArray(value.cookies)
+      && Object.entries(value.cookies).some(([name, item]) => sessionCookieName.test(name)
+        && typeof item === "string" && item.trim()))
+    || (Array.isArray(value.cookies) && value.cookies.some((item) => sessionCookieName.test(String(item?.name || ""))
+      && typeof item?.value === "string" && item.value.trim()))
+    || [value.cookie, typeof value.cookies === "string" ? value.cookies : ""]
+      .some((item) => typeof item === "string"
+        && /(?:^|;\s*)(?:__Secure-)?next-auth\.session-token(?:\.\d+)?=\S+/.test(item));
+  if (hasSessionCookie) return Object.freeze({ mode: "session", session });
   const accessToken = [value.accessToken, value.access_token]
     .find((item) => typeof item === "string" && item.trim());
   if (accessToken) return Object.freeze({ mode: "access_token", accessToken: accessToken.trim() });

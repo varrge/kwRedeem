@@ -1988,12 +1988,77 @@ test("admin UI exposes locked membership credentials without money-operation con
   assert.ok(panel.querySelector("#membership-product-policy-refresh"));
   assert.ok(panel.querySelector("#membership-no-charge-form"));
   assert.ok(panel.querySelector("#membership-circuit-refresh"));
+  assert.equal(panel.querySelector("#automation-mapping-card-product")?.getAttribute("list"), "automation-mapping-card-product-options");
+  assert.ok(panel.querySelector("#automation-mapping-card-product-options"));
   assert.equal(panel.querySelector('[data-action="open-card"], [data-action="recharge-card"], [data-action="delete-card"]'), null);
   assert.match(script, /\/api\/admin\/membership-fulfillment\/settings/);
   assert.match(script, /\/api\/admin\/membership-fulfillments/);
   assert.match(script, /\/api\/admin\/checkout-price-contracts/);
   assert.match(script, /\/api\/admin\/card-product-policies/);
+  assert.match(script, /\/api\/admin\/membership-card-products/);
   assert.match(script, /\/api\/admin\/checkout-validation-runs/);
   assert.match(script, /\/api\/admin\/fulfillment-circuits/);
   dom.window.close();
+});
+
+test("admin lists live SpaceX card products and marks ChatGPT restrictions", async () => {
+  if (!app) ({ app } = await import("../api/src/server.js"));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" }
+  });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  db.prepare(`UPDATE membership_fulfillment_settings
+    SET spacexcard_app_id='ak_test_redacted',spacexcard_app_secret_encrypted=? WHERE id='default'`)
+    .run(encryptText("sk_test_redacted"));
+  db.prepare(`UPDATE membership_card_platforms
+    SET base_url='https://zovocard.com/openapi/v1',enabled=1 WHERE key='spacexcard'`).run();
+
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.equal(new URL(url).pathname, "/openapi/v1/products");
+    return jsonResponse({
+      code: 0,
+      msg: "ok",
+      data: [{
+        product_code: "P-CHATGPT",
+        issuer: "one",
+        network: "VISA",
+        issuing_area: "Hong Kong",
+        card_type: "save",
+        open_fee: 1,
+        recharge_fee: 0,
+        rtf_rate: 0.1,
+        min_amount: 10,
+        max_amount: 1000,
+        restricted_merchants: [],
+        google_chatgpt_blocked: false
+      }, {
+        product_code: "P5378OX",
+        issuer: "one",
+        network: "MasterCard",
+        issuing_area: "United States",
+        card_type: "save",
+        open_fee: 1.5,
+        recharge_fee: 0,
+        rtf_rate: 0.1,
+        min_amount: 10,
+        max_amount: 10000,
+        restricted_merchants: ["GOOGLE CHATGPT"],
+        google_chatgpt_blocked: true
+      }]
+    });
+  };
+  let response;
+  try {
+    response = await app.inject({ method: "GET", url: "/api/admin/membership-card-products", headers });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(response.json().items.map((item) => [item.productCode, item.gptEligible]), [
+    ["P-CHATGPT", true],
+    ["P5378OX", false]
+  ]);
 });

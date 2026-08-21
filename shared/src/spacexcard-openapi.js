@@ -104,6 +104,17 @@ function normalizeCardNumber(value) {
 
 function normalizeProduct(item) {
   const product = requireObject(item);
+  const restrictedMerchants = product.restricted_merchants === undefined
+    ? []
+    : product.restricted_merchants;
+  if (!Array.isArray(restrictedMerchants)
+      || restrictedMerchants.some((merchant) => typeof merchant !== "string" || !merchant.trim())) {
+    throw error("SPACEXCARD_CONTRACT_DRIFT", "SpaceX Card 字段 restricted_merchants 无效");
+  }
+  const normalizedRestrictions = restrictedMerchants.map((merchant) => merchant.trim().toUpperCase());
+  const googleChatgptBlocked = typeof product.google_chatgpt_blocked === "boolean"
+    ? product.google_chatgpt_blocked
+    : null;
   return Object.freeze({
     productCode: requireString(product.product_code, "product_code"),
     issuer: nullableString(product.issuer),
@@ -114,7 +125,11 @@ function normalizeProduct(item) {
     rechargeFeeRate: requireNumber(product.recharge_fee, "recharge_fee"),
     refundRate: requireNumber(product.rtf_rate, "rtf_rate"),
     minAmount: requireNumber(product.min_amount, "min_amount"),
-    maxAmount: requireNumber(product.max_amount, "max_amount")
+    maxAmount: requireNumber(product.max_amount, "max_amount"),
+    restrictedMerchants: Object.freeze(normalizedRestrictions),
+    googleChatgptBlocked,
+    gptEligible: googleChatgptBlocked === false
+      && !normalizedRestrictions.some((merchant) => merchant.includes("GOOGLE CHATGPT"))
   });
 }
 

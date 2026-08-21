@@ -125,6 +125,8 @@ const refs = {
   automationMappingRegion: document.querySelector("#automation-mapping-region"),
   automationMappingCardPlatform: document.querySelector("#automation-mapping-card-platform"),
   automationMappingCardProduct: document.querySelector("#automation-mapping-card-product"),
+  automationMappingCardProductOptions: document.querySelector("#automation-mapping-card-product-options"),
+  automationMappingCardProductHint: document.querySelector("#automation-mapping-card-product-hint"),
   automationMappingCapacityKey: document.querySelector("#automation-mapping-capacity-key"),
   automationMappingCardCapacity: document.querySelector("#automation-mapping-card-capacity"),
   automationMappingFunding: document.querySelector("#automation-mapping-funding"),
@@ -620,6 +622,8 @@ let storeTasksCache = [];
 let automationProvidersCache = [];
 let automationMappingsCache = [];
 let automationStoreMappingsCache = [];
+let automationCardProductsCache = [];
+let automationCardProductsError = "";
 let membershipPreparedCanaries = new Map();
 let membershipAutomaticScopes = new Map();
 let migrationRestoreUploadId = null;
@@ -2074,6 +2078,23 @@ function resetAutomationMappingForm() {
   refs.automationMappingCardCapacity.value = "1";
   refs.automationMappingPriority.value = "100";
   updateAutomationCapabilitySelects();
+  updateAutomationCardProductOptions();
+}
+
+function updateAutomationCardProductOptions() {
+  if (!refs.automationMappingCardProductOptions) return;
+  if (refs.automationMappingCardPlatform.value !== "spacexcard") {
+    refs.automationMappingCardProductOptions.innerHTML = "";
+    refs.automationMappingCardProductHint.textContent = "EfunCard 产品代码可按卡段目录手动填写";
+    return;
+  }
+  const eligible = automationCardProductsCache.filter((item) => item.gptEligible === true);
+  const blocked = automationCardProductsCache.filter((item) => item.gptEligible !== true);
+  refs.automationMappingCardProductOptions.innerHTML = eligible.map((item) => `
+    <option value="${escapeHtml(item.productCode)}">${escapeHtml(item.network || "-")} / ${escapeHtml(item.issuingArea || "-")} / $${Number(item.minAmount).toFixed(2)}-$${Number(item.maxAmount).toFixed(2)}</option>
+  `).join("");
+  refs.automationMappingCardProductHint.textContent = automationCardProductsError
+    || `可用于 GPT：${eligible.map((item) => item.productCode).join("、") || "无"}${blocked.length ? `；已排除受限产品：${blocked.map((item) => item.productCode).join("、")}` : ""}`;
 }
 
 function updateAutomationCapabilitySelects() {
@@ -2117,6 +2138,7 @@ function loadAutomationMapping(id) {
   refs.automationMappingRegion.value = item.regionCode || "";
   refs.automationMappingCardPlatform.value = item.cardPlatformKey;
   refs.automationMappingCardProduct.value = item.cardProductCode || "";
+  updateAutomationCardProductOptions();
   refs.automationMappingCapacityKey.value = item.capacityKey;
   refs.automationMappingCardCapacity.value = item.cardCapacity;
   refs.automationMappingFunding.value = item.fundingAmountUsd;
@@ -2226,18 +2248,21 @@ async function resolveAutomationExecution(id, outcome) {
 }
 
 async function refreshAutomationConsole() {
-  const [settingsPayload, providerPayload, mappingPayload, storeMappingPayload, executionPayload] = await Promise.all([
+  const [settingsPayload, providerPayload, mappingPayload, storeMappingPayload, executionPayload, cardProductPayload] = await Promise.all([
     api("/api/admin/automation/settings"),
     api("/api/admin/automation/providers"),
     api("/api/admin/automation/mappings"),
     api("/api/admin/store-fulfillment/mappings"),
-    api("/api/admin/automation/executions")
+    api("/api/admin/automation/executions"),
+    api("/api/admin/membership-card-products").catch((error) => ({ items: [], error: error.message }))
   ]);
   automationProvidersCache = providerPayload.items || [];
   automationMappingsCache = mappingPayload.items || [];
   automationStoreMappingsCache = (storeMappingPayload.items || []).filter((item) => (
     item.enabled === true && item.fulfillmentKind === "membership_auto"
   ));
+  automationCardProductsCache = cardProductPayload.items || [];
+  automationCardProductsError = cardProductPayload.error || "";
   refs.automationGateEnabled.checked = settingsPayload.paymentGateEnabled === true;
   refs.automationConfigTtl.value = Number(settingsPayload.configTtlSeconds) || 300;
   setHint(
@@ -2260,6 +2285,7 @@ async function refreshAutomationConsole() {
     refs.automationMappingProduct.value = selectedProduct;
   }
   updateAutomationCapabilitySelects();
+  updateAutomationCardProductOptions();
 
   renderTable(refs.automationProviderList, [
     { label: "站点", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br/><code>${escapeHtml(item.baseUrl)}</code>` },
@@ -7202,6 +7228,7 @@ refs.automationProviderRefresh?.addEventListener("click", () => {
   refreshAutomationConsole().catch((error) => setHint(refs.automationProviderResult, error.message));
 });
 refs.automationMappingProvider?.addEventListener("change", updateAutomationCapabilitySelects);
+refs.automationMappingCardPlatform?.addEventListener("change", updateAutomationCardProductOptions);
 
 refs.automationMappingForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -2240,6 +2240,20 @@ export function createMembershipFulfillmentService(options) {
     return { items: listCardProductPolicies() };
   });
 
+  app.get("/api/admin/membership-card-products", { preHandler: requireAdmin }, async (_request, reply) => {
+    setNoStore(reply);
+    try {
+      const products = await createOpenApiClient().listProducts();
+      return { items: products.map((product) => ({ providerKey: "spacexcard", ...product })) };
+    } catch (caught) {
+      const statusCode = Number(caught?.statusCode);
+      return reply.code(statusCode >= 400 && statusCode <= 599 ? statusCode : 502).send({
+        code: caught?.code || "SPACEXCARD_PRODUCT_CATALOG_FAILED",
+        message: caught?.message || "SpaceX Card 产品目录读取失败"
+      });
+    }
+  });
+
   app.put("/api/admin/card-product-policies", { preHandler: requireAdmin }, async (request, reply) => {
     const schema = z.object({
       items: z.array(z.object({

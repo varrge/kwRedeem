@@ -586,7 +586,7 @@
                 <label class="field"><span>站点直付套餐</span><select id="automation-mapping-plan" required></select></label>
                 <label class="field"><span>充值区域</span><select id="automation-mapping-region" required></select></label>
                 <label class="field"><span>卡台</span><select id="automation-mapping-card-platform"><option value="spacexcard">SpaceX Card</option><option value="efuncard">EfunCard</option></select></label>
-                <label class="field"><span>开卡产品代码</span><input id="automation-mapping-card-product" autocomplete="off" placeholder="无可用存量卡时使用" /></label>
+                <label class="field"><span>开卡产品代码</span><input id="automation-mapping-card-product" list="automation-mapping-card-product-options" autocomplete="off" placeholder="选择可用产品；留空则只用现有库存" /><datalist id="automation-mapping-card-product-options"></datalist><small id="automation-mapping-card-product-hint" class="hint"></small></label>
                 <label class="field"><span>容量分组</span><input id="automation-mapping-capacity-key" autocomplete="off" required /></label>
                 <label class="field"><span>单卡容量</span><input id="automation-mapping-card-capacity" type="number" min="1" max="100" step="1" value="1" required /></label>
                 <label class="field"><span>整卡预存金额（USD）</span><input id="automation-mapping-funding" type="number" min="0.01" step="0.01" required /></label>

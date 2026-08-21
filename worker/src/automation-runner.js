@@ -507,8 +507,20 @@ export function createAutomationRunner(options = {}) {
       if (!card || card.product_code !== mapping.card_product_code) return false;
     }
     const intent = db.prepare(`
-      SELECT amount_usd FROM automation_funding_intents WHERE execution_id = ?
+      SELECT operation, target_card_id, amount_usd
+      FROM automation_funding_intents WHERE execution_id = ?
     `).get(execution.id);
+    if (intent?.operation === "recharge") {
+      const attempt = db.prepare(`
+        SELECT mapping_snapshot FROM automation_execution_attempts
+        WHERE execution_id = ? AND mapping_id = ?
+        ORDER BY attempt_no DESC LIMIT 1
+      `).get(execution.id, mapping.id);
+      const snapshot = parseJson(attempt?.mapping_snapshot);
+      return intent.target_card_id === reservation.card_id
+        && Number(snapshot?.cardCapacity) === Number(mapping.card_capacity)
+        && Number(mapping.funding_amount_usd) <= Number(snapshot?.fundingAmountUsd);
+    }
     return !intent || Number(mapping.funding_amount_usd) <= Number(intent.amount_usd);
   }
 
@@ -531,9 +543,19 @@ export function createAutomationRunner(options = {}) {
         AND NOT EXISTS (
           SELECT 1 FROM automation_execution_attempts attempt
           WHERE attempt.execution_id = ? AND attempt.mapping_id = mapping.id
+            AND (
+              attempt.status <> 'not_created'
+              OR NOT EXISTS (
+                SELECT 1 FROM admin_audit_logs retry
+                WHERE retry.action = 'automation.execution.retry_requested'
+                  AND retry.resource_type = 'automation_execution'
+                  AND retry.resource_id = ?
+                  AND retry.created_at >= attempt.updated_at
+              )
+            )
         )
       ORDER BY mapping.priority, mapping.updated_at, mapping.id
-    `).all(execution.product_id, freshAfter, execution.id);
+    `).all(execution.product_id, freshAfter, execution.id, execution.id);
     const mapping = rows.find((row) => reservationCompatible(execution, row)
       && providerCapacityAvailable(row.provider_id)
       && dailyRiskUsed(row.id, at) + automationRiskAllocationUsd(row) <= Number(row.daily_risk_limit_usd));

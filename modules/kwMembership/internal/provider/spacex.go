@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const SpaceXCardBaseURL = "https://spacexcard.com/openapi/v1"
+const SpaceXCardBaseURL = "https://zovocard.com/openapi/v1"
 const maxSpaceXResponse = 256 << 10
 
 type SpaceXClient struct {
@@ -105,11 +105,23 @@ type OpenCardResult struct {
 	OpenFee         float64
 }
 
-func NewSpaceXClient(client *http.Client, appID, appSecret string) (*SpaceXClient, error) {
+func NewSpaceXClient(client *http.Client, appID, appSecret string, configuredBaseURL ...string) (*SpaceXClient, error) {
 	if strings.TrimSpace(appSecret) == "" {
 		return nil, fail("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "SpaceX Card OpenAPI app_secret is not configured", false)
 	}
-	return &SpaceXClient{http: client, appID: strings.TrimSpace(appID), appSecret: strings.TrimSpace(appSecret), baseURL: SpaceXCardBaseURL}, nil
+	baseURL := SpaceXCardBaseURL
+	if len(configuredBaseURL) > 1 {
+		return nil, fail("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "SpaceX Card OpenAPI base URL is invalid", false)
+	}
+	if len(configuredBaseURL) == 1 && strings.TrimSpace(configuredBaseURL[0]) != "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(configuredBaseURL[0]), "/")
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Port() != "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || !strings.HasSuffix(parsed.Path, "/openapi/v1") {
+		return nil, fail("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "SpaceX Card OpenAPI base URL is invalid", false)
+	}
+	return &SpaceXClient{http: client, appID: strings.TrimSpace(appID), appSecret: strings.TrimSpace(appSecret), baseURL: baseURL}, nil
 }
 
 func (c *SpaceXClient) Key() string { return CardPlatformSpaceX }
@@ -159,6 +171,16 @@ func (c *SpaceXClient) request(ctx context.Context, method, path string, input a
 		return fail("SPACEXCARD_ACCESS_DENIED", "SpaceX Card access denied", false)
 	case http.StatusTooManyRequests:
 		return fail("SPACEXCARD_RATE_LIMITED", "SpaceX Card rate limited", true)
+	}
+	if response.StatusCode == http.StatusServiceUnavailable {
+		raw, readErr := readLimited(response, maxSpaceXResponse, "SPACEXCARD_RESPONSE_TOO_LARGE")
+		var unavailable struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if readErr == nil && json.Unmarshal(raw, &unavailable) == nil && unavailable.ErrorCode == "channel_unavailable" {
+			return &Error{ErrorCode: "SPACEXCARD_CHANNEL_UNAVAILABLE", Message: "SpaceX Card channel unavailable", Retryable: true, KnownNoWrite: true}
+		}
+		return fail("SPACEXCARD_UNAVAILABLE", "SpaceX Card unavailable", true)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fail("SPACEXCARD_UNAVAILABLE", "SpaceX Card unavailable", true)
@@ -380,17 +402,18 @@ func (c *SpaceXClient) GetOpenAIPayments(ctx context.Context, cardID int64, _ []
 
 func (c *SpaceXClient) GetBalance(ctx context.Context) (Balance, error) {
 	var raw struct {
-		Balance  *float64 `json:"balance"`
-		Currency string   `json:"currency"`
+		Balance          *float64 `json:"balance"`
+		SpendableBalance *float64 `json:"spendable_balance"`
+		Currency         string   `json:"currency"`
 	}
 	if err := c.request(ctx, http.MethodGet, "/balance", nil, "", &raw); err != nil {
 		return Balance{}, err
 	}
 	raw.Currency = strings.ToUpper(strings.TrimSpace(raw.Currency))
-	if raw.Balance == nil || *raw.Balance < 0 || raw.Currency != "USD" {
+	if raw.Balance == nil || raw.SpendableBalance == nil || *raw.SpendableBalance < 0 || raw.Currency != "USD" {
 		return Balance{}, fail("SPACEXCARD_CONTRACT_DRIFT", "SpaceX Card balance contract drift", true)
 	}
-	return Balance{Balance: *raw.Balance, Currency: raw.Currency}, nil
+	return Balance{Balance: *raw.SpendableBalance, Currency: raw.Currency}, nil
 }
 
 func (c *SpaceXClient) OpenCard(ctx context.Context, input OpenCardInput, key string) (OpenCardResult, error) {

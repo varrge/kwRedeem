@@ -2062,9 +2062,10 @@ function resetAutomationProviderForm() {
 
 function updateAutomationProviderBaseUrlPlaceholder() {
   if (!refs.automationProviderBaseUrl) return;
-  refs.automationProviderBaseUrl.placeholder = refs.automationProviderAdapter?.value === "efun_open_v1"
-    ? "https://example.com/api/v1"
-    : "https://example.com/api/v1/automate";
+  refs.automationProviderBaseUrl.placeholder = {
+    efun_open_v1: "https://example.com/api/v1",
+    spacex_gpt_direct_v1: "https://zovocard.com/openapi/v1"
+  }[refs.automationProviderAdapter?.value] || "https://example.com/api/v1/automate";
 }
 
 function resetAutomationMappingForm() {
@@ -2312,8 +2313,9 @@ async function refreshMembershipFulfillmentConsole() {
   const processor = settings.processor || {};
   const cardPlatforms = payload.cardPlatforms || [];
   const selectedPlatformKey = refs.membershipInventoryPlatform?.value || "spacexcard";
+  const spaceXCard = cardPlatforms.find((item) => item.key === "spacexcard") || {};
   const efunCard = cardPlatforms.find((item) => item.key === "efuncard") || {};
-  refs.membershipOpenApiBase.value = dependencies.openApiBaseUrl || "";
+  refs.membershipOpenApiBase.value = spaceXCard.baseUrl || dependencies.openApiBaseUrl || "";
   refs.membershipAppId.value = settings.appId || "";
   refs.membershipAppSecret.value = "";
   refs.membershipAppSecret.placeholder = settings.hasAppSecret
@@ -7247,6 +7249,10 @@ refs.automationExecutionRefresh?.addEventListener("click", () => {
 refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
+    await api("/api/admin/membership-card-platforms/spacexcard", {
+      method: "PUT",
+      body: JSON.stringify({ baseUrl: refs.membershipOpenApiBase.value.trim() })
+    });
     await api("/api/admin/membership-fulfillment/settings", {
       method: "PATCH",
       body: JSON.stringify({

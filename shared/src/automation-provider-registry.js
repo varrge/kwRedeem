@@ -8,8 +8,16 @@ import {
   EfunOpenV1Adapter,
   normalizeEfunOpenV1BaseUrl
 } from "./automation-adapters/efun-open-v1.js";
+import {
+  SpaceXGptDirectV1Adapter,
+  normalizeSpaceXGptDirectV1BaseUrl
+} from "./automation-adapters/spacex-gpt-direct-v1.js";
 
-export const automationAdapterKeys = Object.freeze(["automate_v1", "efun_open_v1"]);
+export const automationAdapterKeys = Object.freeze([
+  "automate_v1",
+  "efun_open_v1",
+  "spacex_gpt_direct_v1"
+]);
 
 function parseJson(value, fallback = null) {
   if (!value) return fallback;
@@ -31,6 +39,7 @@ export function automationCapabilityHash(config) {
 export function normalizeAutomationProviderBaseUrl(adapterKey, value) {
   if (adapterKey === "automate_v1") return normalizeAutomateV1BaseUrl(value);
   if (adapterKey === "efun_open_v1") return normalizeEfunOpenV1BaseUrl(value);
+  if (adapterKey === "spacex_gpt_direct_v1") return normalizeSpaceXGptDirectV1BaseUrl(value);
   throw new TypeError("自动化站点 Adapter 不受支持");
 }
 
@@ -97,6 +106,18 @@ export function createAutomationAdapter(db, input = {}) {
       })
     };
   }
+  if (provider.adapter_key === "spacex_gpt_direct_v1") {
+    return {
+      provider,
+      credential,
+      adapter: new SpaceXGptDirectV1Adapter({
+        baseUrl: provider.base_url,
+        apiKey: input.decryptText(credential.api_key_encrypted),
+        fetchImpl: input.fetchImpl,
+        lookup: input.lookup
+      })
+    };
+  }
   throw new Error("自动化站点 Adapter 不受支持");
 }
 
@@ -108,6 +129,9 @@ export function validateAutomationMappingCapability(provider, input = {}) {
   const storedPlan = config.plans.find((item) => item.id === input.externalPlanId);
   if (!storedPlan) throw new Error("站点没有提供所选套餐");
   if (storedPlan.taskType !== "purchase") throw new Error("当前系统只允许映射站点明确提供的直付套餐");
+  if (provider.adapter_key === "spacex_gpt_direct_v1" && input.cardPlatformKey !== "spacexcard") {
+    throw new Error("SpaceX GPT 直充只能使用 SpaceX Card 卡台");
+  }
   let plan = storedPlan;
   if (!storedPlan.canonicalOffer && provider.adapter_key === "automate_v1") {
     plan = { ...storedPlan, canonicalOffer: automateV1CanonicalOffer(storedPlan.id, storedPlan.taskType) };
@@ -149,7 +173,8 @@ export async function syncAutomationProvider(db, input = {}) {
         const planOffer = String(plan?.canonicalOffer || "").trim().toLowerCase();
         if (!plan || plan.taskType !== "purchase" || !region || region.currency !== mapping.currency
           || !source || source.enabled !== 1 || source.fulfillment_kind !== "membership_auto"
-          || source.site_status !== "active" || !planOffer || planOffer !== sourceOffer) {
+          || source.site_status !== "active" || !planOffer || planOffer !== sourceOffer
+          || (provider.adapter_key === "spacex_gpt_direct_v1" && mapping.card_platform_key !== "spacexcard")) {
           db.prepare(`
             UPDATE automation_product_mappings
             SET enabled = 0, paused_reason = 'CAPABILITY_OR_STORE_MAPPING_CHANGED',

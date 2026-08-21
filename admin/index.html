@@ -560,7 +560,7 @@
                 <input id="automation-provider-id" type="hidden" />
                 <div class="grid grid-2">
                   <label class="field"><span>站点名称</span><input id="automation-provider-name" autocomplete="off" required /></label>
-                  <label class="field"><span>协议 Adapter</span><select id="automation-provider-adapter"><option value="automate_v1">Automate API v1</option><option value="efun_open_v1">eFun Open API v1</option></select></label>
+                  <label class="field"><span>协议 Adapter</span><select id="automation-provider-adapter"><option value="automate_v1">Automate API v1</option><option value="efun_open_v1">eFun Open API v1</option><option value="spacex_gpt_direct_v1">SpaceX GPT Direct v1</option></select></label>
                 </div>
                 <label class="field"><span>API Base URL</span><input id="automation-provider-base-url" type="url" autocomplete="off" placeholder="https://example.com/api/v1/automate" required /></label>
                 <label class="field"><span>站点 API Key</span><input id="automation-provider-api-key" type="password" autocomplete="new-password" placeholder="首次提供一次；后续留空继续使用" /></label>
@@ -657,8 +657,8 @@
               <div class="card-header"><h3>SpaceX Card OpenAPI</h3></div>
               <form id="membership-fulfillment-settings-form" class="stack">
                 <label class="field">
-                  <span>OpenAPI Base（固定、不可编辑）</span>
-                  <input id="membership-openapi-base" readonly />
+                  <span>OpenAPI Base URL</span>
+                  <input id="membership-openapi-base" type="url" autocomplete="off" required />
                 </label>
                 <label class="field">
                   <span>app_id（可选）</span>

@@ -800,6 +800,8 @@ export function createAutomationRunner(options = {}) {
         checkoutCountry: snapshot.regionCode,
         authSessionJson,
         card: prepared.material,
+        cardProviderKey: prepared.card.provider_key,
+        providerCardId: prepared.card.upstream_card_id,
         requestId: requestId(execution)
       });
       processRemoteTask(execution, result.task);

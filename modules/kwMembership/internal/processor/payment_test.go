@@ -655,7 +655,7 @@ func TestPaymentProviderReadsFenceLeaseAfterResponses(t *testing.T) {
 				t.Fatalf("unexpected request after lost lease: %s", request.URL.Path)
 			}
 			expirePaymentTestLease(t, repository, now)
-			return paymentProviderResponse(http.StatusOK, `{"code":0,"data":{"balance":100,"currency":"USD"}}`), nil
+			return paymentProviderResponse(http.StatusOK, `{"code":0,"data":{"balance":120,"spendable_balance":100,"currency":"USD"}}`), nil
 		})
 		_, err := fixture.processor.paymentLoadFundingFacts(fixture.ctx, fixture.client)
 		if !errors.Is(err, store.ErrLeaseLost) || calls != 1 {
@@ -669,7 +669,7 @@ func TestPaymentProviderReadsFenceLeaseAfterResponses(t *testing.T) {
 			calls++
 			switch request.URL.Path {
 			case "/openapi/v1/balance":
-				return paymentProviderResponse(http.StatusOK, `{"code":0,"data":{"balance":100,"currency":"USD"}}`), nil
+				return paymentProviderResponse(http.StatusOK, `{"code":0,"data":{"balance":120,"spendable_balance":100,"currency":"USD"}}`), nil
 			case "/openapi/v1/products":
 				expirePaymentTestLease(t, repository, now)
 				return paymentProviderResponse(http.StatusOK, `{"code":0,"data":[]}`), nil

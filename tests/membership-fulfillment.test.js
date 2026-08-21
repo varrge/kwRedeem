@@ -821,6 +821,15 @@ test("card platform admin keeps Efun credentials secret and isolates inventory b
   });
   const headers = { authorization: `Bearer ${login.json().token}` };
 
+  const spaceXBase = await app.inject({
+    method: "PUT",
+    url: "/api/admin/membership-card-platforms/spacexcard",
+    headers,
+    payload: { baseUrl: "https://zovocard.com/openapi/v1/" }
+  });
+  assert.equal(spaceXBase.statusCode, 200, spaceXBase.body);
+  assert.equal(spaceXBase.json().item.baseUrl, "https://zovocard.com/openapi/v1");
+
   const missing = await app.inject({
     method: "PUT",
     url: "/api/admin/membership-card-platforms/efuncard",

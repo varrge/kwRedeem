@@ -14,8 +14,11 @@ import {
   requestDependencyProbe,
   serializeDependencyCircuit
 } from "../../shared/src/membership-circuits.js";
-import { spaceXCardOpenApiBaseUrl } from "../../shared/src/spacexcard-openapi.js";
-import { SpaceXCardOpenApiClient } from "../../shared/src/spacexcard-openapi.js";
+import {
+  normalizeSpaceXCardOpenApiBaseUrl,
+  SpaceXCardOpenApiClient,
+  spaceXCardOpenApiBaseUrl
+} from "../../shared/src/spacexcard-openapi.js";
 import { normalizeEfunCardOpenApiBaseUrl } from "../../shared/src/efuncard-openapi.js";
 import {
   createMembershipMaterialGrant,
@@ -157,7 +160,7 @@ function serializeCardPlatform(row) {
     key: row.key,
     kind: row.kind,
     displayName: row.display_name,
-    baseUrl: row.base_url || "",
+    baseUrl: row.base_url || (row.key === "spacexcard" ? spaceXCardOpenApiBaseUrl : ""),
     hasCredential: Boolean(row.credential_encrypted),
     enabled: row.enabled === 1,
     priority: row.priority,
@@ -1080,12 +1083,14 @@ export function createMembershipFulfillmentService(options) {
 
   function createOpenApiClient() {
     const settings = getSettings();
+    const platform = db.prepare("SELECT base_url FROM membership_card_platforms WHERE key = 'spacexcard'").get();
     if (!settings?.spacexcard_app_secret_encrypted) {
       const error = new Error("SpaceX Card OpenAPI 未配置");
       error.code = "SPACEXCARD_OPENAPI_NOT_CONFIGURED";
       throw error;
     }
     return new SpaceXCardOpenApiClient({
+      baseUrl: platform?.base_url || undefined,
       appId: settings.spacexcard_app_id,
       appSecret: decryptText(settings.spacexcard_app_secret_encrypted)
     });
@@ -1688,13 +1693,29 @@ export function createMembershipFulfillmentService(options) {
     }
     const current = db.prepare("SELECT * FROM membership_card_platforms WHERE key = ?").get(key);
     if (!current) return reply.code(404).send({ message: "卡台不存在" });
+    let baseUrl = parsed.data.baseUrl ?? current.base_url;
+    try {
+      if (key === "spacexcard") {
+        baseUrl = normalizeSpaceXCardOpenApiBaseUrl(baseUrl || spaceXCardOpenApiBaseUrl);
+      } else if (baseUrl) {
+        baseUrl = normalizeEfunCardOpenApiBaseUrl(baseUrl);
+      }
+    } catch (error) {
+      return reply.code(400).send({
+        code: error?.code || "CARD_PLATFORM_CONFIGURATION_INVALID",
+        message: error?.message || "卡台 Base URL 无效"
+      });
+    }
+    const currentBaseUrl = key === "spacexcard"
+      ? normalizeSpaceXCardOpenApiBaseUrl(current.base_url || spaceXCardOpenApiBaseUrl)
+      : (current.base_url || "");
     const active = db.prepare(`SELECT id FROM card_inventory_runs
       WHERE provider_key=? AND status IN ('discovering','reconciling') LIMIT 1`).get(key);
     const credentialChanged = parsed.data.clearCredential || Boolean(
       key === "spacexcard" ? parsed.data.appSecret : parsed.data.apiKey
     );
     const baseChanged = Object.hasOwn(parsed.data, "baseUrl")
-      && parsed.data.baseUrl !== (current.base_url || "");
+      && baseUrl !== currentBaseUrl;
     if (active && (credentialChanged || baseChanged || parsed.data.enabled === false)) {
       return reply.code(409).send({ code: "INVENTORY_ALREADY_RUNNING", message: "该卡台库存任务运行中，暂不能更改连接身份或停用" });
     }
@@ -1714,19 +1735,6 @@ export function createMembershipFulfillmentService(options) {
     }
     if (key === "efuncard" && parsed.data.apiKey) {
       credential = encryptText(JSON.stringify({ apiKey: parsed.data.apiKey }));
-    }
-    let baseUrl = key === "efuncard"
-      ? (parsed.data.baseUrl ?? current.base_url)
-      : null;
-    if (key === "efuncard" && baseUrl) {
-      try {
-        baseUrl = normalizeEfunCardOpenApiBaseUrl(baseUrl);
-      } catch (error) {
-        return reply.code(400).send({
-          code: error?.code || "CARD_PLATFORM_CONFIGURATION_INVALID",
-          message: error?.message || "EfunCard Base URL 无效"
-        });
-      }
     }
     if (key === "efuncard" && parsed.data.apiKey && !/^(?:efk_|sk_).+$/.test(parsed.data.apiKey)) {
       return reply.code(400).send({

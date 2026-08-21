@@ -11,7 +11,12 @@ import {
   normalizeEfunAutomationProxyUrl,
   normalizeEfunOpenV1BaseUrl
 } from "../shared/src/automation-adapters/efun-open-v1.js";
+import {
+  SpaceXGptDirectV1Adapter,
+  normalizeSpaceXGptDirectV1BaseUrl
+} from "../shared/src/automation-adapters/spacex-gpt-direct-v1.js";
 import { createAutomationAdapter } from "../shared/src/automation-provider-registry.js";
+import { SpaceXCardOpenApiClient } from "../shared/src/spacexcard-openapi.js";
 
 function response(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -312,4 +317,204 @@ test("eFun Open V1 rejects unsafe URLs and marks ambiguous creates as unsafe to 
     assert.equal(error.unsafeToReplay, true);
     return true;
   });
+});
+
+test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on the selected SpaceX card", async () => {
+  const requests = [];
+  let includeRemoteIdentity = true;
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1",
+    apiKey: "sk_direct_test",
+    lookup: publicLookup,
+    fetchImpl: async (url, options) => {
+      const path = new URL(url).pathname;
+      const body = options.body ? JSON.parse(options.body) : null;
+      requests.push({ path, options, body });
+      if (path.endsWith("/gpt-direct/plans")) {
+        return response({
+          code: 0,
+          data: {
+            version: 3,
+            plans: {
+              go: { key: "go", label: "Go", currency: "PHP", enabled: true },
+              plus: { key: "plus", label: "Plus", currency: "PHP", enabled: true },
+              pro_5x: { key: "pro_5x", label: "Pro 5X", currency: "PHP", enabled: true },
+              pro_20x: { key: "pro_20x", label: "Pro 20X", currency: "PHP", enabled: false }
+            }
+          }
+        });
+      }
+      if (path.endsWith("/gpt-direct/preflight")) {
+        return response({
+          code: 0,
+          data: {
+            preflight_token: "preflight-once",
+            pricing_version: 3,
+            payment_country: "PH",
+            payment_currency: "PHP",
+            quotes: {
+              plus: { plan: "plus", currency: "PHP", amountMinor: 98214 }
+            },
+            quote_error: ""
+          }
+        });
+      }
+      if (path.endsWith("/gpt-direct/orders")) {
+        return response({
+          code: 0,
+          msg: "accepted",
+          data: {
+            id: 981,
+            plan: "plus",
+            status: "queued",
+            stage: "queued",
+            currency: "PHP",
+            quoted_amount_minor: 98214,
+            client_request_id: includeRemoteIdentity ? "KW-SPACEX-1" : undefined
+          }
+        }, 202);
+      }
+      if (path.endsWith("/cancel-renewal")) {
+        return response({
+          code: 0,
+          data: { renewal_status: "success", renewal_message: "自动续费已取消" }
+        });
+      }
+      if (path.endsWith("/gpt-direct/orders/981")) {
+        return response({
+          code: 0,
+          data: {
+            order: {
+              id: 981,
+              plan: "plus",
+              status: "completed",
+              stage: "completed",
+              currency: "PHP",
+              quoted_amount_minor: 98214,
+              client_request_id: includeRemoteIdentity ? "KW-SPACEX-1" : undefined,
+              renewal_status: "warning",
+              card_last_four: "4444"
+            },
+            events: []
+          }
+        });
+      }
+      throw new Error(`unexpected SpaceX GPT path ${path}`);
+    }
+  });
+
+  const config = await adapter.discoverCapabilities();
+  assert.deepEqual(config.plans.map((item) => [item.id, item.canonicalOffer]), [
+    ["plus", "plus"],
+    ["pro_5x", "x5"]
+  ]);
+  assert.equal(config.pricingVersion, 3);
+
+  await assert.rejects(adapter.createTask({
+    clientOrderId: "KW-SPACEX-GO",
+    planId: "go",
+    checkoutCountry: "PH",
+    authSessionJson: { accessToken: "secret-access-token" },
+    cardProviderKey: "spacexcard",
+    providerCardId: 123
+  }), (error) => error.code === "SPACEX_GPT_PLAN_UNSUPPORTED" && error.definitelyNotCreated === true);
+
+  const created = await adapter.createTask({
+    clientOrderId: "KW-SPACEX-1",
+    planId: "plus",
+    checkoutCountry: "PH",
+    authSessionJson: { accessToken: "secret-access-token" },
+    cardProviderKey: "spacexcard",
+    providerCardId: 123,
+    card: { number: "5555555555554444" },
+    requestId: "request-1"
+  });
+  assert.equal(adapter.createReplaySafe, true);
+  assert.equal(created.task.id, "981");
+  assert.equal(created.task.status, "queued");
+  const createRequest = requests.find((item) => item.path.endsWith("/gpt-direct/orders"));
+  assert.equal(createRequest.options.headers["Idempotency-Key"], "KW-SPACEX-1");
+  assert.equal(createRequest.body.card_id, 123);
+  assert.equal(createRequest.body.no_auto_card_switch, true);
+  assert.equal(createRequest.body.pricing_version, 3);
+  assert.deepEqual(createRequest.body.credential, {
+    mode: "access_token",
+    accessToken: "secret-access-token"
+  });
+
+  const completed = await adapter.getTask("981", {
+    clientOrderId: "KW-SPACEX-1",
+    planId: "plus",
+    checkoutCountry: "PH",
+    cardLast4: "4444"
+  });
+  assert.equal(completed.task.status, "succeeded");
+  assert.equal(completed.task.renewalStatus.willRenew, false);
+  assert.equal(completed.task.pricing.displayTotal, "982.14");
+  assert.doesNotMatch(JSON.stringify(completed.task), /secret-access-token/);
+  assert.equal(requests.filter((item) => item.path.endsWith("/cancel-renewal")).length, 1);
+
+  includeRemoteIdentity = false;
+  await assert.rejects(adapter.getTask("981", {
+    clientOrderId: "KW-SPACEX-1",
+    planId: "plus",
+    checkoutCountry: "PH",
+    cardLast4: "4444"
+  }), (error) => error.code === "SPACEX_GPT_CONTRACT_INVALID");
+});
+
+test("SpaceX GPT Direct V1 rejects non-SpaceX cards before preflight", async () => {
+  let calls = 0;
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1",
+    apiKey: "sk_direct_test",
+    lookup: publicLookup,
+    fetchImpl: async () => {
+      calls += 1;
+      return response({ code: 0, data: {} });
+    }
+  });
+  await assert.rejects(adapter.createTask({
+    clientOrderId: "KW-SPACEX-WRONG-CARD",
+    planId: "plus",
+    checkoutCountry: "PH",
+    authSessionJson: { sessionToken: "secret-session" },
+    cardProviderKey: "efuncard",
+    providerCardId: 123
+  }), (error) => error.code === "SPACEX_GPT_CARD_PLATFORM_INVALID"
+    && error.definitelyNotCreated === true);
+  assert.equal(calls, 0);
+  assert.throws(() => normalizeSpaceXGptDirectV1BaseUrl("http://zovocard.com/openapi/v1"), AutomationAdapterError);
+});
+
+test("SpaceX Card new balance contract uses spendable balance and classifies channel 503 as retryable no-write", async () => {
+  let unavailable = false;
+  let balanceData = { balance: 100, spendable_balance: 80, account_reserve_amount: 20, currency: "USD" };
+  const client = new SpaceXCardOpenApiClient({
+    baseUrl: "https://sandbox.zovocard.com/openapi/v1",
+    appSecret: "sk_card_test",
+    fetchImpl: async () => unavailable
+      ? response({ code: 503, error_code: "channel_unavailable", msg: "temporarily unavailable" }, 503)
+      : response({
+          code: 0,
+          data: balanceData
+        })
+  });
+  assert.deepEqual(await client.getBalance(), {
+    balance: 80,
+    totalBalance: 100,
+    spendableBalance: 80,
+    accountReserveAmount: 20,
+    currency: "USD"
+  });
+  balanceData = { balance: -5, spendable_balance: 0, account_reserve_amount: 20, currency: "USD" };
+  assert.equal((await client.getBalance()).balance, 0);
+  unavailable = true;
+  await assert.rejects(client.openCard({
+    productCode: "P5378OX",
+    firstName: "John",
+    lastName: "Smith",
+    initAmount: 20
+  }, "kwr:test:channel:v1"), (error) => error.code === "SPACEXCARD_CHANNEL_UNAVAILABLE"
+    && client.classifyFundingError(error) === "retryable_no_write");
 });

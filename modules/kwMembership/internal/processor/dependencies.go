@@ -79,7 +79,7 @@ func (p *Processor) cardPlatform(ctx context.Context, key string) (provider.Card
 				if json.Unmarshal([]byte(plain), &credential) != nil || strings.TrimSpace(credential.AppSecret) == "" {
 					return nil, coded("CARD_PLATFORM_NOT_CONFIGURED", "SpaceX Card credential is invalid")
 				}
-				return provider.NewSpaceXClient(p.httpClient, credential.AppID, credential.AppSecret)
+				return provider.NewSpaceXClient(p.httpClient, credential.AppID, credential.AppSecret, config.BaseURL.String)
 			case provider.CardPlatformEfun:
 				var credential struct {
 					APIKey string `json:"apiKey"`
@@ -102,6 +102,7 @@ func (p *Processor) cardPlatform(ctx context.Context, key string) (provider.Card
 		if key != provider.CardPlatformSpaceX {
 			return nil, coded("CARD_PLATFORM_NOT_CONFIGURED", "card platform is not configured")
 		}
+		return p.spaceXClient(ctx, config.BaseURL.String)
 	}
 	if key != provider.CardPlatformSpaceX {
 		return nil, coded("CARD_PLATFORM_NOT_CONFIGURED", "card platform is not configured")
@@ -144,7 +145,7 @@ func cardPlatformCircuit(key string) (string, string) {
 	return "card_platform_openapi", key
 }
 
-func (p *Processor) spaceXClient(ctx context.Context) (*provider.SpaceXClient, error) {
+func (p *Processor) spaceXClient(ctx context.Context, baseURL ...string) (*provider.SpaceXClient, error) {
 	var appID, encrypted sql.NullString
 	if err := p.store.DB().QueryRowContext(ctx, `SELECT spacexcard_app_id, spacexcard_app_secret_encrypted
     FROM membership_fulfillment_settings WHERE id='default'`).Scan(&appID, &encrypted); err != nil {
@@ -157,7 +158,7 @@ func (p *Processor) spaceXClient(ctx context.Context) (*provider.SpaceXClient, e
 	if err != nil {
 		return nil, codedWrap("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "decrypt SpaceX Card credential", err)
 	}
-	return provider.NewSpaceXClient(p.httpClient, appID.String, secret)
+	return provider.NewSpaceXClient(p.httpClient, appID.String, secret, baseURL...)
 }
 
 func (p *Processor) acquireCircuit(ctx context.Context, dependency, scope string, now time.Time) (bool, error) {

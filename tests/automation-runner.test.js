@@ -297,6 +297,8 @@ test("automation runner keeps Gate closed, then settles one accepted remote task
         createCalls += 1;
         assert.equal(input.authSessionJson.accessToken, "session-secret");
         assert.equal(input.planId, "plus-monthly");
+        assert.equal(input.cardProviderKey, "spacexcard");
+        assert.equal(input.providerCardId, 101);
         return { task: normalizedTask("queued") };
       },
       getTask: async () => {

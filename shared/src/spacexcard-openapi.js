@@ -1,4 +1,4 @@
-export const spaceXCardOpenApiBaseUrl = "https://spacexcard.com/openapi/v1";
+export const spaceXCardOpenApiBaseUrl = "https://zovocard.com/openapi/v1";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -12,6 +12,7 @@ export class SpaceXCardOpenApiError extends Error {
     this.statusCode = options.statusCode || 502;
     this.retryable = options.retryable ?? true;
     this.retryScope = options.retryScope || "global";
+    this.knownNoWrite = options.knownNoWrite === true;
     if (options.providerCode !== undefined) this.providerCode = options.providerCode;
     if (Number.isInteger(options.retryAfterMs) && options.retryAfterMs >= 0) this.retryAfterMs = options.retryAfterMs;
   }
@@ -19,6 +20,32 @@ export class SpaceXCardOpenApiError extends Error {
 
 function error(code, message, options) {
   return new SpaceXCardOpenApiError(code, message, options);
+}
+
+export function normalizeSpaceXCardOpenApiBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || "").trim());
+  } catch {
+    throw error("SPACEXCARD_CONFIGURATION_INVALID", "SpaceX Card OpenAPI 地址无效", {
+      retryable: false,
+      knownNoWrite: true
+    });
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw error("SPACEXCARD_CONFIGURATION_INVALID", "SpaceX Card OpenAPI 必须使用标准 HTTPS 地址", {
+      retryable: false,
+      knownNoWrite: true
+    });
+  }
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  if (!url.pathname.endsWith("/openapi/v1")) {
+    throw error("SPACEXCARD_CONFIGURATION_INVALID", "SpaceX Card OpenAPI 地址必须以 /openapi/v1 结尾", {
+      retryable: false,
+      knownNoWrite: true
+    });
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 function requireObject(value, code = "SPACEXCARD_CONTRACT_DRIFT") {
@@ -134,6 +161,7 @@ function validateWriteInput(body, idempotencyKey) {
 
 export class SpaceXCardOpenApiClient {
   constructor(options = {}) {
+    this.baseUrl = normalizeSpaceXCardOpenApiBaseUrl(options.baseUrl || spaceXCardOpenApiBaseUrl);
     this.appSecret = String(options.appSecret || "").trim();
     this.appId = String(options.appId || "").trim();
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
@@ -150,26 +178,32 @@ export class SpaceXCardOpenApiClient {
       if (this.appId) headers["X-App-Id"] = this.appId;
       if (options.body !== undefined) headers["Content-Type"] = "application/json";
       if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
-      const response = await this.fetchImpl(`${spaceXCardOpenApiBaseUrl}${path}`, {
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal
       });
       if (response.status === 401) {
-        throw error("SPACEXCARD_AUTH_FAILED", "SpaceX Card OpenAPI 鉴权失败", { statusCode: 503 });
+        throw error("SPACEXCARD_AUTH_FAILED", "SpaceX Card OpenAPI 鉴权失败", {
+          statusCode: 503,
+          retryable: false,
+          knownNoWrite: true
+        });
       }
       if (response.status === 403) {
-        throw error("SPACEXCARD_ACCESS_DENIED", "SpaceX Card OpenAPI 访问被拒绝", { statusCode: 503 });
+        throw error("SPACEXCARD_ACCESS_DENIED", "SpaceX Card OpenAPI 访问被拒绝", {
+          statusCode: 503,
+          retryable: false,
+          knownNoWrite: true
+        });
       }
       if (response.status === 429) {
         throw error("SPACEXCARD_RATE_LIMITED", "SpaceX Card OpenAPI 请求过于频繁", {
           statusCode: 503,
-          retryAfterMs: retryAfterMs(response)
+          retryAfterMs: retryAfterMs(response),
+          knownNoWrite: true
         });
-      }
-      if (!response.ok) {
-        throw error("SPACEXCARD_UNAVAILABLE", "SpaceX Card OpenAPI 暂时不可用");
       }
       const text = await readLimitedText(response);
       let envelope;
@@ -179,12 +213,22 @@ export class SpaceXCardOpenApiClient {
         throw error("SPACEXCARD_RESPONSE_INVALID", "SpaceX Card OpenAPI 响应不是合法 JSON");
       }
       const root = requireObject(envelope);
-      if (root.code !== 0) {
+      if (response.status === 503 && root.error_code === "channel_unavailable") {
+        throw error("SPACEXCARD_CHANNEL_UNAVAILABLE", "SpaceX Card 发卡渠道暂时不可用", {
+          statusCode: 503,
+          providerCode: root.error_code,
+          retryable: true,
+          knownNoWrite: true
+        });
+      }
+      if (!response.ok || Number(root.code) !== 0) {
+        const providerCode = nullableString(root.error_code) || root.code;
         throw error("SPACEXCARD_OPERATION_REJECTED", "SpaceX Card OpenAPI 拒绝了操作", {
-          statusCode: 409,
-          retryable: false,
+          statusCode: response.status >= 400 ? response.status : 409,
+          retryable: response.status >= 500,
           retryScope: "order",
-          providerCode: root.code
+          providerCode,
+          knownNoWrite: response.status < 500 || root.error_code === "channel_unavailable"
         });
       }
       return root.data;
@@ -199,6 +243,11 @@ export class SpaceXCardOpenApiClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  classifyFundingError(caught) {
+    if (caught?.knownNoWrite === true) return caught.retryable === false ? "known_no_write" : "retryable_no_write";
+    return "unknown";
   }
 
   async listProducts() {
@@ -278,8 +327,15 @@ export class SpaceXCardOpenApiClient {
 
   async getBalance() {
     const data = requireObject(await this.request("/balance"));
+    const totalBalance = requireNumber(data.balance, "balance", { allowNegative: true });
+    const spendableBalance = requireNumber(data.spendable_balance, "spendable_balance");
     return Object.freeze({
-      balance: requireNumber(data.balance, "balance"),
+      balance: spendableBalance,
+      totalBalance,
+      spendableBalance,
+      accountReserveAmount: data.account_reserve_amount === undefined
+        ? 0
+        : requireNumber(data.account_reserve_amount, "account_reserve_amount"),
       currency: requireString(data.currency, "currency").toUpperCase()
     });
   }

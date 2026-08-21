@@ -57,6 +57,38 @@ func TestSpaceXRechargeSendsPersistedIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestSpaceXBalanceUsesSpendableAmount(t *testing.T) {
+	client := newSpaceXResponseClient(t, `{"code":0,"data":{"balance":100,"spendable_balance":80,"account_reserve_amount":20,"currency":"USD"}}`)
+	balance, err := client.GetBalance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance.Balance != 80 || balance.Currency != "USD" {
+		t.Fatalf("unexpected spendable balance: %+v", balance)
+	}
+	client = newSpaceXResponseClient(t, `{"code":0,"data":{"balance":-5,"spendable_balance":0,"account_reserve_amount":20,"currency":"USD"}}`)
+	balance, err = client.GetBalance(context.Background())
+	if err != nil || balance.Balance != 0 {
+		t.Fatalf("unexpected negative ledger balance handling: balance=%+v err=%v", balance, err)
+	}
+}
+
+func TestSpaceXChannelUnavailableIsSafeToRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(response, `{"code":503,"error_code":"channel_unavailable","msg":"temporarily unavailable"}`)
+	}))
+	defer server.Close()
+	client, _ := NewSpaceXClient(server.Client(), "", "secret")
+	client.baseURL = server.URL
+	err := client.RechargeCard(context.Background(), 7, 20, "kwr:test:channel:v1")
+	var providerError *Error
+	if !errors.As(err, &providerError) || providerError.Code() != "SPACEXCARD_CHANNEL_UNAVAILABLE" ||
+		!providerError.Retryable || !providerError.KnownNoWrite {
+		t.Fatalf("unexpected channel error: %#v", err)
+	}
+}
+
 func TestSpaceXFreezeCardSendsFreezeRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/cards/freeze" {

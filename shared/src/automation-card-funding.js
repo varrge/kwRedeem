@@ -91,15 +91,11 @@ export function createConfiguredAutomationCardProvider(db, providerKey, decryptT
     const rawCredential = String(decryptText(encrypted) || "").trim();
     const parsedCredential = safeJson(rawCredential);
     const client = new SpaceXCardOpenApiClient({
+      baseUrl: platform.base_url || undefined,
       appId: parsedCredential?.appId || settings?.spacexcard_app_id || "",
       appSecret: parsedCredential?.appSecret || rawCredential,
       fetchImpl: options.fetchImpl
     });
-    client.classifyFundingError = (error) => {
-      if (["SPACEXCARD_AUTH_FAILED", "SPACEXCARD_ACCESS_DENIED"].includes(error?.code)) return "known_no_write";
-      if (error?.code === "SPACEXCARD_OPERATION_REJECTED" && error?.retryable === false) return "known_no_write";
-      return "unknown";
-    };
     return client;
   }
   if (providerKey === "efuncard") {

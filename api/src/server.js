@@ -688,8 +688,11 @@ createMembershipFulfillmentService({
 
 function createConfiguredMembershipOpenApiClient() {
   const settings = db.prepare(`
-    SELECT spacexcard_app_id, spacexcard_app_secret_encrypted
-    FROM membership_fulfillment_settings WHERE id = 'default'
+    SELECT settings.spacexcard_app_id, settings.spacexcard_app_secret_encrypted,
+      platform.base_url AS spacexcard_base_url
+    FROM membership_fulfillment_settings settings
+    LEFT JOIN membership_card_platforms platform ON platform.key = 'spacexcard'
+    WHERE settings.id = 'default'
   `).get();
   if (!settings?.spacexcard_app_secret_encrypted) {
     const error = new Error("SpaceX Card OpenAPI 未配置");
@@ -697,6 +700,7 @@ function createConfiguredMembershipOpenApiClient() {
     throw error;
   }
   return new SpaceXCardOpenApiClient({
+    baseUrl: settings.spacexcard_base_url || undefined,
     appId: settings.spacexcard_app_id,
     appSecret: decryptText(settings.spacexcard_app_secret_encrypted)
   });

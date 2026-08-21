@@ -159,10 +159,12 @@ export function createMembershipInventoryRunner(options) {
   function buildClient() {
     if (clientFactory) return clientFactory();
     const settings = db.prepare("SELECT * FROM membership_fulfillment_settings WHERE id = 'default'").get();
+    const platform = db.prepare("SELECT base_url FROM membership_card_platforms WHERE key = 'spacexcard'").get();
     if (!settings?.spacexcard_app_secret_encrypted) {
       throw inventoryError("SPACEXCARD_OPENAPI_NOT_CONFIGURED", "SpaceX Card OpenAPI app_secret 未配置", 503);
     }
     return new SpaceXCardOpenApiClient({
+      baseUrl: platform?.base_url || undefined,
       appId: settings.spacexcard_app_id,
       appSecret: decryptText(settings.spacexcard_app_secret_encrypted)
     });

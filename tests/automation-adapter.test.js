@@ -323,6 +323,7 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   const requests = [];
   const preflightToken = "p".repeat(7_784);
   let includeRemoteIdentity = true;
+  let renewalRetrying = true;
   const adapter = new SpaceXGptDirectV1Adapter({
     baseUrl: "https://zovocard.com/openapi/v1",
     apiKey: "sk_direct_test",
@@ -394,7 +395,10 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
               currency: "PHP",
               quoted_amount_minor: 98214,
               client_request_id: includeRemoteIdentity ? "KW-SPACEX-1" : undefined,
-              renewal_status: "warning",
+              renewal_status: renewalRetrying ? "retrying" : "warning",
+              renewal_message: renewalRetrying
+                ? "开通已成功；仅自动取消续费暂未成功，系统将在 2 分钟后重试（第 1 次）"
+                : "自动续费状态需复查",
               card_last_four: "4444"
             },
             events: []
@@ -449,6 +453,18 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   assert.deepEqual(preflightRequest.body.credential, expectedCredential);
   assert.deepEqual(createRequest.body.credential, expectedCredential);
 
+  const retrying = await adapter.getTask("981", {
+    clientOrderId: "KW-SPACEX-1",
+    planId: "plus",
+    checkoutCountry: "PH",
+    cardLast4: "4444"
+  });
+  assert.equal(retrying.task.status, "running");
+  assert.equal(retrying.task.currentPhase, "renewal_cancellation");
+  assert.equal(retrying.task.renewalStatus.willRenew, true);
+  assert.equal(requests.filter((item) => item.path.endsWith("/cancel-renewal")).length, 0);
+
+  renewalRetrying = false;
   const completed = await adapter.getTask("981", {
     clientOrderId: "KW-SPACEX-1",
     planId: "plus",

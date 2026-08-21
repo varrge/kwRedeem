@@ -15,6 +15,7 @@ const PENDING_STATUSES = new Set([
   "plus_paid"
 ]);
 const FAILED_STATUSES = new Set(["declined", "failed_precharge"]);
+const RENEWAL_RUNNING_STATUSES = new Set(["pending", "warning", "retrying"]);
 const PLAN_DEFINITIONS = Object.freeze({
   go: Object.freeze({ id: "go", name: "ChatGPT Go", label: "Go", taskType: "purchase", canonicalOffer: "go" }),
   plus: Object.freeze({ id: "plus", name: "ChatGPT Plus", label: "Plus", taskType: "purchase", canonicalOffer: "plus" }),
@@ -237,7 +238,7 @@ function normalizeTask(raw, context = {}) {
   else if (FAILED_STATUSES.has(providerStatus)) status = "failed";
   else if (providerStatus === "cancelled" || providerStatus === "canceled") status = "cancelled";
   else if (providerStatus === "completed" && renewalStatus === "success") status = "succeeded";
-  else if (providerStatus === "completed" && ["pending", "warning"].includes(renewalStatus)) status = "running";
+  else if (providerStatus === "completed" && RENEWAL_RUNNING_STATUSES.has(renewalStatus)) status = "running";
   else if (providerStatus === "completed") {
     status = "manual_review";
     errorCode = "SPACEX_GPT_RENEWAL_STATUS_UNKNOWN";
@@ -251,7 +252,7 @@ function normalizeTask(raw, context = {}) {
   if (providerStatus === "completed" && total === null) {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 完成订单缺少支付金额");
   }
-  const renewalPending = providerStatus === "completed" && ["pending", "warning"].includes(renewalStatus);
+  const renewalPending = providerStatus === "completed" && RENEWAL_RUNNING_STATUSES.has(renewalStatus);
   const message = optionalString(order.message, 500)
     || (status === "succeeded" ? "SpaceX GPT 已完成开通并取消自动续费" : "SpaceX GPT 订单处理中");
   return Object.freeze({

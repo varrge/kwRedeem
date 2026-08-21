@@ -411,7 +411,7 @@ export class SpaceXGptDirectV1Adapter {
       }
     });
     const preflightData = preflight?.data;
-    const preflightToken = boundedString(preflightData?.preflight_token, "preflight_token", 200, {
+    const preflightToken = boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
       definitelyNotCreated: true
     });
     if (optionalString(preflightData?.quote_error, 500)) {

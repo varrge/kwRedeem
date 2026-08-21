@@ -321,6 +321,7 @@ test("eFun Open V1 rejects unsafe URLs and marks ambiguous creates as unsafe to 
 
 test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on the selected SpaceX card", async () => {
   const requests = [];
+  const preflightToken = "p".repeat(7_784);
   let includeRemoteIdentity = true;
   const adapter = new SpaceXGptDirectV1Adapter({
     baseUrl: "https://zovocard.com/openapi/v1",
@@ -349,7 +350,7 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
         return response({
           code: 0,
           data: {
-            preflight_token: "preflight-once",
+            preflight_token: preflightToken,
             pricing_version: 3,
             payment_country: "PH",
             payment_currency: "PHP",
@@ -442,6 +443,7 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   assert.equal(createRequest.options.headers["Idempotency-Key"], "KW-SPACEX-1");
   assert.equal(createRequest.body.card_id, 123);
   assert.equal(createRequest.body.no_auto_card_switch, true);
+  assert.equal(createRequest.body.preflight_token, preflightToken);
   assert.equal(createRequest.body.pricing_version, 3);
   const expectedCredential = { mode: "session", session: JSON.stringify(authSessionJson) };
   assert.deepEqual(preflightRequest.body.credential, expectedCredential);

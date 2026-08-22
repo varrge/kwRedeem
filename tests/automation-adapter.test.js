@@ -486,6 +486,83 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   }), (error) => error.code === "SPACEX_GPT_CONTRACT_INVALID");
 });
 
+test("SpaceX GPT Direct V1 cancels delinquent renewal and waits for the purchase window", async () => {
+  const requests = [];
+  let preflightCalls = 0;
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1",
+    apiKey: "sk_direct_test",
+    lookup: publicLookup,
+    fetchImpl: async (url, options) => {
+      const path = new URL(url).pathname;
+      const body = options.body ? JSON.parse(options.body) : null;
+      requests.push({ path, body });
+      if (path.endsWith("/gpt-direct/preflight")) {
+        preflightCalls += 1;
+        const delinquent = preflightCalls === 1;
+        return response({
+          code: 0,
+          data: {
+            currentPlan: delinquent ? "plus" : "free",
+            subscription_is_delinquent: delinquent,
+            subscription_has_active: delinquent,
+            subscription_will_renew: delinquent,
+            subscription_active_until: delinquent ? "2099-01-01T00:00:00Z" : null,
+            can_purchase_at: preflightCalls === 2 ? "2099-01-01T00:00:00Z" : "2020-01-01T00:00:00Z",
+            preflight_token: `preflight-${preflightCalls}`,
+            pricing_version: 3,
+            quotes: { plus: { plan: "plus", currency: "PHP", amountMinor: 98214 } },
+            quote_error: ""
+          }
+        });
+      }
+      if (path.endsWith("/gpt-direct/cancel-renewal")) {
+        return response({ code: 0, data: { renewal_status: "success", will_renew: false } });
+      }
+      if (path.endsWith("/gpt-direct/orders")) {
+        return response({
+          code: 0,
+          data: {
+            id: 982,
+            plan: "plus",
+            status: "queued",
+            currency: "PHP",
+            quoted_amount_minor: 98214,
+            client_request_id: "KW-SPACEX-DELINQUENT"
+          }
+        }, 202);
+      }
+      throw new Error(`unexpected SpaceX GPT path ${path}`);
+    }
+  });
+  const input = {
+    clientOrderId: "KW-SPACEX-DELINQUENT",
+    planId: "plus",
+    checkoutCountry: "PH",
+    authSessionJson: { sessionToken: "secret-session-token" },
+    cardProviderKey: "spacexcard",
+    providerCardId: 123
+  };
+
+  await assert.rejects(adapter.createTask(input), (error) => {
+    assert.equal(error.code, "SPACEX_GPT_ACCOUNT_WAIT");
+    assert.equal(error.requestNotSent, true);
+    assert.ok(error.retryAfterSeconds > 60);
+    return true;
+  });
+  assert.deepEqual(requests.map((item) => item.path), [
+    "/openapi/v1/gpt-direct/preflight",
+    "/openapi/v1/gpt-direct/cancel-renewal",
+    "/openapi/v1/gpt-direct/preflight"
+  ]);
+  assert.equal(JSON.parse(requests[1].body.session).sessionToken, "secret-session-token");
+
+  const created = await adapter.createTask(input);
+  assert.equal(created.task.status, "queued");
+  assert.equal(requests.filter((item) => item.path.endsWith("/cancel-renewal")).length, 1);
+  assert.equal(requests.filter((item) => item.path.endsWith("/orders")).length, 1);
+});
+
 test("SpaceX GPT Direct V1 rejects non-SpaceX cards before preflight", async () => {
   let calls = 0;
   const adapter = new SpaceXGptDirectV1Adapter({

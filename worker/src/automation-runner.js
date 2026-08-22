@@ -616,6 +616,29 @@ export function createAutomationRunner(options = {}) {
     const snapshot = parseJson(execution.mapping_snapshot);
     const mapping = mappingFromSnapshot(snapshot);
     try {
+      const { adapter } = adapterFactory(db, {
+        providerId: execution.provider_id,
+        credentialId: execution.credential_id,
+        decryptText,
+        fetchImpl,
+        lookup,
+        efunAutomationProxyUrl
+      });
+      if (typeof adapter.prepareAccount === "function") {
+        const order = db.prepare("SELECT session_payload FROM redeem_orders WHERE id = ?").get(execution.order_id);
+        let authSessionJson;
+        try {
+          authSessionJson = JSON.parse(decryptText(order?.session_payload || ""));
+        } catch {
+          throw new AutomationAdapterError("AUTOMATION_SESSION_UNAVAILABLE", "订单 Session 无法读取", {
+            retryable: false
+          });
+        }
+        await adapter.prepareAccount({
+          authSessionJson,
+          checkoutCountry: snapshot.regionCode
+        });
+      }
       await prepareCard(db, {
         execution,
         mapping,
@@ -638,6 +661,16 @@ export function createAutomationRunner(options = {}) {
         WHERE execution_id = ? AND attempt_no = ?
       `).run(at, execution.id, execution.attempt_count);
     } catch (error) {
+      if (error instanceof AutomationAdapterError && error.requestNotSent) {
+        const retryAfter = Number(error.retryAfterSeconds);
+        schedule(execution, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30, {
+          status: "preparing_card",
+          publicMessage: "等待处理",
+          errorCode: error.code,
+          errorMessage: boundedError(error.message)
+        });
+        return;
+      }
       if (error instanceof AutomationFundingError && error.unknownOutcome) {
         markManualReview(execution, error.code, error.message);
         return;
@@ -839,7 +872,8 @@ export function createAutomationRunner(options = {}) {
           SET status = 'card_ready', error_code = ?, error_message = ?, updated_at = ?
           WHERE execution_id = ? AND attempt_no = ?
         `).run(error.code, boundedError(error.message), retryAt, execution.id, execution.attempt_count);
-        schedule(execution, 30, {
+        const retryAfter = Number(error.retryAfterSeconds);
+        schedule(execution, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30, {
           status: "submitting",
           publicMessage: "等待处理",
           errorCode: error.code,

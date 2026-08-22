@@ -215,6 +215,27 @@ function amountMajor(order) {
   return (minor / (10 ** exponent)).toFixed(exponent);
 }
 
+function purchaseWaitSeconds(data, fallback = null) {
+  const value = data?.can_purchase_at;
+  if (value === null || value === undefined || value === "") return fallback;
+  const timestamp = Date.parse(String(value));
+  if (!Number.isFinite(timestamp)) {
+    fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 可购买时间无法识别", {
+      retryable: false,
+      definitelyNotCreated: true
+    });
+  }
+  const seconds = Math.ceil((timestamp - Date.now()) / 1000);
+  return seconds > 0 ? Math.max(30, seconds) : fallback;
+}
+
+function waitForPurchasableAccount(data, fallback = 120) {
+  fail("SPACEX_GPT_ACCOUNT_WAIT", "欠费订阅已取消，等待账号恢复可购买状态", {
+    requestNotSent: true,
+    retryAfterSeconds: purchaseWaitSeconds(data, fallback)
+  });
+}
+
 function normalizeTask(raw, context = {}) {
   const order = raw?.order && typeof raw.order === "object" && !Array.isArray(raw.order) ? raw.order : raw;
   if (!order || typeof order !== "object" || Array.isArray(order)) {
@@ -374,6 +395,73 @@ export class SpaceXGptDirectV1Adapter {
     return normalizeCapabilities(await this.request("/gpt-direct/plans"));
   }
 
+  async prepareAccount(input = {}) {
+    const country = boundedString(input.checkoutCountry, "checkoutCountry", 20, {
+      definitelyNotCreated: true
+    }).toUpperCase();
+    if (country !== "PH") {
+      fail("SPACEX_GPT_REGION_INVALID", "SpaceX GPT 直充当前仅支持 PH 地区", {
+        retryable: false,
+        definitelyNotCreated: true
+      });
+    }
+    const credential = sessionCredential(input.authSessionJson);
+    const preflight = () => this.request("/gpt-direct/preflight", {
+      method: "POST",
+      preCreate: true,
+      body: { credential, payment_country: country, payment_currency: "PHP" }
+    });
+    let preflightData = (await preflight())?.data;
+    if (preflightData?.subscription_is_delinquent === true) {
+      if (preflightData.subscription_will_renew === true) {
+        if (credential.mode !== "session") {
+          fail("SPACEX_GPT_SESSION_REQUIRED", "欠费订阅只能使用完整 Session 自动取消", {
+            retryable: false,
+            definitelyNotCreated: true
+          });
+        }
+        let renewal;
+        try {
+          renewal = await this.request("/gpt-direct/cancel-renewal", {
+            method: "POST",
+            preCreate: true,
+            body: { session: credential.session }
+          });
+        } catch (error) {
+          if (error instanceof AutomationAdapterError && error.retryable) waitForPurchasableAccount(preflightData);
+          throw error;
+        }
+        const renewalStatus = optionalString(renewal?.data?.renewal_status, 40)?.toLowerCase();
+        if (renewalStatus === "pending") waitForPurchasableAccount(preflightData);
+        if (renewalStatus !== "success") {
+          fail("SPACEX_GPT_RENEWAL_STATUS_UNKNOWN", "SpaceX GPT 欠费订阅取消状态无法识别", {
+            requestNotSent: true,
+            retryAfterSeconds: 120
+          });
+        }
+        try {
+          preflightData = (await preflight())?.data;
+        } catch (error) {
+          if (error instanceof AutomationAdapterError && error.retryable) waitForPurchasableAccount(preflightData);
+          throw error;
+        }
+      }
+      if (preflightData?.subscription_is_delinquent === true
+        || preflightData?.subscription_has_active === true
+        || preflightData?.subscription_will_renew === true) {
+        waitForPurchasableAccount(preflightData);
+      }
+    }
+    const purchaseWait = purchaseWaitSeconds(preflightData);
+    if (purchaseWait !== null) {
+      fail("SPACEX_GPT_ACCOUNT_WAIT", "等待账号恢复可购买状态", {
+        requestNotSent: true,
+        retryAfterSeconds: purchaseWait
+      });
+    }
+    return Object.freeze({ credential, preflightData });
+  }
+
   async createTask(input = {}) {
     const clientOrderId = boundedString(input.clientOrderId, "clientOrderId", 80, {
       definitelyNotCreated: true
@@ -401,17 +489,10 @@ export class SpaceXGptDirectV1Adapter {
       });
     }
     const cardId = positiveInteger(input.providerCardId, "card_id", { definitelyNotCreated: true });
-    const credential = sessionCredential(input.authSessionJson);
-    const preflight = await this.request("/gpt-direct/preflight", {
-      method: "POST",
-      preCreate: true,
-      body: {
-        credential,
-        payment_country: country,
-        payment_currency: "PHP"
-      }
+    const { credential, preflightData } = await this.prepareAccount({
+      authSessionJson: input.authSessionJson,
+      checkoutCountry: country
     });
-    const preflightData = preflight?.data;
     const preflightToken = boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
       definitelyNotCreated: true
     });

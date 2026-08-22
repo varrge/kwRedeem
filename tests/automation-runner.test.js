@@ -258,9 +258,10 @@ function normalizedTask(status) {
   };
 }
 
-test("automation runner keeps Gate closed, then settles one accepted remote task", async () => {
+test("automation runner keeps Gate closed, honors pre-submit retry timing, then settles one accepted remote task", async () => {
   seedOrder();
   let prepareCalls = 0;
+  let preflightCalls = 0;
   let createCalls = 0;
   let queryCalls = 0;
   const prepareCard = async (database, { execution }) => {
@@ -293,6 +294,15 @@ test("automation runner keeps Gate closed, then settles one accepted remote task
   };
   const adapterFactory = () => ({
     adapter: {
+      prepareAccount: async () => {
+        preflightCalls += 1;
+        if (preflightCalls === 1) {
+          throw new AutomationAdapterError("SPACEX_GPT_ACCOUNT_WAIT", "等待账号可购买", {
+            requestNotSent: true,
+            retryAfterSeconds: 120
+          });
+        }
+      },
       createTask: async (input) => {
         createCalls += 1;
         assert.equal(input.authSessionJson.accessToken, "session-secret");
@@ -335,7 +345,18 @@ test("automation runner keeps Gate closed, then settles one accepted remote task
   await runner.tick();
   assert.equal(db.prepare("SELECT status FROM automation_executions WHERE id = 'execution-auto'").get().status, "preparing_card");
   await runner.tick();
+  const waiting = db.prepare(`
+    SELECT status, next_action_at FROM automation_executions WHERE id = 'execution-auto'
+  `).get();
+  assert.equal(waiting.status, "preparing_card");
+  assert.equal(waiting.next_action_at, new Date(clock.getTime() + 120_000).toISOString());
+  assert.equal(prepareCalls, 0);
+  assert.equal(createCalls, 0);
+
+  clock = new Date(clock.getTime() + 120_000);
+  await runner.tick();
   assert.equal(db.prepare("SELECT status FROM automation_executions WHERE id = 'execution-auto'").get().status, "submitting");
+  assert.equal(prepareCalls, 1);
   await runner.tick();
   assert.equal(db.prepare("SELECT status FROM automation_executions WHERE id = 'execution-auto'").get().status, "queued");
   assert.equal(createCalls, 1);

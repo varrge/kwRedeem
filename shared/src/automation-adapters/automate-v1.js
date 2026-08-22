@@ -26,6 +26,9 @@ export class AutomationAdapterError extends Error {
     this.requestNotSent = options.requestNotSent === true;
     this.retryable = options.retryable !== false;
     this.providerCode = options.providerCode || null;
+    this.retryAfterSeconds = Number.isFinite(options.retryAfterSeconds)
+      ? Math.max(1, Math.ceil(options.retryAfterSeconds))
+      : null;
   }
 }
 

@@ -452,7 +452,8 @@ export class SpaceXGptDirectV1Adapter {
         waitForPurchasableAccount(preflightData);
       }
     }
-    const purchaseWait = purchaseWaitSeconds(preflightData);
+    const currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
+    const purchaseWait = currentPlan === "free" ? null : purchaseWaitSeconds(preflightData);
     if (purchaseWait !== null) {
       fail("SPACEX_GPT_ACCOUNT_WAIT", "等待账号恢复可购买状态", {
         requestNotSent: true,

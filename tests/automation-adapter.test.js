@@ -486,7 +486,7 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   }), (error) => error.code === "SPACEX_GPT_CONTRACT_INVALID");
 });
 
-test("SpaceX GPT Direct V1 cancels delinquent renewal and waits for the purchase window", async () => {
+test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as the plan is free", async () => {
   const requests = [];
   let preflightCalls = 0;
   const adapter = new SpaceXGptDirectV1Adapter({
@@ -508,7 +508,7 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and waits for the purchase
             subscription_has_active: delinquent,
             subscription_will_renew: delinquent,
             subscription_active_until: delinquent ? "2099-01-01T00:00:00Z" : null,
-            can_purchase_at: preflightCalls === 2 ? "2099-01-01T00:00:00Z" : "2020-01-01T00:00:00Z",
+            can_purchase_at: "2099-01-01T00:00:00Z",
             preflight_token: `preflight-${preflightCalls}`,
             pricing_version: 3,
             quotes: { plus: { plan: "plus", currency: "PHP", amountMinor: 98214 } },
@@ -544,21 +544,15 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and waits for the purchase
     providerCardId: 123
   };
 
-  await assert.rejects(adapter.createTask(input), (error) => {
-    assert.equal(error.code, "SPACEX_GPT_ACCOUNT_WAIT");
-    assert.equal(error.requestNotSent, true);
-    assert.ok(error.retryAfterSeconds > 60);
-    return true;
-  });
+  const created = await adapter.createTask(input);
+  assert.equal(created.task.status, "queued");
   assert.deepEqual(requests.map((item) => item.path), [
     "/openapi/v1/gpt-direct/preflight",
     "/openapi/v1/gpt-direct/cancel-renewal",
-    "/openapi/v1/gpt-direct/preflight"
+    "/openapi/v1/gpt-direct/preflight",
+    "/openapi/v1/gpt-direct/orders"
   ]);
   assert.equal(JSON.parse(requests[1].body.session).sessionToken, "secret-session-token");
-
-  const created = await adapter.createTask(input);
-  assert.equal(created.task.status, "queued");
   assert.equal(requests.filter((item) => item.path.endsWith("/cancel-renewal")).length, 1);
   assert.equal(requests.filter((item) => item.path.endsWith("/orders")).length, 1);
 });

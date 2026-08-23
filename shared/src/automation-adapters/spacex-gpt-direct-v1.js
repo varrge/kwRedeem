@@ -412,7 +412,8 @@ export class SpaceXGptDirectV1Adapter {
       body: { credential, payment_country: country, payment_currency: "PHP" }
     });
     let preflightData = (await preflight())?.data;
-    if (preflightData?.subscription_is_delinquent === true) {
+    let currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
+    if (currentPlan !== "free" && preflightData?.subscription_is_delinquent === true) {
       if (preflightData.subscription_will_renew === true) {
         if (credential.mode !== "session") {
           fail("SPACEX_GPT_SESSION_REQUIRED", "欠费订阅只能使用完整 Session 自动取消", {
@@ -452,7 +453,7 @@ export class SpaceXGptDirectV1Adapter {
         waitForPurchasableAccount(preflightData);
       }
     }
-    const currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
+    currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
     const purchaseWait = currentPlan === "free" ? null : purchaseWaitSeconds(preflightData);
     if (purchaseWait !== null) {
       fail("SPACEX_GPT_ACCOUNT_WAIT", "等待账号恢复可购买状态", {

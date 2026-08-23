@@ -557,6 +557,65 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as th
   assert.equal(requests.filter((item) => item.path.endsWith("/orders")).length, 1);
 });
 
+test("SpaceX GPT Direct V1 proceeds immediately when the plan is free despite stale delinquent flags", async () => {
+  const requests = [];
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1",
+    apiKey: "sk_direct_test",
+    lookup: publicLookup,
+    fetchImpl: async (url, options) => {
+      const path = new URL(url).pathname;
+      requests.push(path);
+      if (path.endsWith("/gpt-direct/preflight")) {
+        return response({
+          code: 0,
+          data: {
+            currentPlan: "free",
+            subscription_is_delinquent: true,
+            subscription_has_active: false,
+            subscription_will_renew: true,
+            can_purchase_at: null,
+            preflight_token: "preflight-free",
+            pricing_version: 3,
+            quotes: { plus: { plan: "plus", currency: "PHP", amountMinor: 98214 } },
+            quote_error: ""
+          }
+        });
+      }
+      if (path.endsWith("/gpt-direct/orders")) {
+        const body = JSON.parse(options.body);
+        return response({
+          code: 0,
+          data: {
+            id: 983,
+            plan: "plus",
+            status: "queued",
+            currency: "PHP",
+            quoted_amount_minor: 98214,
+            client_request_id: body.client_request_id
+          }
+        }, 202);
+      }
+      throw new Error(`unexpected SpaceX GPT path ${path}`);
+    }
+  });
+
+  const created = await adapter.createTask({
+    clientOrderId: "KW-SPACEX-FREE",
+    planId: "plus",
+    checkoutCountry: "PH",
+    authSessionJson: { sessionToken: "secret-session-token" },
+    cardProviderKey: "spacexcard",
+    providerCardId: 123
+  });
+
+  assert.equal(created.task.status, "queued");
+  assert.deepEqual(requests, [
+    "/openapi/v1/gpt-direct/preflight",
+    "/openapi/v1/gpt-direct/orders"
+  ]);
+});
+
 test("SpaceX GPT Direct V1 rejects non-SpaceX cards before preflight", async () => {
   let calls = 0;
   const adapter = new SpaceXGptDirectV1Adapter({

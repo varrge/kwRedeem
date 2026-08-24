@@ -5,6 +5,7 @@ import {
   automationRiskAllocationUsd,
   prepareAutomationCard
 } from "../../shared/src/automation-card-funding.js";
+import { isSpaceXGptCardExhaustedMessage } from "../../shared/src/automation-adapters/spacex-gpt-direct-v1.js";
 import { settleAutomationExecution } from "../../shared/src/automation-fulfillment.js";
 import {
   createAutomationAdapter,
@@ -509,6 +510,7 @@ export function createAutomationRunner(options = {}) {
     const intent = db.prepare(`
       SELECT operation, target_card_id, amount_usd
       FROM automation_funding_intents WHERE execution_id = ?
+      ORDER BY intent_no DESC LIMIT 1
     `).get(execution.id);
     if (intent?.operation === "recharge") {
       const attempt = db.prepare(`
@@ -676,7 +678,10 @@ export function createAutomationRunner(options = {}) {
         return;
       }
       if (error instanceof AutomationFundingError && error.retryable) {
-        const intent = db.prepare("SELECT state FROM automation_funding_intents WHERE execution_id = ?").get(execution.id);
+        const intent = db.prepare(`
+          SELECT state FROM automation_funding_intents
+          WHERE execution_id = ? ORDER BY intent_no DESC LIMIT 1
+        `).get(execution.id);
         if (intent && intent.state !== "prepared") {
           settleAutomationExecution(db, execution.id, "failed", {
             code: error?.code || "AUTOMATION_CARD_PREPARATION_FAILED",
@@ -737,6 +742,70 @@ export function createAutomationRunner(options = {}) {
     writeAudit("automation.task_not_created", execution, { code, providerCode: providerCode || null });
   }
 
+  function replaceExhaustedCard(execution, error) {
+    const snapshot = parseJson(execution.mapping_snapshot);
+    const reservation = db.prepare(`
+      SELECT * FROM automation_card_reservations WHERE execution_id = ?
+    `).get(execution.id);
+    const intents = db.prepare(`
+      SELECT operation, state FROM automation_funding_intents
+      WHERE execution_id = ? ORDER BY intent_no
+    `).all(execution.id);
+    if (snapshot?.adapterKey !== "spacex_gpt_direct_v1"
+      || snapshot.cardPlatformKey !== "spacexcard"
+      || !snapshot.cardProductCode
+      || !reservation?.card_id
+      || reservation.state !== "reserved"
+      || intents.some((intent) => intent.state !== "succeeded")
+      || intents.some((intent) => intent.operation === "open")) {
+      markManualReview(
+        execution,
+        "SPACEX_GPT_CARD_REPLACEMENT_UNSAFE",
+        "卡片额度已满，但当前资金或卡片状态不允许自动换卡"
+      );
+      return;
+    }
+    const at = iso(now());
+    const oldCardId = reservation.card_id;
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE managed_cards
+        SET consumed_slots = MAX(consumed_slots, ?), capacity_state = 'CAPACITY_FULL', updated_at = ?
+        WHERE id = ?
+      `).run(Number(snapshot.cardCapacity), at, oldCardId);
+      db.prepare(`
+        UPDATE automation_card_reservations
+        SET card_id = NULL, planned_product_code = ?, slot_index = NULL,
+            state = 'reserved', reserved_at = ?, consumed_at = NULL, released_at = NULL
+        WHERE id = ?
+      `).run(snapshot.cardProductCode, at, reservation.id);
+      db.prepare(`
+        UPDATE automation_execution_attempts
+        SET status = 'selected', error_code = ?, error_message = ?, updated_at = ?
+        WHERE execution_id = ? AND attempt_no = ?
+      `).run(
+        "SPACEX_GPT_CARD_EXHAUSTED",
+        boundedError(error?.message, "卡片直充额度已满"),
+        at,
+        execution.id,
+        execution.attempt_count
+      );
+      db.prepare(`
+        UPDATE automation_executions
+        SET status = 'preparing_card', current_phase = 'opening_replacement_card',
+            public_message = '处理中', card_id = NULL, card_last4 = NULL,
+            card_reservation_state = 'reserved', remote_task_id = NULL,
+            remote_status = NULL, remote_snapshot = NULL, poll_failure_count = 0,
+            last_error_code = 'SPACEX_GPT_CARD_EXHAUSTED', last_error_message = ?,
+            next_action_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(boundedError(error?.message, "卡片直充额度已满"), at, at, execution.id);
+    }).immediate();
+    writeAudit("automation.card_replacement_planned", execution, {
+      reason: "SPACEX_GPT_CARD_EXHAUSTED"
+    });
+  }
+
   function createBackoff(execution) {
     const failures = Number(execution.poll_failure_count || 0) + 1;
     const attempt = db.prepare(`
@@ -794,6 +863,14 @@ export function createAutomationRunner(options = {}) {
   async function submitExecution(execution) {
     const snapshot = parseJson(execution.mapping_snapshot);
     const mapping = mappingFromSnapshot(snapshot);
+    if (!execution.remote_task_id
+      && snapshot.adapterKey === "spacex_gpt_direct_v1"
+      && isSpaceXGptCardExhaustedMessage(execution.last_error_message)) {
+      replaceExhaustedCard(execution, {
+        message: execution.last_error_message
+      });
+      return;
+    }
     const order = db.prepare("SELECT session_payload FROM redeem_orders WHERE id = ?").get(execution.order_id);
     let authSessionJson;
     try {
@@ -861,6 +938,10 @@ export function createAutomationRunner(options = {}) {
       });
       processRemoteTask(execution, result.task);
     } catch (error) {
+      if (error instanceof AutomationAdapterError && error.cardUnavailable) {
+        replaceExhaustedCard(execution, error);
+        return;
+      }
       if (error instanceof AutomationAdapterError && error.definitelyNotCreated) {
         markDefinitelyNotCreated(execution, error);
         return;

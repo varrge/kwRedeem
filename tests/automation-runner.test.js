@@ -486,6 +486,193 @@ test("automation runner keeps Gate closed, honors pre-submit retry timing, then 
   assert.equal(db.prepare("SELECT consumed_slots FROM managed_cards WHERE id = 'card-auto'").get().consumed_slots, 1);
 });
 
+test("an exhausted SpaceX GPT card opens a new 82 USD card without erasing the prior recharge", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    UPDATE automation_fulfillment_settings
+    SET payment_gate_enabled = 1, mode = 'automatic', updated_at = ?
+    WHERE id = 'default'
+  `).run(at);
+  db.prepare(`
+    INSERT INTO cdkeys (
+      id, batch_id, product_id, activation_endpoint_id, source_key, public_key,
+      prefix, status, locked_at, locked_by_order_id, processing_mode, created_at, updated_at
+    ) VALUES ('cdkey-card-full', 'batch-card-full', 'product-auto', 'endpoint-auto',
+      'source-card-full', 'PUBLIC-CARD-FULL', 'AUTO', 'locked', ?,
+      'order-card-full', 'membership_auto', ?, ?)
+  `).run(at, at, at);
+  db.prepare(`
+    INSERT INTO redeem_orders (
+      id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id,
+      session_payload, status, created_at, updated_at
+    ) VALUES ('order-card-full', 'KWCARDFULL', 'cdkey-card-full', 'PUBLIC-CARD-FULL',
+      'product-auto', 'endpoint-auto', ?, 'pending', ?, ?)
+  `).run(encryptText(JSON.stringify({ sessionToken: "session-secret" })), at, at);
+  const snapshot = JSON.stringify({
+    mappingId: "mapping-auto",
+    mappingRevision: 1,
+    providerId: "provider-auto",
+    providerName: "Provider",
+    adapterKey: "spacex_gpt_direct_v1",
+    configHash: "config-hash",
+    externalPlanId: "plus",
+    externalTaskType: "purchase",
+    regionCode: "PH",
+    currency: "PHP",
+    cardPlatformKey: "spacexcard",
+    cardProductCode: "P5556XV",
+    capacityKey: "plus",
+    cardCapacity: 5,
+    fundingAmountUsd: 82,
+    expectedMinAmount: 900,
+    expectedMaxAmount: 1200,
+    dailyRiskLimitUsd: 100,
+    priority: 1
+  });
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, mapping_id, provider_id,
+      credential_id, client_order_id, current_phase, public_message, mapping_snapshot,
+      card_id, card_last4, card_reservation_state, attempt_count, next_action_at,
+      created_at, updated_at
+    ) VALUES ('execution-card-full', 'order-card-full', 'KWCARDFULL', 'product-auto',
+      'submitting', 'mapping-auto', 'provider-auto', 'credential-auto', 'KWCARDFULL',
+      'remote_submit_started', '处理中', ?, 'card-card-full', '1274', 'reserved', 1,
+      ?, ?, ?)
+  `).run(snapshot, at, at, at);
+  db.prepare(`
+    INSERT INTO automation_execution_attempts (
+      id, execution_id, attempt_no, mapping_id, provider_id, credential_id,
+      client_order_id, status, mapping_snapshot, created_at, updated_at
+    ) VALUES ('attempt-card-full', 'execution-card-full', 1, 'mapping-auto',
+      'provider-auto', 'credential-auto', 'KWCARDFULL', 'submit_started', ?, ?, ?)
+  `).run(snapshot, at, at);
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, provider_key, upstream_card_id, vm_card_id, product_code, last4,
+      upstream_status, cached_available_amount, lane, consumed_slots,
+      capacity_state, reconciliation_state, created_at, updated_at
+    ) VALUES ('card-card-full', 'spacexcard', 214208, '214208', 'P5556XV', '1274',
+      'ACTIVE', 20, 'plus', 4, 'AVAILABLE', 'READY', ?, ?)
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO automation_card_reservations (
+      id, execution_id, provider_key, card_id, capacity_key, slot_index, state, reserved_at
+    ) VALUES ('reservation-card-full', 'execution-card-full', 'spacexcard',
+      'card-card-full', 'plus', 5, 'reserved', ?)
+  `).run(at);
+  db.prepare(`
+    INSERT INTO automation_funding_intents (
+      id, execution_id, provider_key, operation, target_card_id, amount_usd,
+      idempotency_key, request_fingerprint, request_body_encrypted, state,
+      created_at, submitted_at, resolved_at
+    ) VALUES ('funding-card-full-recharge', 'execution-card-full', 'spacexcard',
+      'recharge', 'card-card-full', 16.3, 'kwa:KWCARDFULL:recharge:v1',
+      'prior-fingerprint', ?, 'succeeded', ?, ?, ?)
+  `).run(encryptText(JSON.stringify({ card_id: 214208, amount: 16.3 })), at, at, at);
+
+  const liveCards = [{ upstreamCardId: 214208, availableAmount: 20, status: "ACTIVE" }];
+  let opened = 0;
+  const cardProvider = {
+    listCards: async () => ({ cards: liveCards, total: liveCards.length }),
+    listProducts: async () => [{ productCode: "P5556XV", minAmount: 20, maxAmount: 50_000 }],
+    openCard: async (input) => {
+      opened += 1;
+      assert.equal(input.initAmount, 82);
+      liveCards.push({ upstreamCardId: 214999, availableAmount: 82, status: "ACTIVE" });
+      return {
+        upstreamCardId: 214999,
+        vmCardId: "214999",
+        productCode: "P5556XV",
+        availableAmount: 82
+      };
+    },
+    getCardMaterial: async (cardId) => ({
+      number: cardId === 214208 ? "5555555555551274" : "5555555555559999",
+      cvv: "123",
+      expiryMonth: "12",
+      expiryYear: "2029"
+    })
+  };
+  let createCalls = 0;
+  const runner = createAutomationRunner({
+    db,
+    decryptText,
+    encryptText,
+    workerId: "card-full-worker",
+    now: () => new Date(clock),
+    prepareCard: (database, input) => prepareAutomationCard(database, { ...input, provider: cardProvider }),
+    adapterFactory: () => ({
+      adapter: {
+        prepareAccount: async () => {},
+        createTask: async () => {
+          createCalls += 1;
+          if (createCalls === 1) {
+            const error = new AutomationAdapterError(
+              "AUTOMATION_REMOTE_REJECTED",
+              "该卡直充额度已用满（5 单上限），请换一张卡",
+              { definitelyNotCreated: true, cardUnavailable: true }
+            );
+            throw error;
+          }
+          return {
+            task: {
+              id: "REMOTE-CARD-FULL-RETRY",
+              clientOrderId: "KWCARDFULL",
+              status: "queued",
+              planId: "plus",
+              checkoutCountry: "PH",
+              checkoutCurrency: "PHP",
+              currentPhase: "queued",
+              message: "accepted",
+              card: { brand: null, last4: "9999" },
+              pricing: { currency: "PHP", displayTotal: null, confirmed: false },
+              renewalStatus: { status: null, verified: false, willRenew: null },
+              error: null
+            }
+          };
+        }
+      }
+    }),
+    providerSync: async () => false
+  });
+
+  await runner.tick();
+  assert.equal(db.prepare(`SELECT status FROM automation_executions WHERE id = 'execution-card-full'`).get().status,
+    "preparing_card");
+  await runner.tick();
+  assert.equal(opened, 1);
+  assert.equal(db.prepare(`SELECT status FROM automation_executions WHERE id = 'execution-card-full'`).get().status,
+    "submitting");
+  await runner.tick();
+
+  const execution = db.prepare(`SELECT * FROM automation_executions WHERE id = 'execution-card-full'`).get();
+  const reservation = db.prepare(`
+    SELECT * FROM automation_card_reservations WHERE execution_id = 'execution-card-full'
+  `).get();
+  const intents = db.prepare(`
+    SELECT operation, amount_usd, state FROM automation_funding_intents
+    WHERE execution_id = 'execution-card-full' ORDER BY intent_no
+  `).all();
+  assert.equal(execution.status, "queued");
+  assert.equal(execution.card_last4, "9999");
+  assert.notEqual(reservation.card_id, "card-card-full");
+  assert.deepEqual(intents, [
+    { operation: "recharge", amount_usd: 16.3, state: "succeeded" },
+    { operation: "open", amount_usd: 82, state: "succeeded" }
+  ]);
+  assert.equal(db.prepare(`SELECT capacity_state FROM managed_cards WHERE id = 'card-card-full'`).get().capacity_state,
+    "CAPACITY_FULL");
+
+  db.prepare("DELETE FROM automation_execution_attempts WHERE execution_id = 'execution-card-full'").run();
+  db.prepare("DELETE FROM automation_funding_intents WHERE execution_id = 'execution-card-full'").run();
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-card-full'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-card-full'").run();
+  db.prepare("DELETE FROM managed_cards WHERE id = 'card-card-full' OR upstream_card_id = 214999").run();
+  db.prepare("DELETE FROM redeem_orders WHERE id = 'order-card-full'").run();
+  db.prepare("DELETE FROM cdkeys WHERE id = 'cdkey-card-full'").run();
+});
+
 test("admin retry reuses one definitely-not-created mapping without repeating card funding", async () => {
   const failedAt = clock.toISOString();
   if (!db.prepare("SELECT 1 FROM automation_product_mappings WHERE id = 'mapping-auto'").get()) seedOrder();

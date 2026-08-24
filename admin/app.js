@@ -101,7 +101,6 @@ const refs = {
   extensionDeliveryListResult: document.querySelector("#extension-delivery-list-result"),
   automationGateForm: document.querySelector("#automation-gate-form"),
   automationGateEnabled: document.querySelector("#automation-gate-enabled"),
-  automationConfigTtl: document.querySelector("#automation-config-ttl"),
   automationGateUsername: document.querySelector("#automation-gate-username"),
   automationGatePassword: document.querySelector("#automation-gate-password"),
   automationGateConfirm: document.querySelector("#automation-gate-confirm"),
@@ -2264,7 +2263,6 @@ async function refreshAutomationConsole() {
   automationCardProductsCache = cardProductPayload.items || [];
   automationCardProductsError = cardProductPayload.error || "";
   refs.automationGateEnabled.checked = settingsPayload.paymentGateEnabled === true;
-  refs.automationConfigTtl.value = Number(settingsPayload.configTtlSeconds) || 300;
   setHint(
     refs.automationGateResult,
     `${settingsPayload.paymentGateEnabled ? "Gate 已开启" : "Gate 已关闭"}；最近更新 ${settingsPayload.updatedAt || "-"}`
@@ -7175,7 +7173,6 @@ refs.automationGateForm?.addEventListener("submit", async (event) => {
       method: "PUT",
       body: JSON.stringify({
         paymentGateEnabled: refs.automationGateEnabled.checked,
-        configTtlSeconds: Number(refs.automationConfigTtl.value),
         credentials: {
           username: refs.automationGateUsername.value.trim(),
           password: refs.automationGatePassword.value

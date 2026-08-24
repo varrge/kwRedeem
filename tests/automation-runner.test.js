@@ -373,8 +373,15 @@ function normalizedTask(status) {
   };
 }
 
-test("automation runner keeps Gate closed, honors pre-submit retry timing, then settles one accepted remote task", async () => {
+test("automation runner checks capabilities once on user submission and never polls them while idle", async () => {
   seedOrder();
+  db.prepare(`
+    UPDATE automation_providers
+    SET config_status = 'failed', config_error = 'AUTOMATION_TIMEOUT',
+        circuit_state = 'open', circuit_reason = 'AUTOMATION_TIMEOUT'
+    WHERE id = 'provider-auto'
+  `).run();
+  let syncCalls = 0;
   let prepareCalls = 0;
   let preflightCalls = 0;
   let createCalls = 0;
@@ -440,8 +447,13 @@ test("automation runner keeps Gate closed, honors pre-submit retry timing, then 
     now: () => new Date(clock),
     prepareCard,
     adapterFactory,
-    providerSync: async () => {
-      throw new Error("fresh config must not sync");
+    providerSync: async (database, { providerId, at }) => {
+      syncCalls += 1;
+      database.prepare(`
+        UPDATE automation_providers
+        SET config_status = 'ready', config_error = NULL, config_synced_at = ?,
+            consecutive_failures = 0, updated_at = ? WHERE id = ?
+      `).run(at, at, providerId);
     }
   });
 
@@ -449,6 +461,7 @@ test("automation runner keeps Gate closed, honors pre-submit retry timing, then 
   assert.equal(db.prepare("SELECT status FROM automation_executions WHERE id = 'execution-auto'").get().status, "waiting_gate");
   assert.equal(prepareCalls, 0);
   assert.equal(createCalls, 0);
+  assert.equal(syncCalls, 0);
 
   db.prepare(`
     UPDATE automation_fulfillment_settings
@@ -459,6 +472,9 @@ test("automation runner keeps Gate closed, honors pre-submit retry timing, then 
 
   await runner.tick();
   assert.equal(db.prepare("SELECT status FROM automation_executions WHERE id = 'execution-auto'").get().status, "preparing_card");
+  assert.equal(syncCalls, 1);
+  assert.equal(db.prepare("SELECT circuit_state FROM automation_providers WHERE id = 'provider-auto'").get().circuit_state,
+    "closed");
   await runner.tick();
   const waiting = db.prepare(`
     SELECT status, next_action_at FROM automation_executions WHERE id = 'execution-auto'
@@ -484,6 +500,9 @@ test("automation runner keeps Gate closed, honors pre-submit retry timing, then 
   assert.equal(db.prepare("SELECT session_payload FROM redeem_orders WHERE id = 'order-auto'").get().session_payload, "");
   assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id = 'cdkey-auto'").get().status, "used");
   assert.equal(db.prepare("SELECT consumed_slots FROM managed_cards WHERE id = 'card-auto'").get().consumed_slots, 1);
+  clock = new Date(clock.getTime() + 24 * 60 * 60 * 1000);
+  assert.equal(await runner.tick(), false);
+  assert.equal(syncCalls, 1);
 });
 
 test("an exhausted SpaceX GPT card opens a new 82 USD card without erasing the prior recharge", async () => {

@@ -528,8 +528,6 @@ export function createAutomationRunner(options = {}) {
 
   function routeExecution(execution) {
     const at = iso(now());
-    const ttl = Math.max(60, Number(settings()?.config_ttl_seconds || 300));
-    const freshAfter = addSeconds(at, -ttl);
     const rows = db.prepare(`
       SELECT mapping.*, provider.name AS provider_name, provider.adapter_key,
              provider.config_hash, provider.config_synced_at,
@@ -540,7 +538,7 @@ export function createAutomationRunner(options = {}) {
       WHERE mapping.product_id = ? AND mapping.enabled = 1
         AND mapping.paused_reason IS NULL
         AND provider.status = 'active' AND provider.circuit_state = 'closed'
-        AND provider.config_status = 'ready' AND provider.config_synced_at >= ?
+        AND provider.config_status = 'ready'
         AND provider.current_credential_id IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM automation_execution_attempts attempt
@@ -557,7 +555,7 @@ export function createAutomationRunner(options = {}) {
             )
         )
       ORDER BY mapping.priority, mapping.updated_at, mapping.id
-    `).all(execution.product_id, freshAfter, execution.id, execution.id);
+    `).all(execution.product_id, execution.id, execution.id);
     const mapping = rows.find((row) => reservationCompatible(execution, row)
       && providerCapacityAvailable(row.provider_id)
       && dailyRiskUsed(row.id, at) + automationRiskAllocationUsd(row) <= Number(row.daily_risk_limit_usd));
@@ -1042,48 +1040,61 @@ export function createAutomationRunner(options = {}) {
     }
   }
 
-  async function syncOneStaleProvider() {
+  async function syncExecutionProviders(execution) {
+    if (Number(execution.attempt_count || 0) > 0 || execution.current_phase === "capabilities_checked") return;
     const at = iso(now());
-    const configTtlSeconds = Math.max(60, Number(settings()?.config_ttl_seconds || 300));
-    const staleBefore = addSeconds(at, -configTtlSeconds);
-    const failedRetryBefore = addSeconds(at, -60);
-    const row = db.prepare(`
-      SELECT provider.* FROM automation_providers provider
-      WHERE provider.status = 'active'
+    const rows = db.prepare(`
+      SELECT DISTINCT provider.*
+      FROM automation_product_mappings mapping
+      JOIN automation_providers provider ON provider.id = mapping.provider_id
+      WHERE mapping.product_id = ? AND mapping.enabled = 1
+        AND mapping.paused_reason IS NULL AND provider.status = 'active'
         AND provider.current_credential_id IS NOT NULL
         AND (
           provider.config_synced_at IS NULL
           OR provider.config_synced_at <= ?
+          OR provider.config_status <> 'ready'
         )
-        AND (provider.config_status <> 'failed' OR provider.updated_at <= ?)
-      ORDER BY COALESCE(provider.config_synced_at, ''), provider.id LIMIT 1
-    `).get(staleBefore, failedRetryBefore);
-    if (!row) return false;
-    try {
-      await providerSync(db, {
-        providerId: row.id,
-        decryptText,
-        fetchImpl,
-        lookup,
-        efunAutomationProxyUrl,
-        at
-      });
-    } catch (error) {
-      if (error instanceof AutomationAdapterError
-        && ([401, 403].includes(Number(error.statusCode))
-          || ["automate_key_invalid", "automate_key_required"].includes(error.providerCode))) {
-        openCircuit(row.id, error.providerCode || error.code, at, true);
-      } else {
-        const current = db.prepare(`
-          SELECT consecutive_failures FROM automation_providers WHERE id = ?
-        `).get(row.id);
-        if (Number(current?.consecutive_failures || 0) >= 3 || error?.retryable === false) {
-          openCircuit(row.id, error?.code || "AUTOMATION_CONFIG_SYNC_FAILED", at, false);
+      ORDER BY provider.id
+    `).all(execution.product_id, execution.created_at);
+    for (const row of rows) {
+      try {
+        await providerSync(db, {
+          providerId: row.id,
+          decryptText,
+          fetchImpl,
+          lookup,
+          efunAutomationProxyUrl,
+          at
+        });
+        if (row.config_status === "failed" && row.circuit_state === "open") {
+          db.prepare(`
+            UPDATE automation_providers
+            SET circuit_state = 'closed', circuit_reason = NULL, circuit_opened_at = NULL,
+                consecutive_failures = 0, updated_at = ?, updated_by = 'worker'
+            WHERE id = ?
+          `).run(at, row.id);
         }
+      } catch (error) {
+        if (error instanceof AutomationAdapterError
+          && ([401, 403].includes(Number(error.statusCode))
+            || ["automate_key_invalid", "automate_key_required"].includes(error.providerCode))) {
+          openCircuit(row.id, error.providerCode || error.code, at, true);
+        } else {
+          const current = db.prepare(`
+            SELECT consecutive_failures FROM automation_providers WHERE id = ?
+          `).get(row.id);
+          if (Number(current?.consecutive_failures || 0) >= 3 || error?.retryable === false) {
+            openCircuit(row.id, error?.code || "AUTOMATION_CONFIG_SYNC_FAILED", at, false);
+          }
+        }
+        writeAudit("automation.config_sync_failed", { id: row.id }, { code: error?.code || null });
       }
-      writeAudit("automation.config_sync_failed", { id: row.id }, { code: error?.code || null });
     }
-    return true;
+    db.prepare(`
+      UPDATE automation_executions
+      SET current_phase = 'capabilities_checked', updated_at = ? WHERE id = ?
+    `).run(at, execution.id);
   }
 
   async function advance(execution) {
@@ -1092,6 +1103,7 @@ export function createAutomationRunner(options = {}) {
         schedule(execution, 30, { status: "waiting_gate", publicMessage: "等待处理" });
         return;
       }
+      await syncExecutionProviders(execution);
       routeExecution(execution);
       return;
     }
@@ -1116,7 +1128,6 @@ export function createAutomationRunner(options = {}) {
     running = true;
     let execution = null;
     try {
-      if (await syncOneStaleProvider()) return true;
       execution = claimDue(iso(now()));
       if (!execution) return false;
       await advance(execution);

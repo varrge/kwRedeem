@@ -543,7 +543,7 @@
               <div class="card-header"><h3>协议自动化付款 Gate</h3></div>
               <form id="automation-gate-form" class="stack">
                 <label><input id="automation-gate-enabled" type="checkbox" /> 允许新订单选卡、充值并向自动化站点提交任务</label>
-                <label class="field"><span>站点配置有效期（秒）</span><input id="automation-config-ttl" type="number" min="60" max="3600" step="1" value="300" required /></label>
+                <p class="hint">站点能力在保存站点及用户提交订单时检查；空闲期间不做周期轮询。</p>
                 <div class="grid grid-2">
                   <label class="field"><span>重新输入管理员账号</span><input id="automation-gate-username" autocomplete="off" required /></label>
                   <label class="field"><span>重新输入管理员密码</span><input id="automation-gate-password" type="password" autocomplete="new-password" required /></label>

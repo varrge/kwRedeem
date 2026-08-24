@@ -197,19 +197,36 @@ function reserveNewCard(db, execution, mapping, at) {
 }
 
 function persistFundingIntent(db, execution, request, encryptText, at) {
-  const existing = db.prepare("SELECT * FROM automation_funding_intents WHERE execution_id = ?").get(execution.id);
-  if (existing) return existing;
-  const idempotencyKey = fundingIdempotencyKey(execution.order_no, request.operation);
   const fingerprint = fundingFingerprint(request.body);
+  const existing = db.prepare(`
+    SELECT * FROM automation_funding_intents
+    WHERE execution_id = ? AND operation = ? ORDER BY intent_no DESC LIMIT 1
+  `).get(execution.id, request.operation);
+  if (existing) {
+    if (existing.provider_key !== request.providerKey
+      || (existing.target_card_id || null) !== (request.targetCardId || null)
+      || (existing.product_code || null) !== (request.productCode || null)
+      || usd(existing.amount_usd, "amountUsd") !== usd(request.amountUsd, "amountUsd")
+      || existing.request_fingerprint !== fingerprint) {
+      fail("AUTOMATION_FUNDING_INTENT_INVALID", "已有资金意图与当前请求不一致");
+    }
+    return existing;
+  }
+  const idempotencyKey = fundingIdempotencyKey(execution.order_no, request.operation);
+  const intentNo = Number(db.prepare(`
+    SELECT COALESCE(MAX(intent_no), 0) + 1 AS value
+    FROM automation_funding_intents WHERE execution_id = ?
+  `).get(execution.id).value);
   db.prepare(`
     INSERT INTO automation_funding_intents (
-      id, execution_id, provider_key, operation, target_card_id, product_code,
+      id, execution_id, intent_no, provider_key, operation, target_card_id, product_code,
       amount_usd, idempotency_key, request_fingerprint, request_body_encrypted,
       state, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)
   `).run(
     `afi_${randomUUID()}`,
     execution.id,
+    intentNo,
     request.providerKey,
     request.operation,
     request.targetCardId || null,
@@ -220,7 +237,9 @@ function persistFundingIntent(db, execution, request, encryptText, at) {
     encryptText(JSON.stringify(request.body)),
     at
   );
-  return db.prepare("SELECT * FROM automation_funding_intents WHERE execution_id = ?").get(execution.id);
+  return db.prepare(`
+    SELECT * FROM automation_funding_intents WHERE execution_id = ? AND intent_no = ?
+  `).get(execution.id, intentNo);
 }
 
 function attachOpenedCard(db, execution, mapping, opened, at) {
@@ -443,7 +462,7 @@ export async function prepareAutomationCard(db, input = {}) {
         UPDATE managed_cards
         SET cached_available_amount = ?, last_balance_sync_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(usd(liveAmount + rechargeAmount, "availableAmount"), at, at, card.id);
+      `).run(usd(liveAmount + Number(intent.amount_usd), "availableAmount"), at, at, card.id);
     } else {
       db.prepare(`
         UPDATE managed_cards SET cached_available_amount = ?, last_balance_sync_at = ?, updated_at = ? WHERE id = ?

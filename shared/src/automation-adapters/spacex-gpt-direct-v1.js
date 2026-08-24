@@ -24,6 +24,10 @@ const PLAN_DEFINITIONS = Object.freeze({
 });
 const SUPPORTED_PLAN_IDS = new Set(["plus", "pro_5x", "pro_20x"]);
 
+export function isSpaceXGptCardUnavailableMessage(value) {
+  return /直充额度已用满[^\n]*(?:换一张卡|换卡)|所选卡片当前不可支付/.test(String(value || ""));
+}
+
 function fail(code, message, options = {}) {
   throw new AutomationAdapterError(code, message, options);
 }
@@ -371,6 +375,10 @@ export class SpaceXGptDirectV1Adapter {
     const payload = await readJson(response);
     if (!response.ok || Number(payload?.code) !== 0) {
       const remoteCode = providerCode(payload);
+      const remoteMessage = optionalString(payload?.msg ?? payload?.message, 500);
+      const cardUnavailable = options.cardSelection === true
+        && remoteCode === "GPT_DIRECT_ORDER_REJECTED"
+        && isSpaceXGptCardUnavailableMessage(remoteMessage);
       const knownPreCreateFailure = [
         "GPT_DIRECT_ACCESS_DENIED",
         "RECHARGE_REQUIRED",
@@ -379,12 +387,13 @@ export class SpaceXGptDirectV1Adapter {
         "GPT_PLAN_ALREADY_ACTIVE",
         "INSUFFICIENT_BALANCE"
       ].includes(remoteCode);
-      fail("AUTOMATION_REMOTE_REJECTED", optionalString(payload?.msg ?? payload?.message, 500)
+      fail("AUTOMATION_REMOTE_REJECTED", remoteMessage
         || `SpaceX GPT 返回 HTTP ${response.status}`, {
         statusCode: response.status,
         providerCode: remoteCode,
-        definitelyNotCreated: options.preCreate === true || knownPreCreateFailure,
+        definitelyNotCreated: options.preCreate === true || knownPreCreateFailure || cardUnavailable,
         requestNotSent: options.preCreate === true,
+        cardUnavailable,
         retryable: response.status >= 500 || [429, 503].includes(response.status)
       });
     }
@@ -525,7 +534,8 @@ export class SpaceXGptDirectV1Adapter {
     const created = await this.request("/gpt-direct/orders", {
       method: "POST",
       body,
-      idempotencyKey: clientOrderId
+      idempotencyKey: clientOrderId,
+      cardSelection: true
     });
     return Object.freeze({
       idempotentReplay: false,

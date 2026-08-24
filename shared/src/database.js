@@ -226,6 +226,55 @@ function migrateCardProductPolicyProviderKey(db) {
   })();
 }
 
+function migrateAutomationFundingIntentMultiplicity(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'automation_funding_intents'
+  `).get();
+  if (!/execution_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(table?.sql || "")) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE automation_funding_intents RENAME TO automation_funding_intents_legacy;
+
+      CREATE TABLE automation_funding_intents (
+        id TEXT PRIMARY KEY,
+        execution_id TEXT NOT NULL,
+        intent_no INTEGER NOT NULL DEFAULT 1,
+        provider_key TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        target_card_id TEXT,
+        product_code TEXT,
+        amount_usd REAL NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_fingerprint TEXT NOT NULL,
+        request_body_encrypted TEXT NOT NULL,
+        state TEXT NOT NULL,
+        provider_resource_id TEXT,
+        created_at TEXT NOT NULL,
+        submitted_at TEXT,
+        resolved_at TEXT,
+        UNIQUE(execution_id, intent_no)
+      );
+
+      INSERT INTO automation_funding_intents (
+        id, execution_id, intent_no, provider_key, operation, target_card_id,
+        product_code, amount_usd, idempotency_key, request_fingerprint,
+        request_body_encrypted, state, provider_resource_id, created_at,
+        submitted_at, resolved_at
+      )
+      SELECT
+        id, execution_id, 1, provider_key, operation, target_card_id,
+        product_code, amount_usd, idempotency_key, request_fingerprint,
+        request_body_encrypted, state, provider_resource_id, created_at,
+        submitted_at, resolved_at
+      FROM automation_funding_intents_legacy;
+
+      DROP TABLE automation_funding_intents_legacy;
+    `);
+  })();
+}
+
 function upsertSite(db, site, options = {}) {
   const existingSite = db.prepare("SELECT id, status FROM sites WHERE slug = ?").get(site.slug);
   if (existingSite) {
@@ -2133,7 +2182,8 @@ function createSchema(db) {
 
     CREATE TABLE IF NOT EXISTS automation_funding_intents (
       id TEXT PRIMARY KEY,
-      execution_id TEXT NOT NULL UNIQUE,
+      execution_id TEXT NOT NULL,
+      intent_no INTEGER NOT NULL DEFAULT 1,
       provider_key TEXT NOT NULL,
       operation TEXT NOT NULL,
       target_card_id TEXT,
@@ -2146,7 +2196,8 @@ function createSchema(db) {
       provider_resource_id TEXT,
       created_at TEXT NOT NULL,
       submitted_at TEXT,
-      resolved_at TEXT
+      resolved_at TEXT,
+      UNIQUE(execution_id, intent_no)
     );
 
     CREATE TABLE IF NOT EXISTS automation_order_exclusions (
@@ -2224,6 +2275,7 @@ function createSchema(db) {
   ensureColumn(db, "funding_intents", "provider_key", "TEXT NOT NULL DEFAULT 'spacexcard'");
   migrateManagedCardsProviderUniqueness(db);
   migrateCardProductPolicyProviderKey(db);
+  migrateAutomationFundingIntentMultiplicity(db);
   ensureColumn(db, "cdkey_batches", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "site_id", "TEXT");
   ensureColumn(db, "cdkeys", "processing_mode", "TEXT NOT NULL DEFAULT 'auto'");

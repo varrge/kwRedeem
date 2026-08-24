@@ -24,6 +24,7 @@ export class AutomationAdapterError extends Error {
     this.definitelyNotCreated = options.definitelyNotCreated === true;
     this.unsafeToReplay = options.unsafeToReplay === true;
     this.requestNotSent = options.requestNotSent === true;
+    this.cardUnavailable = options.cardUnavailable === true;
     this.retryable = options.retryable !== false;
     this.providerCode = options.providerCode || null;
     this.retryAfterSeconds = Number.isFinite(options.retryAfterSeconds)

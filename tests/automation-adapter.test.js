@@ -616,6 +616,48 @@ test("SpaceX GPT Direct V1 proceeds immediately when the plan is free despite st
   ]);
 });
 
+test("SpaceX GPT Direct V1 identifies an exhausted card before an order is created", async () => {
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1",
+    apiKey: "sk_direct_test",
+    lookup: publicLookup,
+    fetchImpl: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/gpt-direct/preflight")) {
+        return response({
+          code: 0,
+          data: {
+            currentPlan: "free",
+            preflight_token: "preflight-card-full",
+            pricing_version: 3,
+            quotes: { plus: { plan: "plus", currency: "PHP", amountMinor: 98214 } },
+            quote_error: ""
+          }
+        });
+      }
+      if (path.endsWith("/gpt-direct/orders")) {
+        return response({
+          code: 409,
+          error_code: "GPT_DIRECT_ORDER_REJECTED",
+          msg: "该卡直充额度已用满（5 单上限），请换一张卡"
+        }, 409);
+      }
+      throw new Error(`unexpected SpaceX GPT path ${path}`);
+    }
+  });
+
+  await assert.rejects(adapter.createTask({
+    clientOrderId: "KW-SPACEX-CARD-FULL",
+    planId: "plus",
+    checkoutCountry: "PH",
+    authSessionJson: { sessionToken: "secret-session-token" },
+    cardProviderKey: "spacexcard",
+    providerCardId: 214208
+  }), (error) => error.code === "AUTOMATION_REMOTE_REJECTED"
+    && error.definitelyNotCreated === true
+    && error.cardUnavailable === true);
+});
+
 test("SpaceX GPT Direct V1 rejects non-SpaceX cards before preflight", async () => {
   let calls = 0;
   const adapter = new SpaceXGptDirectV1Adapter({

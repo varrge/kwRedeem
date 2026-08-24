@@ -44,17 +44,6 @@ export function automationRiskAllocationUsd(mapping) {
   return fundingAmount / capacity;
 }
 
-export function automationCardPoolTargetUsd(mapping, occupiedBefore = 0) {
-  const { fundingAmount, capacity } = mappingFundingPolicy(mapping);
-  const occupied = Number(occupiedBefore);
-  if (!Number.isInteger(occupied) || occupied < 0 || occupied >= capacity) {
-    throw new TypeError("occupiedBefore 无效");
-  }
-  const fundingCents = Math.round(fundingAmount * 100);
-  const remainingSlots = capacity - occupied;
-  return Math.ceil((fundingCents * remainingSlots) / capacity) / 100;
-}
-
 function safeJson(value, fallback = null) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
@@ -162,14 +151,6 @@ function cardOccupiedSlots(db, card, mapping) {
     occupied.add(slot);
   }
   return occupied;
-}
-
-function cardPoolTargetForReservation(db, card, mapping, reservation = null) {
-  const occupied = cardOccupiedSlots(db, card, mapping);
-  if (reservation?.card_id === card.id && reservation.state === "reserved") {
-    occupied.delete(Number(reservation.slot_index));
-  }
-  return automationCardPoolTargetUsd(mapping, occupied.size);
 }
 
 function persistedReservation(db, executionId) {
@@ -364,6 +345,29 @@ export async function prepareAutomationCard(db, input = {}) {
   const fundingAmount = mappingFundingPolicy(mapping).fundingAmount;
   let reservation = persistedReservation(db, execution.id);
   const liveCards = await listLiveCards(provider);
+  let products = null;
+  const rechargeAmountFor = async (card) => {
+    if (!products) {
+      if (typeof provider.listProducts !== "function") {
+        fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡台无法提供充值产品规则", { retryable: true });
+      }
+      products = await provider.listProducts();
+      if (!Array.isArray(products)) {
+        fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡台返回的充值产品规则无效", { retryable: true });
+      }
+    }
+    const product = products.find((item) => item.productCode === card.product_code);
+    if (!product) {
+      fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡片对应的充值产品已不可用", { retryable: true });
+    }
+    const minimum = usd(product.minimumRechargeAmount ?? product.minAmount, "minimumRechargeAmount");
+    const maximum = usd(product.maxAmount, "maximumRechargeAmount", true);
+    const amount = usd(Math.max(automationRiskAllocationUsd(mapping), minimum), "rechargeAmount", true);
+    if (amount > maximum) {
+      fail("AUTOMATION_CARD_PRODUCT_INVALID", "单笔订单额度超出卡产品充值上限", { retryable: true });
+    }
+    return amount;
+  };
 
   if (!reservation) {
     const cards = db.prepare(`
@@ -378,12 +382,12 @@ export async function prepareAutomationCard(db, input = {}) {
       const slot = firstFreeSlot(db, card, mapping);
       const live = liveCards.get(Number(card.upstream_card_id));
       if (!slot || !live || String(live.status).toUpperCase() !== "ACTIVE") continue;
-      const poolTarget = cardPoolTargetForReservation(db, card, mapping);
+      const rechargeAmount = await rechargeAmountFor(card);
       candidates.push({
         card,
         live,
         slot,
-        shortfall: Math.max(0, poolTarget - Number(live.availableAmount || 0))
+        shortfall: Math.max(0, rechargeAmount - Number(live.availableAmount || 0))
       });
     }
     candidates.sort((left, right) => left.shortfall - right.shortfall || left.card.id.localeCompare(right.card.id));
@@ -424,22 +428,22 @@ export async function prepareAutomationCard(db, input = {}) {
   } else {
     const live = liveCards.get(Number(card.upstream_card_id));
     if (!live) fail("AUTOMATION_RESERVED_CARD_STALE", "已预留卡片不在实时卡片列表中", { retryable: true });
-    const poolTarget = cardPoolTargetForReservation(db, card, mapping, reservation);
-    const shortfall = usd(Math.max(0, poolTarget - Number(live.availableAmount || 0)), "shortfall");
-    if (shortfall > 0) {
+    const liveAmount = usd(Number(live.availableAmount || 0), "liveAvailableAmount");
+    const rechargeAmount = await rechargeAmountFor(card);
+    if (liveAmount < rechargeAmount) {
       const intent = persistFundingIntent(db, execution, {
         providerKey: mapping.card_platform_key,
         operation: "recharge",
         targetCardId: card.id,
-        amountUsd: shortfall,
-        body: { card_id: Number(card.upstream_card_id), amount: shortfall }
+        amountUsd: rechargeAmount,
+        body: { card_id: Number(card.upstream_card_id), amount: rechargeAmount }
       }, encryptText, at);
       await executeFundingIntent(db, execution, mapping, provider, intent, decryptText, at);
       db.prepare(`
         UPDATE managed_cards
-        SET cached_available_amount = cached_available_amount + ?, last_balance_sync_at = ?, updated_at = ?
+        SET cached_available_amount = ?, last_balance_sync_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(shortfall, at, at, card.id);
+      `).run(usd(liveAmount + rechargeAmount, "availableAmount"), at, at, card.id);
     } else {
       db.prepare(`
         UPDATE managed_cards SET cached_available_amount = ?, last_balance_sync_at = ?, updated_at = ? WHERE id = ?

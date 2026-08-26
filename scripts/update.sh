@@ -102,6 +102,7 @@ fi
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 log "开始在线更新，分支：$CURRENT_BRANCH，远端：$UPSTREAM"
+run_update_runtime prune-backups "$BACKUP_DIR" 9
 run_update_runtime state running
 
 MEMBERSHIP_INSTALLED=0

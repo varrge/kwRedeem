@@ -12,7 +12,8 @@ import {
   canResumeOnlineMaintenance,
   leaseIsDeployed,
   leaseIsDrained,
-  leaseIsHealthy
+  leaseIsHealthy,
+  pruneBackups
 } from "../scripts/update-runtime.js";
 
 test("online updates prefer the Node binary that is running the API over a stale PM2 PATH", () => {
@@ -87,7 +88,8 @@ test("membership drain accepts standby, stopped, absent, or expired leases", () 
 
 test("unified update drains and backs up before pulling or installing dependencies", () => {
   const script = fs.readFileSync(new URL("../scripts/update.sh", import.meta.url), "utf8");
-  const maintenance = script.indexOf('enter-maintenance "$UPDATE_ID"');
+  const maintenance = script.lastIndexOf('enter-maintenance "$UPDATE_ID"');
+  const prune = script.indexOf('prune-backups "$BACKUP_DIR" 9');
   const backup = script.indexOf('backup-database "$BACKUP_DIR/kawang-$STAMP.db"');
   const pull = script.indexOf("git pull --ff-only");
   const install = script.lastIndexOf("npm install");
@@ -95,7 +97,7 @@ test("unified update drains and backs up before pulling or installing dependenci
   const deploy = script.lastIndexOf('sudo -n "$MEMBERSHIP_DEPLOY_HELPER"');
   const release = script.indexOf('leave-maintenance "$UPDATE_ID"');
 
-  assert.ok(maintenance >= 0 && maintenance < backup);
+  assert.ok(prune >= 0 && prune < maintenance && maintenance < backup);
   assert.ok(backup < pull && pull < install && install < migrate);
   assert.ok(migrate < deploy && deploy < release);
   assert.match(script, /tmp\/update-runtime-\$UPDATE_ID\.js/);
@@ -135,6 +137,29 @@ test("online update creates a readable SQLite backup with committed data", () =>
     } finally {
       backup.close();
     }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("online update keeps only the latest ten automatic database backups", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "kawang-update-retention-"));
+  try {
+    const automaticBackups = Array.from({ length: 12 }, (_, index) => {
+      const filePath = path.join(directory, `kawang-202608${String(index + 1).padStart(2, "0")}-120000.db`);
+      fs.writeFileSync(filePath, String(index));
+      fs.utimesSync(filePath, index + 1, index + 1);
+      return filePath;
+    });
+    const manualBackup = path.join(directory, "kawang-20260801-preflight.db");
+    fs.writeFileSync(manualBackup, "manual");
+
+    assert.deepEqual(pruneBackups(directory), automaticBackups.slice(0, 2));
+    assert.deepEqual(
+      automaticBackups.filter((filePath) => fs.existsSync(filePath)),
+      automaticBackups.slice(2)
+    );
+    assert.equal(fs.existsSync(manualBackup), true);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

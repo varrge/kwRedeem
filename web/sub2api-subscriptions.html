@@ -417,7 +417,7 @@
           setStatus("");
         } catch (error) {
           refs.accountLine.textContent = "账号识别失败";
-          const sameOriginHint = connectionId && !sso
+          const sameOriginHint = connectionId && !sso && !accessToken && !refreshToken
             ? "请确认此页面是通过 Sub2api 同源地址打开。"
             : "";
           setStatus([error.message, sameOriginHint].filter(Boolean).join(" "), "error");

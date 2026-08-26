@@ -161,6 +161,20 @@ async function backupDatabase(destination) {
   }
 }
 
+function pruneBackups(directory, keep = 10) {
+  const removed = fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^kawang-\d{8}-\d{6}\.db$/.test(entry.name))
+    .map((entry) => {
+      const filePath = path.join(directory, entry.name);
+      return { filePath, modifiedAt: fs.statSync(filePath).mtimeMs };
+    })
+    .sort((left, right) => left.modifiedAt - right.modifiedAt || left.filePath.localeCompare(right.filePath))
+    .slice(0, -keep)
+    .map(({ filePath }) => filePath);
+  for (const filePath of removed) fs.rmSync(filePath);
+  return removed;
+}
+
 function leaseIsDrained(lease, now = Date.now()) {
   if (!lease || ["standby", "stopped"].includes(lease.status)) return true;
   const expiry = new Date(lease.expires_at || 0).getTime();
@@ -218,6 +232,9 @@ async function main() {
     case "backup-database":
       await backupDatabase(argument);
       break;
+    case "prune-backups":
+      console.log(`已清理 ${pruneBackups(argument, Number(extra || 10)).length} 份旧 SQLite 备份`);
+      break;
     default:
       throw new Error("unknown update runtime command");
   }
@@ -236,5 +253,6 @@ export {
   canResumeOnlineMaintenance,
   leaseIsDeployed,
   leaseIsDrained,
-  leaseIsHealthy
+  leaseIsHealthy,
+  pruneBackups
 };

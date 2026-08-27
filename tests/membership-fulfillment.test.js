@@ -2001,7 +2001,7 @@ test("admin UI exposes locked membership credentials without money-operation con
   dom.window.close();
 });
 
-test("admin lists live SpaceX card products and marks ChatGPT restrictions", async () => {
+test("admin treats Google ChatGPT restrictions separately from direct OpenAI payments", async () => {
   if (!app) ({ app } = await import("../api/src/server.js"));
   const login = await app.inject({
     method: "POST",
@@ -2047,6 +2047,19 @@ test("admin lists live SpaceX card products and marks ChatGPT restrictions", asy
         max_amount: 10000,
         restricted_merchants: ["GOOGLE CHATGPT"],
         google_chatgpt_blocked: true
+      }, {
+        product_code: "P-OPENAI-BLOCKED",
+        issuer: "one",
+        network: "MasterCard",
+        issuing_area: "United States",
+        card_type: "save",
+        open_fee: 1.5,
+        recharge_fee: 0,
+        rtf_rate: 0.1,
+        min_amount: 10,
+        max_amount: 10000,
+        restricted_merchants: ["OPENAI"],
+        google_chatgpt_blocked: false
       }]
     });
   };
@@ -2059,6 +2072,7 @@ test("admin lists live SpaceX card products and marks ChatGPT restrictions", asy
   assert.equal(response.statusCode, 200, response.body);
   assert.deepEqual(response.json().items.map((item) => [item.productCode, item.gptEligible]), [
     ["P-CHATGPT", true],
-    ["P5378OX", false]
+    ["P5378OX", true],
+    ["P-OPENAI-BLOCKED", false]
   ]);
 });

@@ -128,8 +128,7 @@ function normalizeProduct(item) {
     maxAmount: requireNumber(product.max_amount, "max_amount"),
     restrictedMerchants: Object.freeze(normalizedRestrictions),
     googleChatgptBlocked,
-    gptEligible: googleChatgptBlocked === false
-      && !normalizedRestrictions.some((merchant) => merchant.includes("GOOGLE CHATGPT"))
+    gptEligible: !normalizedRestrictions.some((merchant) => merchant.includes("OPENAI"))
   });
 }
 

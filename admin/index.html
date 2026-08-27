@@ -742,14 +742,15 @@
 
           <div class="card mt-24">
             <div class="card-header">
-              <h3>卡片库存初始化与刷新</h3>
+              <h3>卡片使用记录（协议自动化无需初始化）</h3>
               <div class="header-actions">
                 <select id="membership-inventory-platform" aria-label="卡台"></select>
-                <button id="membership-inventory-initialize" type="button" class="primary-btn small">初始化全部卡片</button>
-                <button id="membership-inventory-refresh" type="button" class="ghost-btn small">刷新库存与行情</button>
+                <button id="membership-inventory-initialize" type="button" class="ghost-btn small">可选：导入历史卡片</button>
+                <button id="membership-inventory-refresh" type="button" class="ghost-btn small">可选：全量历史对账</button>
                 <button id="membership-card-list-refresh" type="button" class="ghost-btn small">刷新列表</button>
               </div>
             </div>
+            <p class="hint">协议自动化在用户订单需要卡片时直接查询卡台、判断用途与容量，并只记录实际评估或使用的卡；这里的全量任务仅用于旧流程和历史审计。</p>
             <div id="membership-inventory-progress" class="hint">尚未读取库存任务。</div>
             <div id="membership-card-list" class="table-wrapper mt-24"></div>
             <div id="membership-card-list-result" class="hint"></div>

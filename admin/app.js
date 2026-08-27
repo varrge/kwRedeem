@@ -2392,7 +2392,7 @@ async function refreshMembershipFulfillmentConsole() {
 	<div>旧版 GPT Broker Token（Go 不使用）：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
 	<div>结账执行器：<code>${escapeHtml(dependencies.executor || "go-headless")}</code></div>
 	<div>浏览器扩展：<strong>${dependencies.requiresExtension === false ? "不需要" : "兼容模式"}</strong></div>
-    <div>库存初始化：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
+	<div>历史库存任务：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
     <div>业务时区：${escapeHtml(settings.businessTimezone || "Asia/Shanghai")}</div>
     <div>更新时间：${escapeHtml(settings.updatedAt || "-")}</div>
   `;
@@ -2604,7 +2604,7 @@ async function refreshMembershipInventoryConsole(settings = {}, cardPlatforms = 
     <div>处理：${Number(run.processedCards) || 0}，HOLD：${Number(run.heldCards) || 0}</div>
     <div>最后错误：${escapeHtml(getMembershipInventoryLabel(run.lastErrorCode || platform.lastInventoryError || "-"))}</div>
     <div>更新时间：${escapeHtml(run.updatedAt || "-")}</div>
-  ` : `${escapeHtml(platform.displayName || providerKey)} 暂无库存初始化记录。`;
+  ` : `${escapeHtml(platform.displayName || providerKey)} 暂无历史库存任务；协议自动化不受影响。`;
 
   renderTable(refs.membershipCardList, [
     { label: "卡片", render: (item) => `<code>${escapeHtml(item.display || "-")}</code><br/><span class="hint">${escapeHtml(item.providerKey || providerKey)} / ID ${escapeHtml(item.upstreamCardId)}</span>` },
@@ -2621,7 +2621,7 @@ async function refreshMembershipInventoryConsole(settings = {}, cardPlatforms = 
         && item.reconciliationState === "HOLD" && item.reconciliationReason === "PENDING_SETTLEMENT"
       ? `<button class="ghost-btn small" type="button" data-confirm-plus-lane="${escapeHtml(item.id)}" onclick='confirmMembershipCardPlusLane(${JSON.stringify(item.id)})'>确认为 Plus</button>`
       : "-" }
-  ], cardsPayload.items || [], "暂无已初始化卡片");
+  ], cardsPayload.items || [], "暂无已记录卡片；协议自动化会在订单选卡时按需记录");
   setHint(refs.membershipCardListResult, `已读取 ${cardsPayload.items?.length || 0} 张脱敏卡片`);
 }
 
@@ -7311,7 +7311,7 @@ refs.membershipEfunCardSettingsForm?.addEventListener("submit", async (event) =>
         priority: Number(refs.membershipEfunCardPriority.value)
       })
     });
-    setHint(refs.membershipEfunCardSettingsResult, "EfunCard 配置已加密保存；连接身份变化后需重新初始化该卡台库存");
+    setHint(refs.membershipEfunCardSettingsResult, "EfunCard 配置已加密保存；协议自动化将在订单选卡时实时读取卡台");
     await refreshMembershipFulfillmentConsole();
   } catch (error) {
     setHint(refs.membershipEfunCardSettingsResult, error.message);
@@ -7363,14 +7363,14 @@ refs.membershipFulfillmentBackfillForm?.addEventListener("submit", async (event)
 });
 
 refs.membershipInventoryInitialize?.addEventListener("click", async () => {
-  if (!window.confirm("确认开始完整卡片库存初始化？完成前不会启用自动选卡。")) return;
+  if (!window.confirm("确认导入全部历史卡片用于旧流程与审计？协议自动化无需执行此操作。")) return;
   setButtonBusy(refs.membershipInventoryInitialize, true, "启动中...");
   try {
     await api("/api/admin/membership-inventory/initialize", {
       method: "POST",
       body: JSON.stringify({ providerKey: refs.membershipInventoryPlatform.value })
     });
-    setHint(refs.membershipCardListResult, "库存初始化已启动，Worker 将断点处理全部卡片");
+    setHint(refs.membershipCardListResult, "历史卡片导入已启动，Worker 将断点处理全部卡片");
     await refreshMembershipFulfillmentConsole();
   } catch (error) {
     setHint(refs.membershipCardListResult, error.message);

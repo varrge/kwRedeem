@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { EfunCardOpenApiClient } from "./efuncard-openapi.js";
+import { classifyHistoricalCardFulfillments } from "./membership-fulfillment.js";
 import { SpaceXCardOpenApiClient } from "./spacexcard-openapi.js";
+
+const CARD_TRANSACTION_PAGE_SIZE = 100;
+const MAX_CARD_TRANSACTION_PAGES = 100;
 
 export class AutomationFundingError extends Error {
   constructor(code, message, options = {}) {
@@ -114,6 +118,124 @@ async function listLiveCards(provider) {
   fail("AUTOMATION_CARD_LIST_EXCEEDED", "卡片列表超过安全分页上限", { retryable: true });
 }
 
+async function listCardTransactions(provider, cardId) {
+  const transactions = [];
+  for (let page = 1; page <= MAX_CARD_TRANSACTION_PAGES; page += 1) {
+    const items = await provider.listTransactions(cardId, { page, pageSize: CARD_TRANSACTION_PAGE_SIZE });
+    if (!Array.isArray(items)) {
+      fail("AUTOMATION_CARD_HISTORY_INVALID", "卡台返回的交易记录无效", { retryable: true });
+    }
+    transactions.push(...items);
+    if (items.length < CARD_TRANSACTION_PAGE_SIZE) return transactions;
+  }
+  fail("AUTOMATION_CARD_HISTORY_EXCEEDED", "卡片交易记录超过安全分页上限", { retryable: true });
+}
+
+function upsertDiscoveredSpaceXCard(db, live, classification, capacity, at) {
+  const existing = db.prepare(`
+    SELECT * FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = ?
+  `).get(live.upstreamCardId);
+  const consumed = Math.max(Number(existing?.consumed_slots || 0), Number(classification.consumed || 0));
+  const state = classification.state === "RECONCILIATION_HOLD"
+    ? "HOLD"
+    : (classification.state === "CAPACITY_FULL" || consumed >= capacity ? "CAPACITY_FULL" : "AVAILABLE");
+  db.prepare(`
+    INSERT INTO managed_cards (
+      id, provider_key, upstream_card_id, vm_card_id, product_code, bin, last4,
+      upstream_status, cached_available_amount, lane, consumed_slots,
+      capacity_state, reconciliation_state, reconciliation_reason,
+      last_balance_sync_at, last_transaction_sync_at, created_at, updated_at
+    ) VALUES (?, 'spacexcard', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(provider_key, upstream_card_id) DO UPDATE SET
+      vm_card_id = excluded.vm_card_id,
+      product_code = excluded.product_code,
+      bin = excluded.bin,
+      last4 = excluded.last4,
+      upstream_status = excluded.upstream_status,
+      cached_available_amount = excluded.cached_available_amount,
+      lane = excluded.lane,
+      consumed_slots = excluded.consumed_slots,
+      capacity_state = excluded.capacity_state,
+      reconciliation_state = excluded.reconciliation_state,
+      reconciliation_reason = excluded.reconciliation_reason,
+      last_balance_sync_at = excluded.last_balance_sync_at,
+      last_transaction_sync_at = excluded.last_transaction_sync_at,
+      updated_at = excluded.updated_at
+  `).run(
+    `mc_spacexcard_${live.upstreamCardId}`,
+    live.upstreamCardId,
+    live.vmCardId,
+    live.productCode,
+    live.bin,
+    live.last4,
+    live.status,
+    live.availableAmount,
+    classification.lane,
+    consumed,
+    state,
+    state === "HOLD" ? "HOLD" : "READY",
+    classification.reason,
+    at,
+    at,
+    existing?.created_at || at,
+    at
+  );
+  return db.prepare(`
+    SELECT * FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = ?
+  `).get(live.upstreamCardId);
+}
+
+async function discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at) {
+  const eligibleProducts = new Map(products.filter((product) => product.gptEligible === true)
+    .map((product) => [product.productCode, product]));
+  const slotAmount = automationRiskAllocationUsd(mapping);
+  const ordered = [];
+  for (const live of liveCards.values()) {
+    const existing = db.prepare(`
+      SELECT * FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = ?
+    `).get(live.upstreamCardId);
+    const productCode = live.productCode || existing?.product_code;
+    const product = eligibleProducts.get(productCode);
+    if (String(live.status).toUpperCase() !== "ACTIVE" || !product) continue;
+    const requiredAmount = Math.max(slotAmount, Number(product.minAmount));
+    ordered.push({
+      live,
+      existing,
+      productCode,
+      shortfall: Math.max(0, requiredAmount - Number(live.availableAmount || 0))
+    });
+  }
+  ordered.sort((left, right) => left.shortfall - right.shortfall
+    || String(left.live.upstreamCardId).localeCompare(String(right.live.upstreamCardId)));
+  for (const { live, existing, productCode } of ordered) {
+    const transactions = await listCardTransactions(provider, live.upstreamCardId);
+    const classification = classifyHistoricalCardFulfillments(transactions, { knownLane: existing?.lane });
+    const card = upsertDiscoveredSpaceXCard(db, {
+      ...live,
+      vmCardId: live.vmCardId || existing?.vm_card_id || String(live.upstreamCardId),
+      productCode,
+      bin: live.bin || existing?.bin || null,
+      last4: live.last4 || existing?.last4 || null
+    }, classification, Number(mapping.card_capacity), at);
+    if (card.reconciliation_state !== "READY"
+      || (card.lane && card.lane !== mapping.capacity_key)
+      || Number(card.consumed_slots || 0) >= Number(mapping.card_capacity)
+      || !firstFreeSlot(db, card, mapping)) continue;
+    return [card];
+  }
+  return [];
+}
+
+function selectSpaceXOpenProduct(products, mapping, fundingAmount) {
+  const eligible = products.filter((product) => product.gptEligible === true
+    && Number(product.minAmount) <= fundingAmount
+    && Number(product.maxAmount) >= fundingAmount);
+  return eligible.find((product) => product.productCode === mapping.card_product_code)
+    || eligible.sort((left, right) => Number(left.openFee) - Number(right.openFee)
+      || left.productCode.localeCompare(right.productCode))[0]
+    || null;
+}
+
 function occupiedSlots(db, cardId, capacityKey) {
   const occupied = new Set();
   const legacy = db.prepare(`
@@ -178,17 +300,17 @@ function reserveExistingCard(db, execution, mapping, card, slot, at) {
   }).immediate();
 }
 
-function reserveNewCard(db, execution, mapping, at) {
+function reserveNewCard(db, execution, mapping, at, productCode = mapping.card_product_code) {
   return db.transaction(() => {
     const existing = persistedReservation(db, execution.id);
     if (existing) return existing;
-    if (!mapping.card_product_code) fail("AUTOMATION_CARD_UNAVAILABLE", "没有可用卡片且映射未配置开卡产品", { retryable: true });
+    if (!productCode) fail("AUTOMATION_CARD_UNAVAILABLE", "没有可用卡片且卡台没有可用开卡产品", { retryable: true });
     const id = `acr_${randomUUID()}`;
     db.prepare(`
       INSERT INTO automation_card_reservations (
         id, execution_id, provider_key, planned_product_code, capacity_key, state, reserved_at
       ) VALUES (?, ?, ?, ?, ?, 'reserved', ?)
-    `).run(id, execution.id, mapping.card_platform_key, mapping.card_product_code, mapping.capacity_key, at);
+    `).run(id, execution.id, mapping.card_platform_key, productCode, mapping.capacity_key, at);
     db.prepare(`
       UPDATE automation_executions SET card_reservation_state = 'reserved', updated_at = ? WHERE id = ?
     `).run(at, execution.id);
@@ -364,7 +486,13 @@ export async function prepareAutomationCard(db, input = {}) {
   const fundingAmount = mappingFundingPolicy(mapping).fundingAmount;
   let reservation = persistedReservation(db, execution.id);
   const liveCards = await listLiveCards(provider);
-  let products = null;
+  let products = mapping.card_platform_key === "spacexcard" ? await provider.listProducts() : null;
+  if (products !== null && !Array.isArray(products)) {
+    fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡台返回的卡产品规则无效", { retryable: true });
+  }
+  const openProduct = mapping.card_platform_key === "spacexcard"
+    ? selectSpaceXOpenProduct(products, mapping, fundingAmount)
+    : null;
   const rechargeAmountFor = async (card) => {
     if (!products) {
       if (typeof provider.listProducts !== "function") {
@@ -379,6 +507,9 @@ export async function prepareAutomationCard(db, input = {}) {
     if (!product) {
       fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡片对应的充值产品已不可用", { retryable: true });
     }
+    if (mapping.card_platform_key === "spacexcard" && product.gptEligible !== true) {
+      fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡片产品当前不支持 GPT 支付", { retryable: true });
+    }
     const minimum = usd(product.minimumRechargeAmount ?? product.minAmount, "minimumRechargeAmount");
     const maximum = usd(product.maxAmount, "maximumRechargeAmount", true);
     const amount = usd(Math.max(automationRiskAllocationUsd(mapping), minimum), "rechargeAmount", true);
@@ -389,15 +520,18 @@ export async function prepareAutomationCard(db, input = {}) {
   };
 
   if (!reservation) {
-    const cards = db.prepare(`
-      SELECT * FROM managed_cards
-      WHERE provider_key = ? AND upstream_status = 'ACTIVE' AND reconciliation_state = 'READY'
-        AND capacity_state <> 'HOLD' AND (lane IS NULL OR lane = ?)
-      ORDER BY cached_available_amount DESC, id
-    `).all(mapping.card_platform_key, mapping.capacity_key);
+    const cards = mapping.card_platform_key === "spacexcard"
+      ? await discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at)
+      : db.prepare(`
+        SELECT * FROM managed_cards
+        WHERE provider_key = ? AND upstream_status = 'ACTIVE' AND reconciliation_state = 'READY'
+          AND capacity_state <> 'HOLD' AND (lane IS NULL OR lane = ?)
+        ORDER BY cached_available_amount DESC, id
+      `).all(mapping.card_platform_key, mapping.capacity_key);
     const candidates = [];
     for (const card of cards) {
-      if (mapping.card_product_code && card.product_code !== mapping.card_product_code) continue;
+      if (mapping.card_platform_key !== "spacexcard"
+        && mapping.card_product_code && card.product_code !== mapping.card_product_code) continue;
       const slot = firstFreeSlot(db, card, mapping);
       const live = liveCards.get(Number(card.upstream_card_id));
       if (!slot || !live || String(live.status).toUpperCase() !== "ACTIVE") continue;
@@ -413,7 +547,12 @@ export async function prepareAutomationCard(db, input = {}) {
     if (candidates[0]) {
       reservation = reserveExistingCard(db, execution, mapping, candidates[0].card, candidates[0].slot, at);
     } else {
-      reservation = reserveNewCard(db, execution, mapping, at);
+      if (mapping.card_platform_key === "spacexcard" && !openProduct) {
+        fail("AUTOMATION_CARD_PRODUCT_INVALID", "SpaceX Card 当前没有支持 GPT 支付的卡产品", {
+          retryable: true
+        });
+      }
+      reservation = reserveNewCard(db, execution, mapping, at, openProduct?.productCode);
     }
   }
 
@@ -421,6 +560,14 @@ export async function prepareAutomationCard(db, input = {}) {
     ? db.prepare("SELECT * FROM managed_cards WHERE id = ?").get(reservation.card_id)
     : null;
   if (!card) {
+    if (mapping.card_platform_key === "spacexcard") {
+      const plannedProduct = products.find((product) => product.productCode === reservation.planned_product_code);
+      if (plannedProduct?.gptEligible !== true) {
+        fail("AUTOMATION_CARD_PRODUCT_INVALID", "SpaceX Card 计划开卡产品当前不支持 GPT 支付", {
+          retryable: true
+        });
+      }
+    }
     const holder = typeof getCardholder === "function" ? await getCardholder() : null;
     const firstName = String(holder?.firstName || "").trim();
     const lastName = String(holder?.lastName || "").trim();

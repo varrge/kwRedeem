@@ -36,6 +36,142 @@ test("Plus allocates one fifth of the opening funds to each slot", () => {
   }
 });
 
+test("SpaceX automation discovers and uses a suitable live card without inventory initialization", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-live-card', 'order-live-card', 'KWLIVECARD', 'product-live-card',
+      'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  let openCalls = 0;
+  let rechargeCalls = 0;
+  const provider = {
+    listCards: async () => ({
+      cards: [{
+        upstreamCardId: 9911,
+        vmCardId: "vm-9911",
+        productCode: "P5378OX",
+        availableAmount: 23.1,
+        status: "ACTIVE",
+        bin: "537800",
+        last4: "9911"
+      }],
+      total: 1
+    }),
+    listProducts: async () => [{
+      productCode: "P5378OX",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
+    listTransactions: async () => [{
+      authId: "openai-1",
+      authTime: "2026-08-14T00:00:00Z",
+      authAmount: 20,
+      authCurrency: "USD",
+      settleAmount: 20,
+      settleCurrency: "USD",
+      type: "Settlement",
+      status: "COMPLETE",
+      merchantNormalized: "OPENAI"
+    }],
+    openCard: async () => { openCalls += 1; },
+    rechargeCard: async () => { rechargeCalls += 1; },
+    getCardMaterial: async () => ({
+      number: "5378000000009911",
+      cvv: "123",
+      expiryMonth: "12",
+      expiryYear: "2029"
+    })
+  };
+  const result = await prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-live-card'").get(),
+    mapping: {
+      card_platform_key: "spacexcard",
+      card_product_code: "P5556XV",
+      capacity_key: "plus",
+      card_capacity: 5,
+      funding_amount_usd: 82
+    },
+    decryptText,
+    encryptText,
+    provider,
+    at
+  });
+  const reservation = db.prepare(`
+    SELECT * FROM automation_card_reservations WHERE execution_id = 'execution-live-card'
+  `).get();
+  assert.equal(result.card.upstream_card_id, 9911);
+  assert.equal(result.card.product_code, "P5378OX");
+  assert.equal(result.card.consumed_slots, 1);
+  assert.equal(reservation.slot_index, 2);
+  assert.equal(openCalls, 0);
+  assert.equal(rechargeCalls, 0);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM automation_funding_intents WHERE execution_id = 'execution-live-card'
+  `).get().count, 0);
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-live-card'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-live-card'").run();
+  db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = 9911").run();
+});
+
+test("SpaceX automation does not reserve or fund products currently blocked for GPT", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-blocked-product', 'order-blocked-product', 'KWBLOCKEDPRODUCT',
+      'product-blocked', 'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  let transactionCalls = 0;
+  await assert.rejects(() => prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-blocked-product'").get(),
+    mapping: {
+      card_platform_key: "spacexcard",
+      card_product_code: "P5556XV",
+      capacity_key: "plus",
+      card_capacity: 5,
+      funding_amount_usd: 82
+    },
+    decryptText,
+    encryptText,
+    provider: {
+      listCards: async () => ({
+        cards: [{
+          upstreamCardId: 9912,
+          vmCardId: "vm-9912",
+          productCode: "P5556XV",
+          availableAmount: 82,
+          status: "ACTIVE",
+          last4: "9912"
+        }],
+        total: 1
+      }),
+      listProducts: async () => [{
+        productCode: "P5556XV",
+        openFee: 0.4,
+        minAmount: 20,
+        maxAmount: 50_000,
+        gptEligible: false
+      }],
+      listTransactions: async () => { transactionCalls += 1; return []; }
+    },
+    at
+  }), (error) => error.code === "AUTOMATION_CARD_PRODUCT_INVALID");
+  assert.equal(transactionCalls, 0);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM automation_card_reservations WHERE execution_id = 'execution-blocked-product'
+  `).get().count, 0);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM automation_funding_intents WHERE execution_id = 'execution-blocked-product'
+  `).get().count, 0);
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-blocked-product'").run();
+});
+
 test("an existing Plus card receives one slot amount instead of the remaining card pool", async () => {
   const at = clock.toISOString();
   db.prepare(`
@@ -61,9 +197,12 @@ test("an existing Plus card receives one slot amount instead of the remaining ca
     }),
     listProducts: async () => [{
       productCode: "P5556XV",
+      openFee: 0.4,
       minAmount: 20,
-      maxAmount: 50_000
+      maxAmount: 50_000,
+      gptEligible: true
     }],
+    listTransactions: async () => [],
     rechargeCard: async (input) => {
       rechargeInput = input;
       return { succeeded: true };
@@ -116,6 +255,13 @@ test("a new Plus card still opens with the full 82 USD funding amount", async ()
   let openInput = null;
   const provider = {
     listCards: async () => ({ cards: [], total: 0 }),
+    listProducts: async () => [{
+      productCode: "P5556XV",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
     openCard: async (input) => {
       openInput = input;
       return {
@@ -183,7 +329,14 @@ test("an existing Plus card is not recharged while it already covers one slot", 
       cards: [{ upstreamCardId: 8803, availableAmount: 65, status: "ACTIVE" }],
       total: 1
     }),
-    listProducts: async () => [{ productCode: "P5556XV", minAmount: 20, maxAmount: 50_000 }],
+    listProducts: async () => [{
+      productCode: "P5556XV",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
+    listTransactions: async () => [],
     rechargeCard: async () => { rechargeCalls += 1; },
     getCardMaterial: async () => ({
       number: "5555555555558803",
@@ -600,7 +753,14 @@ test("an exhausted SpaceX GPT card opens a new 82 USD card without erasing the p
   let opened = 0;
   const cardProvider = {
     listCards: async () => ({ cards: liveCards, total: liveCards.length }),
-    listProducts: async () => [{ productCode: "P5556XV", minAmount: 20, maxAmount: 50_000 }],
+    listProducts: async () => [{
+      productCode: "P5556XV",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
+    listTransactions: async () => [],
     openCard: async (input) => {
       opened += 1;
       assert.equal(input.initAmount, 82);
@@ -736,7 +896,7 @@ test("admin retry reuses one definitely-not-created mapping without repeating ca
       id, provider_key, upstream_card_id, vm_card_id, product_code, last4,
       upstream_status, cached_available_amount, lane, consumed_slots,
       capacity_state, reconciliation_state, created_at, updated_at
-    ) VALUES ('card-admin-retry', 'spacexcard', 213357, '213357', 'CARD-PRODUCT', '9992',
+    ) VALUES ('card-admin-retry', 'spacexcard', 213357, '213357', 'OTHER-GPT-PRODUCT', '9992',
       'ACTIVE', 25, 'plus', 0, 'AVAILABLE', 'READY', ?, ?)
   `).run(failedAt, failedAt);
   db.prepare(`

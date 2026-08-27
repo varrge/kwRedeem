@@ -503,7 +503,7 @@ export function createAutomationRunner(options = {}) {
     if (reservation.provider_key !== mapping.card_platform_key
       || reservation.capacity_key !== mapping.capacity_key) return false;
     if (!reservation.card_id && reservation.planned_product_code !== mapping.card_product_code) return false;
-    if (reservation.card_id && mapping.card_product_code) {
+    if (reservation.card_id && mapping.card_product_code && mapping.card_platform_key !== "spacexcard") {
       const card = db.prepare("SELECT product_code FROM managed_cards WHERE id = ?").get(reservation.card_id);
       if (!card || card.product_code !== mapping.card_product_code) return false;
     }

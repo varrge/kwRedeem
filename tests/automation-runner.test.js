@@ -21,6 +21,30 @@ const { AutomationAdapterError } = await import("../shared/src/automation-adapte
 const db = getDb();
 let clock = new Date("2026-08-15T00:00:00.000Z");
 
+function openAiPaymentEvents(prefix, count) {
+  return Array.from({ length: count }, (_, index) => {
+    const authId = `${prefix}-${index + 1}`;
+    const authTime = new Date(Date.UTC(2026, 7, index + 1)).toISOString();
+    const payment = {
+      authId,
+      authTime,
+      authAmount: 20,
+      authCurrency: "USD",
+      merchantNormalized: "OPENAI"
+    };
+    return [
+      { ...payment, type: "Authorization", status: "PENDING" },
+      {
+        ...payment,
+        settleAmount: 20,
+        settleCurrency: "USD",
+        type: "Settlement",
+        status: "COMPLETE"
+      }
+    ];
+  }).flat();
+}
+
 after(() => {
   db.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -116,6 +140,163 @@ test("SpaceX automation discovers and uses a suitable live card without inventor
   db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-live-card'").run();
   db.prepare("DELETE FROM automation_executions WHERE id = 'execution-live-card'").run();
   db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = 9911").run();
+});
+
+test("SpaceX automation skips a Plus card with five payments and uses another live card", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-skip-full-card', 'order-skip-full-card', 'KWSKIPFULLCARD',
+      'product-skip-full-card', 'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  let openCalls = 0;
+  const provider = {
+    listCards: async () => ({
+      cards: [
+        {
+          upstreamCardId: 9920,
+          vmCardId: "vm-9920",
+          productCode: "P5556XV",
+          availableAmount: 50,
+          status: "ACTIVE",
+          last4: "9920"
+        },
+        {
+          upstreamCardId: 9921,
+          vmCardId: "vm-9921",
+          productCode: "P5556XV",
+          availableAmount: 25,
+          status: "ACTIVE",
+          last4: "9921"
+        }
+      ],
+      total: 2
+    }),
+    listProducts: async () => [{
+      productCode: "P5556XV",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
+    listTransactions: async (cardId) => openAiPaymentEvents(
+      `openai-${cardId}`,
+      cardId === 9920 ? 5 : 4
+    ),
+    openCard: async () => { openCalls += 1; },
+    getCardMaterial: async () => ({
+      number: "5555555555559921",
+      cvv: "123",
+      expiryMonth: "12",
+      expiryYear: "2029"
+    })
+  };
+  const result = await prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-skip-full-card'").get(),
+    mapping: {
+      card_platform_key: "spacexcard",
+      card_product_code: "P5556XV",
+      capacity_key: "plus",
+      card_capacity: 5,
+      funding_amount_usd: 82
+    },
+    decryptText,
+    encryptText,
+    provider,
+    at
+  });
+  const fullCard = db.prepare(`
+    SELECT consumed_slots, capacity_state FROM managed_cards
+    WHERE provider_key = 'spacexcard' AND upstream_card_id = 9920
+  `).get();
+  const reservation = db.prepare(`
+    SELECT card_id, slot_index FROM automation_card_reservations
+    WHERE execution_id = 'execution-skip-full-card'
+  `).get();
+  assert.equal(fullCard.consumed_slots, 5);
+  assert.equal(fullCard.capacity_state, "CAPACITY_FULL");
+  assert.equal(result.card.upstream_card_id, 9921);
+  assert.equal(result.card.consumed_slots, 4);
+  assert.equal(reservation.slot_index, 5);
+  assert.equal(openCalls, 0);
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-skip-full-card'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-skip-full-card'").run();
+  db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id IN (9920, 9921)").run();
+});
+
+test("SpaceX automation opens a new card only when every live Plus card has five payments", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-all-cards-full', 'order-all-cards-full', 'KWALLCARDSFULL',
+      'product-all-cards-full', 'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  let openCalls = 0;
+  const provider = {
+    listCards: async () => ({
+      cards: [9930, 9931].map((upstreamCardId) => ({
+        upstreamCardId,
+        vmCardId: `vm-${upstreamCardId}`,
+        productCode: "P5556XV",
+        availableAmount: 50,
+        status: "ACTIVE",
+        last4: String(upstreamCardId)
+      })),
+      total: 2
+    }),
+    listProducts: async () => [{
+      productCode: "P5556XV",
+      openFee: 0.4,
+      minAmount: 20,
+      maxAmount: 50_000,
+      gptEligible: true
+    }],
+    listTransactions: async (cardId) => openAiPaymentEvents(`openai-${cardId}`, 5),
+    openCard: async () => {
+      openCalls += 1;
+      return {
+        upstreamCardId: 9932,
+        vmCardId: "vm-9932",
+        productCode: "P5556XV",
+        availableAmount: 82
+      };
+    },
+    getCardMaterial: async () => ({
+      number: "5555555555559932",
+      cvv: "123",
+      expiryMonth: "12",
+      expiryYear: "2029"
+    })
+  };
+  const result = await prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-all-cards-full'").get(),
+    mapping: {
+      card_platform_key: "spacexcard",
+      card_product_code: "P5556XV",
+      capacity_key: "plus",
+      card_capacity: 5,
+      funding_amount_usd: 82
+    },
+    decryptText,
+    encryptText,
+    provider,
+    getCardholder: async () => ({ firstName: "Test", lastName: "User" }),
+    at
+  });
+  assert.equal(openCalls, 1);
+  assert.equal(result.card.upstream_card_id, 9932);
+  assert.deepEqual(db.prepare(`
+    SELECT operation, amount_usd FROM automation_funding_intents
+    WHERE execution_id = 'execution-all-cards-full'
+  `).get(), { operation: "open", amount_usd: 82 });
+  db.prepare("DELETE FROM automation_funding_intents WHERE execution_id = 'execution-all-cards-full'").run();
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-all-cards-full'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-all-cards-full'").run();
+  db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id IN (9930, 9931, 9932)").run();
 });
 
 test("SpaceX automation does not reserve or fund products currently blocked for GPT", async () => {

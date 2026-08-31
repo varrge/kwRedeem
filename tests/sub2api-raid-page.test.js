@@ -18,9 +18,9 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.match(script, /viewRaidHistory\(campaignId\)/);
   assert.match(script, /updateRaidRewardControls/);
   assert.match(script, /_kwredeem\/sub2api-raid\.html/);
-  assert.match(script, /defaultRaidCardReward\("MVP 第 1 名低级抽奖卡", boss\.level \* 3\)/);
-  assert.match(script, /defaultRaidCardReward\("MVP 第 3 名低级抽奖卡", boss\.level\)/);
-  assert.doesNotMatch(script, /MVP 第 [123] 名额度/);
+  assert.match(script, /defaultRaidGlobalRechargeReward/);
+  assert.match(script, /global_recharge_multiplier/);
+  assert.match(script, /rewardMode === "legacy_mvp"/);
   assert.match(script, /existing\?\.status === "draft"/);
   assert.match(script, /发布后不能修改/);
   assert.match(script, /deleteRaidCampaign\(id\)/);
@@ -30,6 +30,7 @@ test("raid admin exposes campaign, sync, reward, and battlefield controls", () =
   assert.doesNotMatch(html, /raid-damage-threshold/);
   assert.match(script, /data-field="entryCostThreshold"/);
   assert.match(script, /留空则倍率作用于全站/);
+  assert.match(script, /defaultRaidLegacyMvpReward/);
 });
 
 test("production battlefield uses server-confirmed damage and eight switchable licensed assets", () => {
@@ -72,16 +73,12 @@ test("production battlefield exchanges browser auth through the configured API h
     id: "boss-1", sequence: 1, level: 1, name: "测试核心", title: "",
     assetKey: "leviathan", health: 100, remainingHealth: 90, totalDamage: 10,
     status: "active", entryCostThreshold: 10, themeGroupId: null, themeMultiplier: 1,
-    clearReward: { name: "共享额度", type: "balance", amount: 1 },
-    mvpRewards: [
-      { name: "MVP 一等奖", type: "shake_card", quantity: 3 },
-      { name: "MVP 二等奖", type: "shake_card", quantity: 2 },
-      { name: "MVP 三等奖", type: "shake_card", quantity: 1 }
-    ]
+    clearReward: { name: "全服充值加成", type: "global_recharge_multiplier", rechargeMultiplier: 1.2 },
+    mvpRewards: []
   };
   const payload = {
     sessionToken: "raid-token",
-    campaign: { name: "测试战斗", status: "active", bosses: [boss] },
+    campaign: { name: "测试战斗", status: "active", rewardMode: "pve", bosses: [boss] },
     currentBoss: boss,
     enrollment: { enrolledAt: "2026-08-01T00:00:00.000Z" },
     effectiveRaiderCount: 1,
@@ -114,11 +111,46 @@ test("production battlefield exchanges browser auth through the configured API h
   });
   assert.match(dom.window.document.querySelector("#ranking").textContent, /排\*\*\*名/);
   assert.doesNotMatch(dom.window.document.querySelector("#ranking").textContent, /战\*\*\*报/);
-  assert.match(dom.window.document.querySelector("#reward-list").textContent, /MVP 一等奖/);
+  assert.match(dom.window.document.querySelector("#reward-list").textContent, /全站充值 1.20x/);
   assert.match(dom.window.document.querySelector("#my-reward-list").textContent, /我的共享奖励/);
   dom.window.document.querySelector("#refresh-btn").click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(requests[1]?.url, "https://apikey.vsakura.top/api/public/sub2api/raid/bootstrap");
   assert.equal(requests[1].options.headers.get("Authorization"), "Bearer raid-token");
+  dom.window.close();
+});
+
+test("production battlefield preserves legacy MVP rewards and ranking highlights", async () => {
+  const html = fs.readFileSync(path.resolve("web/sub2api-raid.html"), "utf8");
+  const boss = {
+    id: "legacy-boss", sequence: 1, level: 1, name: "旧版核心", title: "",
+    assetKey: "sentinel", health: 100, remainingHealth: 80, totalDamage: 20,
+    status: "active", entryCostThreshold: 10, themeGroupId: null, themeMultiplier: 1,
+    clearReward: { name: "共享额度", type: "balance", amount: 1 },
+    mvpRewards: [{ name: "MVP 一等奖", type: "shake_card", quantity: 3 }]
+  };
+  const payload = {
+    sessionToken: "legacy-token",
+    campaign: { name: "旧版活动", status: "active", rewardMode: "legacy_mvp", bosses: [boss] },
+    currentBoss: boss,
+    enrollment: { enrolledAt: "2026-08-01T00:00:00.000Z" },
+    effectiveRaiderCount: 10,
+    mvpSlots: 1,
+    ranking: [{ rank: 1, userId: "53", maskedName: "旧***将", actualCost: 20, damage: 20 }],
+    own: { rank: 1, userId: "53", actualCost: 20, damage: 20, effective: true },
+    battleLog: [], rewards: [], history: [], sync: null
+  };
+  const dom = new JSDOM(html, {
+    runScripts: "dangerously",
+    url: "https://sub.vsakura.top/_kwredeem/sub2api-raid.html?connectionId=main&token=browser-token",
+    beforeParse(window) {
+      window.KAWANG_CONFIG = { apiUrl: "https://apikey.vsakura.top" };
+      window.fetch = async () => ({ ok: true, status: 200, json: async () => payload });
+    }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(dom.window.document.querySelector("#reward-list").textContent, /MVP 一等奖/);
+  assert.equal(dom.window.document.querySelector("#mvp-slots").textContent, "TOP 1");
+  assert.ok(dom.window.document.querySelector("#ranking .rank").classList.contains("mvp"));
   dom.window.close();
 });

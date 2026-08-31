@@ -3705,6 +3705,33 @@ const sub2apiRaidService = createSub2ApiRaidService({
       }
     );
     return unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text;
+  },
+  async setGlobalRechargeMultiplier({ connectionId, multiplier, idempotencyKey }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/payment/config", {
+      method: "PUT",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: { balance_recharge_multiplier: Number(multiplier) }
+    });
+    return unwrapSub2ApiRemoteData(result.json) ?? result.json ?? result.text;
+  },
+  async getGlobalRechargeMultiplier({ connectionId }) {
+    const connection = getSub2ApiConnectionById(connectionId);
+    if (!connection || connection.status !== sub2apiConnectionStatuses.active) {
+      const error = new Error("Sub2api 连接不存在或未启用");
+      error.statusCode = 404;
+      throw error;
+    }
+    const result = await callSub2ApiRemote(connection, "/api/v1/admin/payment/config");
+    const config = unwrapSub2ApiRemoteData(result.json) ?? result.json;
+    const multiplier = Number(config?.balance_recharge_multiplier ?? config?.balanceRechargeMultiplier);
+    if (!(multiplier > 0)) throw new Error("Sub2api 未返回有效的全站充值倍率");
+    return multiplier;
   }
 });
 

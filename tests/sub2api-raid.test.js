@@ -122,7 +122,7 @@ function boss(level, health, entryCostThreshold, options = {}) {
     themeGroupName: "高速中转",
     themeMultiplier: 1.25,
     clearReward: reward(`Clear ${level}`),
-    mvpRewards: [reward(`MVP ${level}-1`), reward(`MVP ${level}-2`), reward(`MVP ${level}-3`)],
+    mvpRewards: [],
     ...options
   };
 }
@@ -152,6 +152,7 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
     body: campaignConfig
   });
   assert.equal(created.statusCode, 201);
+  assert.equal(created.body.campaign.rewardMode, "pve");
   assert.deepEqual(created.body.campaign.bosses.map((item) => item.entryCostThreshold), [9, 15]);
   campaignId = created.body.campaign.id;
   const published = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", {
@@ -244,6 +245,64 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(adminHistory.body.bosses[0].ranking[0].identity.userId, "7");
   await raid.deliverPendingRewards(campaignId);
   assert.equal(balanceDeliveries, 1);
+});
+
+test("legacy MVP campaigns keep dynamic winner settlement after the PVE upgrade", async () => {
+  db.prepare(`
+    INSERT INTO sub2api_connections (
+      id, name, base_url, admin_token, status, created_by, created_at, updated_at
+    ) VALUES ('raid-legacy', '旧版 MVP 测试', 'https://legacy.example.com', 'token', 'active', 'admin', ?, ?)
+  `).run(currentNow, currentNow);
+  const created = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns", {
+    body: {
+      connectionId: "raid-legacy",
+      name: "旧版 MVP 活动",
+      month: "2026-08",
+      startAt: "2026-07-31T16:00:00.000Z",
+      endAt: "2026-08-31T16:00:00.000Z",
+      settlementEndAt: "2026-08-31T16:10:00.000Z",
+      effectiveDamageThreshold: 1,
+      rewardBudget: 100,
+      bosses: [boss(1, 10, 1, { themeGroupId: null, themeGroupName: "", themeMultiplier: 1 })]
+    }
+  });
+  assert.equal(created.body.campaign.rewardMode, "pve");
+  db.prepare("UPDATE sub2api_raid_campaigns SET reward_mode = 'legacy_mvp' WHERE id = ?").run(created.body.campaign.id);
+  db.prepare("UPDATE sub2api_raid_bosses SET mvp_rewards = ? WHERE campaign_id = ?")
+    .run(JSON.stringify([reward("MVP 1"), reward("MVP 2"), reward("MVP 3")]), created.body.campaign.id);
+  const published = await app.injectRoute("POST", "/api/admin/sub2api/raid/campaigns/:id/publish", {
+    params: { id: created.body.campaign.id }
+  });
+  assert.equal(published.body.campaign.rewardMode, "legacy_mvp");
+  assert.equal(published.body.campaign.bosses[0].mvpRewards.length, 3);
+
+  for (let userId = 1; userId <= 10; userId += 1) {
+    await app.injectRoute("POST", "/api/public/sub2api/raid/enroll", {
+      sub2apiRaid: { connectionId: "raid-legacy", userId: String(userId), username: `legacy-${userId}` }
+    });
+    remoteUsageItems.push({
+      connection_id: "raid-legacy",
+      id: 500 + userId,
+      user_id: userId,
+      actual_cost: 1,
+      group_id: 1,
+      created_at: `2026-08-01T00:01:${String(userId).padStart(2, "0")}.000Z`
+    });
+  }
+  for (let sync = 0; sync < 3; sync += 1) {
+    await app.injectRoute("POST", "/api/admin/sub2api/raid/connections/:id/sync-usage", {
+      params: { id: "raid-legacy" }
+    });
+  }
+
+  const settlement = db.prepare("SELECT * FROM sub2api_raid_settlements WHERE campaign_id = ?").get(created.body.campaign.id);
+  assert.equal(settlement.mvp_slots, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_rewards WHERE settlement_id = ? AND reward_scope = 'clear'").get(settlement.id).count, 10);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_rewards WHERE settlement_id = ? AND reward_scope = 'mvp'").get(settlement.id).count, 1);
+});
+
+test("raid MVP slots keep the legacy participant boundaries", () => {
+  assert.deepEqual([9, 10, 19, 20, 29, 30].map(getRaidMvpSlots), [0, 1, 1, 2, 2, 3]);
 });
 
 test("raid battle log aggregates each player's damage by authoritative minute", async () => {
@@ -340,7 +399,7 @@ test("raid reports an existing connection-month campaign without leaking a SQLit
 
 test("raid refuses a shake-card reward without a positive internal cost", async () => {
   const invalidBoss = boss(1, 10);
-  invalidBoss.mvpRewards[0] = {
+  invalidBoss.clearReward = {
     name: "MVP 高级抽奖卡",
     type: "shake_card",
     quantity: 1,
@@ -364,10 +423,6 @@ test("raid refuses a shake-card reward without a positive internal cost", async 
   });
   assert.equal(rejected.statusCode, 400);
   assert.match(rejected.body.message, /内部成本/);
-});
-
-test("raid MVP slots follow the confirmed participant boundaries", () => {
-  assert.deepEqual([9, 10, 19, 20, 29, 30].map(getRaidMvpSlots), [0, 1, 1, 2, 2, 3]);
 });
 
 test("raid tie ordering is deterministic by the stable numeric user ID", () => {

@@ -994,7 +994,7 @@
             <div class="metric"><span>全站伤害</span><strong id="total-damage">0.00</strong></div>
             <div class="metric"><span>有效参战者</span><strong id="raider-count">0 人</strong></div>
             <div class="metric"><span>伤害倍率</span><strong class="cyan" id="theme-group">全站伤害 · 1.0x</strong></div>
-            <div class="metric"><span>当前 MVP 名额</span><strong class="amber" id="mvp-slots">TOP 0</strong></div>
+            <div class="metric"><span id="reward-mode-label">PVE 模式</span><strong class="amber" id="mvp-slots">全服协作</strong></div>
           </div>
 
           <!-- Bottom Console: Clear separation between Health, Player Status and Action Button -->
@@ -1071,7 +1071,7 @@
           <div class="section-head">
             <div>
               <h2 id="rewards-heading">当前 Boss 奖励</h2>
-              <p>击杀共享奖励按门槛发放，MVP 奖励由有效参战人数动态解锁。</p>
+              <p id="reward-description">全服协作击杀后立即解锁奖励，不再按个人名次分配 MVP。</p>
             </div>
           </div>
           <div class="rewards" id="reward-list"></div>
@@ -1081,7 +1081,7 @@
           <div class="section-head">
             <div>
               <h2 id="my-reward-heading">我的活动奖励</h2>
-              <p>由 KaWang API 自动发放；额度与抽奖卡默认自动入账，特殊权益需审核。</p>
+              <p id="my-reward-description">全站充值倍率由 KaWang 自动生效，并在北京时间自然月结束后恢复 1x。</p>
             </div>
           </div>
           <div class="list" id="my-reward-list"></div>
@@ -1143,6 +1143,7 @@
           totalDamage: document.querySelector("#total-damage"),
           raiderCount: document.querySelector("#raider-count"),
           themeGroup: document.querySelector("#theme-group"),
+          rewardModeLabel: document.querySelector("#reward-mode-label"),
           mvpSlots: document.querySelector("#mvp-slots"),
           healthCurrent: document.querySelector("#health-current"),
           healthMax: document.querySelector("#health-max"),
@@ -1156,8 +1157,10 @@
           ranking: document.querySelector("#ranking"),
           rankNote: document.querySelector("#rank-note"),
           rewardList: document.querySelector("#reward-list"),
+          rewardDescription: document.querySelector("#reward-description"),
           myRewardPanel: document.querySelector("#my-reward-panel"),
           myRewardList: document.querySelector("#my-reward-list"),
+          myRewardDescription: document.querySelector("#my-reward-description"),
           historyPanel: document.querySelector("#history-panel"),
           historyTabs: document.querySelector("#history-tabs"),
           historyDetail: document.querySelector("#history-detail"),
@@ -1256,6 +1259,7 @@
           if (reward.type === "shake_card") return `${reward.name || "活动抽奖卡"} ×${reward.quantity || 1}`;
           if (reward.type === "subscription") return `订阅套餐 · ${reward.validityDays || 0} 天`;
           if (reward.type === "rate_multiplier") return `限时 ${number(reward.rateMultiplier)}x · ${reward.durationDays || 0} 天`;
+          if (reward.type === "global_recharge_multiplier") return `全站充值 ${number(reward.rechargeMultiplier)}x · 月末恢复 1x`;
           return reward.name || "全域奖励";
         }
 
@@ -1265,6 +1269,9 @@
             pending: "待发放",
             delivery_failed: "发放失败",
             delivered: "已成功发放",
+            expired: "已到期恢复 1x",
+            revert_failed: "月末恢复失败",
+            superseded: "已被后续阶段取代",
             disqualified: "已取消资格",
             voided: "已作废"
           }[status] || status;
@@ -1319,7 +1326,21 @@
           }).join("");
         }
 
-        function renderRewards(boss, effectiveRaiders, mvpSlots) {
+        function renderRewards(boss, effectiveRaiders, mvpSlots, legacyMvp) {
+          if (!legacyMvp) {
+            const globalRecharge = boss.clearReward?.type === "global_recharge_multiplier";
+            const status = globalRecharge ? ({
+              pending: "待自动生效",
+              delivery_failed: "生效失败，等待重试",
+              delivered: "已解锁并生效",
+              expired: "已到期并恢复 1x",
+              revert_failed: "月末恢复失败，等待重试",
+              superseded: "已被后续阶段取代"
+            }[boss.globalRewardStatus] || (boss.status === "defeated" ? "正在完成倍率对账" : "击败当前 Boss 后自动生效"))
+              : boss.status === "defeated" ? "已完成参战者奖励结算" : "达到入榜门槛的参战者在击败后获得";
+            refs.rewardList.innerHTML = `<article class="reward glass clear"><span>${globalRecharge ? "PVE 全服击杀奖励" : "PVE 有效参战奖励"}</span><strong>${escapeHtml(rewardText(boss.clearReward))}</strong><small>${escapeHtml(status)}</small></article>`;
+            return;
+          }
           const rewards = [
             { label: "击杀共享奖励", reward: boss.clearReward, clear: true, unlocked: effectiveRaiders > 0 },
             ...(boss.mvpRewards || []).map((reward, index) => ({
@@ -1329,30 +1350,39 @@
           refs.rewardList.innerHTML = rewards.map((item) => `<article class="reward glass ${item.clear ? "clear" : ""}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(rewardText(item.reward))}</strong><small>${item.unlocked ? "当前已解锁" : item.clear ? "达到本 Boss 入榜消耗门槛后解锁" : `需要 ${Math.max(10, (Number(item.label.match(/\d+/)?.[0]) || 1) * 10)} 名有效参战者`}</small></article>`).join("");
         }
 
-        function renderOwnRewards(items) {
+        function renderOwnRewards(items, legacyMvp) {
           refs.myRewardPanel.hidden = !items.length;
-          refs.myRewardList.innerHTML = items.map((item) => `<div class="row"><div><strong>${escapeHtml(item.reward?.name || "Boss 奖励")}</strong><br><span>${escapeHtml(item.scope === "mvp" ? `MVP 第 ${item.finalRank || item.originalRank} 名` : "击杀共享奖励")} · ${escapeHtml(rewardText(item.reward))}</span></div><div class="row-value"><strong>${escapeHtml(rewardStatus(item.status))}</strong>${item.errorMessage ? `<br><span>${escapeHtml(item.errorMessage)}</span>` : ""}</div></div>`).join("");
+          refs.myRewardList.innerHTML = items.map((item) => {
+            const scope = legacyMvp
+              ? item.scope === "mvp" ? `MVP 第 ${item.finalRank || item.originalRank} 名` : "击杀共享奖励"
+              : item.scope === "global" ? "PVE 全服奖励" : "参战奖励";
+            return `<div class="row"><div><strong>${escapeHtml(item.reward?.name || "Boss 奖励")}</strong><br><span>${escapeHtml(scope)} · ${escapeHtml(rewardText(item.reward))}</span></div><div class="row-value"><strong>${escapeHtml(rewardStatus(item.status))}</strong>${item.errorMessage ? `<br><span>${escapeHtml(item.errorMessage)}</span>` : ""}</div></div>`;
+          }).join("");
         }
 
-        function renderHistory(items) {
+        function renderHistory(items, legacyMvp) {
           refs.historyPanel.hidden = !items.length;
           if (!items.length) return;
           if (!items.some((item) => item.boss.id === state.historyBossId)) state.historyBossId = items.at(-1).boss.id;
           refs.historyTabs.innerHTML = items.map((item) => `<button class="history-tab" type="button" role="tab" data-history-boss="${escapeHtml(item.boss.id)}" aria-selected="${item.boss.id === state.historyBossId}">LV.${String(item.boss.level).padStart(2, "0")} ${escapeHtml(item.boss.name)}</button>`).join("");
           const selected = items.find((item) => item.boss.id === state.historyBossId) || items.at(-1);
-          const winners = selected.finalWinners?.length
-            ? selected.finalWinners.map((winner) => `${winner.rank}. ${winner.maskedName}`).join(" · ")
-            : "本场未解锁 MVP";
+          const rewardResult = legacyMvp
+            ? selected.finalWinners?.length
+              ? selected.finalWinners.map((winner) => `${winner.rank}. ${winner.maskedName}`).join(" · ")
+              : "本场未解锁 MVP"
+            : selected.boss.clearReward?.type === "global_recharge_multiplier"
+              ? `全站充值 ${number(selected.boss.clearReward.rechargeMultiplier)}x`
+              : rewardText(selected.boss.clearReward);
           const result = selected.defeatedAt ? "已击败" : selected.boss.status === "aborted" ? "活动中止" : "月末未击败 · 参战纪念";
           refs.historyDetail.innerHTML = `
             <div class="history-summary">
               <div><span>战斗结果</span><strong>${escapeHtml(result)}</strong></div>
               <div><span>全站伤害</span><strong>${number(selected.totalDamage)}</strong></div>
-              <div><span>有效参战 / MVP</span><strong>${selected.effectiveRaiderCount} 人 / ${selected.mvpSlots} 席</strong></div>
+              <div><span>${legacyMvp ? "有效参战 / MVP" : "有效参战"}</span><strong>${selected.effectiveRaiderCount} 人${legacyMvp ? ` / ${selected.mvpSlots} 席` : ""}</strong></div>
               <div><span>我的战绩</span><strong>${selected.own ? selected.own.effective ? `第 ${selected.own.rank} 名 · ${number(selected.own.damage)}` : `消耗 ${number(selected.own.actualCost)} · 未入榜` : "未产生贡献"}</strong></div>
             </div>
-            <div class="section-head" style="margin-top:18px"><h2>最终贡献榜</h2><p>${escapeHtml(winners)}</p></div>
-            <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`}</div>`;
+            <div class="section-head" style="margin-top:18px"><h2>最终贡献榜</h2><p>${escapeHtml(rewardResult)}</p></div>
+            <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${legacyMvp && item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`}</div>`;
         }
 
         function renderBossAsset(assetKey) {
@@ -1384,6 +1414,7 @@
           persistRefreshedAuth(payload);
           if (payload.sessionToken) state.sessionToken = payload.sessionToken;
           if (!payload.campaign) return showStatus("当前连接没有已开始的 Boss 活动。");
+          const legacyMvp = payload.campaign.rewardMode === "legacy_mvp";
           const boss = payload.currentBoss || [...payload.campaign.bosses].reverse().find((item) => item.status !== "locked");
           if (!boss) return showStatus("本月活动尚未开放战斗。");
           const historical = (payload.history || []).find((item) => item.boss.id === boss.id);
@@ -1418,9 +1449,18 @@
           refs.totalDamage.textContent = number(historical?.totalDamage ?? boss.totalDamage);
           refs.raiderCount.textContent = `${historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount} 人`;
           refs.themeGroup.textContent = boss.themeGroupId ? `${boss.themeGroupName || `分组 ${boss.themeGroupId}`} · ${boss.themeMultiplier}x` : `全站伤害 · ${boss.themeMultiplier}x`;
-          refs.mvpSlots.textContent = `TOP ${historical?.mvpSlots ?? payload.mvpSlots}`;
+          refs.rewardModeLabel.textContent = legacyMvp ? "当前 MVP 名额" : "PVE 模式";
+          refs.mvpSlots.textContent = legacyMvp ? `TOP ${historical?.mvpSlots ?? payload.mvpSlots}` : "全服协作";
+          refs.rewardDescription.textContent = legacyMvp ? "击杀共享奖励按门槛发放，MVP 奖励由有效参战人数动态解锁。" : "全服协作击杀后立即解锁奖励，不再按个人名次分配 MVP。";
+          refs.myRewardDescription.textContent = legacyMvp
+            ? "由 KaWang API 自动发放；额度与抽奖卡默认自动入账，特殊权益需审核。"
+            : boss.clearReward?.type === "global_recharge_multiplier"
+              ? "全站充值倍率由 KaWang 自动生效，并在北京时间自然月结束后恢复 1x。"
+              : "达到本 Boss 入榜消耗门槛的参战者将在击败后获得奖励。";
           refs.syncTime.textContent = payload.sync?.lastSyncedAt ? `上次同步 ${formatTime(payload.sync.lastSyncedAt)}` : "尚未同步";
-          refs.rankNote.textContent = `本 Boss 实际消耗达到 ${number(boss.entryCostThreshold)} 后入榜 · 当前 ${payload.mvpSlots} 个 MVP 名额`;
+          refs.rankNote.textContent = legacyMvp
+            ? `本 Boss 实际消耗达到 ${number(boss.entryCostThreshold)} 后入榜 · 当前 ${payload.mvpSlots} 个 MVP 名额`
+            : `本 Boss 实际消耗达到 ${number(boss.entryCostThreshold)} 后进入贡献榜；名次不影响 PVE 奖励`;
           refs.enrollBtn.disabled = battleFinished || Boolean(payload.enrollment) || payload.campaign.status !== "active";
           refs.enrollBtn.textContent = battleFinished ? "本月战斗已结束" : payload.enrollment ? "已加入本月战斗" : payload.campaign.status === "active" ? "加入本月战斗" : "当前不可加入";
           refs.playerNote.textContent = battleFinished
@@ -1430,16 +1470,16 @@
             : "加入后仅统计此刻之后的真实消耗";
 
           renderRoute(payload.campaign.bosses || [], boss.id);
-          renderRewards(boss, historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount, historical?.mvpSlots ?? payload.mvpSlots);
-          renderOwnRewards(payload.rewards || []);
-          renderHistory(payload.history || []);
+          renderRewards(boss, historical?.effectiveRaiderCount ?? payload.effectiveRaiderCount, historical?.mvpSlots ?? payload.mvpSlots, legacyMvp);
+          renderOwnRewards(payload.rewards || [], legacyMvp);
+          renderHistory(payload.history || [], legacyMvp);
 
           const items = payload.battleLog || [];
           refs.battleLog.innerHTML = items.length ? items.map((item) => `<div class="row"><div><strong>${escapeHtml(item.maskedName)} 命中核心</strong><br><span>实际消耗 ${number(item.actualCost)}${item.bonusDamage > 0 ? ` · 主题加成 +${number(item.bonusDamage)}` : ""}</span></div><div class="row-value"><strong>+${number(item.damage)}</strong><br><span>${escapeHtml(formatTime(item.occurredAt))}</span></div></div>`).join("") : `<div class="row"><span>等待第一条权威战报</span></div>`;
           const ranking = battleFinished ? historical?.ranking || [] : payload.ranking || [];
           const own = battleFinished ? historical?.own : payload.own;
           const slots = historical?.mvpSlots ?? payload.mvpSlots;
-          refs.ranking.innerHTML = ranking.length ? ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`;
+          refs.ranking.innerHTML = ranking.length ? ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === own?.userId ? "is-own" : ""}"><span class="rank ${legacyMvp && item.rank <= slots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`;
         }
 
         async function refresh() {
@@ -1493,7 +1533,7 @@
           const button = event.target.closest("[data-history-boss]");
           if (!button || !state.payload) return;
           state.historyBossId = button.dataset.historyBoss;
-          renderHistory(state.payload.history || []);
+          renderHistory(state.payload.history || [], state.payload.campaign?.rewardMode === "legacy_mvp");
         });
         refs.battlefield.addEventListener("pointermove", (event) => {
           const bounds = refs.battlefield.getBoundingClientRect();

@@ -68,7 +68,7 @@ test("production routes authenticate raid administration and keep published rule
       themeGroupName: "高速中转",
       themeMultiplier: 1.25,
       clearReward: reward("共享额度"),
-      mvpRewards: [reward("第一名", 20, "review"), reward("第二名", 10, "review"), reward("第三名", 5, "review")]
+      mvpRewards: []
     }]
   };
   const created = await app.inject({

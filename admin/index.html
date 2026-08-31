@@ -2105,7 +2105,7 @@
         <section class="tab-panel hidden" data-panel="sub2api-raid">
           <div class="content-header">
             <h2>月度 Boss 突袭</h2>
-            <p>配置逐级 Boss、主题伤害、动态 MVP 奖励与履约队列</p>
+            <p>配置逐级 PVE Boss、主题伤害与全站击杀奖励</p>
           </div>
 
           <div class="grid grid-2 raid-admin-layout">
@@ -2180,8 +2180,10 @@
                   <option value="awaiting_review">待审核</option>
                   <option value="pending">待发放</option>
                   <option value="delivery_failed">发放失败</option>
+                  <option value="revert_failed">月末恢复失败</option>
                   <option value="delivered">已发放</option>
-                  <option value="disqualified">已取消资格</option>
+                  <option value="expired">已到期恢复</option>
+                  <option value="superseded">已被后续阶段取代</option>
                   <option value="voided">已作废</option>
                 </select>
                 <button id="raid-reward-refresh-btn" type="button" class="ghost-btn small">查询</button>

@@ -608,6 +608,7 @@ let sub2apiConnectionsCache = [];
 let shakeCampaignsCache = [];
 let raidCampaignsCache = [];
 let raidShakeCampaignsCache = [];
+let raidEditorRewardMode = "pve";
 let sub2apiInvitesCache = [];
 let sub2apiRebatesCache = [];
 let sub2apiLevelsCache = [];
@@ -732,6 +733,8 @@ const STATUS_LABELS = {
   selected: "待发放",
   delivered: "已发放",
   delivery_failed: "发放失败",
+  revert_failed: "月末恢复失败",
+  superseded: "已被后续阶段取代",
   voided: "已作废",
   expired: "已过期",
   retrying: "重试中",
@@ -4718,40 +4721,63 @@ const RAID_ASSETS = {
   singularity: "奇点核心"
 };
 
-function defaultRaidBalanceReward(name, amount, fulfillmentMode = "auto") {
-  return { name, type: "balance", amount, cost: amount, fulfillmentMode, cardTier: "low" };
+function defaultRaidGlobalRechargeReward(level, rechargeMultiplier) {
+  return {
+    name: `LV.${level} 全站充值 ${rechargeMultiplier}x`,
+    type: "global_recharge_multiplier",
+    rechargeMultiplier,
+    cost: level * 100,
+    fulfillmentMode: "auto"
+  };
 }
 
-function defaultRaidCardReward(name, quantity) {
+function defaultRaidPveBoss(level, overrides = {}) {
+  const rechargeMultiplier = Math.min(5, 1 + level * 0.05);
   return {
-    name,
-    type: "shake_card",
-    quantity,
-    shakeCampaignId: "",
-    cardTier: "low",
-    cost: 0,
-    fulfillmentMode: "auto"
+    level,
+    name: `Boss ${level}`,
+    title: "月度突袭目标",
+    assetKey: "sentinel",
+    health: 2000,
+    entryCostThreshold: 10,
+    themeGroupId: null,
+    themeGroupName: "",
+    themeMultiplier: 1,
+    clearReward: defaultRaidGlobalRechargeReward(level, rechargeMultiplier),
+    mvpRewards: [],
+    ...overrides
+  };
+}
+
+function defaultRaidLegacyMvpReward(name, quantity) {
+  return { name, type: "shake_card", quantity, shakeCampaignId: "", cardTier: "low", cost: quantity, fulfillmentMode: "auto" };
+}
+
+function defaultRaidLegacyBoss(level) {
+  return {
+    level,
+    name: `Boss ${level}`,
+    title: "月度突袭目标",
+    assetKey: "sentinel",
+    health: 2000,
+    entryCostThreshold: 10,
+    themeGroupId: null,
+    themeGroupName: "",
+    themeMultiplier: 1,
+    clearReward: { name: `LV.${level} 共享额度`, type: "balance", amount: 1, cost: 1, fulfillmentMode: "auto" },
+    mvpRewards: [3, 2, 1].map((quantity, index) => defaultRaidLegacyMvpReward(`MVP 第 ${index + 1} 名低级抽奖卡`, level * quantity))
   };
 }
 
 function defaultRaidBosses() {
   return [
-    { level: 1, name: "封锁者", title: "边界防御节点", assetKey: "sentinel", health: 2000, clearAmount: 0.2 },
-    { level: 2, name: "装甲核心·利维坦", title: "中转网络重装核心", assetKey: "leviathan", health: 4000, clearAmount: 0.3 },
-    { level: 3, name: "棱镜母体", title: "多路复用控制母体", assetKey: "prism", health: 7000, clearAmount: 0.5 },
-    { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, clearAmount: 1 }
-  ].map((boss) => ({
+    { level: 1, name: "封锁者", title: "边界防御节点", assetKey: "sentinel", health: 2000, rechargeMultiplier: 1.05 },
+    { level: 2, name: "装甲核心·利维坦", title: "中转网络重装核心", assetKey: "leviathan", health: 4000, rechargeMultiplier: 1.1 },
+    { level: 3, name: "棱镜母体", title: "多路复用控制母体", assetKey: "prism", health: 7000, rechargeMultiplier: 1.15 },
+    { level: 4, name: "零号主机", title: "月度最终目标", assetKey: "zero-core", health: 11000, rechargeMultiplier: 1.2 }
+  ].map((boss) => defaultRaidPveBoss(boss.level, {
     ...boss,
-    entryCostThreshold: 10,
-    themeGroupId: null,
-    themeGroupName: "",
-    themeMultiplier: 1,
-    clearReward: defaultRaidBalanceReward(`LV.${boss.level} 共享额度`, boss.clearAmount),
-    mvpRewards: [
-      defaultRaidCardReward("MVP 第 1 名低级抽奖卡", boss.level * 3),
-      defaultRaidCardReward("MVP 第 2 名低级抽奖卡", boss.level * 2),
-      defaultRaidCardReward("MVP 第 3 名低级抽奖卡", boss.level)
-    ]
+    clearReward: defaultRaidGlobalRechargeReward(boss.level, boss.rechargeMultiplier)
   }));
 }
 
@@ -4761,25 +4787,28 @@ function raidShakeCampaignOptions(selected = "") {
     .join("");
 }
 
-function renderRaidRewardRow(scope, reward = {}) {
-  const value = reward.type === "shake_card" ? reward.quantity : reward.amount;
-  const advancedOptions = scope === "clear" ? "" : `
+function renderRaidRewardRow(scope, reward = {}, rewardMode = raidEditorRewardMode) {
+  const legacyMvp = rewardMode === "legacy_mvp";
+  const value = reward.type === "shake_card"
+    ? reward.quantity
+    : reward.type === "global_recharge_multiplier" ? reward.rechargeMultiplier : reward.amount;
+  const advancedOptions = legacyMvp && scope !== "clear" ? `
       <label class="field raid-reward-advanced" data-reward-field="subscriptionGroupId"><span>订阅分组 ID</span><input data-field="subscriptionGroupId" type="number" min="1" step="1" value="${escapeHtml(reward.subscriptionGroupId ?? "")}" /></label>
       <label class="field raid-reward-advanced" data-reward-field="validityDays"><span>订阅天数</span><input data-field="validityDays" type="number" min="1" max="365" step="1" value="${escapeHtml(reward.validityDays ?? 7)}" /></label>
       <label class="field raid-reward-advanced" data-reward-field="rateGroupId"><span>倍率分组 ID</span><input data-field="rateGroupId" type="number" min="1" step="1" value="${escapeHtml(reward.rateGroupId ?? "")}" /></label>
       <label class="field raid-reward-advanced" data-reward-field="rateMultiplier"><span>绝对倍率</span><input data-field="rateMultiplier" type="number" min="0.01" max="1" step="0.01" value="${escapeHtml(reward.rateMultiplier ?? 0.8)}" /></label>
       <label class="field raid-reward-advanced" data-reward-field="durationDays"><span>倍率天数</span><input data-field="durationDays" type="number" min="1" max="90" step="1" value="${escapeHtml(reward.durationDays ?? 7)}" /></label>
       <label class="field raid-reward-advanced" data-reward-field="usageCap"><span>优惠用量上限</span><input data-field="usageCap" type="number" min="0.01" step="0.01" value="${escapeHtml(reward.usageCap ?? 100)}" /></label>
-      <label class="field raid-reward-advanced" data-reward-field="fallbackAmount"><span>冲突备用额度</span><input data-field="fallbackAmount" type="number" min="0" step="0.01" value="${escapeHtml(reward.fallbackAmount ?? 0)}" /></label>`;
+      <label class="field raid-reward-advanced" data-reward-field="fallbackAmount"><span>冲突备用额度</span><input data-field="fallbackAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(reward.fallbackAmount ?? 1)}" /></label>` : "";
   return `
     <div class="raid-reward-row" data-raid-reward="${escapeHtml(scope)}">
-      <strong>${escapeHtml({ clear: "共享", mvp1: "MVP 1", mvp2: "MVP 2", mvp3: "MVP 3" }[scope] || scope)}</strong>
+      <strong>${escapeHtml(legacyMvp ? ({ clear: "共享", mvp1: "MVP 1", mvp2: "MVP 2", mvp3: "MVP 3" }[scope] || scope) : "PVE 击杀奖励")}</strong>
       <label class="field"><span>奖品名称</span><input data-field="name" maxlength="100" value="${escapeHtml(reward.name || "")}" required /></label>
-      <label class="field"><span>类型</span><select data-field="type"><option value="balance" ${reward.type === "balance" || !reward.type ? "selected" : ""}>额度</option><option value="shake_card" ${reward.type === "shake_card" ? "selected" : ""}>抽奖卡</option>${scope === "clear" ? "" : `<option value="subscription" ${reward.type === "subscription" ? "selected" : ""}>订阅套餐</option><option value="rate_multiplier" ${reward.type === "rate_multiplier" ? "selected" : ""}>限时倍率</option>`}</select></label>
-      <label class="field"><span>金额 / 数量</span><input data-field="value" type="number" min="0.01" step="0.01" value="${escapeHtml(value ?? 1)}" required /></label>
+      <label class="field"><span>类型</span><select data-field="type">${legacyMvp ? "" : `<option value="global_recharge_multiplier" ${reward.type === "global_recharge_multiplier" ? "selected" : ""}>全站充值倍率</option>`}<option value="balance" ${reward.type === "balance" || !reward.type ? "selected" : ""}>${legacyMvp ? "额度" : "参战额度"}</option><option value="shake_card" ${reward.type === "shake_card" ? "selected" : ""}>${legacyMvp ? "抽奖卡" : "参战抽奖卡"}</option>${legacyMvp && scope !== "clear" ? `<option value="subscription" ${reward.type === "subscription" ? "selected" : ""}>订阅套餐</option><option value="rate_multiplier" ${reward.type === "rate_multiplier" ? "selected" : ""}>限时倍率</option>` : ""}</select></label>
+      <label class="field"><span>金额 / 数量 / 倍率</span><input data-field="value" type="number" min="0.01" step="0.01" value="${escapeHtml(value ?? 1)}" required /></label>
       <label class="field"><span>绑定活动</span><select data-field="shakeCampaignId">${raidShakeCampaignOptions(reward.shakeCampaignId || "")}</select></label>
       <label class="field"><span>卡种</span><select data-field="cardTier"><option value="low" ${reward.cardTier !== "medium" && reward.cardTier !== "high" ? "selected" : ""}>低级</option><option value="medium" ${reward.cardTier === "medium" ? "selected" : ""}>中级</option><option value="high" ${reward.cardTier === "high" ? "selected" : ""}>高级</option></select></label>
-      <label class="field"><span>内部成本</span><input data-field="cost" type="number" min="0" step="0.01" value="${escapeHtml(reward.cost ?? value ?? 0)}" required /></label>
+      <label class="field"><span>预算成本估算</span><input data-field="cost" type="number" min="0" step="0.01" value="${escapeHtml(reward.cost ?? value ?? 0)}" required /></label>
       <label class="field"><span>发放</span><select data-field="fulfillmentMode"><option value="auto" ${reward.fulfillmentMode !== "review" ? "selected" : ""}>自动</option><option value="review" ${reward.fulfillmentMode === "review" ? "selected" : ""}>审核后</option></select></label>
       ${advancedOptions}
     </div>`;
@@ -4789,12 +4818,25 @@ function updateRaidRewardControls(row) {
   if (!row) return;
   const type = row.querySelector('[data-field="type"]')?.value || "balance";
   const shakeCard = type === "shake_card";
+  const globalRecharge = type === "global_recharge_multiplier";
   for (const field of ["shakeCampaignId", "cardTier"]) {
     const input = row.querySelector(`[data-field="${field}"]`);
     if (input) input.disabled = !shakeCard;
   }
   const cost = row.querySelector('[data-field="cost"]');
   if (cost) cost.min = shakeCard ? "0.01" : "0";
+  const value = row.querySelector('[data-field="value"]');
+  if (value) {
+    value.disabled = false;
+    value.min = shakeCard ? "1" : "0.01";
+    value.max = globalRecharge ? "5" : "";
+    value.step = shakeCard ? "1" : "0.01";
+  }
+  const fulfillmentMode = row.querySelector('[data-field="fulfillmentMode"]');
+  if (fulfillmentMode) {
+    if (globalRecharge) fulfillmentMode.value = "auto";
+    fulfillmentMode.disabled = globalRecharge;
+  }
   for (const field of ["subscriptionGroupId", "validityDays"]) {
     const wrapper = row.querySelector(`[data-reward-field="${field}"]`);
     if (wrapper) wrapper.hidden = type !== "subscription";
@@ -4807,16 +4849,12 @@ function updateRaidRewardControls(row) {
     const input = row.querySelector(`[data-field="${field}"]`);
     if (input) input.disabled = type !== "rate_multiplier";
   }
-  const value = row.querySelector('[data-field="value"]');
-  if (value) {
-    value.disabled = type === "subscription" || type === "rate_multiplier";
-    value.min = shakeCard ? "1" : "0.01";
-    value.step = shakeCard ? "1" : "0.01";
-  }
+  if (value) value.disabled = type === "subscription" || type === "rate_multiplier";
 }
 
-function renderRaidBossEditor(bosses = defaultRaidBosses()) {
+function renderRaidBossEditor(bosses = defaultRaidBosses(), rewardMode = raidEditorRewardMode) {
   if (!refs.raidBossEditor) return;
+  raidEditorRewardMode = rewardMode;
   refs.raidBossEditor.innerHTML = bosses.map((boss, index) => `
     <section class="raid-boss-row" data-raid-boss-row>
       <div class="raid-boss-head"><strong>Boss ${index + 1}</strong><button type="button" class="icon-btn" data-remove-raid-boss="${index}" title="删除 Boss" aria-label="删除 Boss">×</button></div>
@@ -4832,10 +4870,12 @@ function renderRaidBossEditor(bosses = defaultRaidBosses()) {
         <label class="field"><span>主题伤害倍率</span><input data-field="themeMultiplier" type="number" min="1" max="5" step="0.01" value="${escapeHtml(boss.themeMultiplier ?? 1)}" required /></label>
       </div>
       <div class="raid-reward-editor">
-        ${renderRaidRewardRow("clear", boss.clearReward)}
-        ${renderRaidRewardRow("mvp1", boss.mvpRewards?.[0])}
-        ${renderRaidRewardRow("mvp2", boss.mvpRewards?.[1])}
-        ${renderRaidRewardRow("mvp3", boss.mvpRewards?.[2])}
+        ${renderRaidRewardRow("clear", boss.clearReward, rewardMode)}
+        ${rewardMode === "legacy_mvp" ? [0, 1, 2].map((rewardIndex) => renderRaidRewardRow(
+          `mvp${rewardIndex + 1}`,
+          boss.mvpRewards?.[rewardIndex] || defaultRaidLegacyMvpReward(`MVP 第 ${rewardIndex + 1} 名低级抽奖卡`, Math.max(1, boss.level * (3 - rewardIndex))),
+          rewardMode
+        )).join("") : ""}
       </div>
     </section>`).join("");
   refs.raidBossEditor.querySelectorAll("[data-raid-reward]").forEach(updateRaidRewardControls);
@@ -4871,6 +4911,12 @@ function collectRaidReward(row) {
     if (!(reward.rateGroupId > 0) || !(reward.rateMultiplier > 0 && reward.rateMultiplier <= 1) || !(reward.durationDays > 0) || !(reward.usageCap > 0)) {
       throw new Error("限时倍率奖励必须填写分组、0-1 倍率、天数和用量上限");
     }
+  } else if (type === "global_recharge_multiplier") {
+    reward.rechargeMultiplier = value;
+    reward.fulfillmentMode = "auto";
+    if (!(value > 0 && value <= 5) || !(reward.cost > 0)) {
+      throw new Error("全站充值倍率必须大于 0 且不超过 5，并填写大于 0 的预算成本估算");
+    }
   }
   return reward;
 }
@@ -4892,7 +4938,9 @@ function collectRaidBosses() {
       themeGroupName: row.querySelector('[data-field="themeGroupName"]').value.trim(),
       themeMultiplier: Number(row.querySelector('[data-field="themeMultiplier"]').value),
       clearReward: collectRaidReward(rewardRows.clear),
-      mvpRewards: ["mvp1", "mvp2", "mvp3"].map((scope) => collectRaidReward(rewardRows[scope]))
+      mvpRewards: raidEditorRewardMode === "legacy_mvp"
+        ? ["mvp1", "mvp2", "mvp3"].map((scope) => collectRaidReward(rewardRows[scope]))
+        : []
     };
   });
 }
@@ -4955,7 +5003,7 @@ function resetRaidCampaignForm() {
   refs.raidCampaignConnection.disabled = false;
   refs.raidCampaignMonth.disabled = false;
   if (sub2apiConnectionsCache.length === 1) refs.raidCampaignConnection.value = sub2apiConnectionsCache[0].id;
-  renderRaidBossEditor();
+  renderRaidBossEditor(defaultRaidBosses(), "pve");
   updateRaidEmbedUrl();
 }
 
@@ -4968,7 +5016,7 @@ function editRaidCampaign(id) {
   refs.raidCampaignMonth.value = campaign.month;
   refs.raidRewardBudget.value = campaign.rewardBudget;
   refs.raidExcludedUsers.value = (campaign.excludedUserIds || []).join(", ");
-  renderRaidBossEditor(campaign.bosses);
+  renderRaidBossEditor(campaign.bosses, campaign.rewardMode || "legacy_mvp");
   refs.raidCampaignFormTitle.textContent = `编辑草稿：${campaign.name}`;
   refs.raidCampaignSubmitBtn.textContent = "更新草稿";
   refs.raidCampaignResetBtn.classList.remove("hidden");
@@ -5002,7 +5050,7 @@ async function saveRaidCampaign() {
 
 function renderRaidCampaigns() {
   renderTable(refs.raidCampaignList, [
-    { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br><code>${escapeHtml(item.month)} · ${escapeHtml(item.id)}</code>` },
+    { label: "活动", render: (item) => `<strong>${escapeHtml(item.name)}</strong><br><code>${escapeHtml(item.month)} · ${escapeHtml(item.id)}</code><br><span class="hint">${item.rewardMode === "legacy_mvp" ? "旧版 MVP（规则锁定）" : "全服 PVE"}</span>` },
     { label: "状态", render: (item) => `${renderStatus(item.status)}<br><span class="hint">${item.bosses.filter((boss) => boss.status === "defeated").length} / ${item.bosses.length} 已击败</span>` },
     { label: "入榜门槛 / 预算", render: (item) => `${item.bosses.map((boss) => `LV.${escapeHtml(boss.level)} · ${escapeHtml(boss.entryCostThreshold)}`).join("<br>")}<br><span class="hint">最坏 ${escapeHtml(item.worstCaseCost)} / 预算 ${escapeHtml(item.rewardBudget)}</span>` },
     { label: "当前 Boss", render: (item) => { const boss = item.bosses.find((entry) => entry.id === item.currentBossId); return boss ? `<strong>LV.${escapeHtml(boss.level)} ${escapeHtml(boss.name)}</strong><br><span class="hint">${escapeHtml(boss.remainingHealth)} / ${escapeHtml(boss.health)} HP</span>` : "-"; } },
@@ -5026,17 +5074,24 @@ async function refreshRaidCampaigns() {
 
 async function viewRaidHistory(campaignId) {
   const campaign = raidCampaignsCache.find((item) => item.id === campaignId);
-  refs.raidHistoryTitle.textContent = campaign ? `结算历史榜 · ${campaign.name}` : "结算历史榜";
+  const legacyMvp = campaign?.rewardMode === "legacy_mvp";
+  refs.raidHistoryTitle.textContent = campaign ? `${legacyMvp ? "结算历史榜" : "PVE 战果"} · ${campaign.name}` : "Boss 战果";
   setHint(refs.raidHistoryResult, "正在读取冻结榜单...");
   try {
     const payload = await api(`/api/admin/sub2api/raid/campaigns/${encodeURIComponent(campaignId)}/history`);
-    renderTable(refs.raidHistoryList, [
+    const payloadLegacyMvp = payload.campaign?.rewardMode === "legacy_mvp";
+    const columns = [
       { label: "Boss", render: (item) => `<strong>LV.${escapeHtml(item.boss.level)} ${escapeHtml(item.boss.name)}</strong><br><span class="hint">${item.defeatedAt ? `击败于 ${escapeHtml(formatWorldCupTime(item.defeatedAt))}` : escapeHtml(getStatusLabel(item.boss.status))}</span>` },
-      { label: "结算", render: (item) => `伤害 ${escapeHtml(item.totalDamage)}<br><span class="hint">有效 ${escapeHtml(item.effectiveRaiderCount)} 人 · MVP ${escapeHtml(item.mvpSlots)} 席</span>` },
+      { label: "结算", render: (item) => `伤害 ${escapeHtml(item.totalDamage)}<br><span class="hint">有效参战 ${escapeHtml(item.effectiveRaiderCount)} 人${payloadLegacyMvp ? ` · MVP ${escapeHtml(item.mvpSlots)} 席` : ""}</span>` },
       { label: "原始榜单", render: (item) => item.ranking.slice(0, 10).map((rank) => `<span class="hint">${rank.effective ? `#${escapeHtml(rank.rank)}` : "未入榜"} <code>${escapeHtml(rank.identity?.userId || rank.userId)}</code> · 消耗 ${escapeHtml(rank.actualCost)} · 伤害 ${escapeHtml(rank.damage)}</span>`).join("<br>") || "-" },
-      { label: "最终 MVP", render: (item) => item.finalWinners.length ? item.finalWinners.map((winner) => `<span class="hint">#${escapeHtml(winner.rank)} <code>${escapeHtml(winner.userId)}</code> · ${escapeHtml(getStatusLabel(winner.status))}</span>`).join("<br>") : "未解锁" },
-      { label: "资格顺延", render: (item) => item.disqualifications.length ? item.disqualifications.map((entry) => `<span class="hint"><code>${escapeHtml(entry.userId)}</code> → <code>${escapeHtml(entry.replacementUserId || "无替补")}</code><br>${escapeHtml(entry.reason)}</span>`).join("<br>") : "-" }
-    ], payload.bosses || [], "该活动暂无已冻结或月末保留的榜单");
+      ...(payloadLegacyMvp ? [
+        { label: "最终 MVP", render: (item) => item.finalWinners.length ? item.finalWinners.map((winner) => `<span class="hint">#${escapeHtml(winner.rank)} <code>${escapeHtml(winner.userId)}</code> · ${escapeHtml(getStatusLabel(winner.status))}</span>`).join("<br>") : "未解锁" },
+        { label: "资格顺延", render: (item) => item.disqualifications.length ? item.disqualifications.map((entry) => `<span class="hint"><code>${escapeHtml(entry.userId)}</code> → <code>${escapeHtml(entry.replacementUserId || "无替补")}</code><br>${escapeHtml(entry.reason)}</span>`).join("<br>") : "-" }
+      ] : [
+        { label: "PVE 奖励", render: (item) => item.boss.clearReward?.type === "global_recharge_multiplier" ? `全站充值 ${escapeHtml(item.boss.clearReward.rechargeMultiplier)}x<br><span class="hint">月末恢复 1x</span>` : escapeHtml(item.boss.clearReward?.name || "-") }
+      ])
+    ];
+    renderTable(refs.raidHistoryList, columns, payload.bosses || [], "该活动暂无已冻结或月末保留的榜单");
     setHint(refs.raidHistoryResult, payload.bosses?.length ? "榜单来自不可变结算快照；中止与月末未击败记录按最终保留数据显示" : "暂无历史结果");
   } catch (error) {
     refs.raidHistoryList.innerHTML = "";
@@ -5100,13 +5155,15 @@ async function refreshRaidRewards() {
   if (refs.raidRewardStatusFilter.value) params.set("status", refs.raidRewardStatusFilter.value);
   const payload = await api(`/api/admin/sub2api/raid/rewards${params.size ? `?${params}` : ""}`);
   renderTable(refs.raidRewardList, [
-    { label: "用户", render: (item) => `<code>${escapeHtml(item.userId)}</code><br><span class="hint">${item.scope === "mvp" ? `MVP ${escapeHtml(item.finalRank)}` : "共享奖励"}</span>` },
+    { label: "对象", render: (item) => item.scope === "global" ? `<strong>全站用户</strong><br><span class="hint">PVE 全服奖励</span>` : `<code>${escapeHtml(item.userId)}</code><br><span class="hint">${item.scope === "mvp" ? `MVP ${escapeHtml(item.finalRank)}` : item.scope === "clear" ? "共享奖励" : "参战奖励"}</span>` },
     { label: "奖品", render: (item) => {
       const reward = item.reward || {};
       const detail = reward.type === "subscription"
         ? `订阅 ${reward.subscriptionGroupId} · ${reward.validityDays} 天`
         : reward.type === "rate_multiplier"
           ? `倍率 ${reward.rateMultiplier}x · ${reward.durationDays} 天 · 上限 ${reward.usageCap}`
+          : reward.type === "global_recharge_multiplier"
+            ? `全站充值 ${reward.rechargeMultiplier}x · 月末恢复 1x`
           : reward.type === "shake_card" ? `抽奖卡 ×${reward.quantity}` : `额度 ${reward.amount}`;
       return `<strong>${escapeHtml(reward.name || "-")}</strong><br><span class="hint">${escapeHtml(detail)} · 成本 ${escapeHtml(item.cost)} · ${item.fulfillmentMode === "review" ? "审核后发放" : "自动发放"}</span>`;
     } },
@@ -5114,8 +5171,8 @@ async function refreshRaidRewards() {
     { label: "时间", render: (item) => `<span class="hint">${escapeHtml(formatWorldCupTime(item.createdAt))}</span>` },
     { label: "操作", render: (item) => `
       ${item.status === "awaiting_review" ? `<button class="primary-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','approve')">通过并发放</button>` : ""}
-      ${item.status === "delivery_failed" ? `<button class="primary-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','retry')">重试</button><button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','confirm')">确认到账</button>` : ""}
-      ${!["delivered", "voided", "disqualified"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','void')">作废</button>` : ""}
+      ${["delivery_failed", "revert_failed"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','retry')">重试</button>${item.scope !== "global" && item.status === "delivery_failed" ? `<button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','confirm')">确认到账</button>` : ""}` : ""}
+      ${item.scope !== "global" && !["delivered", "expired", "superseded", "revert_failed", "voided", "disqualified"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick="dispositionRaidReward('${escapeHtml(item.id)}','void')">作废</button>` : ""}
       ${item.scope === "mvp" && !["delivered", "disqualified"].includes(item.status) ? `<button class="ghost-btn small" type="button" style="color:var(--error)" onclick="disqualifyRaidWinner('${escapeHtml(item.settlementId)}','${escapeHtml(item.userId)}')">取消资格</button>` : ""}
     ` }
   ], payload.items || [], "暂无奖励记录");
@@ -6684,9 +6741,7 @@ refs.raidAddBossBtn?.addEventListener("click", () => {
     const bosses = collectRaidBosses();
     if (bosses.length >= 12) return setHint(refs.raidCampaignResult, "一期最多配置 12 只 Boss");
     const level = Math.max(0, ...bosses.map((boss) => boss.level)) + 1;
-    const nextBoss = defaultRaidBosses()[0];
-    nextBoss.level = level;
-    nextBoss.name = `Boss ${level}`;
+    const nextBoss = raidEditorRewardMode === "legacy_mvp" ? defaultRaidLegacyBoss(level) : defaultRaidPveBoss(level);
     renderRaidBossEditor(bosses.concat(nextBoss));
   } catch (error) {
     setHint(refs.raidCampaignResult, error.message);

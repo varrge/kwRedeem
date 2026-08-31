@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 const BOSS_ASSETS = ["leviathan", "sentinel", "prism", "zero-core", "warden", "overmind", "behemoth", "singularity"];
-const REWARD_TYPES = ["balance", "shake_card", "subscription", "rate_multiplier"];
+const REWARD_TYPES = ["balance", "shake_card", "subscription", "rate_multiplier", "global_recharge_multiplier"];
 const FULFILLMENT_MODES = ["auto", "review"];
 const ACTIVE_SYNC_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const LEGACY_REWARD_MODE = "legacy_mvp";
+const PVE_REWARD_MODE = "pve";
 
 function monthWindow(month) {
   const [year, monthNumber] = String(month).split("-").map(Number);
@@ -31,6 +33,7 @@ const rewardSchema = z.object({
   durationDays: z.number().int().min(1).max(90).optional(),
   usageCap: z.number().finite().positive().max(100000).optional(),
   fallbackAmount: z.number().finite().positive().optional(),
+  rechargeMultiplier: z.number().finite().gt(0).lte(5).optional(),
   cost: z.number().finite().nonnegative(),
   fulfillmentMode: z.enum(FULFILLMENT_MODES)
 }).superRefine((reward, context) => {
@@ -55,6 +58,15 @@ const rewardSchema = z.object({
   )) {
     context.addIssue({ code: "custom", path: ["rateGroupId"], message: "限时倍率奖励必须指定分组、0-1 绝对倍率、天数、优惠用量上限和备用额度" });
   }
+  if (reward.type === "global_recharge_multiplier" && !(Number(reward.rechargeMultiplier) > 0 && Number(reward.rechargeMultiplier) <= 5)) {
+    context.addIssue({ code: "custom", path: ["rechargeMultiplier"], message: "全站充值倍率必须大于 0 且不超过 5" });
+  }
+  if (reward.type === "global_recharge_multiplier" && reward.fulfillmentMode !== "auto") {
+    context.addIssue({ code: "custom", path: ["fulfillmentMode"], message: "全站充值倍率必须在 Boss 击败后自动生效" });
+  }
+  if (reward.type === "global_recharge_multiplier" && !(Number(reward.cost) > 0)) {
+    context.addIssue({ code: "custom", path: ["cost"], message: "全站充值倍率必须填写大于 0 的预算成本估算" });
+  }
 });
 
 const bossSchema = z.object({
@@ -68,7 +80,8 @@ const bossSchema = z.object({
   themeGroupName: z.string().trim().max(100).optional().default(""),
   themeMultiplier: z.number().finite().min(1).max(5).optional().default(1),
   clearReward: rewardSchema,
-  mvpRewards: z.array(rewardSchema).length(3)
+  // Legacy MVP configs remain readable, but PVE settlement ignores them.
+  mvpRewards: z.array(rewardSchema).max(3).optional().default([])
 });
 
 const campaignSchema = z.object({
@@ -95,7 +108,7 @@ const campaignSchema = z.object({
   }
   for (const boss of campaign.bosses) {
     if (boss.clearReward.type === "subscription" || boss.clearReward.type === "rate_multiplier") {
-      context.addIssue({ code: "custom", path: ["bosses"], message: "共享奖励暂只支持小额额度或活动抽奖卡；订阅套餐和限时倍率请配置为 MVP 奖励" });
+      context.addIssue({ code: "custom", path: ["bosses"], message: "PVE 击杀奖励支持额度、抽奖卡或全站充值倍率" });
     }
   }
 });
@@ -150,19 +163,19 @@ function maskIdentity(identity) {
   return `${source.slice(0, 2)}***${source.slice(-2)}`;
 }
 
-function rewardWorstCaseCost(boss, threshold) {
+function rewardWorstCaseCost(boss, threshold, rewardMode) {
   const maxRaiders = Math.ceil(Number(boss.health) / Number(threshold));
-  const slots = getRaidMvpSlots(maxRaiders);
   const rewardCost = (reward) => Math.max(Number(reward.cost), reward.type === "rate_multiplier" ? Number(reward.fallbackAmount || 0) : 0);
-  return roundAmount(
-    rewardCost(boss.clearReward) * maxRaiders
-      + boss.mvpRewards.slice(0, slots).reduce((sum, reward) => sum + rewardCost(reward), 0)
-  );
+  const clearCost = rewardCost(boss.clearReward) * (boss.clearReward.type === "global_recharge_multiplier" ? 1 : maxRaiders);
+  const mvpCost = rewardMode === LEGACY_REWARD_MODE
+    ? boss.mvpRewards.slice(0, getRaidMvpSlots(maxRaiders)).reduce((sum, reward) => sum + rewardCost(reward), 0)
+    : 0;
+  return roundAmount(clearCost + mvpCost);
 }
 
-function campaignWorstCaseCost(campaign) {
+function campaignWorstCaseCost(campaign, rewardMode = PVE_REWARD_MODE) {
   return roundAmount(campaign.bosses.reduce(
-    (sum, boss) => sum + rewardWorstCaseCost(boss, boss.entryCostThreshold),
+    (sum, boss) => sum + rewardWorstCaseCost(boss, boss.entryCostThreshold, rewardMode),
     0
   ));
 }
@@ -176,6 +189,21 @@ function normalizeCampaignInput(input) {
       ? input.bosses.map((boss) => ({ ...boss, entryCostThreshold: boss?.entryCostThreshold ?? fallbackThreshold }))
       : input?.bosses
   };
+}
+
+function validateCampaignRewardMode(data, rewardMode) {
+  for (const boss of data.bosses) {
+    if (rewardMode === LEGACY_REWARD_MODE) {
+      if (boss.mvpRewards.length !== 3) {
+        throw Object.assign(new Error("旧版 MVP 活动的每只 Boss 必须保留 3 项 MVP 奖励"), { statusCode: 400 });
+      }
+      if ([boss.clearReward, ...boss.mvpRewards].some((reward) => reward.type === "global_recharge_multiplier")) {
+        throw Object.assign(new Error("旧版 MVP 活动不能配置全站充值倍率"), { statusCode: 400 });
+      }
+    } else if (boss.mvpRewards.length) {
+      throw Object.assign(new Error("PVE 活动不能配置 MVP 奖励"), { statusCode: 400 });
+    }
+  }
 }
 
 function parseJson(value, fallback) {
@@ -199,9 +227,12 @@ export function createSub2ApiRaidService({
   creditBalance = async () => { throw new Error("Sub2api 余额奖励适配器未配置"); },
   grantSubscription = async () => { throw new Error("Sub2api 订阅奖励适配器未配置"); },
   getUserGroupRate = async () => null,
-  applyRateEntitlement = async () => { throw new Error("Sub2api 倍率奖励适配器未配置"); }
+  applyRateEntitlement = async () => { throw new Error("Sub2api 倍率奖励适配器未配置"); },
+  getGlobalRechargeMultiplier = async () => { throw new Error("Sub2api 全站充值倍率读取适配器未配置"); },
+  setGlobalRechargeMultiplier = async () => { throw new Error("Sub2api 全站充值倍率适配器未配置"); }
 }) {
   const syncingConnections = new Set();
+  const globalRechargeReconciliations = new Map();
 
   function getCampaign(campaignId) {
     return db.prepare("SELECT * FROM sub2api_raid_campaigns WHERE id = ?").get(campaignId);
@@ -236,6 +267,7 @@ export function createSub2ApiRaidService({
       durationDays: reward.durationDays ?? null,
       usageCap: reward.usageCap ?? null,
       fallbackAmount: reward.fallbackAmount ?? null,
+      rechargeMultiplier: reward.rechargeMultiplier ?? null,
       cost: Number(reward.cost),
       fulfillmentMode: reward.fulfillmentMode
     };
@@ -246,6 +278,7 @@ export function createSub2ApiRaidService({
     const damage = db.prepare(`
       SELECT COALESCE(SUM(damage), 0) AS total FROM sub2api_raid_damage_assignments WHERE boss_id = ?
     `).get(row.id).total;
+    const rewardMode = getCampaign(row.campaign_id)?.reward_mode || LEGACY_REWARD_MODE;
     return {
       id: row.id,
       campaignId: row.campaign_id,
@@ -263,7 +296,11 @@ export function createSub2ApiRaidService({
       themeGroupName: row.theme_group_name || "",
       themeMultiplier: Number(row.theme_multiplier),
       clearReward: parseJson(row.clear_reward, null),
-      mvpRewards: parseJson(row.mvp_rewards, []),
+      mvpRewards: rewardMode === LEGACY_REWARD_MODE ? parseJson(row.mvp_rewards, []) : [],
+      globalRewardStatus: db.prepare(`
+        SELECT status FROM sub2api_raid_rewards
+        WHERE boss_id = ? AND reward_scope = 'global' ORDER BY created_at DESC LIMIT 1
+      `).get(row.id)?.status || null,
       startedAt: row.started_at || null,
       defeatedAt: row.defeated_at || null
     };
@@ -279,6 +316,7 @@ export function createSub2ApiRaidService({
       connectionId: row.connection_id,
       name: row.name,
       month: row.month,
+      rewardMode: row.reward_mode || LEGACY_REWARD_MODE,
       timezone: "Asia/Shanghai",
       status: row.status,
       startAt: row.start_at,
@@ -347,6 +385,7 @@ export function createSub2ApiRaidService({
       throw error;
     }
     const data = parsed.data;
+    validateCampaignRewardMode(data, PVE_REWARD_MODE);
     const connection = db.prepare("SELECT id FROM sub2api_connections WHERE id = ? AND status = 'active'").get(data.connectionId);
     if (!connection) {
       const error = new Error("Sub2api 连接不存在或未启用");
@@ -355,7 +394,7 @@ export function createSub2ApiRaidService({
     }
     const existing = findCampaignByConnectionMonth(data.connectionId, data.month);
     if (existing) throw duplicateCampaignError(data, existing);
-    const worstCaseCost = campaignWorstCaseCost(data);
+    const worstCaseCost = campaignWorstCaseCost(data, PVE_REWARD_MODE);
     if (worstCaseCost > data.rewardBudget) {
       const error = new Error(`最坏奖励成本 ${worstCaseCost} 超过月度预算 ${data.rewardBudget}`);
       error.statusCode = 409;
@@ -366,12 +405,12 @@ export function createSub2ApiRaidService({
     runCampaignWrite(data, () => {
       db.prepare(`
         INSERT INTO sub2api_raid_campaigns (
-          id, connection_id, name, month, status, start_at, end_at, settlement_end_at,
+          id, connection_id, name, month, reward_mode, status, start_at, end_at, settlement_end_at,
           effective_damage_threshold, reward_budget, worst_case_cost, excluded_user_ids,
           created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        campaignId, data.connectionId, data.name, data.month, data.startAt, data.endAt,
+        campaignId, data.connectionId, data.name, data.month, PVE_REWARD_MODE, data.startAt, data.endAt,
         data.settlementEndAt, data.effectiveDamageThreshold, data.rewardBudget, worstCaseCost,
         JSON.stringify([...new Set(data.excludedUserIds.map(String))]), actor, createdAt, createdAt
       );
@@ -416,7 +455,9 @@ export function createSub2ApiRaidService({
     if (!connection) throw Object.assign(new Error("Sub2api 连接不存在或未启用"), { statusCode: 404 });
     const existing = findCampaignByConnectionMonth(data.connectionId, data.month, campaign.id);
     if (existing) throw duplicateCampaignError(data, existing);
-    const worstCaseCost = campaignWorstCaseCost(data);
+    const rewardMode = campaign.reward_mode || LEGACY_REWARD_MODE;
+    validateCampaignRewardMode(data, rewardMode);
+    const worstCaseCost = campaignWorstCaseCost(data, rewardMode);
     if (worstCaseCost > data.rewardBudget) {
       throw Object.assign(
         new Error(`最坏奖励成本 ${worstCaseCost} 超过月度预算 ${data.rewardBudget}`),
@@ -474,6 +515,7 @@ export function createSub2ApiRaidService({
       throw error;
     }
     const serialized = serializeCampaign(campaign, { includeExcluded: true });
+    validateCampaignRewardMode(serialized, campaign.reward_mode || LEGACY_REWARD_MODE);
     validateRewardTargets({ ...serialized, bosses: serialized.bosses.map((boss) => ({
       ...boss,
       clearReward: boss.clearReward,
@@ -884,7 +926,8 @@ export function createSub2ApiRaidService({
     if (boss.status !== "settling" || Number(boss.stable_sync_count) < 2) return null;
     const ranking = getRanking(boss.id);
     const effective = ranking.filter((item) => item.effective);
-    const mvpSlots = getRaidMvpSlots(effective.length);
+    const legacyMvp = (campaign.reward_mode || LEGACY_REWARD_MODE) === LEGACY_REWARD_MODE;
+    const mvpSlots = legacyMvp ? getRaidMvpSlots(effective.length) : 0;
     const settlementId = id("raid-settlement");
     const createdAt = now();
     const totalDamage = db.prepare(`
@@ -914,13 +957,20 @@ export function createSub2ApiRaidService({
         SET status = 'defeated', defeated_at = ?, remaining_health = 0, updated_at = ? WHERE id = ?
       `).run(boss.provisional_defeated_at, createdAt, boss.id);
       const clearReward = parseJson(boss.clear_reward, null);
-      for (const raider of effective) {
-        createReward(settlement, boss, raider.userId, "clear", null, clearReward);
+      if (!legacyMvp && clearReward.type === "global_recharge_multiplier") {
+        createReward(settlement, boss, "__global__", "global", null, clearReward);
+      } else {
+        for (const raider of effective) createReward(settlement, boss, raider.userId, "clear", null, clearReward);
       }
-      const mvpRewards = parseJson(boss.mvp_rewards, []);
-      effective.slice(0, mvpSlots).forEach((raider, index) => {
-        createReward(settlement, boss, raider.userId, "mvp", index + 1, mvpRewards[index]);
-      });
+      if (legacyMvp) {
+        const mvpRewards = parseJson(boss.mvp_rewards, []);
+        if (mvpRewards.length < mvpSlots) {
+          throw Object.assign(new Error("旧版 MVP 奖励配置不完整，已停止结算以避免错误发奖"), { statusCode: 409 });
+        }
+        effective.slice(0, mvpSlots).forEach((raider, index) => {
+          createReward(settlement, boss, raider.userId, "mvp", index + 1, mvpRewards[index]);
+        });
+      }
       if (nextBoss) {
         db.prepare(`
           UPDATE sub2api_raid_bosses SET status = 'active', started_at = ?, updated_at = ? WHERE id = ?
@@ -942,6 +992,10 @@ export function createSub2ApiRaidService({
     let row = db.prepare("SELECT * FROM sub2api_raid_rewards WHERE id = ?").get(rewardId);
     if (!row || !["pending", "delivery_failed"].includes(row.status)) return row;
     const reward = parseJson(row.reward_snapshot, null);
+    if (reward.type === "global_recharge_multiplier") {
+      await reconcileGlobalRechargeConnection(getCampaign(row.campaign_id).connection_id);
+      return db.prepare("SELECT * FROM sub2api_raid_rewards WHERE id = ?").get(rewardId);
+    }
     let response = null;
     try {
       if (reward.type === "balance") {
@@ -1028,6 +1082,228 @@ export function createSub2ApiRaidService({
     `).all(...params);
     for (const row of rows) await deliverReward(row.id);
     return rows.length;
+  }
+
+  function updateGlobalRechargeRewardStatuses(connectionId, at, { success, response = null, error = "", desiredRewardId = null }) {
+    if (success) {
+      const result = JSON.stringify({ ...(response || {}), reconciledAt: at });
+      db.prepare(`
+        UPDATE sub2api_raid_rewards SET status = 'expired', delivery_response = ?,
+          error_message = NULL, updated_at = ?
+        WHERE reward_scope = 'global' AND campaign_id IN (
+          SELECT id FROM sub2api_raid_campaigns WHERE connection_id = ? AND end_at <= ?
+        ) AND status IN ('pending', 'delivery_failed', 'delivered', 'revert_failed')
+      `).run(result, at, connectionId, at);
+      db.prepare(`
+        UPDATE sub2api_raid_rewards SET status = 'delivered', delivery_response = ?,
+          error_message = NULL, delivered_at = COALESCE(delivered_at, ?), updated_at = ?
+        WHERE id = ? AND status IN ('pending', 'delivery_failed', 'revert_failed')
+      `).run(result, at, at, desiredRewardId || "");
+      if (desiredRewardId) db.prepare(`
+        UPDATE sub2api_raid_rewards SET status = 'superseded', delivery_response = ?,
+          error_message = NULL, updated_at = ?
+        WHERE reward_scope = 'global' AND id <> ? AND campaign_id IN (
+          SELECT id FROM sub2api_raid_campaigns
+          WHERE connection_id = ? AND start_at <= ? AND end_at > ?
+        ) AND status IN ('pending', 'delivery_failed', 'revert_failed')
+      `).run(result, at, desiredRewardId, connectionId, at, at);
+      return;
+    }
+    if (desiredRewardId) {
+      db.prepare(`
+        UPDATE sub2api_raid_rewards SET status = 'delivery_failed', error_message = ?, updated_at = ?
+        WHERE id = ?
+      `).run(error, at, desiredRewardId);
+    } else {
+      db.prepare(`
+        UPDATE sub2api_raid_rewards SET status = 'revert_failed', error_message = ?, updated_at = ?
+        WHERE reward_scope = 'global' AND campaign_id IN (
+          SELECT id FROM sub2api_raid_campaigns WHERE connection_id = ? AND end_at <= ?
+        ) AND status IN ('pending', 'delivery_failed', 'delivered', 'revert_failed')
+      `).run(error, at, connectionId, at);
+    }
+  }
+
+  function commitGlobalRechargeResult(connectionId, claim, at, { failure = null, response = null, verified = false } = {}) {
+    return db.transaction(() => {
+      const updated = verified
+        ? db.prepare(`
+          UPDATE sub2api_raid_global_recharge_state
+          SET applied_multiplier = desired_multiplier, error_message = NULL, updated_at = ?
+          WHERE connection_id = ? AND revision = ? AND status = 'applied'
+        `).run(at, connectionId, claim.revision)
+        : failure
+          ? db.prepare(`
+            UPDATE sub2api_raid_global_recharge_state
+            SET status = 'failed', lease_token = NULL, lease_until = NULL, error_message = ?, updated_at = ?
+            WHERE connection_id = ? AND revision = ? AND lease_token = ? AND status = 'applying'
+          `).run(failure.message || "全站充值倍率对账失败", at, connectionId, claim.revision, claim.leaseToken)
+          : db.prepare(`
+            UPDATE sub2api_raid_global_recharge_state
+            SET status = 'applied', lease_token = NULL, lease_until = NULL,
+              applied_multiplier = ?, error_message = NULL, updated_at = ?
+            WHERE connection_id = ? AND revision = ? AND lease_token = ? AND status = 'applying'
+          `).run(claim.desiredMultiplier, at, connectionId, claim.revision, claim.leaseToken);
+      if (!updated.changes) return false;
+      updateGlobalRechargeRewardStatuses(connectionId, at, failure ? {
+        success: false,
+        error: failure.message || "全站充值倍率对账失败",
+        desiredRewardId: claim.desiredRewardId
+      } : {
+        success: true,
+        response,
+        desiredRewardId: claim.desiredRewardId
+      });
+      return true;
+    })();
+  }
+
+  function claimGlobalRechargeReconciliation(connectionId, at) {
+    return db.transaction(() => {
+      const anyReward = db.prepare(`
+        SELECT 1 FROM sub2api_raid_rewards r
+        INNER JOIN sub2api_raid_campaigns c ON c.id = r.campaign_id
+        WHERE c.connection_id = ? AND r.reward_scope = 'global' LIMIT 1
+      `).get(connectionId);
+      if (!anyReward) return null;
+      const desired = db.prepare(`
+        SELECT r.id, r.reward_snapshot
+        FROM sub2api_raid_rewards r
+        INNER JOIN sub2api_raid_campaigns c ON c.id = r.campaign_id
+        INNER JOIN sub2api_raid_bosses b ON b.id = r.boss_id
+        WHERE c.connection_id = ? AND r.reward_scope = 'global'
+          AND c.start_at <= ? AND c.end_at > ?
+        ORDER BY c.start_at DESC, b.sequence DESC, r.created_at DESC LIMIT 1
+      `).get(connectionId, at, at);
+      const desiredReward = desired ? parseJson(desired.reward_snapshot, null) : null;
+      const desiredRewardId = desired?.id || null;
+      const desiredMultiplier = desiredRewardId ? Number(desiredReward?.rechargeMultiplier) : 1;
+      const existing = db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId);
+      const sameDesired = existing
+        && (existing.desired_reward_id || null) === desiredRewardId
+        && Math.abs(Number(existing.desired_multiplier) - desiredMultiplier) < 1e-9;
+      const revision = sameDesired ? Number(existing.revision) : Number(existing?.revision || 0) + 1;
+      if (!existing) {
+        db.prepare(`
+          INSERT INTO sub2api_raid_global_recharge_state (
+            connection_id, desired_reward_id, desired_multiplier, revision, status, updated_at
+          ) VALUES (?, ?, ?, ?, 'pending', ?)
+        `).run(connectionId, desiredRewardId, desiredMultiplier, revision, at);
+      } else if (!sameDesired) {
+        const applying = existing.status === "applying" && existing.lease_until > at;
+        db.prepare(`
+          UPDATE sub2api_raid_global_recharge_state
+          SET desired_reward_id = ?, desired_multiplier = ?, revision = ?, status = ?,
+            error_message = NULL, updated_at = ? WHERE connection_id = ?
+        `).run(desiredRewardId, desiredMultiplier, revision, applying ? "applying" : "pending", at, connectionId);
+      }
+      const state = db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId);
+      if (state.status === "applied") return { state, claimed: false, verify: true };
+      if (state.status === "applying" && state.lease_until > at) return { state, claimed: false };
+      const leaseToken = id("raid-global-lease");
+      const leaseUntil = new Date(Date.parse(at) + 30_000).toISOString();
+      db.prepare(`
+        UPDATE sub2api_raid_global_recharge_state
+        SET status = 'applying', lease_token = ?, lease_until = ?, updated_at = ?
+        WHERE connection_id = ?
+      `).run(leaseToken, leaseUntil, at, connectionId);
+      return {
+        claimed: true,
+        leaseToken,
+        revision,
+        desiredRewardId,
+        desiredMultiplier
+      };
+    })();
+  }
+
+  async function runGlobalRechargeReconciliation(connectionId) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const at = now();
+      const claim = claimGlobalRechargeReconciliation(connectionId, at);
+      if (!claim) return null;
+      if (!claim.claimed) {
+        if (!claim.verify) return claim.state || null;
+        let actualMultiplier = null;
+        try {
+          actualMultiplier = Number(await getGlobalRechargeMultiplier({ connectionId }));
+        } catch {
+          // A read failure is reconciled by safely writing the current desired value again.
+        }
+        const current = db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId);
+        if (Number(current?.revision) !== Number(claim.state.revision)) continue;
+        if (Number.isFinite(actualMultiplier)
+          && Math.abs(actualMultiplier - Number(claim.state.desired_multiplier)) < 1e-9) {
+          const committed = commitGlobalRechargeResult(connectionId, {
+            revision: Number(claim.state.revision),
+            desiredRewardId: claim.state.desired_reward_id || null
+          }, at, {
+            verified: true,
+            response: { multiplier: actualMultiplier, verified: true }
+          });
+          if (committed) return current;
+          continue;
+        }
+        db.prepare(`
+          UPDATE sub2api_raid_global_recharge_state
+          SET status = 'pending', error_message = ?, updated_at = ?
+          WHERE connection_id = ? AND revision = ? AND status = 'applied'
+        `).run("远端充值倍率与当前期望不一致，等待重新对账", at, connectionId, claim.state.revision);
+        continue;
+      }
+      let response = null;
+      let failure = null;
+      try {
+        response = await setGlobalRechargeMultiplier({
+          connectionId,
+          multiplier: claim.desiredMultiplier,
+          rewardId: claim.desiredRewardId || connectionId,
+          idempotencyKey: `${connectionId}:global-recharge:${claim.revision}`,
+          notes: claim.desiredRewardId
+            ? `KaWang Boss Raid 对账充值倍率：${claim.desiredRewardId}`
+            : `KaWang Boss Raid 自然月结束恢复充值倍率：${connectionId}`
+        });
+      } catch (error) {
+        failure = error;
+      }
+      const current = db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId);
+      const stillCurrent = Number(current?.revision) === claim.revision && current?.lease_token === claim.leaseToken;
+      if (!stillCurrent) {
+        db.prepare(`
+          UPDATE sub2api_raid_global_recharge_state
+          SET status = 'pending', lease_token = NULL, lease_until = NULL, updated_at = ?
+          WHERE connection_id = ? AND lease_token = ?
+        `).run(now(), connectionId, claim.leaseToken);
+        continue;
+      }
+      const finishedAt = now();
+      const committed = commitGlobalRechargeResult(connectionId, claim, finishedAt, {
+        failure,
+        response: { ...(response || {}), multiplier: claim.desiredMultiplier }
+      });
+      if (!committed) continue;
+      return db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId);
+    }
+    return db.prepare("SELECT * FROM sub2api_raid_global_recharge_state WHERE connection_id = ?").get(connectionId) || null;
+  }
+
+  function reconcileGlobalRechargeConnection(connectionId) {
+    if (globalRechargeReconciliations.has(connectionId)) return globalRechargeReconciliations.get(connectionId);
+    const reconciliation = runGlobalRechargeReconciliation(connectionId)
+      .finally(() => globalRechargeReconciliations.delete(connectionId));
+    globalRechargeReconciliations.set(connectionId, reconciliation);
+    return reconciliation;
+  }
+
+  async function maintainGlobalRechargeRewards() {
+    const connections = db.prepare(`
+      SELECT DISTINCT c.connection_id
+      FROM sub2api_raid_campaigns c
+      INNER JOIN sub2api_raid_rewards r ON r.campaign_id = c.id
+      WHERE r.reward_scope = 'global'
+    `).all();
+    for (const connection of connections) await reconcileGlobalRechargeConnection(connection.connection_id);
+    return connections.length;
   }
 
   async function syncUsage(connectionId) {
@@ -1219,7 +1495,9 @@ export function createSub2ApiRaidService({
       defeatedAt: settlement?.defeated_at || boss.defeated_at || null,
       totalDamage: Number(settlement?.total_damage ?? serializeBoss(boss).totalDamage),
       effectiveRaiderCount: Number(settlement?.effective_raider_count ?? ranking.filter((item) => item.effective).length),
-      mvpSlots: Number(settlement?.mvp_slots ?? getRaidMvpSlots(ranking.filter((item) => item.effective).length)),
+      mvpSlots: (campaign.reward_mode || LEGACY_REWARD_MODE) === LEGACY_REWARD_MODE
+        ? Number(settlement?.mvp_slots ?? getRaidMvpSlots(ranking.filter((item) => item.effective).length))
+        : 0,
       ranking: admin ? adminRanking : publicRanking,
       own,
       finalWinners,
@@ -1291,6 +1569,7 @@ export function createSub2ApiRaidService({
     const currentBoss = campaign.current_boss_id ? getBoss(campaign.current_boss_id) : null;
     const ranking = currentBoss ? getRanking(currentBoss.id) : [];
     const effectiveRaiders = ranking.filter((item) => item.effective).length;
+    const legacyMvp = (campaign.reward_mode || LEGACY_REWARD_MODE) === LEGACY_REWARD_MODE;
     const own = ranking.find((item) => item.userId === userId) || null;
     const battleLog = currentBoss ? db.prepare(`
       SELECT e.id AS enrollment_id, e.masked_name, d.sub2api_user_id,
@@ -1326,8 +1605,8 @@ export function createSub2ApiRaidService({
       enrollment: enrollment ? { enrolledAt: enrollment.enrolled_at, maskedName: enrollment.masked_name } : null,
       currentBoss: serializeBoss(currentBoss),
       effectiveRaiderCount: effectiveRaiders,
-      mvpSlots: getRaidMvpSlots(effectiveRaiders),
-      nextMvpSlotAt: effectiveRaiders >= 30 ? null : (Math.floor(effectiveRaiders / 10) + 1) * 10,
+      mvpSlots: legacyMvp ? getRaidMvpSlots(effectiveRaiders) : 0,
+      nextMvpSlotAt: legacyMvp && effectiveRaiders < 30 ? (Math.floor(effectiveRaiders / 10) + 1) * 10 : null,
       ranking: ranking.filter((item) => item.effective).slice(0, 10).map((item) => ({ ...item, userId: item.userId === userId ? item.userId : undefined })),
       own,
       battleLog,
@@ -1459,6 +1738,35 @@ export function createSub2ApiRaidService({
       const error = new Error("奖励记录不存在");
       error.statusCode = 404;
       throw error;
+    }
+    const rewardConfig = parseJson(reward.reward_snapshot, null);
+    if (rewardConfig?.type === "global_recharge_multiplier") {
+      if (parsed.data.action !== "retry" || !["delivery_failed", "revert_failed"].includes(reward.status)) {
+        throw Object.assign(new Error("全站充值倍率只能重试对账，不能确认到账或作废"), { statusCode: 409 });
+      }
+      const connectionId = getCampaign(reward.campaign_id).connection_id;
+      const reconciliation = await reconcileGlobalRechargeConnection(connectionId);
+      const reconciledAt = now();
+      db.prepare(`
+        UPDATE sub2api_raid_rewards SET disposition_reason = ?, disposition_by = ?, updated_at = ?
+        WHERE id = ?
+      `).run(parsed.data.reason, actor, reconciledAt, reward.id);
+      const reconciled = db.prepare("SELECT * FROM sub2api_raid_rewards WHERE id = ?").get(reward.id);
+      createAuditLog({
+        action: "sub2api.raid.reward.retry",
+        actor,
+        resourceType: "sub2api_raid_reward",
+        resourceId: reward.id,
+        detail: {
+          reason: parsed.data.reason,
+          status: reconciled.status,
+          mode: "global_recharge_reconciliation",
+          desiredRewardId: reconciliation?.desired_reward_id || null,
+          revision: Number(reconciliation?.revision || 0),
+          multiplier: Number(reconciliation?.desired_multiplier || 1)
+        }
+      });
+      return reconciled;
     }
     const updatedAt = now();
     if (parsed.data.action === "approve") {
@@ -1602,6 +1910,7 @@ export function createSub2ApiRaidService({
       }
     }
     await maintainRateEntitlements(at);
+    await maintainGlobalRechargeRewards(at);
     const expired = db.prepare(`
       SELECT * FROM sub2api_raid_campaigns WHERE status = 'settling' AND settlement_end_at <= ?
     `).all(at);

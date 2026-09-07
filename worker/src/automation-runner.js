@@ -560,7 +560,10 @@ export function createAutomationRunner(options = {}) {
       && providerCapacityAvailable(row.provider_id)
       && dailyRiskUsed(row.id, at) + automationRiskAllocationUsd(row) <= Number(row.daily_risk_limit_usd));
     if (!mapping) {
-      schedule(execution, 15, { status: "waiting_mapping", publicMessage: "等待处理" });
+      schedule(execution, 15, {
+        status: "waiting_mapping", publicMessage: "等待处理",
+        errorCode: execution.last_error_code, errorMessage: execution.last_error_message
+      });
       return;
     }
     const provider = {
@@ -635,6 +638,7 @@ export function createAutomationRunner(options = {}) {
           });
         }
         await adapter.prepareAccount({
+          planId: snapshot.externalPlanId,
           authSessionJson,
           checkoutCountry: snapshot.regionCode
         });
@@ -669,6 +673,10 @@ export function createAutomationRunner(options = {}) {
           errorCode: error.code,
           errorMessage: boundedError(error.message)
         });
+        return;
+      }
+      if (error instanceof AutomationAdapterError && error.definitelyNotCreated) {
+        markDefinitelyNotCreated(execution, error);
         return;
       }
       if (error instanceof AutomationFundingError && error.unknownOutcome) {

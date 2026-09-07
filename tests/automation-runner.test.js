@@ -17,6 +17,7 @@ const {
 } = await import("../shared/src/automation-card-funding.js");
 const { createAutomationRunner } = await import("../worker/src/automation-runner.js");
 const { AutomationAdapterError } = await import("../shared/src/automation-adapters/automate-v1.js");
+const { SpaceXGptDirectV1Adapter } = await import("../shared/src/automation-adapters/spacex-gpt-direct-v1.js");
 
 const db = getDb();
 let clock = new Date("2026-08-15T00:00:00.000Z");
@@ -48,6 +49,102 @@ function openAiPaymentEvents(prefix, count) {
 after(() => {
   db.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+for (const funded of [false, true]) test(`SpaceX quote rejection preserves routing evidence and existing funding (${funded})`, async () => {
+  const at = clock.toISOString();
+  const executionId = "execution-pro-quote";
+  const snapshot = {
+    mappingId: "mapping-pro-quote", providerId: "provider-pro-quote", adapterKey: "spacex_gpt_direct_v1",
+    externalPlanId: "pro_20x", externalTaskType: "purchase", regionCode: "PH", currency: "PHP",
+    cardPlatformKey: "spacexcard", cardProductCode: "P5556XV", capacityKey: "x20",
+    cardCapacity: 1, fundingAmountUsd: 149, expectedMinAmount: 7800, expectedMaxAmount: 9999
+  };
+  db.prepare(`
+    INSERT INTO redeem_orders (id, order_no, cdkey_id, public_key, product_id, activation_endpoint_id,
+      session_payload, status, created_at, updated_at)
+    VALUES ('order-pro-quote', 'KWPROQUOTE', 'cdkey-pro-quote', 'PUBLIC-PRO-QUOTE', 'product-pro-quote',
+      'endpoint-pro-quote', ?, 'pending', ?, ?)
+  `).run(encryptText(JSON.stringify({ sessionToken: "test-session", planType: "pro" })), at, at);
+  db.prepare(`
+    INSERT INTO automation_executions (id, order_id, order_no, product_id, status, mapping_id,
+      provider_id, credential_id, client_order_id, mapping_snapshot, attempt_count, next_action_at, created_at, updated_at)
+    VALUES (?, 'order-pro-quote', 'KWPROQUOTE', 'product-pro-quote', 'preparing_card', 'mapping-pro-quote',
+      'provider-pro-quote', 'credential-pro-quote', 'KWPROQUOTE', ?, 1, ?, ?, ?)
+  `).run(executionId, JSON.stringify(snapshot), at, at, at);
+  db.prepare(`
+    INSERT INTO automation_execution_attempts (id, execution_id, attempt_no, mapping_id, provider_id,
+      credential_id, client_order_id, status, mapping_snapshot, created_at, updated_at)
+    VALUES ('attempt-pro-quote', ?, 1, 'mapping-pro-quote', 'provider-pro-quote', 'credential-pro-quote',
+      'KWPROQUOTE', 'selected', ?, ?, ?)
+  `).run(executionId, JSON.stringify(snapshot), at, at);
+  if (funded) {
+    db.prepare(`
+      INSERT INTO managed_cards (id, provider_key, upstream_card_id, vm_card_id, product_code,
+        upstream_status, cached_available_amount, lane, consumed_slots, capacity_state, reconciliation_state, created_at, updated_at)
+      VALUES ('card-pro-quote', 'spacexcard', 9950, '9950', 'P5556XV', 'ACTIVE', 149, 'x20', 0, 'AVAILABLE', 'READY', ?, ?)
+    `).run(at, at);
+    db.prepare(`
+      INSERT INTO automation_card_reservations (id, execution_id, provider_key, card_id, capacity_key, slot_index, state, reserved_at)
+      VALUES ('reservation-pro-quote', ?, 'spacexcard', 'card-pro-quote', 'x20', 1, 'reserved', ?)
+    `).run(executionId, at);
+    db.prepare(`
+      INSERT INTO automation_funding_intents (id, execution_id, provider_key, operation, product_code, amount_usd,
+        idempotency_key, request_fingerprint, request_body_encrypted, state, provider_resource_id, created_at)
+      VALUES ('funding-pro-quote', ?, 'spacexcard', 'open', 'P5556XV', 149, 'kwa:KWPROQUOTE:open:v1',
+        'test-fingerprint', 'test-encrypted-body', 'succeeded', '9950', ?)
+    `).run(executionId, at);
+    db.prepare("UPDATE automation_executions SET card_id='card-pro-quote', card_reservation_state='reserved' WHERE id=?").run(executionId);
+  }
+  const settings = db.prepare("SELECT payment_gate_enabled, mode FROM automation_fulfillment_settings WHERE id='default'").get();
+  db.prepare("UPDATE automation_fulfillment_settings SET payment_gate_enabled=1, mode='automatic' WHERE id='default'").run();
+  let prepareCalls = 0;
+  const adapter = new SpaceXGptDirectV1Adapter({
+    baseUrl: "https://zovocard.com/openapi/v1", apiKey: "test-key",
+    lookup: async () => [{ address: "203.0.113.10", family: 4 }],
+    fetchImpl: async (url) => {
+      assert.equal(new URL(url).pathname, "/openapi/v1/gpt-direct/preflight");
+      return new Response(JSON.stringify({ code: 0, data: {
+        currentPlan: "free", preflight_token: "test-preflight", quote_error: "",
+        quotes: { pro_20x: { plan: "prolite", currency: "PHP", amountMinor: 579464 } }
+      } }), { headers: { "content-type": "application/json" } });
+    }
+  });
+  const runner = createAutomationRunner({
+    db, decryptText, encryptText, workerId: "pro-quote-worker", now: () => new Date(clock),
+    prepareCard: async () => { prepareCalls += 1; throw new Error("must not fund an invalid quote"); },
+    adapterFactory: () => ({ adapter }), providerSync: async () => false
+  });
+  try {
+    await runner.tick();
+    const rejected = db.prepare("SELECT * FROM automation_executions WHERE id=?").get(executionId);
+    assert.equal(prepareCalls, 0);
+    assert.equal(rejected.status, "waiting_mapping");
+    assert.equal(rejected.last_error_code, "SPACEX_GPT_QUOTE_INVALID");
+    assert.match(rejected.last_error_message, /pro_20x.*报价套餐不匹配/);
+    assert.equal(db.prepare("SELECT status FROM automation_execution_attempts WHERE execution_id=?").get(executionId).status, "not_created");
+    await runner.tick();
+    const waiting = db.prepare("SELECT * FROM automation_executions WHERE id=?").get(executionId);
+    assert.equal(waiting.last_error_code, rejected.last_error_code);
+    assert.equal(waiting.last_error_message, rejected.last_error_message);
+    assert.equal(waiting.attempt_count, 1);
+    for (const table of ["automation_funding_intents", "automation_card_reservations"]) {
+      assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE execution_id=?`).get(executionId).count, funded ? 1 : 0);
+    }
+    if (funded) {
+      assert.equal(db.prepare("SELECT state FROM automation_funding_intents WHERE execution_id=?").get(executionId).state, "succeeded");
+      assert.equal(db.prepare("SELECT state FROM automation_card_reservations WHERE execution_id=?").get(executionId).state, "reserved");
+    }
+  } finally {
+    db.prepare("DELETE FROM automation_execution_attempts WHERE execution_id=?").run(executionId);
+    db.prepare("DELETE FROM automation_funding_intents WHERE execution_id=?").run(executionId);
+    db.prepare("DELETE FROM automation_card_reservations WHERE execution_id=?").run(executionId);
+    db.prepare("DELETE FROM automation_executions WHERE id=?").run(executionId);
+    db.prepare("DELETE FROM managed_cards WHERE id='card-pro-quote'").run();
+    db.prepare("DELETE FROM redeem_orders WHERE id='order-pro-quote'").run();
+    db.prepare("UPDATE automation_fulfillment_settings SET payment_gate_enabled=?, mode=? WHERE id='default'")
+      .run(settings.payment_gate_enabled, settings.mode);
+  }
 });
 
 test("Plus allocates one fifth of the opening funds to each slot", () => {

@@ -486,7 +486,11 @@ test("SpaceX GPT Direct V1 discovers plans and creates an idempotent order on th
   }), (error) => error.code === "SPACEX_GPT_CONTRACT_INVALID");
 });
 
-test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as the plan is free", async () => {
+for (const [planId, quotePlan, amountMinor] of [
+  ["plus", "plus", 98214],
+  ["pro_5x", "prolite", 579464],
+  ["pro_20x", "pro", 891966]
+]) test(`SpaceX GPT ${planId} cancels delinquent renewal and proceeds as soon as the plan is free`, async () => {
   const requests = [];
   let preflightCalls = 0;
   const adapter = new SpaceXGptDirectV1Adapter({
@@ -503,15 +507,16 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as th
         return response({
           code: 0,
           data: {
-            currentPlan: delinquent ? "plus" : "free",
-            subscription_is_delinquent: delinquent,
-            subscription_has_active: delinquent,
-            subscription_will_renew: delinquent,
+            currentPlan: delinquent ? quotePlan : "free",
+            // The current plan is authoritative even if subscription flags lag cancellation.
+            subscription_is_delinquent: true,
+            subscription_has_active: true,
+            subscription_will_renew: true,
             subscription_active_until: delinquent ? "2099-01-01T00:00:00Z" : null,
             can_purchase_at: "2099-01-01T00:00:00Z",
             preflight_token: `preflight-${preflightCalls}`,
             pricing_version: 3,
-            quotes: { plus: { plan: "plus", currency: "PHP", amountMinor: 98214 } },
+            quotes: { [planId]: { plan: quotePlan, currency: "PHP", amountMinor } },
             quote_error: ""
           }
         });
@@ -524,10 +529,10 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as th
           code: 0,
           data: {
             id: 982,
-            plan: "plus",
+            plan: planId,
             status: "queued",
             currency: "PHP",
-            quoted_amount_minor: 98214,
+            quoted_amount_minor: amountMinor,
             client_request_id: "KW-SPACEX-DELINQUENT"
           }
         }, 202);
@@ -537,9 +542,9 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as th
   });
   const input = {
     clientOrderId: "KW-SPACEX-DELINQUENT",
-    planId: "plus",
+    planId,
     checkoutCountry: "PH",
-    authSessionJson: { sessionToken: "secret-session-token" },
+    authSessionJson: { sessionToken: "secret-session-token", planType: quotePlan },
     cardProviderKey: "spacexcard",
     providerCardId: 123
   };
@@ -555,6 +560,67 @@ test("SpaceX GPT Direct V1 cancels delinquent renewal and proceeds as soon as th
   assert.equal(JSON.parse(requests[1].body.session).sessionToken, "secret-session-token");
   assert.equal(requests.filter((item) => item.path.endsWith("/cancel-renewal")).length, 1);
   assert.equal(requests.filter((item) => item.path.endsWith("/orders")).length, 1);
+  assert.equal(requests.at(-1).body.plan, planId);
+});
+
+test("SpaceX GPT Pro quotes accept only their own aliases while preserving the order plan", async () => {
+  for (const [planId, alias, amountMinor] of [["pro_20x", "pro", 891966], ["pro_5x", "prolite", 579464]]) {
+    for (const quotePlan of [planId, alias]) {
+      const requests = [];
+      const adapter = new SpaceXGptDirectV1Adapter({
+        baseUrl: "https://zovocard.com/openapi/v1", apiKey: "sk_direct_test", lookup: publicLookup,
+        fetchImpl: async (url, options) => {
+          const path = new URL(url).pathname;
+          requests.push(path);
+          if (path.endsWith("/preflight")) return response({ code: 0, data: {
+            currentPlan: "free", preflight_token: "preflight-pro", quote_error: "",
+            quotes: { [planId]: { plan: quotePlan, currency: "PHP", amountMinor } }
+          } });
+          assert.equal(path, "/openapi/v1/gpt-direct/orders");
+          const body = JSON.parse(options.body);
+          assert.equal(body.plan, planId);
+          assert.equal(options.headers["Idempotency-Key"], body.client_request_id);
+          return response({ code: 0, data: {
+            id: 984, plan: planId, status: "queued", currency: "PHP",
+            quoted_amount_minor: amountMinor, client_request_id: body.client_request_id
+          } }, 202);
+        }
+      });
+      const created = await adapter.createTask({
+        clientOrderId: "KW-PRO-ALIAS", planId, checkoutCountry: "PH",
+        cardProviderKey: "spacexcard", providerCardId: 123,
+        authSessionJson: { sessionToken: "secret-session-token", planType: "pro" }
+      });
+      assert.equal(created.task.planId, planId);
+      assert.equal(created.task.status, "queued");
+      assert.equal(requests.length, 2);
+    }
+  }
+});
+
+test("SpaceX GPT checks the requested quote during account preparation before funding", async () => {
+  const valid = { plan: "pro", currency: "PHP", amountMinor: 891966 };
+  for (const invalid of [
+    { quote: undefined }, { quote: { ...valid, plan: "prolite" } },
+    { quote: { ...valid, plan: "unknown" } }, { quote: { ...valid, currency: "USD" } },
+    { quote: { ...valid, amountMinor: 0 } }, { quote: { ...valid, amountMinor: 1.5 } },
+    { quote: valid, quoteError: "upstream unavailable" }
+  ]) {
+    const adapter = new SpaceXGptDirectV1Adapter({
+      baseUrl: "https://zovocard.com/openapi/v1", apiKey: "sk_direct_test", lookup: publicLookup,
+      fetchImpl: async (url) => {
+        assert.equal(new URL(url).pathname, "/openapi/v1/gpt-direct/preflight");
+        return response({ code: 0, data: {
+          currentPlan: "free", preflight_token: "preflight-invalid", quote_error: invalid.quoteError || "",
+          quotes: { pro_20x: invalid.quote }
+        } });
+      }
+    });
+    await assert.rejects(adapter.prepareAccount({
+      planId: "pro_20x", checkoutCountry: "PH", authSessionJson: { sessionToken: "secret-session-token" }
+    }), (error) => error.code === (invalid.quoteError ? "SPACEX_GPT_QUOTE_UNAVAILABLE" : "SPACEX_GPT_QUOTE_INVALID")
+      && error.definitelyNotCreated === true);
+  }
 });
 
 test("SpaceX GPT Direct V1 proceeds immediately when the plan is free despite stale delinquent flags", async () => {

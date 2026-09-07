@@ -23,6 +23,8 @@ const PLAN_DEFINITIONS = Object.freeze({
   pro_20x: Object.freeze({ id: "pro_20x", name: "ChatGPT Pro 20X", label: "Pro 20X", taskType: "purchase", canonicalOffer: "x20" })
 });
 const SUPPORTED_PLAN_IDS = new Set(["plus", "pro_5x", "pro_20x"]);
+// Quote names differ from the plan IDs required by the order API.
+const QUOTE_PLAN_NAMES = Object.freeze({ plus: "plus", pro_5x: "prolite", pro_20x: "pro" });
 
 export function isSpaceXGptCardUnavailableMessage(value) {
   return /直充额度已用满[^\n]*(?:换一张卡|换卡)|所选卡片当前不可支付/.test(String(value || ""));
@@ -405,6 +407,13 @@ export class SpaceXGptDirectV1Adapter {
   }
 
   async prepareAccount(input = {}) {
+    const planId = boundedString(input.planId, "planId", 40, { definitelyNotCreated: true });
+    if (!SUPPORTED_PLAN_IDS.has(planId)) {
+      fail("SPACEX_GPT_PLAN_UNSUPPORTED", "SpaceX GPT 套餐暂不支持安全库存对账", {
+        retryable: false,
+        definitelyNotCreated: true
+      });
+    }
     const country = boundedString(input.checkoutCountry, "checkoutCountry", 20, {
       definitelyNotCreated: true
     }).toUpperCase();
@@ -456,9 +465,10 @@ export class SpaceXGptDirectV1Adapter {
           throw error;
         }
       }
-      if (preflightData?.subscription_is_delinquent === true
+      currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
+      if (currentPlan !== "free" && (preflightData?.subscription_is_delinquent === true
         || preflightData?.subscription_has_active === true
-        || preflightData?.subscription_will_renew === true) {
+        || preflightData?.subscription_will_renew === true)) {
         waitForPurchasableAccount(preflightData);
       }
     }
@@ -468,6 +478,27 @@ export class SpaceXGptDirectV1Adapter {
       fail("SPACEX_GPT_ACCOUNT_WAIT", "等待账号恢复可购买状态", {
         requestNotSent: true,
         retryAfterSeconds: purchaseWait
+      });
+    }
+    boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
+      definitelyNotCreated: true
+    });
+    if (optionalString(preflightData?.quote_error, 500)) {
+      fail("SPACEX_GPT_QUOTE_UNAVAILABLE", "SpaceX GPT 当前报价不可用", {
+        retryable: false,
+        definitelyNotCreated: true
+      });
+    }
+    const quote = preflightData?.quotes?.[planId];
+    const quoteProblem = !quote ? "缺少目标套餐报价"
+      : ![planId, QUOTE_PLAN_NAMES[planId]].includes(quote.plan) ? "报价套餐不匹配"
+        : String(quote.currency || "").toUpperCase() !== "PHP" ? "报价币种不是 PHP"
+          : !Number.isSafeInteger(Number(quote.amountMinor)) || Number(quote.amountMinor) <= 0 ? "报价金额无效"
+            : null;
+    if (quoteProblem) {
+      fail("SPACEX_GPT_QUOTE_INVALID", `SpaceX GPT 预检报价无法识别（${planId}：${quoteProblem}）`, {
+        retryable: false,
+        definitelyNotCreated: true
       });
     }
     return Object.freeze({ credential, preflightData });
@@ -501,31 +532,15 @@ export class SpaceXGptDirectV1Adapter {
     }
     const cardId = positiveInteger(input.providerCardId, "card_id", { definitelyNotCreated: true });
     const { credential, preflightData } = await this.prepareAccount({
+      planId,
       authSessionJson: input.authSessionJson,
       checkoutCountry: country
     });
-    const preflightToken = boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
-      definitelyNotCreated: true
-    });
-    if (optionalString(preflightData?.quote_error, 500)) {
-      fail("SPACEX_GPT_QUOTE_UNAVAILABLE", "SpaceX GPT 当前报价不可用", {
-        retryable: false,
-        definitelyNotCreated: true
-      });
-    }
-    const quote = preflightData?.quotes?.[planId];
-    if (!quote || quote.plan !== planId || String(quote.currency || "").toUpperCase() !== "PHP"
-      || !Number.isSafeInteger(Number(quote.amountMinor)) || Number(quote.amountMinor) <= 0) {
-      fail("SPACEX_GPT_QUOTE_INVALID", "SpaceX GPT 预检报价无法识别", {
-        retryable: false,
-        definitelyNotCreated: true
-      });
-    }
     const body = {
       card_id: cardId,
       plan: planId,
       credential,
-      preflight_token: preflightToken,
+      preflight_token: preflightData.preflight_token,
       client_request_id: clientOrderId,
       no_auto_card_switch: true
     };

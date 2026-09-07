@@ -1,0 +1,58 @@
+{
+  "width": 512,
+  "height": 512,
+  "columns": 6,
+  "poster": "poster.webp",
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 24,
+      "duration": 2400
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 24,
+      "duration": 1920
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 12,
+      "duration": 660
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 24,
+      "duration": 1680
+    }
+  },
+  "source": {
+    "title": "Rock Monster",
+    "author": "Joseph Crown (jcrown41)",
+    "url": "https://opengameart.org/content/rock-monster",
+    "authorUrl": "https://opengameart.org/users/jcrown41",
+    "archive": "https://opengameart.org/sites/default/files/Monster.zip",
+    "license": "CC0-1.0",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "character": "Rock Monster",
+    "animation": "Original static separated PNG parts; KaWang-authored bone and fragment animation."
+  },
+  "registration": {
+    "sourceScale": 0.19,
+    "sourceAnchor": [
+      1500,
+      1320
+    ],
+    "frameAnchor": [
+      256,
+      259
+    ]
+  },
+  "animationAuthor": "KaWang / Codex",
+  "deathFinalPose": "Visible settled stone rubble; final pose held without fading.",
+  "posterContentBounds": [
+    61,
+    29,
+    459,
+    471
+  ]
+}

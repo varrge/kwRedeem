@@ -1,0 +1,92 @@
+{
+  "width": 512,
+  "height": 281,
+  "columns": 6,
+  "poster": "poster.webp",
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 50,
+      "duration": 1667,
+      "sourceFrames": "DarkSaber/idle/0001 through 0050"
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 50,
+      "duration": 1667,
+      "sourceFrames": "DarkSaber/idle/0051 through 0100"
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 26,
+      "duration": 1000,
+      "sourceFrames": "DarkSaber/Hit/0001 through 0026"
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 101,
+      "duration": 3200,
+      "sourceFrames": "DarkSaber/death/0001 through 0101"
+    }
+  },
+  "source": {
+    "title": "Dark Saber (Werewolf)",
+    "author": "MindChamber",
+    "url": "https://opengameart.org/content/dark-saber-werewolf",
+    "authorUrl": "https://opengameart.org/users/mindchamber",
+    "license": "CC-BY-3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+    "archive": "https://opengameart.org/sites/default/files/DarkSaber_0.zip",
+    "attribution": "werewolf sprite by MindChamber"
+  },
+  "sourceCrop": [
+    -314,
+    -75,
+    671,
+    465
+  ],
+  "sourceClipOffsets": {
+    "idle": [
+      0,
+      0
+    ],
+    "idle-battle": [
+      0,
+      0
+    ],
+    "hurt": [
+      -306,
+      -67
+    ],
+    "death": [
+      0,
+      -59
+    ]
+  },
+  "sourceFrameSizes": {
+    "idle": [
+      424,
+      457
+    ],
+    "idle-battle": [
+      424,
+      457
+    ],
+    "hurt": [
+      758,
+      523
+    ],
+    "death": [
+      663,
+      512
+    ]
+  },
+  "playbackTiming": "Adapted for the raid UI; durations are milliseconds.",
+  "posterContentBounds": [
+    161,
+    38,
+    375,
+    277
+  ],
+  "deathFinalFrame": 101
+}

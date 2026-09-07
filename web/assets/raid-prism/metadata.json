@@ -1,0 +1,91 @@
+{
+  "width": 512,
+  "height": 441,
+  "columns": 6,
+  "poster": "poster.webp",
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_Pack_crazy_mushroom/Large/purple_idle1__000.png through __009.png"
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_Pack_crazy_mushroom/Large/purple_idle2__000.png through __009.png"
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_Pack_crazy_mushroom/Large/purple_hurt__000.png through __009.png"
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_Pack_crazy_mushroom/Large/purple_death2__000.png through __009.png"
+    }
+  },
+  "source": {
+    "title": "Forest Fiends - Free Character Pack",
+    "author": "LudicArts",
+    "url": "https://opengameart.org/content/forest-fiends-free-character-pack",
+    "authorUrl": "https://www.ludicarts.com/",
+    "archive": "https://opengameart.org/sites/default/files/forestfiendspackoga.zip",
+    "license": "CC-BY-4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "character": "Crazy Mushroom (purple)"
+  },
+  "sourceCrop": [
+    -184,
+    20,
+    507,
+    615
+  ],
+  "sourceClipOffsets": {
+    "idle": [
+      0,
+      0
+    ],
+    "idle-battle": [
+      -45,
+      0
+    ],
+    "hurt": [
+      8,
+      -9
+    ],
+    "death": [
+      -305,
+      -110
+    ]
+  },
+  "sourceFrameSizes": {
+    "idle": [
+      504,
+      477
+    ],
+    "idle-battle": [
+      581,
+      477
+    ],
+    "hurt": [
+      637,
+      587
+    ],
+    "death": [
+      940,
+      874
+    ]
+  },
+  "framesPerSecond": 12,
+  "posterContentBounds": [
+    184,
+    17,
+    460,
+    341
+  ]
+}

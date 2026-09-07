@@ -4711,14 +4711,14 @@ window.endShakeCampaign = endShakeCampaign;
 window.dispositionShakeDraw = dispositionShakeDraw;
 
 const RAID_ASSETS = {
-  leviathan: "装甲利维坦",
-  sentinel: "边界哨兵",
-  prism: "棱镜母体",
-  "zero-core": "零号主机",
-  warden: "深空典狱长",
-  overmind: "集群主脑",
-  behemoth: "轨道巨像",
-  singularity: "奇点核心"
+  leviathan: "黑棘利维坦 · 古龙",
+  sentinel: "苍木哨兵 · 树灵",
+  prism: "菌冠母体 · 孢群",
+  "zero-core": "深渊之瞳 · 独眼",
+  warden: "血月典狱长 · 狼人",
+  overmind: "亡骸主宰 · 腐躯",
+  behemoth: "符文巨像 · 岩石",
+  singularity: "星渊术士 · 咒术"
 };
 
 function defaultRaidGlobalRechargeReward(level, rechargeMultiplier) {

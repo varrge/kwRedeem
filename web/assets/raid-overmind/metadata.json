@@ -1,0 +1,42 @@
+{
+  "width": 264,
+  "height": 207,
+  "columns": 6,
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 45,
+      "duration": 4400
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 42,
+      "duration": 2033
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 12,
+      "duration": 383
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 47,
+      "duration": 2400
+    }
+  },
+  "source": {
+    "title": "Zombie — Fully Animated",
+    "author": "Cethiel",
+    "url": "https://opengameart.org/content/zombie-fully-animated",
+    "archive": "https://opengameart.org/sites/default/files/zombie_-_fully_animated.zip",
+    "license": "CC0 1.0",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "sourceCrop": [
+    111,
+    35,
+    375,
+    242
+  ],
+  "notes": "Source sprite cell384x288, empty trailing cells removed, every6/3/2/4th frame for idle/battle/hurt/death. Common crop across all actions. Source60fps; death capped2.4s."
+}

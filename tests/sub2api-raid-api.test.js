@@ -23,7 +23,9 @@ function reward(name, amount = 1, fulfillmentMode = "auto") {
   return { name, type: "balance", amount, cost: amount, fulfillmentMode };
 }
 
-test("production routes authenticate raid administration and keep published rules immutable", async () => {
+test("production routes authenticate raid administration and keep published rules immutable", async (t) => {
+  // Keep the August fixture active regardless of the machine's calendar month.
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-08-15T00:00:00.000Z") });
   const unauthorized = await app.inject({ method: "GET", url: "/api/admin/sub2api/raid/campaigns" });
   assert.equal(unauthorized.statusCode, 401);
 

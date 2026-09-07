@@ -953,6 +953,7 @@
         *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
       }
     </style>
+    <link rel="stylesheet" href="./raid-boss.css" />
   </head>
   <body>
     <main>
@@ -962,7 +963,7 @@
         <div class="ambient-grid" aria-hidden="true"></div>
 
         <div class="boss-wrap" aria-hidden="true">
-          <img class="boss-scene" id="boss-scene" src="./assets/boss-raid-leviathan.jpg" alt="当前月度 Boss" />
+          <div class="boss-scene" id="boss-scene"><img src="./assets/boss-raid-leviathan.jpg" alt="当前月度 Boss" /></div>
           <div class="boss-scanline"></div>
           
           <div class="boss-target-reticle">
@@ -977,11 +978,12 @@
         </div>
 
         <div class="damage-float" id="damage-float" aria-hidden="true"></div>
+        <div class="boss-animation-status" id="boss-animation-status" role="status"></div>
 
         <div class="hud" id="battle-hud" hidden>
           <div class="topbar">
             <div class="live glass"><span class="dot"></span><span id="campaign-state">等待战报</span></div>
-            <div class="sync glass"><span>伤害最多延迟约 60 秒 · <b id="sync-time">尚未同步</b></span><button id="refresh-btn" type="button" title="刷新战报" aria-label="刷新战报">↻</button></div>
+            <div class="sync glass"><span>伤害最多延迟约 60 秒 · <b id="sync-time">尚未同步</b></span><button id="motion-toggle" class="motion-toggle" type="button" aria-pressed="false">减少动态</button><button id="refresh-btn" type="button" title="刷新战报" aria-label="刷新战报">↻</button></div>
           </div>
 
           <div class="identity">
@@ -1101,10 +1103,12 @@
     </main>
 
     <footer class="site-foot">
-      Boss 视觉素材由 <a id="asset-source" href="https://www.flickr.com/photos/22007612@N05/4840240932" target="_blank" rel="noreferrer">Gage Skidmore</a> 提供，基于 <a id="asset-license" href="https://creativecommons.org/licenses/by-sa/2.0/" target="_blank" rel="noreferrer">CC BY-SA 2.0</a> 授权使用。
+      <span id="animated-credit" hidden>KaWang 原创动态 Boss · 分层矢量动画</span>
+      <span id="fallback-credit">Boss 视觉素材由 <a id="asset-source" href="https://www.flickr.com/photos/22007612@N05/4840240932" target="_blank" rel="noreferrer">Gage Skidmore</a> 提供，基于 <a id="asset-license" href="https://creativecommons.org/licenses/by-sa/2.0/" target="_blank" rel="noreferrer">CC BY-SA 2.0</a> 授权使用。</span>
     </footer>
 
     <script src="./runtime-config.js"></script>
+    <script src="./raid-boss.js"></script>
     <script>
       (() => {
         const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
@@ -1124,8 +1128,13 @@
           sessionToken: null,
           initialized: false,
           payload: null,
-          lastDamageIds: new Set(),
-          historyBossId: null
+          historyBossId: null,
+          skipDamageOnce: false,
+          transitionTimer: null,
+          transitionListener: null,
+          pendingPayload: null,
+          refreshing: false,
+          motionDisabled: localStorage.getItem("raid-reduced-motion") === "1"
         };
 
         const refs = {
@@ -1133,6 +1142,8 @@
           battleHud: document.querySelector("#battle-hud"),
           battleContent: document.querySelector("#battle-content"),
           bossScene: document.querySelector("#boss-scene"),
+          animationStatus: document.querySelector("#boss-animation-status"),
+          motionToggle: document.querySelector("#motion-toggle"),
           damageFloat: document.querySelector("#damage-float"),
           campaignState: document.querySelector("#campaign-state"),
           syncTime: document.querySelector("#sync-time"),
@@ -1171,6 +1182,27 @@
           assetLicense: document.querySelector("#asset-license")
         };
 
+        const bossVisual = globalThis.RaidBoss?.create(refs.bossScene);
+        const motionPreference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+        let battlefieldVisible = true;
+        let resumeParticles = () => {};
+        function reducedMotion() { return state.motionDisabled || Boolean(motionPreference?.matches); }
+        function syncMotion() {
+          refs.battlefield.classList.toggle("is-paused", document.hidden || !battlefieldVisible);
+          refs.battlefield.classList.toggle("is-reduced-motion", reducedMotion());
+          bossVisual?.setReducedMotion(reducedMotion());
+          refs.motionToggle.setAttribute("aria-pressed", String(reducedMotion()));
+          refs.motionToggle.textContent = reducedMotion() ? "动态已减少" : "减少动态";
+          resumeParticles();
+        }
+        motionPreference?.addEventListener("change", syncMotion);
+        if (typeof IntersectionObserver === "function") {
+          new IntersectionObserver(([entry]) => {
+            battlefieldVisible = entry.isIntersecting;
+            syncMotion();
+          }).observe(refs.battlefield);
+        }
+
         // Ambient Combat Particles Simulation
         const canvas = document.getElementById("combat-canvas");
         if (canvas && typeof canvas.getContext === "function" && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1201,7 +1233,10 @@
                 });
               }
 
+              let frame = null;
               function renderParticles() {
+                frame = null;
+                if (document.hidden || !battlefieldVisible || reducedMotion()) return;
                 ctx.clearRect(0, 0, width, height);
                 for (let i = 0; i < particles.length; i++) {
                   const p = particles[i];
@@ -1221,14 +1256,21 @@
                 }
                 ctx.globalAlpha = 1;
                 ctx.shadowBlur = 0;
-                window.requestAnimationFrame(renderParticles);
+                frame = window.requestAnimationFrame(renderParticles);
               }
-              window.requestAnimationFrame(renderParticles);
+              resumeParticles = () => {
+                if (frame !== null) window.cancelAnimationFrame(frame);
+                frame = null;
+                if (!document.hidden && battlefieldVisible && !reducedMotion()) frame = window.requestAnimationFrame(renderParticles);
+                else ctx.clearRect(0, 0, width, height);
+              };
+              resumeParticles();
             }
           } catch (e) {
             // Graceful fallback
           }
         }
+        syncMotion();
 
         function number(value) {
           const num = Number(value) || 0;
@@ -1304,6 +1346,12 @@
         }
 
         function showStatus(title, message = "") {
+          clearTimeout(state.transitionTimer);
+          if (state.transitionListener) refs.bossScene.removeEventListener("raid-boss-defeated", state.transitionListener);
+          state.transitionListener = null;
+          state.transitionTimer = null;
+          state.pendingPayload = null;
+          bossVisual?.setPaused(true);
           refs.emptyTitle.textContent = title;
           refs.emptyMessage.textContent = message;
           refs.emptyState.hidden = false;
@@ -1385,11 +1433,28 @@
             <div class="list">${selected.ranking.length ? selected.ranking.map((item) => `<div class="row rank-row ${item.userId && item.userId === selected.own?.userId ? "is-own" : ""}"><span class="rank ${legacyMvp && item.rank <= selected.mvpSlots ? "mvp" : ""}">${String(item.rank).padStart(2, "0")}</span><div><strong>${escapeHtml(item.maskedName)}</strong><br><span>已入榜 · 实际消耗 ${number(item.actualCost)}</span></div><div class="row-value"><strong>${number(item.damage)}</strong><br><span>伤害</span></div></div>`).join("") : `<div class="row"><span>暂无入榜记录</span></div>`}</div>`;
         }
 
-        function renderBossAsset(assetKey) {
+        function renderBossAsset(assetKey, boss, campaignStatus) {
+          if (bossVisual) {
+            bossVisual.update(boss, campaignStatus, !state.skipDamageOnce);
+            bossVisual.setPaused(false);
+            const animatedAsset = globalThis.RaidBoss.skins[assetKey];
+            document.querySelector("#animated-credit").hidden = Boolean(animatedAsset?.credit);
+            document.querySelector("#fallback-credit").hidden = !animatedAsset?.credit;
+            if (animatedAsset?.credit) {
+              refs.assetSource.textContent = animatedAsset.credit;
+              refs.assetSource.href = animatedAsset.source;
+              refs.assetLicense.textContent = animatedAsset.license;
+              refs.assetLicense.href = animatedAsset.licenseUrl;
+            }
+            refs.animationStatus.textContent = {
+              enraged: "目标狂暴", unstable: "濒临击败 · 等待结算", defeated: "目标已击败", dormant: "战斗已停止"
+            }[refs.bossScene.dataset.state] || "";
+            return;
+          }
           const key = BOSS_ASSETS[assetKey] ? assetKey : "leviathan";
           if (refs.bossScene.dataset.assetKey === key) return;
           const asset = BOSS_ASSETS[key];
-          refs.bossScene.src = asset.src;
+          refs.bossScene.querySelector("img").src = asset.src;
           refs.bossScene.dataset.assetKey = key;
           refs.assetSource.textContent = asset.credit;
           refs.assetSource.href = asset.source;
@@ -1397,11 +1462,12 @@
           refs.assetLicense.href = asset.licenseUrl;
         }
 
-        function playDamage(items) {
-          if (!state.initialized) return;
-          const added = items.filter((item) => !state.lastDamageIds.has(item.id));
-          if (!added.length) return;
-          const total = added.reduce((sum, item) => sum + item.damage, 0);
+        function playDamage(boss, previousBoss) {
+          if (!state.initialized || state.skipDamageOnce || document.hidden || !battlefieldVisible || reducedMotion() || boss.id !== previousBoss?.id) return;
+          // A minute bucket can grow without changing its ID; use authoritative cumulative damage.
+          const total = Number(boss.totalDamage) - Number(previousBoss.totalDamage);
+          if (!(total > 0)) return;
+          bossVisual?.hit();
           refs.damageFloat.textContent = `-${number(total)}`;
           refs.damageFloat.classList.remove("show");
           void refs.damageFloat.offsetWidth;
@@ -1410,18 +1476,47 @@
           window.setTimeout(() => refs.battlefield.classList.remove("is-hit"), 240);
         }
 
-        function render(payload) {
+        function render(payload, afterTransition = false) {
+          if (state.transitionTimer && !afterTransition) {
+            state.pendingPayload = payload;
+            return;
+          }
           persistRefreshedAuth(payload);
           if (payload.sessionToken) state.sessionToken = payload.sessionToken;
           if (!payload.campaign) return showStatus("当前连接没有已开始的 Boss 活动。");
           const legacyMvp = payload.campaign.rewardMode === "legacy_mvp";
           const boss = payload.currentBoss || [...payload.campaign.bosses].reverse().find((item) => item.status !== "locked");
           if (!boss) return showStatus("本月活动尚未开放战斗。");
+          const previousBoss = state.payload?.currentBoss;
+          const previousDefeated = previousBoss && payload.campaign.bosses.find((item) => item.id === previousBoss.id && item.status === "defeated");
+          if (!afterTransition && !state.skipDamageOnce && bossVisual && previousDefeated && previousBoss.id !== boss.id && !document.hidden && battlefieldVisible && !reducedMotion()) {
+            bossVisual.update(previousDefeated, payload.campaign.status);
+            refs.animationStatus.textContent = `${previousBoss.name} 已击败`;
+            refs.healthCurrent.textContent = number(0);
+            refs.healthFill.style.width = "0%";
+            refs.healthGhost.style.width = "0%";
+            refs.healthTrack.setAttribute("aria-valuenow", "0");
+            state.pendingPayload = payload;
+            const finishTransition = () => {
+              const next = state.pendingPayload;
+              clearTimeout(state.transitionTimer);
+              refs.bossScene.removeEventListener("raid-boss-defeated", finishTransition);
+              state.transitionTimer = null;
+              state.transitionListener = null;
+              state.pendingPayload = null;
+              if (next) render(next, true);
+            };
+            state.transitionListener = finishTransition;
+            refs.bossScene.addEventListener("raid-boss-defeated", finishTransition, { once: true });
+            state.transitionTimer = window.setTimeout(finishTransition, bossVisual.defeatTimeout(previousDefeated));
+            return;
+          }
           const historical = (payload.history || []).find((item) => item.boss.id === boss.id);
           const battleFinished = ["cleared", "ended", "aborted"].includes(payload.campaign.status)
             || ["defeated", "ended", "aborted"].includes(payload.currentBoss?.status);
-          playDamage(payload.battleLog || []);
-          state.lastDamageIds = new Set((payload.battleLog || []).map((item) => item.id));
+          renderBossAsset(boss.assetKey, boss, payload.campaign.status);
+          if (!["ended", "aborted"].includes(payload.campaign.status)) playDamage(boss, previousBoss);
+          state.skipDamageOnce = false;
           state.payload = payload;
           refs.emptyState.hidden = true;
           refs.battleHud.hidden = false;
@@ -1432,7 +1527,6 @@
           refs.bossLevel.textContent = `Relay Defense / Lv.${String(boss.level).padStart(2, "0")}`;
           refs.bossName.textContent = boss.name;
           refs.bossTitle.textContent = boss.title || "全站真实消耗自动转化为攻击能量。";
-          renderBossAsset(boss.assetKey);
           refs.healthCurrent.textContent = number(boss.remainingHealth);
           refs.healthMax.textContent = number(boss.health);
           refs.healthTrack.setAttribute("aria-valuemax", String(boss.health));
@@ -1483,12 +1577,15 @@
         }
 
         async function refresh() {
+          if (state.refreshing) return;
+          state.refreshing = true;
           refs.refreshBtn.classList.add("is-loading");
           try {
             render(await request("/api/public/sub2api/raid/bootstrap"));
           } catch (error) {
             showStatus("战报同步失败", error.message);
           } finally {
+            state.refreshing = false;
             window.setTimeout(() => refs.refreshBtn.classList.remove("is-loading"), 400);
           }
         }
@@ -1529,6 +1626,11 @@
           }
         });
         refs.refreshBtn.addEventListener("click", refresh);
+        refs.motionToggle.addEventListener("click", () => {
+          state.motionDisabled = !state.motionDisabled;
+          localStorage.setItem("raid-reduced-motion", state.motionDisabled ? "1" : "0");
+          syncMotion();
+        });
         refs.historyTabs.addEventListener("click", (event) => {
           const button = event.target.closest("[data-history-boss]");
           if (!button || !state.payload) return;
@@ -1536,6 +1638,7 @@
           renderHistory(state.payload.history || [], state.payload.campaign?.rewardMode === "legacy_mvp");
         });
         refs.battlefield.addEventListener("pointermove", (event) => {
+          if (reducedMotion() || event.pointerType === "touch") return;
           const bounds = refs.battlefield.getBoundingClientRect();
           const x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
           const y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
@@ -1547,6 +1650,8 @@
           refs.battlefield.style.removeProperty("--scene-y");
         });
         document.addEventListener("visibilitychange", () => {
+          state.skipDamageOnce = true;
+          syncMotion();
           if (!document.hidden && state.sessionToken) refresh();
         });
         initialize();

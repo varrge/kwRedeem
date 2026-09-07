@@ -22,6 +22,9 @@ docs/*
 !docs/adr/
 !docs/boss-raid-campaign-plan.md
 !docs/boss-raid-rules.md
+!docs/boss-raid-animation.md
+!docs/sub2api-recharge-multiplier-api.md
+!docs/sub2api-v0.1.137-upgrade-assessment.md
 !docs/sub2api-home-content.html
 !docs/chatgpt-membership-fulfillment-implementation-spec.md
 !docs/python-membership-payment-executor-spec.md
@@ -62,7 +65,9 @@ tests/*
 !tests/sub2api-raid.test.js
 !tests/sub2api-raid-api.test.js
 !tests/sub2api-raid-page.test.js
+!tests/sub2api-raid-animation.test.js
 !tests/sub2api-raid-phase2.test.js
+!tests/sub2api-raid-migration.test.js
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/gptserve-subscription-info-pro.json

@@ -1,0 +1,62 @@
+{
+  "width": 493,
+  "height": 512,
+  "columns": 6,
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 25,
+      "duration": 2000
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 25,
+      "duration": 1350
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 13,
+      "duration": 850
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 37,
+      "duration": 2200
+    }
+  },
+  "source": {
+    "title": "Wizard character (animated)",
+    "author": "ruberboy",
+    "url": "https://opengameart.org/content/wizard-characteranimated",
+    "archive": "https://opengameart.org/sites/default/files/magician_v1.0.zip",
+    "license": "CC0 1.0",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "sourceCrop": [
+    90,
+    109,
+    648,
+    688
+  ],
+  "notes": {
+    "registration": {
+      "idle": [
+        110,
+        125
+      ],
+      "damage": [
+        148,
+        114
+      ],
+      "die": [
+        100,
+        128
+      ],
+      "attack": [
+        140,
+        101
+      ]
+    },
+    "description": "Fixed per-action registration aligns first standing feet. Idle25, damage13, die37 authored PNGs; battle uses same25-frame idle played faster. No per-frame trimming."
+  }
+}

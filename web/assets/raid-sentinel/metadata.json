@@ -1,0 +1,91 @@
+{
+  "width": 512,
+  "height": 435,
+  "columns": 6,
+  "poster": "poster.webp",
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_walking_tree_pack/Large/Idle1__000.png through __009.png"
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_walking_tree_pack/Large/Idle2__000.png through __009.png"
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_walking_tree_pack/Large/Hurt__000.png through __009.png"
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 10,
+      "duration": 833,
+      "sourceFrames": "ForestFiendsPackOGA/_walking_tree_pack/Large/Death2__000.png through __009.png"
+    }
+  },
+  "source": {
+    "title": "Forest Fiends - Free Character Pack",
+    "author": "LudicArts",
+    "url": "https://opengameart.org/content/forest-fiends-free-character-pack",
+    "authorUrl": "https://www.ludicarts.com/",
+    "archive": "https://opengameart.org/sites/default/files/forestfiendspackoga.zip",
+    "license": "CC-BY-4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "character": "Walking Tree"
+  },
+  "sourceCrop": [
+    -224,
+    -75,
+    549,
+    582
+  ],
+  "sourceClipOffsets": {
+    "idle": [
+      0,
+      0
+    ],
+    "idle-battle": [
+      -6,
+      0
+    ],
+    "hurt": [
+      -1,
+      -23
+    ],
+    "death": [
+      -293,
+      -139
+    ]
+  },
+  "sourceFrameSizes": {
+    "idle": [
+      466,
+      437
+    ],
+    "idle-battle": [
+      476,
+      437
+    ],
+    "hurt": [
+      615,
+      498
+    ],
+    "death": [
+      889,
+      784
+    ]
+  },
+  "framesPerSecond": 12,
+  "posterContentBounds": [
+    156,
+    47,
+    442,
+    341
+  ]
+}

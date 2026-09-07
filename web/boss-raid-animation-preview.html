@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Boss 动画预览 · KaWang</title>
+  <link rel="stylesheet" href="./raid-boss.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #070b13; color: #dfebef; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+    button, input { font: inherit; } button { cursor: pointer; } button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid #7ce2d2; outline-offset: 4px; }
+    .preview { position: relative; min-height: 100svh; overflow: hidden; background: radial-gradient(ellipse at 51% 42%, #263139 0, #10171e 35%, #070b13 72%); }
+    .preview::before { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(#b4e2dd55 .6px, transparent .6px); background-size: 47px 43px; opacity: .4; }
+    header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 26px 4vw; border-bottom: 1px solid #cee7ef12; }
+    .brand { letter-spacing: .22em; font-size: 12px; } .brand span { color: #5ae1be; margin-right: 12px; }
+    .notice { color: #80939e; font-size: 12px; }
+    .theater { position: relative; min-height: 690px; height: calc(100svh - 165px); max-height: 1000px; }
+    #preview-boss { position: absolute; inset: 0; width: min(1050px, 85vw); height: 100%; margin: auto; }
+    .intro { position: absolute; z-index: 1; top: 50px; left: 4vw; max-width: 235px; pointer-events: none; }
+    .eyebrow { color: #76969e; letter-spacing: .24em; font: 11px ui-monospace, monospace; }
+    h1 { margin: 20px 0 5px; font-size: clamp(32px, 3.5vw, 56px); font-weight: 500; letter-spacing: -.04em; line-height: 1.2; }
+    .intro p { color: #93a5b0; font-size: 13px; line-height: 1.9; }
+    .form-label { margin-top: 30px; padding-left: 12px; border-left: 1px solid #74cfb8; }
+    .form-label b { display: block; color: #ccddd9; font-weight: 400; margin-top: 5px; }
+    .controls { position: absolute; z-index: 1; right: 4vw; top: 52px; width: 210px; padding: 20px; border: 1px solid #bddae81a; border-radius: 12px; background: #0c182066; backdrop-filter: blur(14px); }
+    .controls h2 { font-size: 12px; font-weight: 400; color: #90a7af; margin: 0 0 18px; letter-spacing: .15em; }
+    .controls button { width: 100%; padding: 10px 7px; color: #b9cdd3; border: 1px solid #86afbd2b; background: #253b452e; border-radius: 6px; margin-bottom: 8px; }
+    .controls button:hover { border-color: #8bd7c9; color: #fff; } .controls button.primary { background: #90e7d3; color: #082c27; border-color: #90e7d3; }
+    .controls label { color: #8ea4ac; font-size: 12px; display: block; margin: 12px 0 7px; }
+    .controls input { width: 100%; accent-color: #83dcca; }
+    .controls .motion { background: transparent; font-size: 11px; margin: 16px 0 0; }
+    .health { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); width: min(410px, 80vw); }
+    .health-head { display: flex; justify-content: space-between; font: 11px ui-monospace, monospace; color: #a9c7c8; letter-spacing: .12em; margin-bottom: 12px; }
+    .track { height: 3px; background: #69818e33; } .fill { height: 100%; background: #8ae3cd; transition: width .4s ease; }
+    #state-label { margin: 16px 0 0; text-align: center; font-size: 12px; color: #8da4af; letter-spacing: .12em; min-height: 18px; }
+    .roster { position: relative; display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin: 0 4vw 28px; }
+    .roster button { position: relative; text-align: left; padding: 12px; border: 1px solid #a5c6d21a; background: #0c1620; color: #97aab4; border-radius: 7px; }
+    .roster img { display: block; width: 100%; height: 80px; object-fit: contain; margin: 0 0 10px; filter: brightness(1.12) saturate(.8); }
+    .roster button span { display: block; font: 10px ui-monospace, monospace; letter-spacing: .13em; color: #5d7786; margin-bottom: 7px; }
+    .roster button[aria-pressed="true"] { color: #e8f8f2; border-color: #7ac7b67a; background: #17302e; }
+    .roster button[aria-pressed="true"]::after { content: ""; width: 4px; height: 4px; background: #9aecd9; border-radius: 50%; position: absolute; right: 12px; top: 16px; }
+    footer { color: #82949d; text-align: center; font-size: 11px; padding: 0 15px 24px; } footer a { color: #c9b48f; }
+    @media (max-width: 1050px) { .intro { max-width: 175px; } .controls { width: 175px; right: 20px; padding: 14px; } #preview-boss { width: 90vw; } .roster { grid-template-columns: repeat(4, 1fr); } }
+    @media (max-width: 680px) {
+      header { padding: 18px 20px; align-items: flex-start; gap: 12px; } .notice { max-width: 130px; font-size: 10px; }
+      .theater { height: auto; min-height: 930px; } .intro { left: 22px; top: 27px; max-width: 270px; }
+      h1 { font-size: 38px; margin-top: 13px; } .intro p { margin: 8px 0; } .form-label { display: none; }
+      #preview-boss { top: 140px; bottom: auto; width: 125vw; left: -12.5vw; height: 440px; }
+      .health { top: 551px; bottom: auto; width: calc(100% - 48px); }
+      .controls { top: 640px; left: 24px; right: 24px; width: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .controls h2 { grid-column: 1 / -1; margin-bottom: 3px; } .controls button { margin: 0; }
+      .controls label { margin: 6px 0 0; } .controls input { grid-column: 1 / -1; } .controls .motion { margin: 0; }
+      .roster { margin: 0 24px 24px; grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="preview">
+    <header><div class="brand"><span>◈</span>KAWANG / RAID LAB</div><div class="notice">动画预览 · 模拟数据<br>操作不会影响正式活动</div></header>
+    <section class="theater" aria-label="Boss 动画预览">
+      <div id="preview-boss" aria-hidden="true"></div>
+      <div class="intro"><div class="eyebrow" id="asset-code"></div><h1 id="boss-title"></h1><p id="boss-description"></p><div class="form-label"><span class="eyebrow" id="art-label">CREATURE / 2.5D</span><b id="art-detail">黑鳞 · 破翼 · 长尾</b></div></div>
+      <div class="controls">
+        <h2>动作预览</h2>
+        <button class="primary" id="hit" type="button">模拟受击</button>
+        <button id="defeat" type="button">确认击败</button>
+        <button id="dormant" type="button">活动中止</button>
+        <button id="reset" type="button">重置待机</button>
+        <label for="health">剩余血量 <output id="health-value">100%</output></label>
+        <input id="health" type="range" min="0" max="100" value="100" />
+        <button class="motion" id="motion" type="button" aria-pressed="false">暂停动画</button>
+      </div>
+      <div class="health"><div class="health-head"><span>VITALITY</span><span id="health-numbers">2,000 / 2,000</span></div><div class="track"><div class="fill" id="health-fill" style="width:100%"></div></div><p id="state-label" role="status">待机 · 呼吸中</p></div>
+    </section>
+    <nav class="roster" id="roster" aria-label="选择 Boss"></nav>
+    <footer id="art-credit"></footer>
+  </main>
+  <script src="./raid-boss.js"></script>
+  <script>
+    const descriptions = {
+      leviathan: "从深渊归来的黑棘古龙。破损翼膜贴着层叠鳞甲，金色独瞳注视入侵者。",
+      sentinel: "扎根于遗忘之森的古老守卫。盘结树根托起巨冠，枯木面孔缓缓苏醒。",
+      prism: "幽紫菌伞下藏着锯齿巨口。它的每一次摇摆，都像在倾听孢群的低语。",
+      "zero-core": "悬浮在裂隙中的巨大独眼。血色神经束向后伸展，瞳孔缓慢扫视战场。",
+      warden: "被血月诅咒的半兽看守。撕裂的制服下是弓起的脊背，巨爪蓄势待发。",
+      overmind: "被瘟疫吞噬的亡骸之王。畸变巨肩压低躯体，残破衣物下仍涌动着力量。",
+      behemoth: "符文将碎岩聚成巨像。悬浮石首与不对称重拳连动，败退时崩散成石堆。",
+      singularity: "手握古老符杖的星渊术士。长袍掩住步伐，兜帽之下的视线从未离开你。"
+    };
+    const host = document.querySelector("#preview-boss");
+    const visual = RaidBoss.create(host);
+    let boss;
+    let campaignStatus = "active";
+    let paused = false;
+    function render() {
+      visual.update(boss, campaignStatus);
+      const percent = Math.round(boss.remainingHealth / boss.health * 100);
+      document.querySelector("#health").value = percent;
+      document.querySelector("#health-value").textContent = `${percent}%`;
+      document.querySelector("#health-fill").style.width = `${percent}%`;
+      document.querySelector("#health-numbers").textContent = `${boss.remainingHealth.toLocaleString()} / 2,000`;
+      document.querySelector("#state-label").textContent = { idle: "待机 · 保持戒备", enraged: "残血 · 进入战斗姿态", unstable: "濒临击败 · 等待服务器确认", defeated: "已确认击败 · 目标倒下", dormant: "活动中止 · 保持休眠" }[host.dataset.state];
+    }
+    function select(key) {
+      boss = { id: key, assetKey: key, health: 2000, remainingHealth: 2000, status: "active" };
+      campaignStatus = "active";
+      const skin = RaidBoss.skins[key];
+      document.querySelector("#boss-title").textContent = key === "leviathan" ? "利维坦" : skin.title;
+      document.querySelector("#boss-description").textContent = descriptions[key];
+      document.querySelector("#asset-code").textContent = `${skin.subtitle} / ${key.toUpperCase()}`;
+      document.querySelector("#art-label").textContent = "CREATURE / 2.5D";
+      document.querySelector("#art-detail").textContent = skin.detail;
+      document.querySelector("#art-credit").innerHTML = `角色素材：<a href="${skin.source}" target="_blank" rel="noreferrer">${skin.credit}</a> · <a href="${skin.licenseUrl}" target="_blank" rel="noreferrer">${skin.license}</a> · <a href="./assets/raid-${key}/CREDITS.md" target="_blank">来源及改编说明</a>`;
+      for (const button of document.querySelectorAll("[data-boss]")) button.setAttribute("aria-pressed", String(button.dataset.boss === key));
+      render();
+    }
+    Object.entries(RaidBoss.skins).forEach(([key, skin], index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.boss = key;
+      button.innerHTML = `<img src="./assets/raid-${key}/poster.webp" alt="" loading="lazy"/><span>${skin.subtitle}</span>${skin.title}`;
+      button.addEventListener("click", () => select(key));
+      document.querySelector("#roster").append(button);
+    });
+    document.querySelector("#hit").addEventListener("click", () => {
+      if (boss.status !== "active" || campaignStatus !== "active") return;
+      boss.remainingHealth = Math.max(0, boss.remainingHealth - 160);
+      if (!boss.remainingHealth) boss.status = "settling";
+      render(); visual.hit();
+    });
+    document.querySelector("#defeat").addEventListener("click", () => { boss.remainingHealth = 0; boss.status = "defeated"; render(); });
+    document.querySelector("#dormant").addEventListener("click", () => { campaignStatus = "aborted"; render(); });
+    document.querySelector("#reset").addEventListener("click", () => select(boss.assetKey));
+    document.querySelector("#health").addEventListener("input", (event) => {
+      boss.remainingHealth = Number(event.target.value) * 20;
+      boss.status = boss.remainingHealth ? "active" : "settling";
+      campaignStatus = "active";
+      render();
+    });
+    document.querySelector("#motion").addEventListener("click", (event) => {
+      paused = !paused; visual.setPaused(paused);
+      event.target.setAttribute("aria-pressed", String(paused));
+      event.target.textContent = paused ? "继续动画" : "暂停动画";
+    });
+    select("leviathan");
+  </script>
+</body>
+</html>

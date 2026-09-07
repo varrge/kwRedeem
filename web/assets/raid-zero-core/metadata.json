@@ -1,0 +1,43 @@
+{
+  "width": 406,
+  "height": 337,
+  "columns": 6,
+  "clips": {
+    "idle": {
+      "file": "idle.webp",
+      "frames": 36,
+      "duration": 3000
+    },
+    "idle-battle": {
+      "file": "idle-battle.webp",
+      "frames": 30,
+      "duration": 2000
+    },
+    "hurt": {
+      "file": "hurt.webp",
+      "frames": 15,
+      "duration": 900
+    },
+    "death": {
+      "file": "death.webp",
+      "frames": 30,
+      "duration": 2000
+    }
+  },
+  "source": {
+    "title": "Demonic Eye",
+    "author": "Grefuntor / Atmostatic",
+    "url": "https://opengameart.org/content/demonic-eye",
+    "archive": "https://opengameart.org/sites/default/files/demon-eye-obj.zip",
+    "license": "CC-BY-3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+    "authorUrl": "http://atmostatic.blogspot.com"
+  },
+  "sourceCrop": [
+    87,
+    127,
+    493,
+    464
+  ],
+  "notes": "Original handpainted textured OBJ rendered at512x512. KaWang added lighting, eye turns, independently oscillating tendrils, hurt recoil and collapsing death. Four distinct clips, no original rig animation claimed. No Three.js runtime shipped; offline pre-render only."
+}

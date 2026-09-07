@@ -26,6 +26,22 @@ _Avoid_: Full project archive, directory dump
 A full server migration restore initiated from the KaWang admin UI while the service is reachable, with the backend first moving the system into maintenance mode to block user-facing writes.
 _Avoid_: Hot restore, direct database overwrite
 
+**Sub2api Operational State**:
+The complete production state required for an existing Sub2api service to continue without losing business records, transient coordination state, service configuration, login continuity, or two-factor authentication continuity.
+_Avoid_: Database-only backup, Docker image, source checkout
+
+**Sub2api Application Rollback**:
+Returning production traffic to a previously deployed compatible application image without reverting player data written after a release. Once writes resume, it is distinct from restoring a deployment snapshot.
+_Avoid_: Routine database restore, discarding post-release recharge or usage records
+
+**Sub2api Disaster-Recovery Snapshot**:
+A coordinated PostgreSQL, Redis, application-data, and runtime-configuration backup kept for recovery from corruption or an otherwise unrecoverable release. Restoring it after production writes resume is a last-resort recovery operation that requires explicit reconciliation of newer business records.
+_Avoid_: Normal application rollback, automatic post-release restore
+
+**Customer Input Moderation**:
+Evaluation of client-authored system, developer, and user content, including submitted images, against standard safety categories and explicit business keywords. Assistant content, tool results, and model output are outside its first-release boundary.
+_Avoid_: Model output moderation, retaining complete non-hit requests
+
 **Registration Invite Code**:
 A Sub2api `type=invitation` redeem code created through the remote official Sub2api admin API. KaWang records which existing player issued it and layers invite-rebate behavior locally.
 _Avoid_: Affiliate code, referral code, promo code

@@ -40,8 +40,9 @@ test("production battlefield uses server-confirmed damage and eight switchable l
   assert.match(html, /class="battlefield"/);
   assert.match(html, /class="boss-scene"/);
   assert.match(html, /backdrop-filter:\s*blur/);
-  assert.match(html, /state\.lastDamageIds/);
-  assert.match(html, /item\.id/);
+  assert.match(html, /Number\(boss\.totalDamage\) - Number\(previousBoss\.totalDamage\)/);
+  assert.match(html, /\.\/raid-boss\.js/);
+  assert.match(html, /\.\/raid-boss\.css/);
   assert.match(html, /setInterval\(refresh, 60000\)/);
   assert.match(html, /每分钟汇总同一玩家的实际消耗与伤害/);
   assert.match(html, /<script src="\.\/runtime-config\.js"><\/script>/);

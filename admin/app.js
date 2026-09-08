@@ -4711,14 +4711,14 @@ window.endShakeCampaign = endShakeCampaign;
 window.dispositionShakeDraw = dispositionShakeDraw;
 
 const RAID_ASSETS = {
-  leviathan: "黑棘利维坦 · 古龙",
-  sentinel: "苍木哨兵 · 树灵",
-  prism: "菌冠母体 · 孢群",
-  "zero-core": "深渊之瞳 · 独眼",
-  warden: "血月典狱长 · 狼人",
-  overmind: "亡骸主宰 · 腐躯",
-  behemoth: "符文巨像 · 岩石",
-  singularity: "星渊术士 · 咒术"
+  leviathan: "黑棘利维坦 · 霜脊古堡",
+  sentinel: "古誓戟卫 · 寒松遗迹",
+  prism: "巢穴之母 · 枯金矿坑",
+  "zero-core": "黑曜翼魔 · 黑曜祭所",
+  warden: "灰鬃处刑者 · 灰石要塞",
+  overmind: "幽沼主宰 · 腐沼墓园",
+  behemoth: "霜牙三首猎犬 · 冰封隘口",
+  singularity: "深渊凝视者 · 沉星祭坛"
 };
 
 function defaultRaidGlobalRechargeReward(level, rechargeMultiplier) {

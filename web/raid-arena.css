@@ -1,0 +1,64 @@
+.raid-arena { position:relative; width:100%; height:100%; overflow:hidden; --arena-accent:#afd6d0; color:#e3edef; }
+.raid-3d-canvas { display:block; width:100%; height:100%; touch-action:none; cursor:grab; }
+.raid-3d-canvas:active { cursor:grabbing; }
+.raid-view-toolbar { position:absolute; top:195px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:10px; white-space:nowrap; }
+.raid-view-toolbar span { color:#b8cbce; font-size:10px; text-shadow:0 1px 4px #000; }
+.raid-view-toolbar button { color:#e6e5d6; border:1px solid #a8c9d43d; background:#142432ab; border-radius:5px; padding:5px 9px; font-size:10px; cursor:pointer; }
+.raid-party-identities { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; pointer-events:none; }
+.raid-attack-note { position:absolute; left:50%; bottom:92px; transform:translateX(-50%); max-width:80%; text-align:center; color:#c3e9df; background:#10212ca8; border-radius:6px; padding:5px 10px; font:11px/1.5 ui-monospace,monospace; pointer-events:none; }
+.raid-attack-note:empty { display:none; }
+.battlefield .raid-attack-note { bottom:175px; }
+.raid-party-toolbar { position:absolute; right:6%; top:110px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; width:260px; padding:14px 16px; background:#0e19298a; backdrop-filter:blur(14px); border:1px solid #bbd8e522; border-radius:10px; }
+.raid-party-toolbar strong { font-size:13px; font-weight:500; margin-right:auto; }
+.raid-party-toolbar button { border:1px solid #c2dbe42b; background:#9dcecb13; border-radius:5px; color:#bfd7e1; width:26px; height:26px; cursor:pointer; }
+.raid-party-toolbar button:disabled { opacity:.25; cursor:default; }
+.raid-party-toolbar > span { font:10px ui-monospace,monospace; color:#adc7d1; }
+.raid-party-toolbar .raid-roster-note { width:100%; font:11px/1.4 inherit; color:#98aeb7; }
+.raid-scene-tag { position:absolute; left:6%; bottom:150px; font-size:12px; letter-spacing:.15em; color:var(--arena-accent); padding-left:12px; border-left:2px solid var(--arena-accent); }
+.raid-model-message { position:absolute; left:25%; top:42%; transform:translate(-50%,-50%); max-width:200px; padding:12px; border:1px solid #adc6d333; border-radius:8px; color:#b9c9d4; background:#142435d9; font-size:12px; text-align:center; }
+.raid-model-message button { display:block; color:#d4e9eb; background:#305268; border:0; border-radius:5px; margin:8px auto 0; padding:7px; cursor:pointer; }
+.battlefield:has(.raid-arena), body.embedded .battlefield:has(.raid-arena) { height:720px; min-height:720px; perspective:none; background:#192b38; }
+.battlefield:has(.raid-arena) .boss-wrap { inset:0; height:100%; display:block; pointer-events:auto; }
+.battlefield .boss-scene.raid-arena { width:100%; height:100%; transform:none!important; filter:none!important; animation:none!important; transition:none; }
+.battlefield:has(.raid-arena) .ambient-glow, .battlefield:has(.raid-arena) .ambient-grid, .battlefield:has(.raid-arena) #combat-canvas, .battlefield:has(.raid-arena) .boss-target-reticle, .battlefield:has(.raid-arena) .boss-scanline, .battlefield:has(.raid-arena) .shockwave-ring { display:none; }
+.battlefield:has(.raid-arena) .hud { z-index:5; width:88%; }
+.battlefield:has(.raid-arena) .identity { top:80px; max-width:45%; }
+.battlefield:has(.raid-arena) .identity h1 { font-size:clamp(25px,3vw,42px); text-shadow:0 4px 22px #0004; }
+.battlefield:has(.raid-arena) .identity p { max-width:330px; }
+.battlefield:has(.raid-arena) .metrics { top:auto; bottom:134px; right:0; width:auto; display:flex; flex-direction:row; margin:0; }
+.battlefield:has(.raid-arena) .metric { padding:10px 16px; }
+.battlefield:has(.raid-arena) .metric strong { font-size:15px; }
+.battlefield:has(.raid-arena) .bottom-console { bottom:25px; left:0; right:0; }
+.battlefield:has(.raid-arena) .boss-animation-status { top:auto; bottom:180px; left:24%; }
+.battlefield:has(.raid-arena) .damage-float { left:28%; top:38%; font-size:30px; }
+.raid-roster-fallback { padding:16px; border-bottom:1px solid #aacccc22; color:#a8bfc5; display:flex; gap:10px; flex-wrap:wrap; }
+.raid-roster-fallback span { padding:8px 12px; border-radius:8px; background:#152934; font:12px ui-monospace,monospace; }
+.raid-roster-fallback b { display:block; margin-bottom:5px; color:#c4e2de; }
+@media(max-width:980px){
+  .battlefield:has(.raid-arena) .hud { width:94%; height:100%; }
+  .battlefield:has(.raid-arena) .identity { position:absolute; top:82px; left:0; margin:0; max-width:46%; }
+  .battlefield:has(.raid-arena) .metrics { position:absolute; bottom:132px; right:0; display:flex; width:auto; margin:0; }
+  .battlefield:has(.raid-arena) .bottom-console { position:absolute; bottom:20px; grid-template-columns:minmax(0,1fr) 155px; margin:0; }
+  .raid-party-toolbar { right:3%; top:96px; width:230px; }
+}
+@media(max-width:650px){
+  .battlefield:has(.raid-arena), body.embedded .battlefield:has(.raid-arena) { height:860px; min-height:860px; }
+  .battlefield:has(.raid-arena) .topbar { align-items:flex-start; }
+  .battlefield:has(.raid-arena) .identity { top:115px; max-width:46%; }
+  .battlefield:has(.raid-arena) .identity h1 { font-size:25px; }
+  .battlefield:has(.raid-arena) .identity p:last-child { display:block; font-size:10px; }
+  .raid-party-toolbar { top:122px; width:46%; padding:10px; gap:5px; }
+  .raid-party-toolbar strong { width:100%; }
+  .raid-party-toolbar .raid-roster-note { font-size:9px; }
+  .raid-view-toolbar { top:235px; gap:6px; }
+  .raid-view-toolbar span { font-size:9px; }
+  .raid-attack-note,.battlefield .raid-attack-note { bottom:280px; max-width:90%; font-size:9px; }
+  .battlefield:has(.raid-arena) .metrics { left:0; right:0; bottom:158px; display:grid; grid-template-columns:repeat(2,1fr); width:100%; }
+  .battlefield:has(.raid-arena) .metric { padding:6px 10px; }.battlefield:has(.raid-arena) .metric strong{font-size:12px;}
+  .battlefield:has(.raid-arena) .bottom-console { bottom:14px; grid-template-columns:1fr; gap:8px; }
+  .battlefield:has(.raid-arena) .health { padding:10px; }
+  .battlefield:has(.raid-arena) .player-action button { width:100%; min-height:36px; }
+  .raid-scene-tag { left:4%; bottom:270px; font-size:10px; }
+  .battlefield:has(.raid-arena) .boss-animation-status { bottom:290px; font-size:10px; width:45%; text-align:center; }
+  .raid-model-message { top:44%; left:25%; max-width:45%; font-size:10px; }
+}

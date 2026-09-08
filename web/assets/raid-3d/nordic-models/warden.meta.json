@@ -1,0 +1,112 @@
+{
+  "key": "warden",
+  "displayNameSuggestion": "灰鬃处刑者",
+  "source": "https://opengameart.org/content/animated-bezerker",
+  "license": "CC-BY-3.0",
+  "credits": "warden.credits.md",
+  "bytes": 417244,
+  "sha256": "617893ec75ecb66209686a36522c2cb04d42d04e9bf268f1744b550688e1a8f0",
+  "coordinates": {
+    "up": "+Y",
+    "front": "+Z",
+    "normalization": "All visible vertices at Idle time 0: height 2, bottom 0, horizontal bounds centered."
+  },
+  "idleBounds": {
+    "min": [
+      -1.0122820233303476,
+      -9.370833042865456e-08,
+      -0.7944036353825215
+    ],
+    "max": [
+      1.0122822127700704,
+      1.9999999736585485,
+      0.7944036720837269
+    ],
+    "size": [
+      2.024564236100418,
+      2.000000067366879,
+      1.5888073074662483
+    ]
+  },
+  "triangles": 556,
+  "embeddedImages": 1,
+  "animations": [
+    {
+      "name": "Idle",
+      "duration": 0.8333333134651184,
+      "tracks": 153,
+      "native": true,
+      "source": {
+        "action": "Idle",
+        "frames": [
+          1,
+          21
+        ]
+      }
+    },
+    {
+      "name": "Attack",
+      "duration": 3.2916667461395264,
+      "tracks": 153,
+      "native": true,
+      "source": {
+        "action": "Attack",
+        "frames": [
+          1,
+          80
+        ]
+      }
+    },
+    {
+      "name": "HitReact",
+      "duration": 0.875,
+      "tracks": 153,
+      "native": true,
+      "source": {
+        "action": "Hit",
+        "frames": [
+          1,
+          22
+        ]
+      }
+    },
+    {
+      "name": "Death",
+      "duration": 2.5,
+      "tracks": 153,
+      "native": true,
+      "source": {
+        "action": "Die",
+        "frames": [
+          1,
+          61
+        ]
+      }
+    }
+  ],
+  "missingNativeAnimations": [],
+  "skins": [
+    {
+      "name": "Cube",
+      "bones": 51,
+      "vertices": 447
+    }
+  ],
+  "materials": [
+    {
+      "name": "Material.003",
+      "textured": true,
+      "textureSize": [
+        512,
+        512
+      ]
+    }
+  ],
+  "verification": {
+    "date": "2026-09-08",
+    "loader": "Three.js GLTFLoader in Chromium",
+    "selfContained": true,
+    "finitePoseBounds": "Every exported clip sampled at 0%, 25%, 50%, 75%, 99%.",
+    "visualCheck": "Idle, Attack, HitReact when available, and Death near final frame; /tmp/kw-nordic-guardians/contact-sheet.png."
+  }
+}

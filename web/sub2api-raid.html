@@ -954,6 +954,8 @@
       }
     </style>
     <link rel="stylesheet" href="./raid-boss.css" />
+    <link rel="stylesheet" href="./raid-arena.css" />
+    <link rel="stylesheet" href="./raid-nordic.css" />
   </head>
   <body>
     <main>
@@ -1036,6 +1038,7 @@
         </div>
       </section>
 
+      <div class="raid-roster-fallback" id="raid-roster-fallback" hidden></div>
       <section class="content" id="battle-content" hidden>
         <section class="route glass" aria-labelledby="route-heading">
           <div class="section-head">
@@ -1103,12 +1106,14 @@
     </main>
 
     <footer class="site-foot">
+      <span id="party-model-credit" hidden>参战角色：<a href="./assets/raid-3d/nordic-heroes/CREDITS.md" target="_blank" rel="noreferrer">Clement Wu、Nikolaus、Botanic · CC BY 3.0</a> · 场景贴图：<a href="./assets/raid-3d/nordic-textures/CREDITS.md" target="_blank" rel="noreferrer">Rob Tuytel / Poly Haven · CC0</a> · </span>
       <span id="animated-credit" hidden>KaWang 原创动态 Boss · 分层矢量动画</span>
       <span id="fallback-credit">Boss 视觉素材由 <a id="asset-source" href="https://www.flickr.com/photos/22007612@N05/4840240932" target="_blank" rel="noreferrer">Gage Skidmore</a> 提供，基于 <a id="asset-license" href="https://creativecommons.org/licenses/by-sa/2.0/" target="_blank" rel="noreferrer">CC BY-SA 2.0</a> 授权使用。</span>
     </footer>
 
     <script src="./runtime-config.js"></script>
     <script src="./raid-boss.js"></script>
+    <script src="./raid-arena.js"></script>
     <script>
       (() => {
         const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
@@ -1182,7 +1187,9 @@
           assetLicense: document.querySelector("#asset-license")
         };
 
-        const bossVisual = globalThis.RaidBoss?.create(refs.bossScene);
+        const bossVisual = globalThis.RaidArena?.create(refs.bossScene) || globalThis.RaidBoss?.create(refs.bossScene);
+        document.querySelector("#party-model-credit").hidden = refs.bossScene.dataset.renderer !== "3d";
+        if (refs.bossScene.dataset.renderer === "3d") refs.bossScene.closest(".boss-wrap")?.removeAttribute("aria-hidden");
         const motionPreference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
         let battlefieldVisible = true;
         let resumeParticles = () => {};
@@ -1205,7 +1212,7 @@
 
         // Ambient Combat Particles Simulation
         const canvas = document.getElementById("combat-canvas");
-        if (canvas && typeof canvas.getContext === "function" && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        if (refs.bossScene.dataset.renderer !== "3d" && canvas && typeof canvas.getContext === "function" && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
           try {
             const ctx = canvas.getContext("2d");
             if (ctx) {
@@ -1437,7 +1444,9 @@
           if (bossVisual) {
             bossVisual.update(boss, campaignStatus, !state.skipDamageOnce);
             bossVisual.setPaused(false);
-            const animatedAsset = globalThis.RaidBoss.skins[assetKey];
+            const animatedAsset = refs.bossScene.dataset.renderer === "3d"
+              ? (globalThis.RaidArena.credits[assetKey] || globalThis.RaidArena.credits.leviathan)
+              : globalThis.RaidBoss.skins[assetKey];
             document.querySelector("#animated-credit").hidden = Boolean(animatedAsset?.credit);
             document.querySelector("#fallback-credit").hidden = !animatedAsset?.credit;
             if (animatedAsset?.credit) {
@@ -1515,6 +1524,18 @@
           const battleFinished = ["cleared", "ended", "aborted"].includes(payload.campaign.status)
             || ["defeated", "ended", "aborted"].includes(payload.currentBoss?.status);
           renderBossAsset(boss.assetKey, boss, payload.campaign.status);
+          const participants = payload.participants || [];
+          bossVisual?.updateParticipants?.(participants, payload.participantCount || 0, `${payload.campaign.id}:${boss.id}`, state.initialized && !state.skipDamageOnce);
+          const fallbackRoster = document.querySelector("#raid-roster-fallback");
+          fallbackRoster.hidden = refs.bossScene.dataset.renderer === "3d";
+          if (!fallbackRoster.hidden) {
+            fallbackRoster.replaceChildren();
+            const heading = document.createElement("b"); heading.textContent = `参战者 ${payload.participantCount || 0} 人`;fallbackRoster.append(heading);
+            for (const participant of participants) {
+              if (!/^ID · \*\*[A-F0-9]{4}$/.test(participant.maskedId)) continue;
+              const card = document.createElement("span");card.textContent = `${participant.own ? "我 · " : ""}${participant.maskedId}`;fallbackRoster.append(card);
+            }
+          }
           if (!["ended", "aborted"].includes(payload.campaign.status)) playDamage(boss, previousBoss);
           state.skipDamageOnce = false;
           state.payload = payload;
@@ -1638,7 +1659,7 @@
           renderHistory(state.payload.history || [], state.payload.campaign?.rewardMode === "legacy_mvp");
         });
         refs.battlefield.addEventListener("pointermove", (event) => {
-          if (reducedMotion() || event.pointerType === "touch") return;
+          if (refs.bossScene.dataset.renderer === "3d" || reducedMotion() || event.pointerType === "touch") return;
           const bounds = refs.battlefield.getBoundingClientRect();
           const x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
           const y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
@@ -1654,6 +1675,7 @@
           syncMotion();
           if (!document.hidden && state.sessionToken) refresh();
         });
+        window.addEventListener("pagehide", (event) => { if (!event.persisted) bossVisual?.destroy(); });
         initialize();
       })();
     </script>

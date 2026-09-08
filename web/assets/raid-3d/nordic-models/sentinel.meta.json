@@ -1,0 +1,114 @@
+{
+  "key": "sentinel",
+  "displayNameSuggestion": "古誓戟卫",
+  "source": "https://opengameart.org/content/animated-defender-aka-brigand",
+  "license": "CC-BY-3.0",
+  "credits": "sentinel.credits.md",
+  "bytes": 3671128,
+  "sha256": "a4a256d5bc204320a0d5a6b0da085ea36d4410d36b1dd4f2a3a4848af3227f69",
+  "coordinates": {
+    "up": "+Y",
+    "front": "+Z",
+    "normalization": "All visible vertices at Idle time 0: height 2, bottom 0, horizontal bounds centered."
+  },
+  "idleBounds": {
+    "min": [
+      -0.6563762680119988,
+      6.293668617374237e-07,
+      -0.920593665887149
+    ],
+    "max": [
+      0.6563759872111186,
+      2.0000000965774527,
+      0.9205931399455755
+    ],
+    "size": [
+      1.3127522552231174,
+      1.999999467210591,
+      1.8411868058327245
+    ]
+  },
+  "triangles": 15953,
+  "embeddedImages": 4,
+  "animations": [
+    {
+      "name": "Idle",
+      "duration": 0.47999998927116394,
+      "tracks": 93,
+      "native": true,
+      "source": {
+        "action": "Attack-two handed2",
+        "frames": [
+          3,
+          15
+        ]
+      }
+    },
+    {
+      "name": "Attack",
+      "duration": 1.1200000047683716,
+      "tracks": 93,
+      "native": true,
+      "source": {
+        "action": "Attack-two handed2",
+        "frames": [
+          108,
+          136
+        ]
+      }
+    },
+    {
+      "name": "Death",
+      "duration": 3.8399999141693115,
+      "tracks": 93,
+      "native": true,
+      "source": {
+        "action": "Death-Backwards",
+        "frames": [
+          2,
+          98
+        ]
+      }
+    }
+  ],
+  "missingNativeAnimations": [
+    "HitReact"
+  ],
+  "skins": [
+    {
+      "name": "Defender_1",
+      "bones": 31,
+      "vertices": 395
+    },
+    {
+      "name": "Defender_2",
+      "bones": 31,
+      "vertices": 9222
+    }
+  ],
+  "materials": [
+    {
+      "name": "Defender_Weapon",
+      "textured": true,
+      "textureSize": [
+        512,
+        512
+      ]
+    },
+    {
+      "name": "Defender",
+      "textured": true,
+      "textureSize": [
+        1024,
+        1024
+      ]
+    }
+  ],
+  "verification": {
+    "date": "2026-09-08",
+    "loader": "Three.js GLTFLoader in Chromium",
+    "selfContained": true,
+    "finitePoseBounds": "Every exported clip sampled at 0%, 25%, 50%, 75%, 99%.",
+    "visualCheck": "Idle, Attack, HitReact when available, and Death near final frame; /tmp/kw-nordic-guardians/contact-sheet.png."
+  }
+}

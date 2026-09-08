@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 const BOSS_ASSETS = ["leviathan", "sentinel", "prism", "zero-core", "warden", "overmind", "behemoth", "singularity"];
@@ -1561,7 +1562,7 @@ export function createSub2ApiRaidService({
 
   function buildBootstrap(identity) {
     const campaign = findVisibleCampaign(identity.connectionId);
-    if (!campaign) return { campaign: null, enrollment: null, currentBoss: null, ranking: [], battleLog: [], rewards: [], history: [], sync: null };
+    if (!campaign) return { campaign: null, enrollment: null, currentBoss: null, participants: [], participantCount: 0, ranking: [], battleLog: [], rewards: [], history: [], sync: null };
     const userId = String(identity.userId);
     const enrollment = db.prepare(`
       SELECT * FROM sub2api_raid_enrollments WHERE campaign_id = ? AND sub2api_user_id = ?
@@ -1571,6 +1572,24 @@ export function createSub2ApiRaidService({
     const effectiveRaiders = ranking.filter((item) => item.effective).length;
     const legacyMvp = (campaign.reward_mode || LEGACY_REWARD_MODE) === LEGACY_REWARD_MODE;
     const own = ranking.find((item) => item.userId === userId) || null;
+    // Show the earliest 60 enrollments, replacing the last with the viewer if needed.
+    const participantRows = db.prepare(`
+      SELECT * FROM (
+        SELECT id, sub2api_user_id, enrolled_at, COUNT(*) OVER () AS participant_count
+        FROM sub2api_raid_enrollments
+        WHERE campaign_id = ? AND connection_id = ?
+          AND sub2api_user_id NOT IN (SELECT value FROM json_each(?))
+        ORDER BY (sub2api_user_id = ?) DESC, enrolled_at ASC, id ASC LIMIT 60
+      ) ORDER BY enrolled_at ASC, id ASC
+    `).all(campaign.id, campaign.connection_id, JSON.stringify(parseJson(campaign.excluded_user_ids, []).map(String)), userId);
+    const damageByUser = new Map(ranking.map((item) => [item.userId, item.damage]));
+    const participants = participantRows.map((row) => ({
+      publicId: row.id,
+      // The campaign-scoped label is derived from a random enrollment, never an account ID.
+      maskedId: `ID · **${createHash("sha256").update(`${campaign.id}:${row.id}`).digest("hex").slice(0, 4).toUpperCase()}`,
+      damage: damageByUser.get(row.sub2api_user_id) || 0,
+      own: row.sub2api_user_id === userId
+    }));
     const battleLog = currentBoss ? db.prepare(`
       SELECT e.id AS enrollment_id, e.masked_name, d.sub2api_user_id,
         substr(d.occurred_at, 1, 16) AS minute_bucket,
@@ -1607,6 +1626,8 @@ export function createSub2ApiRaidService({
       effectiveRaiderCount: effectiveRaiders,
       mvpSlots: legacyMvp ? getRaidMvpSlots(effectiveRaiders) : 0,
       nextMvpSlotAt: legacyMvp && effectiveRaiders < 30 ? (Math.floor(effectiveRaiders / 10) + 1) * 10 : null,
+      participants,
+      participantCount: Number(participantRows[0]?.participant_count || 0),
       ranking: ranking.filter((item) => item.effective).slice(0, 10).map((item) => ({ ...item, userId: item.userId === userId ? item.userId : undefined })),
       own,
       battleLog,

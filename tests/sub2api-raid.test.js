@@ -174,6 +174,11 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
     sub2apiRaid: { connectionId: "raid-main", userId: "7", username: "player" }
   });
   assert.equal(enrolled.statusCode, 201);
+  assert.equal(enrolled.body.participantCount, 1);
+  assert.equal(enrolled.body.participants[0].damage, 0);
+  assert.equal(enrolled.body.participants[0].own, true);
+  assert.match(enrolled.body.participants[0].maskedId, /^ID · \*\*[A-F0-9]{4}$/);
+  const participant = enrolled.body.participants[0];
 
   const firstSync = await app.injectRoute("POST", "/api/admin/sub2api/raid/connections/:id/sync-usage", {
     params: { id: "raid-main" }
@@ -191,6 +196,7 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(current.body.own.bonusDamage, 2.25);
   assert.equal(current.body.own.damage, 11.25);
   assert.equal(current.body.ranking[0].rank, 1);
+  assert.deepEqual(current.body.participants, [{ ...participant, damage: 11.25 }]);
   const damageIds = current.body.battleLog.map((item) => item.id);
 
   const secondSync = await app.injectRoute("POST", "/api/admin/sub2api/raid/connections/:id/sync-usage", {
@@ -219,6 +225,7 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(current.body.own.damage, 18);
   assert.equal(current.body.own.effective, false);
   assert.equal(current.body.ranking.length, 0);
+  assert.deepEqual(current.body.participants, [{ ...participant, damage: 18 }]);
   assert.equal(current.body.rewards.length, 1);
   assert.equal(balanceDeliveries, 1);
   assert.equal(current.body.history.length, 1);
@@ -567,4 +574,103 @@ test("month-end maintenance imports the final usage before ending an uncleared b
   assert.equal(db.prepare("SELECT status FROM sub2api_raid_campaigns WHERE id = ?").get(monthEndCampaignId).status, "ended");
   assert.equal(db.prepare("SELECT actual_cost FROM sub2api_raid_contributions WHERE campaign_id = ?").get(monthEndCampaignId).actual_cost, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sub2api_raid_rewards WHERE campaign_id = ?").get(monthEndCampaignId).count, 0);
+});
+
+test("raid battlefield roster is capped, campaign-scoped, masked, and preserves the enrolled viewer", () => {
+  const rosterNow = "2026-08-01T00:00:00.000Z";
+  const rosterRaid = createSub2ApiRaidService({ app: new FakeApp(), db, now: () => rosterNow });
+  const empty = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "7" });
+  assert.deepEqual(empty.participants, []);
+  assert.equal(empty.participantCount, 0);
+
+  for (const connectionId of ["raid-roster", "raid-roster-other"]) {
+    db.prepare(`
+      INSERT INTO sub2api_connections (
+        id, name, base_url, admin_token, status, created_by, created_at, updated_at
+      ) VALUES (?, 'Roster', 'https://roster.example.com', 'token', 'active', 'admin', ?, ?)
+    `).run(connectionId, rosterNow, rosterNow);
+  }
+  const config = {
+    connectionId: "raid-roster", name: "Roster", month: "2026-08",
+    startAt: "2026-07-31T16:00:00.000Z", endAt: "2026-08-31T16:00:00.000Z",
+    settlementEndAt: "2026-08-31T16:10:00.000Z", effectiveDamageThreshold: 10,
+    rewardBudget: 100, excludedUserIds: [88], bosses: [boss(1, 100, 10)]
+  };
+  const currentCampaign = rosterRaid.createCampaign(config, "admin");
+  const foreignCampaign = rosterRaid.createCampaign({ ...config, connectionId: "raid-roster-other" }, "admin");
+  const priorCampaign = rosterRaid.createCampaign({
+    ...config, month: "2026-07", startAt: "2026-06-30T16:00:00.000Z",
+    endAt: "2026-07-31T16:00:00.000Z", settlementEndAt: "2026-07-31T16:10:00.000Z"
+  }, "admin");
+  rosterRaid.publishCampaign(currentCampaign.id, "admin");
+  rosterRaid.publishCampaign(foreignCampaign.id, "admin");
+  db.prepare("UPDATE sub2api_raid_campaigns SET status = 'ended' WHERE id = ?").run(priorCampaign.id);
+  assert.equal(rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "7" }).participantCount, 0);
+
+  const insertEnrollment = (campaign, userId, index) => {
+    const publicId = `raid-enrollment-${crypto.randomUUID()}`;
+    db.prepare(`
+      INSERT INTO sub2api_raid_enrollments (
+        id, campaign_id, connection_id, sub2api_user_id, email, username,
+        masked_name, account_created_at, enrolled_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00.000Z', ?)
+    `).run(publicId, campaign.id, campaign.connection_id, userId,
+      `private-${userId}@example.com`, `private-user-${userId}`, `private-mask-${userId}`,
+      new Date(Date.parse(rosterNow) + index * 1000).toISOString());
+    return { publicId, userId };
+  };
+  const records = Array.from({ length: 65 }, (_, index) => insertEnrollment(currentCampaign,
+    ["7", "1234", "123456789012345", "88"][index] || String(10000 + index), index));
+  const prior = insertEnrollment(priorCampaign, "7", 0);
+  const foreign = insertEnrollment(foreignCampaign, "7", 0);
+  const insertContribution = (campaign, userId, damage) => {
+    const bossId = db.prepare("SELECT id FROM sub2api_raid_bosses WHERE campaign_id = ?").get(campaign.id).id;
+    db.prepare(`
+      INSERT INTO sub2api_raid_contributions (
+        id, campaign_id, boss_id, sub2api_user_id, actual_cost, damage, reached_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(crypto.randomUUID(), campaign.id, bossId, userId, damage, damage, rosterNow, rosterNow);
+  };
+  insertContribution(currentCampaign, "7", 2);
+  insertContribution(priorCampaign, "7", 999);
+  insertContribution(foreignCampaign, "7", 555);
+  insertContribution(currentCampaign, "not-enrolled", 777);
+  const eligible = records.filter((record) => record.userId !== "88");
+  const observer = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "not-enrolled" });
+  assert.equal(observer.participantCount, 64);
+  assert.deepEqual(observer.participants.map((item) => item.publicId), eligible.slice(0, 60).map((item) => item.publicId));
+  assert.equal(observer.participants[0].damage, 2);
+  assert.ok(observer.participants.slice(1).every((item) => item.damage === 0));
+  assert.ok(observer.participants.every((item) => item.own === false));
+  assert.ok(observer.participants.every((item) => item.publicId !== prior.publicId && item.publicId !== foreign.publicId));
+  for (const participant of observer.participants) {
+    assert.deepEqual(Object.keys(participant).sort(), ["damage", "maskedId", "own", "publicId"]);
+    assert.match(participant.maskedId, /^ID · \*\*[A-F0-9]{4}$/);
+  }
+  assert.doesNotMatch(JSON.stringify(observer.participants), /private-|example\.com|123456789012345/);
+
+  const own = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: records.at(-1).userId });
+  assert.equal(own.participantCount, 64);
+  assert.deepEqual(own.participants.map((item) => item.publicId), [...eligible.slice(0, 59), records.at(-1)].map((item) => item.publicId));
+  assert.equal(own.participants.filter((item) => item.own).length, 1);
+  assert.equal(own.participants.at(-1).own, true);
+  assert.equal(own.participants.at(-1).damage, 0);
+  assert.deepEqual(own.participants.slice(0, 59), observer.participants.slice(0, 59));
+  const excluded = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "88" });
+  assert.deepEqual(excluded.participants, observer.participants);
+  const shortIdViewer = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "7" });
+  assert.equal(shortIdViewer.participants[0].own, true);
+  assert.equal(shortIdViewer.participants[0].maskedId, observer.participants[0].maskedId);
+
+  db.prepare("UPDATE sub2api_raid_enrollments SET username = 'changed', email = 'changed@example.com', masked_name = 'changed' WHERE id = ?").run(records[0].publicId);
+  assert.deepEqual(rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "not-enrolled" }).participants, observer.participants);
+  db.prepare("UPDATE sub2api_raid_campaigns SET current_boss_id = NULL WHERE id = ?").run(currentCampaign.id);
+  const withoutBoss = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "not-enrolled" });
+  assert.equal(withoutBoss.participantCount, 64);
+  assert.ok(withoutBoss.participants.every((item) => item.damage === 0));
+  for (const record of records.slice(0, 3)) {
+    db.prepare("UPDATE sub2api_raid_enrollments SET enrolled_at = ? WHERE id = ?").run(rosterNow, record.publicId);
+  }
+  const sameTime = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "7" });
+  assert.deepEqual(sameTime.participants.slice(0, 3).map((item) => item.publicId), records.slice(0, 3).map((item) => item.publicId).sort());
 });

@@ -1,0 +1,41 @@
+/* Northern medieval treatment shared by the battlefield and its offline preview. */
+:root { --nordic-ink:#10171c; --nordic-text:#e1e1d7; --nordic-muted:#aeb7b6; --nordic-gold:#b7a37b; }
+body.nordic-preview, body:has(.raid-arena) { background:#11191e; color:var(--nordic-text); }
+.nordic-preview header { background:#11191e; border-bottom:1px solid #b7a37b3b; padding:20px 5%; }
+.nordic-preview .brand { font-family:Georgia,"Songti SC","SimSun",serif; color:#ded8c9; letter-spacing:.24em; }
+.nordic-preview .brand b { color:#b7a37b; }
+.nordic-preview .notice { color:#abb3b1; }
+.nordic-preview .intro h1, .battlefield:has(.raid-arena) .identity h1 { font-family:Georgia,"Songti SC","SimSun",serif; font-weight:500; letter-spacing:.11em; color:#eee8db; text-shadow:0 2px 8px #091016,0 0 24px #091016; }
+.nordic-preview .intro .eyebrow, .battlefield:has(.raid-arena) .eyebrow { background:none; padding:0; border:0; color:#d1b98d; letter-spacing:.2em; text-shadow:0 2px 5px #000; }
+.nordic-preview .intro p, .battlefield:has(.raid-arena) .identity p { color:#c1c8c6; text-shadow:0 1px 5px #111; }
+.raid-party-toolbar { background:#121b22ad; border:1px solid #b7a37b47; border-radius:2px; box-shadow:none; }
+.raid-party-toolbar strong { font-family:Georgia,"Songti SC",serif; color:#ded8c9; letter-spacing:.2em; }
+.raid-party-toolbar button, .raid-view-toolbar button { background:#151e25b3; border:1px solid #c2b29352; border-radius:2px; color:#d8ccae; }
+.raid-party-toolbar > span, .raid-party-toolbar .raid-roster-note { color:#afb9b9; }
+.raid-scene-tag { color:#c2b28f; border-color:#c2b28f; text-shadow:0 1px 6px #000; }
+.raid-view-toolbar span { color:#c5cbc9; }
+.raid-attack-note { background:#10171cc9; color:#dfd5b9; border-radius:2px; }
+.nordic-preview .status { color:#c7cecc; text-shadow:0 2px 5px #111; }
+.nordic-preview .health-head { color:#e1dacb; text-shadow:0 1px 5px #111; }
+.nordic-preview .track { height:6px; border:1px solid #c7b59466; border-radius:0; background:#101519b5; }
+.nordic-preview .fill { background:linear-gradient(90deg,#512c2b,#a76e5b); }
+.nordic-preview .controls button, .nordic-preview .controls select { background:#111a20ce; border:1px solid #a69a805b; color:#d9d5ca; border-radius:2px; }
+.nordic-preview .controls .primary { background:#a79772; border-color:#c3b18a; color:#10191c; }
+.nordic-preview .controls label { color:#c9cfca; text-shadow:0 1px 5px #000; }
+.nordic-preview .legend { padding:17px; border-top:1px solid #a69a8030; color:#a5b2b7; }
+.nordic-preview .legend b { color:#c4b28c; }
+.nordic-preview .roster { gap:0; padding:0 5% 20px; }
+.nordic-preview .roster button { border-radius:0; background:#111a21; border:0; border-top:1px solid #a99a7950; border-right:1px solid #a99a7922; color:#bdbbad; font-family:Georgia,"Songti SC",serif; letter-spacing:.04em; }
+.nordic-preview .roster button span { color:#899c9f; font-family:inherit; letter-spacing:.08em; }
+.nordic-preview .roster button[aria-pressed="true"] { background:linear-gradient(#b7a37b24,#b7a37b05); color:#efdfb9; border-top-color:#dbc899; }
+.nordic-preview footer { color:#829495; }
+.nordic-preview footer a { color:#b9b49f; }
+body:has(.raid-arena) { --cyan:#c2b28f; --line:#a8a18640; --amber:#c8b587; --muted:#96a8aa; --text:#e0e2d8; --bg-deep:#11191e; --bg-surface:#151f25; }
+.battlefield:has(.raid-arena) .glass { background:#111a20bf; border-color:#b7a37b3f; border-radius:2px; box-shadow:none; }
+.battlefield:has(.raid-arena) .health-fill { background:linear-gradient(90deg,#693a35,#ad7961); box-shadow:none; }
+.battlefield:has(.raid-arena) .health-current { color:#e0d3b6; }
+.battlefield:has(.raid-arena) .dot { background:#b4ad8e; box-shadow:none; animation:none; }
+.battlefield:has(.raid-arena) .primary { background:#b1a07b; border:1px solid #c3b596; border-radius:2px; color:#142027; box-shadow:none; }
+body:has(.raid-arena) .content .glass { background:#151f25; border-color:#8c9b9130; border-radius:2px; box-shadow:none; }
+body:has(.raid-arena) .content h2 { font-family:Georgia,"Songti SC",serif; font-weight:500; letter-spacing:.06em; }
+@media(prefers-reduced-motion:reduce) { .nordic-preview .fill { transition:none; } }

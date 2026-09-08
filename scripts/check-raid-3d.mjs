@@ -23,11 +23,11 @@ try {
     await page.waitForFunction(()=>document.querySelectorAll("[data-actor-ready='true']").length===6);
     await page.waitForFunction(()=>document.querySelector("#preview-boss").dataset.environmentReady==="true");
     assert.equal(await page.locator(".raid-member-label").count(),6);
-    for(const label of await page.locator(".raid-member-label b").allTextContents())assert.match(label,/^\*\*[A-F0-9]{4}$/);
+    assert.deepEqual(await page.locator(".raid-member-label b").allTextContents(),await page.evaluate(()=>participants.map(p=>p.maskedName)));
     await page.locator("#attacker").selectOption("demo-enrollment-2");
     await page.locator("#hit").click();
     await page.waitForFunction(()=>document.querySelector("#preview-boss").dataset.animation==="HitReact");
-    assert.deepEqual(await page.locator(".raid-member-label.is-attacking b").allTextContents(),["**A8B3"],"only the selected consumer attacks");
+    assert.deepEqual(await page.locator(".raid-member-label.is-attacking b").allTextContents(),["夜***风"],"only the selected consumer attacks");
     assert.deepEqual(await page.evaluate(()=>participants.map(p=>p.damage)),[0,0,12,0,0,0],"10 simulated credits at1.2x belong only to the selected player");
     await page.locator("#health").fill("20");assert.equal(await page.locator("#preview-boss").getAttribute("data-state"),"enraged");
     await page.locator("#health").fill("0");assert.equal(await page.locator("#preview-boss").getAttribute("data-state"),"unstable");
@@ -72,7 +72,7 @@ try {
   await page.screenshot({path:path.join(output,"mobile.png"),fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   // Exercise production against in-memory fixtures, never an external account or API.
-  const participants=Array.from({length:60},(_,i)=>({publicId:`opaque-test-${i}`,maskedId:`ID · **${(0xD000+i).toString(16).toUpperCase()}`,damage:i*.25,own:i===59}));
+  const participants=Array.from({length:60},(_,i)=>({publicId:`opaque-test-${i}`,maskedName:`勇***${i}`,damage:i*.25,own:i===59}));
   let fixtureCount=60,assetKey="leviathan";
   const calls=[];
   await page.route("https://raid.test/**",async route=>{
@@ -119,22 +119,22 @@ try {
   // The production bootstrap can change individual totals without battle-log IDs changing.
   participants[2].damage+=12;
   await page.locator("#refresh-btn").click();
-  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="**D002");
-  assert.deepEqual(await attackLabels(),["**D002"]);
+  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="勇***2");
+  assert.deepEqual(await attackLabels(),["勇***2"]);
   const shot=await page.evaluate(()=>__raidShot);assert.equal(shot.id,"opaque-test-2");assert.deepEqual(shot.origin,shot.hand,"beam must start at the attacker's actual world hand, not a screen card");
   await page.waitForFunction(()=>document.querySelectorAll(".raid-member-label.is-attacking").length===0);
   await page.locator("#refresh-btn").click();await page.waitForTimeout(150);assert.deepEqual(await attackLabels(),[],"identical snapshot must not replay an attack");
   participants[2].damage-=1;await page.locator("#refresh-btn").click();await page.waitForTimeout(150);assert.deepEqual(await attackLabels(),[],"negative corrections must not attack");
   participants[1].damage+=1;participants[4].damage+=3;
   await page.locator("#refresh-btn").click();await page.waitForFunction(()=>document.querySelectorAll(".raid-member-label.is-attacking").length===2);
-  assert.deepEqual(await attackLabels(),["**D001","**D004"],"two contributors do not make a six-person volley");
+  assert.deepEqual(await attackLabels(),["勇***1","勇***4"],"two contributors do not make a six-person volley");
   await page.waitForTimeout(1000);
   participants[8].damage+=2;participants[14].damage+=4;
   await page.locator("#refresh-btn").click();
-  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="**D008");
-  assert.deepEqual(await attackLabels(),["**D008"],"off-page contributor must fire from its own model");
-  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="**D00E");
-  assert.deepEqual(await attackLabels(),["**D00E"]);
+  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="勇***8");
+  assert.deepEqual(await attackLabels(),["勇***8"],"off-page contributor must fire from its own model");
+  await page.waitForFunction(()=>document.querySelector(".raid-member-label.is-attacking b")?.textContent==="勇***14");
+  assert.deepEqual(await attackLabels(),["勇***14"]);
   await page.waitForTimeout(1000);await page.locator("#refresh-btn").click();await page.waitForTimeout(150);assert.deepEqual(await attackLabels(),[]);
   for(let i=0;i<2;i++)await page.getByRole("button",{name:"上一页参战者"}).click();
   for(let i=0;i<9;i++)await page.getByRole("button",{name:"下一页参战者"}).click();assert.equal(await page.locator(".raid-member-label.is-own").count(),1);

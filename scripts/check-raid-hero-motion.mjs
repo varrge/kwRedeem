@@ -51,6 +51,19 @@ try {
   const standing=await page.evaluate(()=>captureHeroPoses());
   await page.evaluate(()=>advanceMotion(150)); // Longer than every former idle loop.
   assert.deepEqual(await page.evaluate(()=>captureHeroPoses()),standing,"no consumption: all six heroes must remain still");
+  assert.deepEqual(await page.locator(".raid-member-label b").allTextContents(),await page.evaluate(()=>participants.map(p=>p.maskedName)));
+  // The displayed name may change or collide; the enrollment still owns its actor.
+  await page.evaluate(()=>{
+    globalThis.originalActors=__motionParty.map(p=>p.actor);
+    globalThis.drawnNames=[];
+    const proto=CanvasRenderingContext2D.prototype,fill=proto.fillText;
+    proto.fillText=function(text,...args){drawnNames.push(text);return fill.call(this,text,...args);};
+    participants[0].maskedName=participants[1].maskedName="星河***长夜";draw();advanceMotion(2);
+  });
+  assert.equal(await page.evaluate(()=>__motionParty.every((p,i)=>p.actor===originalActors[i])),true,"renaming cannot recreate characters");
+  assert.deepEqual(await page.locator(".raid-member-label b").allTextContents(),await page.evaluate(()=>participants.map(p=>p.maskedName)));
+  assert.ok(await page.evaluate(()=>drawnNames.filter(n=>n==="星河***长夜").length===2),"both world textures must redraw the leaderboard nickname");
+  assert.deepEqual(await page.evaluate(()=>captureHeroPoses()),standing,"nickname changes cannot generate attacks");
 
   // First three slots contain ranger, mage and knight; identical templates must not
   // cause their other instances to animate along with the real contributor.
@@ -60,6 +73,7 @@ try {
       draw();visual.hit();advanceMotion(7);
     },i);
     const attacking=await page.evaluate(()=>captureHeroPoses());
+    assert.ok((await page.locator(".raid-attack-note").textContent()).includes(await page.evaluate(i=>participants[i].maskedName,i)),"attack notices use the same nickname");
     assert.notDeepEqual(attacking[i],standing[i],`contributor ${i} must play the attack`);
     for(let j=0;j<6;j++)if(j!==i)assert.deepEqual(attacking[j],standing[j],`non-contributor ${j} must stay still`);
     await page.evaluate(()=>advanceMotion(70));

@@ -1575,7 +1575,7 @@ export function createSub2ApiRaidService({
     // Show the earliest 60 enrollments, replacing the last with the viewer if needed.
     const participantRows = db.prepare(`
       SELECT * FROM (
-        SELECT id, sub2api_user_id, enrolled_at, COUNT(*) OVER () AS participant_count
+        SELECT id, sub2api_user_id, masked_name, enrolled_at, COUNT(*) OVER () AS participant_count
         FROM sub2api_raid_enrollments
         WHERE campaign_id = ? AND connection_id = ?
           AND sub2api_user_id NOT IN (SELECT value FROM json_each(?))
@@ -1585,6 +1585,7 @@ export function createSub2ApiRaidService({
     const damageByUser = new Map(ranking.map((item) => [item.userId, item.damage]));
     const participants = participantRows.map((row) => ({
       publicId: row.id,
+      maskedName: row.masked_name || maskIdentity({ userId: row.sub2api_user_id }),
       // The campaign-scoped label is derived from a random enrollment, never an account ID.
       maskedId: `ID · **${createHash("sha256").update(`${campaign.id}:${row.id}`).digest("hex").slice(0, 4).toUpperCase()}`,
       damage: damageByUser.get(row.sub2api_user_id) || 0,

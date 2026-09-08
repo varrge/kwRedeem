@@ -4,9 +4,14 @@ import fs from "node:fs";
 import { build } from "esbuild";
 import * as T from "three";
 import { createEffects } from "../web/raid-arena-effects.js";
-import { partyFormation, clearGroup } from "../web/raid-arena-source.js";
+import { partyFormation, clearGroup, participantName } from "../web/raid-arena-source.js";
 
 const keys=["leviathan","sentinel","prism","zero-core","warden","overmind","behemoth","singularity"];
+test("battlefield labels prefer leaderboard nicknames and never raw identity fields",()=>{
+  assert.equal(participantName({maskedName:"星河***长夜",maskedId:"ID · **AB12"}),"星河***长夜");
+  assert.equal(participantName({maskedId:"ID · **AB12"}),"**AB12");
+  assert.equal(participantName({userId:"12345",username:"secret",name:"private",email:"private@example.com"}),"");
+});
 test("scene cleanup releases instanced foliage buffers and shared resources once",()=>{
   const group=new T.Group(),geometry=new T.IcosahedronGeometry(1),map=new T.Texture(),material=new T.MeshStandardMaterial({map,bumpMap:map});
   const events={instance:0,geometry:0,material:0,texture:0};

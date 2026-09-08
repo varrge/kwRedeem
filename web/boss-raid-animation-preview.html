@@ -31,7 +31,7 @@ footer{padding:0 20px 24px;text-align:center;color:#839aa8;font-size:11px}footer
 <div class="health"><div class="health-head"><span>BOSS 耐久</span><span id="health-value">2,000 / 2,000</span></div><div class="track"><div id="health-fill" class="fill" style="width:100%"></div></div></div>
 <div class="controls"><label for="attacker">本次消费玩家<select id="attacker"></select></label><button class="primary" id="hit" type="button">模拟此人消耗 10 额度</button><button id="defeat" type="button">确认击败</button><button id="dormant" type="button">中止</button><button id="reset" type="button">重置</button><button id="motion" type="button" aria-pressed="false">暂停动画</button><label for="health">剩余血量<input id="health" type="range" min="0" max="100" value="100"/></label></div>
 </section>
-<div class="legend"><span><b>左侧</b> 首领与专属场景</span><span><b>右侧</b> 参战小队 · 可翻页</span><span><b>ID · **AB12</b> 活动内脱敏标识</span></div>
+<div class="legend"><span><b>左侧</b> 首领与专属场景</span><span><b>右侧</b> 参战小队 · 可翻页</span><span><b>脱敏昵称</b> 与贡献榜一致</span></div>
 <nav class="roster" id="roster" aria-label="切换 Boss 和场景"></nav>
 </main>
 <footer>首领：<a id="boss-art-credit" target="_blank"></a> · 人物：<a href="./assets/raid-3d/nordic-heroes/CREDITS.md" target="_blank">Clement Wu、Nikolaus、Botanic · CC BY 3.0</a> · 石材：<a href="./assets/raid-3d/nordic-textures/CREDITS.md" target="_blank">Rob Tuytel / Poly Haven · CC0</a> · 预览均为模拟数据</footer>
@@ -39,8 +39,8 @@ footer{padding:0 20px 24px;text-align:center;color:#839aa8;font-size:11px}footer
 <script>
 const host=document.querySelector("#preview-boss");
 const visual=RaidArena.create(host);
-const participants=Array.from({length:6},(_,i)=>({publicId:"demo-enrollment-"+i,maskedId:"ID · **"+(0xA731+i*193).toString(16).slice(-4).toUpperCase(),damage:0,own:i===0}));
-for(const participant of participants){const option=document.createElement("option");option.value=participant.publicId;option.textContent=participant.maskedId;document.querySelector("#attacker").append(option);}
+const participants=Array.from({length:6},(_,i)=>({publicId:"demo-enrollment-"+i,maskedName:["霜***客","北***星","夜***风","云***川","寒***月","星***火"][i],damage:0,own:i===0}));
+for(const participant of participants){const option=document.createElement("option");option.value=participant.publicId;option.textContent=participant.maskedName;document.querySelector("#attacker").append(option);}
 let boss, paused=false,campaign="active",simulationRound=0;
 function draw(){
  if(!visual){document.querySelector("#state-label").textContent="浏览器不支持3D，请使用支持WebGL的浏览器。";return;}

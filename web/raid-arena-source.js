@@ -27,6 +27,13 @@ const credits=Object.freeze(Object.fromEntries(Object.entries({
   singularity:["Grefuntor / Atmostatic","CC BY 3.0","licenses/by/3.0"]
 }).map(([key,[credit,license,licensePath]])=>[key,{credit,license,licenseUrl:`https://creativecommons.org/${licensePath}/`,source:`./assets/raid-3d/nordic-models/${key==="leviathan"?"CREDITS.md":`${key}.credits.md`}`}])));
 
+export function participantName(participant) {
+  // The leaderboard's server-masked nickname is also the battlefield label.
+  // Keep old snapshots usable while the API and cached pages roll forward.
+  if(typeof participant.maskedName==="string"&&participant.maskedName.trim()&&participant.maskedName.length<=64)return participant.maskedName;
+  return /^ID · \*\*[A-F0-9]{4}$/.test(participant.maskedId)?participant.maskedId.replace("ID · ",""):"";
+}
+
 // Fill X slots on the right-hand ground, then start the next Z row.
 export function partyFormation(width, count) {
   const columns=width<=650?2:3;
@@ -106,7 +113,7 @@ function create(host) {
   function render(){
     if(disposed||contextLost)return;
     const textScale=2*Math.tan(T.MathUtils.degToRad(camera.fov/2))/Math.max(1,host.clientHeight);
-    for(const member of party)member.identity.scale.set((host.clientWidth<=650?50:63)*textScale,(host.clientWidth<=650?15:19)*textScale,1);
+    for(const member of party){const height=(host.clientWidth<=650?15:19)*textScale;member.identity.scale.set(height*member.identity.material.map.image.width/48,height,1);}
     renderer.render(scene,camera);
   }
   function schedule(){if(frame===null&&running())frame=requestAnimationFrame(tick);}
@@ -259,6 +266,17 @@ function create(host) {
     if(!changed&&stateChanged&&state==="defeated"&&animate&&running())effects.victory();
     render();schedule();
   }
+  function updateMemberName(entry){
+    const name=entry.member.displayName;
+    entry.label.setAttribute("aria-label",`${entry.member.own?"我 · ":""}${name}`);entry.label.querySelector("b").textContent=name;
+    const texture=entry.identity.material.map,canvas=texture.image,context=canvas.getContext("2d");
+    context.font="600 32px system-ui, sans-serif";
+    const width=Math.min(320,Math.max(168,Math.ceil(context.measureText(name).width)+16));
+    if(canvas.width!==width)texture.dispose(); // Reallocate immutable WebGL texture storage after a label resize.
+    canvas.width=width;
+    context.font="600 32px system-ui, sans-serif";context.textAlign="center";context.textBaseline="middle";context.lineWidth=5;context.strokeStyle="#10202ddd";context.fillStyle="#ffffff";
+    context.strokeText(name,canvas.width/2,24,canvas.width-16);context.fillText(name,canvas.width/2,24,canvas.width-16);texture.needsUpdate=true;
+  }
   function makeParty(){
     clearParty();
     const totalPages=Math.max(1,Math.ceil(participants.length/pageSize));page=Math.min(page,totalPages-1);
@@ -267,18 +285,16 @@ function create(host) {
       const member=members[i];let hash=0;for(const c of member.publicId)hash=(hash*31+c.charCodeAt(0))>>>0;
       const variant=["knight","ranger","mage"][hash%3];
       const label=document.createElement("div");label.className=`raid-member-label${member.own?" is-own":""}`;
-      label.setAttribute("aria-label",`${member.own?"我 · ":""}${member.maskedId}`);
       const loading=document.createElement("small");loading.textContent="角色加载中…";
-      const id=document.createElement("b");id.textContent=member.maskedId.replace("ID · ","");const amount=document.createElement("span");amount.textContent=`${member.own?"我 · ":""}${Number(member.damage||0).toFixed(2)} 伤害`;label.append(id,amount,loading);labels.append(label);
+      const id=document.createElement("b");const amount=document.createElement("span");amount.textContent=`${member.own?"我 · ":""}${Number(member.damage||0).toFixed(2)} 伤害`;label.append(id,amount,loading);labels.append(label);
       const root=new T.Group();root.name="raid-participant";partyRoot.add(root);
       const marker=new T.Mesh(new T.RingGeometry(.43,.47,32),new T.MeshBasicMaterial({color:member.own?0xe8c685:0x8caeb4,transparent:true,opacity:.65,side:T.DoubleSide,depthWrite:false}));
       marker.rotation.x=-Math.PI/2;marker.position.y=.025;root.add(marker);
       // Only the anonymous text is a billboard. The character is an ordinary world mesh.
       const textCanvas=document.createElement("canvas");textCanvas.width=168;textCanvas.height=48;
-      const context=textCanvas.getContext("2d");context.font="600 32px monospace";context.textAlign="center";context.textBaseline="middle";context.lineWidth=5;context.strokeStyle="#10202ddd";context.strokeText(id.textContent,84,24);context.fillStyle="#ffffff";context.fillText(id.textContent,84,24);
       const texture=new T.CanvasTexture(textCanvas);texture.colorSpace=T.SRGBColorSpace;
       const identity=new T.Sprite(new T.SpriteMaterial({map:texture,color:member.own?0xffdda0:0xd8eced,transparent:true,depthWrite:false,sizeAttenuation:false}));identity.name="raid-masked-id";identity.center.set(.5,0);identity.position.set(0,.045,.78);root.add(identity);
-      const entry={member,label,loading,amount,root,marker,identity,attack:0,actor:null,mixer:null,hand:null};party.push(entry);loadActor(entry,variant,partyGeneration);
+      const entry={member,label,loading,amount,root,marker,identity,attack:0,actor:null,mixer:null,hand:null};updateMemberName(entry);party.push(entry);loadActor(entry,variant,partyGeneration);
     }
     positionParty();
     status.textContent=members.length?`${page+1} / ${totalPages}`:"0 / 0";previous.disabled=page===0;next.disabled=page>=totalPages-1;
@@ -289,7 +305,7 @@ function create(host) {
   function updateParticipants(items=[],count=items.length,scope="",animate=true){
     const reset=campaignId!==scope;campaignId=scope;
     // Accept only the server's anonymous display contract; never render raw IDs/names.
-    const clean=items.filter(p=>typeof p.publicId==="string"&&/^ID · \*\*[A-F0-9]{4}$/.test(p.maskedId)).slice(0,60).map(p=>({publicId:p.publicId,maskedId:p.maskedId,damage:Number.isFinite(Number(p.damage))?Math.max(0,Number(p.damage)):0,own:Boolean(p.own)}));
+    const clean=items.filter(p=>typeof p.publicId==="string"&&participantName(p)).slice(0,60).map(p=>({publicId:p.publicId,displayName:participantName(p),damage:Number.isFinite(Number(p.damage))?Math.max(0,Number(p.damage)):0,own:Boolean(p.own)}));
     const old=lastDamage;lastDamage=new Map(clean.map(p=>[p.publicId,p.damage]));
     const same=!reset&&participants.map(p=>p.publicId).join("|")===clean.map(p=>p.publicId).join("|");participants=clean;participantCount=Math.max(clean.length,Number(count)||0);
     const canAttack=animate&&!reset&&running()&&!["defeated","dormant"].includes(state);
@@ -302,7 +318,7 @@ function create(host) {
       if(delta>0)pendingAttacks.set(member.publicId,(pendingAttacks.get(member.publicId)||0)+delta);
     }
     if(!same)makeParty();
-    for(const member of party){const current=clean.find(p=>p.publicId===member.member.publicId);if(!current)continue;member.member=current;member.amount.textContent=`${current.own?"我 · ":""}${current.damage.toFixed(2)} 伤害`;
+    for(const member of party){const current=clean.find(p=>p.publicId===member.member.publicId);if(!current)continue;const renamed=member.member.displayName!==current.displayName;member.member=current;if(renamed)updateMemberName(member);member.amount.textContent=`${current.own?"我 · ":""}${current.damage.toFixed(2)} 伤害`;
     }
     playParticipantAttacks();
     rosterNote.textContent=participantCount>participants.length?`已参战 ${participantCount} 人 · 展示 ${participants.length} 人`:`已参战 ${participantCount} 人`;
@@ -322,7 +338,7 @@ function create(host) {
       const delta=pendingAttacks.get(member.member.publicId);if(!delta||!member.actor)continue;
       pendingAttacks.delete(member.member.publicId);member.attack=1;setMemberHighlight(member,true);
       member.play("Attack");const origin=attackOrigin(member);if(origin)effects.launch(origin);
-      notices.push(`${member.member.maskedId} +${delta.toFixed(2)}`);
+      notices.push(`${member.member.displayName} +${delta.toFixed(2)}`);
     }
     if(notices.length){attackPageRemaining=.9;attackNote.textContent=notices.join(" · ")+" 伤害";}
   }
@@ -369,4 +385,4 @@ function create(host) {
   };
 }
 
-globalThis.RaidArena=Object.freeze({create,scenes,credits});
+globalThis.RaidArena=Object.freeze({create,scenes,credits,participantName});

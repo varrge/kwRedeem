@@ -1113,7 +1113,7 @@
 
     <script src="./runtime-config.js"></script>
     <script src="./raid-boss.js"></script>
-    <script src="./raid-arena.js"></script>
+    <script src="./raid-arena.js?v=20260908-names"></script>
     <script>
       (() => {
         const configuredApiBase = String(globalThis.KAWANG_CONFIG?.apiUrl || "").trim();
@@ -1532,8 +1532,8 @@
             fallbackRoster.replaceChildren();
             const heading = document.createElement("b"); heading.textContent = `参战者 ${payload.participantCount || 0} 人`;fallbackRoster.append(heading);
             for (const participant of participants) {
-              if (!/^ID · \*\*[A-F0-9]{4}$/.test(participant.maskedId)) continue;
-              const card = document.createElement("span");card.textContent = `${participant.own ? "我 · " : ""}${participant.maskedId}`;fallbackRoster.append(card);
+              const name = globalThis.RaidArena?.participantName(participant);if (!name) continue;
+              const card = document.createElement("span");card.textContent = `${participant.own ? "我 · " : ""}${name}`;fallbackRoster.append(card);
             }
           }
           if (!["ended", "aborted"].includes(payload.campaign.status)) playDamage(boss, previousBoss);

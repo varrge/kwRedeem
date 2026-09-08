@@ -197,6 +197,7 @@ test("raid requires a pre-registered enrollment and starts from zero after each 
   assert.equal(current.body.own.damage, 11.25);
   assert.equal(current.body.ranking[0].rank, 1);
   assert.deepEqual(current.body.participants, [{ ...participant, damage: 11.25 }]);
+  assert.equal(current.body.participants[0].maskedName, current.body.own.maskedName, "battlefield and contribution ranking must use the same masked nickname");
   const damageIds = current.body.battleLog.map((item) => item.id);
 
   const secondSync = await app.injectRoute("POST", "/api/admin/sub2api/raid/connections/:id/sync-usage", {
@@ -615,7 +616,7 @@ test("raid battlefield roster is capped, campaign-scoped, masked, and preserves 
         masked_name, account_created_at, enrolled_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00.000Z', ?)
     `).run(publicId, campaign.id, campaign.connection_id, userId,
-      `private-${userId}@example.com`, `private-user-${userId}`, `private-mask-${userId}`,
+      `private-${userId}@example.com`, `private-user-${userId}`, `游***${index}`,
       new Date(Date.parse(rosterNow) + index * 1000).toISOString());
     return { publicId, userId };
   };
@@ -644,8 +645,9 @@ test("raid battlefield roster is capped, campaign-scoped, masked, and preserves 
   assert.ok(observer.participants.every((item) => item.own === false));
   assert.ok(observer.participants.every((item) => item.publicId !== prior.publicId && item.publicId !== foreign.publicId));
   for (const participant of observer.participants) {
-    assert.deepEqual(Object.keys(participant).sort(), ["damage", "maskedId", "own", "publicId"]);
+    assert.deepEqual(Object.keys(participant).sort(), ["damage", "maskedId", "maskedName", "own", "publicId"]);
     assert.match(participant.maskedId, /^ID · \*\*[A-F0-9]{4}$/);
+    assert.match(participant.maskedName, /^游\*\*\*\d+$/);
   }
   assert.doesNotMatch(JSON.stringify(observer.participants), /private-|example\.com|123456789012345/);
 
@@ -662,8 +664,13 @@ test("raid battlefield roster is capped, campaign-scoped, masked, and preserves 
   assert.equal(shortIdViewer.participants[0].own, true);
   assert.equal(shortIdViewer.participants[0].maskedId, observer.participants[0].maskedId);
 
-  db.prepare("UPDATE sub2api_raid_enrollments SET username = 'changed', email = 'changed@example.com', masked_name = 'changed' WHERE id = ?").run(records[0].publicId);
+  db.prepare("UPDATE sub2api_raid_enrollments SET username = 'changed', email = 'changed@example.com' WHERE id = ?").run(records[0].publicId);
   assert.deepEqual(rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "not-enrolled" }).participants, observer.participants);
+  db.prepare("UPDATE sub2api_raid_enrollments SET masked_name = '新***名' WHERE id = ?").run(records[0].publicId);
+  const renamed = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "7" });
+  assert.equal(renamed.participants[0].maskedName, renamed.own.maskedName);
+  assert.equal(renamed.participants[0].maskedName, "新***名");
+  assert.equal(renamed.participants[0].publicId, records[0].publicId);
   db.prepare("UPDATE sub2api_raid_campaigns SET current_boss_id = NULL WHERE id = ?").run(currentCampaign.id);
   const withoutBoss = rosterRaid.buildBootstrap({ connectionId: "raid-roster", userId: "not-enrolled" });
   assert.equal(withoutBoss.participantCount, 64);

@@ -311,7 +311,7 @@ test("admin can immediately retry only pre-submit automation states while Gate r
   db.prepare("UPDATE automation_fulfillment_settings SET payment_gate_enabled = 1 WHERE id = 'default'").run();
 });
 
-test("admin can safely take over an unfunded waiting order and settle an external manual success", async () => {
+for (const status of ["waiting_gate", "waiting_mapping", "waiting_capacity", "preparing_card"]) test(`admin can take over unfunded ${status} and settle an external manual success`, async () => {
   const login = await app.inject({
     method: "POST",
     url: "/api/admin/auth/login",
@@ -348,9 +348,16 @@ test("admin can safely take over an unfunded waiting order and settle an externa
   });
   db.prepare(`
     UPDATE automation_executions
-    SET status = 'waiting_mapping', next_action_at = '2099-01-01T00:00:00.000Z'
+    SET status = ?, last_error_code = 'AUTOMATION_REMOTE_REJECTED',
+        last_error_message = 'Session 检查失败，请确认登录状态',
+        next_action_at = '2099-01-01T00:00:00.000Z'
     WHERE id = ?
-  `).run(execution.id);
+  `).run(status, execution.id);
+  const attemptStatus = status === "waiting_mapping" ? "not_created" : "selected";
+  db.prepare(`INSERT INTO automation_execution_attempts(id,execution_id,attempt_no,mapping_id,provider_id,
+    credential_id,client_order_id,status,mapping_snapshot,created_at,updated_at)
+    VALUES('manual-takeover-attempt',?,1,'m','p','c','KWMANUALTAKEOVER',?,'{}',?,?)`)
+    .run(execution.id,attemptStatus,at,at);
 
   const takeover = await app.inject({
     method: "POST",
@@ -362,6 +369,12 @@ test("admin can safely take over an unfunded waiting order and settle an externa
   assert.equal(takeover.json().item.status, "manual_review");
   assert.equal(takeover.json().item.lastErrorCode, "ADMIN_MANUAL_TAKEOVER_PRE_PAYMENT");
   assert.equal(db.prepare("SELECT next_action_at FROM automation_executions WHERE id = ?").get(execution.id).next_action_at, null);
+  assert.equal(db.prepare("SELECT status FROM automation_execution_attempts WHERE execution_id=?").get(execution.id).status, attemptStatus);
+  assert.equal(db.prepare("SELECT status FROM redeem_orders WHERE id='order-manual-takeover'").get().status, "pending");
+  assert.equal(db.prepare("SELECT status FROM cdkeys WHERE id='cdkey-manual-takeover'").get().status, "locked");
+  const audit = db.prepare(`SELECT detail FROM admin_audit_logs
+    WHERE action='automation.execution.manual_takeover' AND resource_id=? ORDER BY created_at DESC LIMIT 1`).get(execution.id);
+  assert.equal(JSON.parse(audit.detail).previousErrorCode, "AUTOMATION_REMOTE_REJECTED");
 
   const resolved = await app.inject({
     method: "POST",
@@ -409,6 +422,61 @@ test("admin can safely take over an unfunded waiting order and settle an externa
   });
   assert.equal(blocked.statusCode, 409);
   assert.match(blocked.json().message, /卡片或资金边界/);
+  for (const id of [execution.id, bounded.id]) {
+    db.prepare("DELETE FROM automation_execution_attempts WHERE execution_id=?").run(id);
+    db.prepare("DELETE FROM automation_card_reservations WHERE execution_id=?").run(id);
+    db.prepare("DELETE FROM admin_audit_logs WHERE resource_id=?").run(id);
+    db.prepare("DELETE FROM automation_executions WHERE id=?").run(id);
+  }
+  db.prepare("DELETE FROM redeem_orders WHERE id='order-manual-takeover'").run();
+  db.prepare("DELETE FROM cdkeys WHERE id='cdkey-manual-takeover'").run();
+});
+
+test("manual takeover refuses active workers, funding, reservations and submitted attempts", async () => {
+  const login = await app.inject({ method: "POST", url: "/api/admin/auth/login",
+    payload: { username: "admin", password: "test-password" } });
+  const headers = { authorization: `Bearer ${login.json().token}` };
+  const at = new Date().toISOString();
+  const execution = enrollAutomationOrder(db, { id: "takeover-guards", orderId: "takeover-guards-order",
+    orderNo: "KWTAKEOVERGUARDS", productId: "prod_demo", createdAt: at });
+  const takeover = () => app.inject({ method: "POST", url: `/api/admin/automation/executions/${execution.id}/manual-review`, headers, payload: {} });
+  const reset = () => db.prepare(`UPDATE automation_executions SET status='preparing_card',
+    locked_at=NULL, locked_by=NULL, remote_task_id=NULL, card_id=NULL WHERE id=?`).run(execution.id);
+  for (const lockedAt of [at, "2000-01-01T00:00:00.000Z"]) {
+    reset();
+    db.prepare("UPDATE automation_executions SET locked_at=?,locked_by='worker-live' WHERE id=?").run(lockedAt, execution.id);
+    const result = await takeover();
+    assert.equal(result.statusCode, 409);
+    assert.match(result.json().message, /worker/);
+    assert.equal(db.prepare("SELECT locked_by FROM automation_executions WHERE id=?").get(execution.id).locked_by, "worker-live");
+  }
+  reset();
+  db.prepare(`INSERT INTO automation_funding_intents(id,execution_id,provider_key,operation,
+    amount_usd,idempotency_key,request_fingerprint,request_body_encrypted,state,created_at)
+    VALUES('takeover-funding',?,'spacexcard','open',149,'takeover-funding-key','fingerprint','encrypted','succeeded',?)`).run(execution.id,at);
+  assert.equal((await takeover()).statusCode,409);
+  assert.equal(db.prepare("SELECT state FROM automation_funding_intents WHERE id='takeover-funding'").get().state,"succeeded");
+  db.prepare("DELETE FROM automation_funding_intents WHERE execution_id=?").run(execution.id);
+  db.prepare(`INSERT INTO automation_card_reservations(id,execution_id,provider_key,planned_product_code,capacity_key,state,reserved_at)
+    VALUES('takeover-reservation',?,'spacexcard','P5556XV','plus','reserved',?)`).run(execution.id,at);
+  assert.equal((await takeover()).statusCode,409);
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id=?").run(execution.id);
+  db.prepare("UPDATE automation_executions SET card_id='existing-card' WHERE id=?").run(execution.id);
+  assert.equal((await takeover()).statusCode,409);
+  reset();
+  db.prepare(`INSERT INTO automation_execution_attempts(id,execution_id,attempt_no,mapping_id,provider_id,
+    credential_id,client_order_id,status,mapping_snapshot,created_at,updated_at)
+    VALUES('takeover-attempt',?,1,'m','p','c','KWTAKEOVERGUARDS','submit_started','{}',?,?)`).run(execution.id,at,at);
+  assert.equal((await takeover()).statusCode,409);
+  db.prepare("DELETE FROM automation_execution_attempts WHERE execution_id=?").run(execution.id);
+  for (const state of ["submitting","submit_unknown","queued","running","succeeded"]) {
+    reset();db.prepare("UPDATE automation_executions SET status=? WHERE id=?").run(state,execution.id);
+    assert.equal((await takeover()).statusCode,409);
+  }
+  reset();db.prepare("UPDATE automation_executions SET remote_task_id='remote-task' WHERE id=?").run(execution.id);
+  assert.equal((await takeover()).statusCode,409);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM admin_audit_logs WHERE resource_id=?").get(execution.id).n,0);
+  db.prepare("DELETE FROM automation_executions WHERE id=?").run(execution.id);
 });
 
 test("CDK voiding cancels only protocol orders that have not crossed the card boundary", async () => {

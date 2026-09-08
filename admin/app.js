@@ -2315,7 +2315,7 @@ async function refreshAutomationConsole() {
     { label: "错误 / 更新", render: (item) => `<code>${escapeHtml(item.lastErrorCode || "-")}</code><br/><span class="hint">${escapeHtml(item.lastErrorMessage || "-")}<br/>${escapeHtml(item.updatedAt || "-")}</span>` },
     { label: "操作", render: (item) => [
       ["waiting_gate", "waiting_mapping", "waiting_capacity", "preparing_card"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick='retryAutomationExecution(${JSON.stringify(item.id)})'>立即重试</button>` : "",
-      ["waiting_gate", "waiting_mapping"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick='takeOverAutomationExecution(${JSON.stringify(item.id)})'>人工处理</button>` : "",
+      ["waiting_gate", "waiting_mapping", "waiting_capacity", "preparing_card"].includes(item.status) && !item.cardId && !item.remoteTaskId ? `<button class="ghost-btn small" type="button" onclick='takeOverAutomationExecution(${JSON.stringify(item.id)})'>人工处理</button>` : "",
       ["queued", "running", "submit_unknown"].includes(item.status) ? `<button class="ghost-btn small" type="button" onclick='queryAutomationExecution(${JSON.stringify(item.id)})'>立即查询</button>` : "",
       ["manual_review", "manual_hold"].includes(item.status) ? `<button class="primary-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "succeeded")'>裁决成功</button> <button class="ghost-btn small" type="button" onclick='resolveAutomationExecution(${JSON.stringify(item.id)}, "failed")'>裁决失败</button>` : ""
     ].filter(Boolean).join(" ") || "-" }

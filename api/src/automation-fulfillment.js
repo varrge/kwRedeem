@@ -490,44 +490,59 @@ export function createAutomationFulfillmentService(options = {}) {
 
   app.post("/api/admin/automation/executions/:id/manual-review", { preHandler: requireAdmin }, async (request, reply) => {
     const id = String(request.params.id || "");
-    const current = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id);
-    if (!current) return reply.code(404).send({ message: "自动化履约不存在" });
-    if (!["waiting_gate", "waiting_mapping"].includes(current.status) || current.remote_task_id) {
-      return reply.code(409).send({ message: "当前订单已越过安全人工接管状态" });
-    }
-    const activeReservation = db.prepare(`
-      SELECT 1 FROM automation_card_reservations
-      WHERE execution_id = ? AND state <> 'released'
-    `).get(id);
-    const fundingIntent = db.prepare(`
-      SELECT 1 FROM automation_funding_intents WHERE execution_id = ?
-    `).get(id);
-    if (activeReservation || fundingIntent) {
-      return reply.code(409).send({ message: "订单已有卡片或资金边界，只能继续对账" });
-    }
-    const at = nowIso();
-    const staleLockAt = new Date(Date.parse(at) - 120_000).toISOString();
-    const changed = db.prepare(`
-      UPDATE automation_executions
-      SET status = 'manual_review', current_phase = 'manual_processing',
-          public_message = '人工核验中', last_error_code = ?,
-          last_error_message = '管理员已接管处理', next_action_at = NULL,
-          locked_at = NULL, locked_by = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('waiting_gate', 'waiting_mapping')
-        AND remote_task_id IS NULL
-        AND (locked_at IS NULL OR locked_at <= ?)
-    `).run(MANUAL_TAKEOVER_CODE, at, id, staleLockAt).changes;
-    if (!changed) return reply.code(409).send({ message: "worker 正在处理该订单，请稍后再接管" });
-    audit(request, "automation.execution.manual_takeover", "automation_execution", id, {
-      orderNo: current.order_no,
-      previousStatus: current.status
-    });
-    return {
-      item: serializeAutomationExecution(
-        db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id),
-        { admin: true }
-      )
-    };
+    // Serialize the boundary checks with worker claims and funding writes.
+    const result = db.transaction(() => {
+      const current = db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id);
+      if (!current) return { statusCode: 404, message: "自动化履约不存在" };
+      if (!SAFE_RETRY_STATUSES.includes(current.status) || current.remote_task_id) {
+        return { statusCode: 409, message: "当前订单已越过安全人工接管状态" };
+      }
+      if (current.locked_at || current.locked_by) {
+        return { statusCode: 409, message: "worker 正在处理该订单，请稍后再接管" };
+      }
+      const activeReservation = db.prepare(`
+        SELECT 1 FROM automation_card_reservations
+        WHERE execution_id = ? AND state <> 'released'
+      `).get(id);
+      const fundingIntent = db.prepare(`
+        SELECT 1 FROM automation_funding_intents WHERE execution_id = ?
+      `).get(id);
+      if (current.card_id || activeReservation || fundingIntent) {
+        return { statusCode: 409, message: "订单已有卡片或资金边界，只能继续对账" };
+      }
+      const submittedAttempt = db.prepare(`
+        SELECT 1 FROM automation_execution_attempts WHERE execution_id = ?
+          AND (remote_task_id IS NOT NULL OR status NOT IN ('selected', 'not_created'))
+      `).get(id);
+      if (submittedAttempt) {
+        return { statusCode: 409, message: "订单已有提交记录，只能继续查询或对账" };
+      }
+      const at = nowIso();
+      const changed = db.prepare(`
+        UPDATE automation_executions
+        SET status = 'manual_review', current_phase = 'manual_processing',
+            public_message = '人工核验中', last_error_code = ?,
+            last_error_message = '管理员已接管处理', next_action_at = NULL,
+            locked_at = NULL, locked_by = NULL, updated_at = ?
+        WHERE id = ? AND status = ? AND remote_task_id IS NULL
+          AND locked_at IS NULL AND locked_by IS NULL
+      `).run(MANUAL_TAKEOVER_CODE, at, id, current.status).changes;
+      if (!changed) return { statusCode: 409, message: "worker 正在处理该订单，请稍后再接管" };
+      audit(request, "automation.execution.manual_takeover", "automation_execution", id, {
+        orderNo: current.order_no,
+        previousStatus: current.status,
+        previousErrorCode: current.last_error_code,
+        previousErrorMessage: current.last_error_message
+      });
+      return {
+        item: serializeAutomationExecution(
+          db.prepare("SELECT * FROM automation_executions WHERE id = ?").get(id),
+          { admin: true }
+        )
+      };
+    }).immediate();
+    if (result.statusCode) return reply.code(result.statusCode).send({ message: result.message });
+    return result;
   });
 
   app.post("/api/admin/automation/executions/:id/resolve", { preHandler: requireAdmin }, async (request, reply) => {

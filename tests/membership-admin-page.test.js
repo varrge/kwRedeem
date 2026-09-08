@@ -103,6 +103,31 @@ test("admin script boots with the phase 4-7 DOM without an authenticated session
   dom.window.close();
 });
 
+test("unfunded preflight waits expose manual takeover but paid or submitted orders do not", async () => {
+  const dom = new JSDOM(html, { url: "http://127.0.0.1:4174/", runScripts: "outside-only" });
+  const items = [
+    { id: "session-wait", status: "preparing_card" },
+    { id: "capacity-wait", status: "waiting_capacity" },
+    { id: "funded-wait", status: "preparing_card", cardId: "reserved-card" },
+    { id: "submitted-wait", status: "waiting_mapping", remoteTaskId: "remote-1" },
+    { id: "unknown-submit", status: "submit_unknown" }
+  ].map((item) => ({ ...item, orderNo: item.id }));
+  dom.window.fetch = async (url) => ({ ok: true, status: 200,
+    json: async () => new URL(String(url)).pathname === "/api/admin/automation/executions" ? { items } : { items: [] }
+  });
+  dom.window.eval(app);
+  try {
+    await dom.window.refreshAutomationConsole();
+    const buttons = [...dom.window.document.querySelectorAll("#automation-execution-list button")]
+      .filter((button) => button.textContent === "人工处理");
+    assert.equal(buttons.length, 2);
+    assert.match(buttons[0].getAttribute("onclick"), /session-wait/);
+    assert.match(buttons[1].getAttribute("onclick"), /capacity-wait/);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("cdkey detail list exposes Session copy for locked cards", () => {
   assert.match(
     app,

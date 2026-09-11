@@ -117,7 +117,8 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
       expectedMaxAmount: 1200,
       dailyRiskLimitUsd: 100,
       priority: 10,
-      enabled: true
+      enabled: true,
+      excludedCardIds: [12345, 67890]
     }
   });
   assert.equal(mapping.statusCode, 200, mapping.body);
@@ -127,6 +128,14 @@ test("automation admin config keeps Gate closed and maps only discovered direct 
   assert.equal(mapping.json().item.storeManualType, "PLUS");
   assert.equal(mapping.json().item.externalPlanId, "plus-monthly");
   assert.equal(mapping.json().item.regionCode, "PH");
+  assert.deepEqual(mapping.json().item.excludedCardIds, [12345, 67890]);
+  assert.deepEqual(
+    db.prepare(`
+      SELECT upstream_card_id FROM automation_mapping_card_exclusions
+      WHERE mapping_id = ? ORDER BY upstream_card_id
+    `).all(mapping.json().item.id).map((row) => row.upstream_card_id),
+    [12345, 67890]
+  );
 
   const upgradeMapping = await app.inject({
     method: "POST",

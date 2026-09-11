@@ -2123,6 +2123,16 @@ function createSchema(db) {
       UNIQUE(product_id, provider_id, external_plan_id, region_code)
     );
 
+    CREATE TABLE IF NOT EXISTS automation_mapping_card_exclusions (
+      mapping_id TEXT NOT NULL,
+      provider_key TEXT NOT NULL,
+      upstream_card_id INTEGER NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      PRIMARY KEY(mapping_id, provider_key, upstream_card_id)
+    );
+
     CREATE TABLE IF NOT EXISTS automation_executions (
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL UNIQUE,
@@ -2608,6 +2618,8 @@ function createSchema(db) {
       ON automation_provider_credentials(provider_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_automation_mappings_route
       ON automation_product_mappings(product_id, enabled, priority, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_card_exclusions_lookup
+      ON automation_mapping_card_exclusions(mapping_id, provider_key, upstream_card_id);
     CREATE INDEX IF NOT EXISTS idx_automation_executions_due
       ON automation_executions(status, next_action_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_automation_executions_provider

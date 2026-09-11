@@ -185,12 +185,23 @@ function upsertDiscoveredSpaceXCard(db, live, classification, capacity, at) {
   `).get(live.upstreamCardId);
 }
 
+function excludedCardIds(db, mapping) {
+  if (!mapping?.id || !mapping?.card_platform_key) return new Set();
+  return new Set(db.prepare(`
+    SELECT upstream_card_id
+    FROM automation_mapping_card_exclusions
+    WHERE mapping_id = ? AND provider_key = ?
+  `).all(mapping.id, mapping.card_platform_key).map((row) => Number(row.upstream_card_id)));
+}
+
 async function discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at) {
   const eligibleProducts = new Map(products.filter((product) => product.gptEligible === true)
     .map((product) => [product.productCode, product]));
   const slotAmount = automationRiskAllocationUsd(mapping);
+  const excluded = excludedCardIds(db, mapping);
   const ordered = [];
   for (const live of liveCards.values()) {
+    if (excluded.has(Number(live.upstreamCardId))) continue;
     const existing = db.prepare(`
       SELECT * FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id = ?
     `).get(live.upstreamCardId);
@@ -520,6 +531,7 @@ export async function prepareAutomationCard(db, input = {}) {
   };
 
   if (!reservation) {
+    const excluded = excludedCardIds(db, mapping);
     const cards = mapping.card_platform_key === "spacexcard"
       ? await discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at)
       : db.prepare(`
@@ -530,6 +542,7 @@ export async function prepareAutomationCard(db, input = {}) {
       `).all(mapping.card_platform_key, mapping.capacity_key);
     const candidates = [];
     for (const card of cards) {
+      if (excluded.has(Number(card.upstream_card_id))) continue;
       if (mapping.card_platform_key !== "spacexcard"
         && mapping.card_product_code && card.product_code !== mapping.card_product_code) continue;
       const slot = firstFreeSlot(db, card, mapping);

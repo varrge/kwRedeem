@@ -28,7 +28,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function serializeMapping(row) {
+function serializeMapping(row, excludedCardIds = []) {
   let capability = null;
   try { capability = JSON.parse(row.capability_snapshot); } catch {}
   return {
@@ -63,8 +63,16 @@ function serializeMapping(row) {
     revision: Number(row.revision),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    updatedBy: row.updated_by
+    updatedBy: row.updated_by,
+    excludedCardIds: excludedCardIds.map((id) => Number(id))
   };
+}
+
+function mappingExcludedCardIds(db, mappingId, providerKey) {
+  return db.prepare(`
+    SELECT upstream_card_id FROM automation_mapping_card_exclusions
+    WHERE mapping_id = ? AND provider_key = ? ORDER BY upstream_card_id
+  `).all(mappingId, providerKey).map((row) => Number(row.upstream_card_id));
 }
 
 function loadAutomationStoreSource(db, storeMappingId) {
@@ -277,7 +285,10 @@ export function createAutomationFulfillmentService(options = {}) {
       LEFT JOIN sites site ON site.id = source.site_id
       JOIN automation_providers provider ON provider.id = m.provider_id
       ORDER BY COALESCE(source.product_title, source.product_id, m.product_id), m.priority, provider.name
-    `).all().map(serializeMapping);
+    `).all().map((row) => serializeMapping(
+      row,
+      mappingExcludedCardIds(db, row.id, row.card_platform_key)
+    ));
     return { items };
   });
 
@@ -297,7 +308,8 @@ export function createAutomationFulfillmentService(options = {}) {
       expectedMaxAmount: z.number().positive().max(10000000),
       dailyRiskLimitUsd: z.number().positive().max(1000000),
       priority: z.number().int().min(1).max(10000),
-      enabled: z.boolean().default(false)
+      enabled: z.boolean().default(false),
+      excludedCardIds: z.array(z.number().int().positive()).max(500).default([])
     }).safeParse(request.body || {});
     if (!parsed.success) return reply.code(400).send({ message: "自动化商城交付映射参数不正确" });
     if (parsed.data.expectedMaxAmount < parsed.data.expectedMinAmount
@@ -357,6 +369,16 @@ export function createAutomationFulfillmentService(options = {}) {
           snapshot, at, at, request.admin.username
         );
       }
+      db.prepare("DELETE FROM automation_mapping_card_exclusions WHERE mapping_id = ? AND provider_key = ?")
+        .run(id, parsed.data.cardPlatformKey);
+      const insertExclusion = db.prepare(`
+        INSERT INTO automation_mapping_card_exclusions
+          (mapping_id, provider_key, upstream_card_id, reason, created_at, created_by)
+        VALUES (?, ?, ?, 'ADMIN_EXCLUDED', ?, ?)
+      `);
+      for (const upstreamCardId of new Set(parsed.data.excludedCardIds)) {
+        insertExclusion.run(id, parsed.data.cardPlatformKey, upstreamCardId, at, request.admin.username);
+      }
       audit(request, "automation.mapping.upsert", "automation_mapping", id, {
         storeMappingId: parsed.data.storeMappingId,
         storeProductId: storeSource.product_id,
@@ -380,7 +402,12 @@ export function createAutomationFulfillmentService(options = {}) {
         LEFT JOIN sites site ON site.id = source.site_id
         JOIN automation_providers provider ON provider.id = m.provider_id WHERE m.id = ?
       `).get(id);
-      return { item: serializeMapping(row) };
+      return {
+        item: serializeMapping(
+          row,
+          mappingExcludedCardIds(db, id, parsed.data.cardPlatformKey)
+        )
+      };
     } catch (error) {
       return errorReply(reply, error);
     }

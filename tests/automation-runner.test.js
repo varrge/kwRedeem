@@ -323,6 +323,57 @@ test("SpaceX automation skips a Plus card with five payments and uses another li
   db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id IN (9920, 9921)").run();
 });
 
+test("SpaceX automation skips a card explicitly excluded by the mapping", async () => {
+  const at = clock.toISOString();
+  db.prepare(`
+    INSERT INTO automation_executions (
+      id, order_id, order_no, product_id, status, public_message,
+      card_reservation_state, created_at, updated_at
+    ) VALUES ('execution-excluded-card', 'order-excluded-card', 'KWEXCLUDEDCARD',
+      'product-excluded-card', 'preparing_card', '处理中', 'unassigned', ?, ?)
+  `).run(at, at);
+  db.prepare(`
+    INSERT INTO automation_mapping_card_exclusions
+      (mapping_id, provider_key, upstream_card_id, reason, created_at, created_by)
+    VALUES ('mapping-excluded-card', 'spacexcard', 9922, 'ADMIN_EXCLUDED', ?, 'test')
+  `).run(at);
+  const provider = {
+    listCards: async () => ({
+      cards: [
+        { upstreamCardId: 9922, vmCardId: "vm-9922", productCode: "P5556XV", availableAmount: 50, status: "ACTIVE", last4: "9922" },
+        { upstreamCardId: 9923, vmCardId: "vm-9923", productCode: "P5556XV", availableAmount: 25, status: "ACTIVE", last4: "9923" }
+      ],
+      total: 2
+    }),
+    listProducts: async () => [{ productCode: "P5556XV", openFee: 0.4, minAmount: 20, maxAmount: 50_000, gptEligible: true }],
+    listTransactions: async () => [],
+    getCardMaterial: async () => ({ number: "5555555555559923", cvv: "123", expiryMonth: "12", expiryYear: "2029" })
+  };
+  const result = await prepareAutomationCard(db, {
+    execution: db.prepare("SELECT * FROM automation_executions WHERE id = 'execution-excluded-card'").get(),
+    mapping: {
+      id: "mapping-excluded-card",
+      card_platform_key: "spacexcard",
+      card_product_code: "P5556XV",
+      capacity_key: "plus",
+      card_capacity: 5,
+      funding_amount_usd: 82
+    },
+    decryptText,
+    encryptText,
+    provider,
+    at
+  });
+  assert.equal(result.card.upstream_card_id, 9923);
+  assert.equal(db.prepare(`
+    SELECT card_id FROM automation_card_reservations WHERE execution_id = 'execution-excluded-card'
+  `).get().card_id, "mc_spacexcard_9923");
+  db.prepare("DELETE FROM automation_mapping_card_exclusions WHERE mapping_id = 'mapping-excluded-card'").run();
+  db.prepare("DELETE FROM automation_card_reservations WHERE execution_id = 'execution-excluded-card'").run();
+  db.prepare("DELETE FROM automation_executions WHERE id = 'execution-excluded-card'").run();
+  db.prepare("DELETE FROM managed_cards WHERE provider_key = 'spacexcard' AND upstream_card_id IN (9922, 9923)").run();
+});
+
 test("SpaceX automation opens a new card only when every live Plus card has five payments", async () => {
   const at = clock.toISOString();
   db.prepare(`

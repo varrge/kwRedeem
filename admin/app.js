@@ -124,6 +124,7 @@ const refs = {
   automationMappingRegion: document.querySelector("#automation-mapping-region"),
   automationMappingCardPlatform: document.querySelector("#automation-mapping-card-platform"),
   automationMappingCardProduct: document.querySelector("#automation-mapping-card-product"),
+  automationMappingExcludedCards: document.querySelector("#automation-mapping-excluded-cards"),
   automationMappingCardProductOptions: document.querySelector("#automation-mapping-card-product-options"),
   automationMappingCardProductHint: document.querySelector("#automation-mapping-card-product-hint"),
   automationMappingCapacityKey: document.querySelector("#automation-mapping-capacity-key"),
@@ -2140,6 +2141,7 @@ function loadAutomationMapping(id) {
   refs.automationMappingRegion.value = item.regionCode || "";
   refs.automationMappingCardPlatform.value = item.cardPlatformKey;
   refs.automationMappingCardProduct.value = item.cardProductCode || "";
+  refs.automationMappingExcludedCards.value = (item.excludedCardIds || []).join(", ");
   updateAutomationCardProductOptions();
   refs.automationMappingCapacityKey.value = item.capacityKey;
   refs.automationMappingCardCapacity.value = item.cardCapacity;
@@ -2302,7 +2304,7 @@ async function refreshAutomationConsole() {
       : `<strong>原配置待重新选择</strong><br/><code>${escapeHtml(item.productId)}</code>` },
     { label: "站点套餐", render: (item) => `${escapeHtml(item.providerName || item.providerId)}<br/><code>${escapeHtml(item.externalPlanId)}</code>` },
     { label: "区域 / 价格", render: (item) => `${escapeHtml(item.regionCode || "-")} / ${escapeHtml(item.currency || "-")}<br/><span class="hint">${item.expectedMinAmount} - ${item.expectedMaxAmount}</span>` },
-    { label: "卡台 / 资金", render: (item) => `${escapeHtml(item.cardPlatformKey)} / ${escapeHtml(item.capacityKey)} × ${item.cardCapacity}<br/><span class="hint">整卡 $${Number(item.fundingAmountUsd).toFixed(2)} / 日上限 $${Number(item.dailyRiskLimitUsd).toFixed(2)}</span>` },
+    { label: "卡台 / 资金", render: (item) => `${escapeHtml(item.cardPlatformKey)} / ${escapeHtml(item.capacityKey)} × ${item.cardCapacity}<br/><span class="hint">整卡 $${Number(item.fundingAmountUsd).toFixed(2)} / 日上限 $${Number(item.dailyRiskLimitUsd).toFixed(2)} / 排除 ${Number(item.excludedCardIds?.length || 0)} 张</span>` },
     { label: "路由", render: (item) => `优先级 ${item.priority}<br/>${item.enabled ? renderStatus("active") : renderStatus("paused")}<br/><span class="hint">${escapeHtml(item.pausedReason || "-")}</span>` },
     { label: "操作", render: (item) => `<button class="ghost-btn small" type="button" onclick='loadAutomationMapping(${JSON.stringify(item.id)})'>编辑</button> <button class="ghost-btn small" type="button" onclick='toggleAutomationMapping(${JSON.stringify(item.id)}, ${item.enabled ? "false" : "true"})'>${item.enabled ? "暂停" : "启用"}</button>` }
   ], automationMappingsCache, "尚未配置商城交付商品映射");
@@ -7297,6 +7299,10 @@ refs.automationMappingForm?.addEventListener("submit", async (event) => {
         regionCode: refs.automationMappingRegion.value,
         cardPlatformKey: refs.automationMappingCardPlatform.value,
         cardProductCode: refs.automationMappingCardProduct.value.trim(),
+        excludedCardIds: refs.automationMappingExcludedCards.value
+          .split(/[\s,，]+/)
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isInteger(value) && value > 0),
         capacityKey: refs.automationMappingCapacityKey.value.trim(),
         cardCapacity: Number(refs.automationMappingCardCapacity.value),
         fundingAmountUsd: Number(refs.automationMappingFunding.value),

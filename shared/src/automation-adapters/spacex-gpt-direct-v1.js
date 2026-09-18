@@ -235,7 +235,34 @@ function purchaseWaitSeconds(data, fallback = null) {
   return seconds > 0 ? Math.max(30, seconds) : fallback;
 }
 
+function rejectActiveSubscription(data) {
+  const plan = optionalString(data?.currentPlan ?? data?.current_plan, 40)?.toLowerCase();
+  // A live Free result overrides stale subscription metadata after cancellation.
+  if (plan === "free") return;
+  const futureTimes = [data?.can_purchase_at, data?.subscription_active_until]
+    .filter((value) => typeof value === "string"
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value))
+    .map((value) => Date.parse(value))
+    .filter((value) => Number.isFinite(value) && value > Date.now());
+  const hasSubscription = data?.subscription_has_active === true
+    || ["plus", "go", "pro", "prolite", "pro_5x", "pro_20x", "team", "business"].includes(plan);
+  if (!hasSubscription && futureTimes.length === 0) return;
+  const availableAt = futureTimes.length ? Math.max(...futureTimes) : null;
+  const timeText = availableAt
+    ? new Date(availableAt + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ")
+    : null;
+  const message = timeText
+    ? `当前账号仍有订阅，本次充值失败。预计可于 ${timeText}（北京时间）后充值，请确认账号已恢复 Free 后重新提交。`
+    : "当前账号仍有订阅，本次充值失败。上游未返回有效的可充值时间，请在 ChatGPT 中查看订阅到期时间，待账号恢复 Free 后重新提交。";
+  fail("AUTOMATION_SUBSCRIPTION_ACTIVE", message, {
+    retryable: false,
+    definitelyNotCreated: true,
+    requestNotSent: true
+  });
+}
+
 function waitForPurchasableAccount(data, fallback = 120) {
+  rejectActiveSubscription(data);
   fail("SPACEX_GPT_ACCOUNT_WAIT", "欠费订阅已取消，等待账号恢复可购买状态", {
     requestNotSent: true,
     retryAfterSeconds: purchaseWaitSeconds(data, fallback)
@@ -434,6 +461,7 @@ export class SpaceXGptDirectV1Adapter {
     if (currentPlan !== "free" && preflightData?.subscription_is_delinquent === true) {
       if (preflightData.subscription_will_renew === true) {
         if (credential.mode !== "session") {
+          rejectActiveSubscription(preflightData);
           fail("SPACEX_GPT_SESSION_REQUIRED", "欠费订阅只能使用完整 Session 自动取消", {
             retryable: false,
             definitelyNotCreated: true
@@ -447,12 +475,14 @@ export class SpaceXGptDirectV1Adapter {
             body: { session: credential.session }
           });
         } catch (error) {
+          rejectActiveSubscription(preflightData);
           if (error instanceof AutomationAdapterError && error.retryable) waitForPurchasableAccount(preflightData);
           throw error;
         }
         const renewalStatus = optionalString(renewal?.data?.renewal_status, 40)?.toLowerCase();
         if (renewalStatus === "pending") waitForPurchasableAccount(preflightData);
         if (renewalStatus !== "success") {
+          rejectActiveSubscription(preflightData);
           fail("SPACEX_GPT_RENEWAL_STATUS_UNKNOWN", "SpaceX GPT 欠费订阅取消状态无法识别", {
             requestNotSent: true,
             retryAfterSeconds: 120
@@ -461,6 +491,7 @@ export class SpaceXGptDirectV1Adapter {
         try {
           preflightData = (await preflight())?.data;
         } catch (error) {
+          rejectActiveSubscription(preflightData);
           if (error instanceof AutomationAdapterError && error.retryable) waitForPurchasableAccount(preflightData);
           throw error;
         }
@@ -472,14 +503,7 @@ export class SpaceXGptDirectV1Adapter {
         waitForPurchasableAccount(preflightData);
       }
     }
-    currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
-    const purchaseWait = currentPlan === "free" ? null : purchaseWaitSeconds(preflightData);
-    if (purchaseWait !== null) {
-      fail("SPACEX_GPT_ACCOUNT_WAIT", "等待账号恢复可购买状态", {
-        requestNotSent: true,
-        retryAfterSeconds: purchaseWait
-      });
-    }
+    rejectActiveSubscription(preflightData);
     boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
       definitelyNotCreated: true
     });

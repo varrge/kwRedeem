@@ -615,6 +615,34 @@ export function createAutomationRunner(options = {}) {
     }).immediate();
   }
 
+  function handleSubscriptionRejection(execution, error) {
+    if (!(error instanceof AutomationAdapterError) || error.code !== "AUTOMATION_SUBSCRIPTION_ACTIVE") return false;
+    // This preflight says nothing about an earlier payment or ambiguous submission.
+    const hasBoundary = execution.card_id || execution.remote_task_id || execution.status === "submit_unknown"
+      || execution.current_phase === "remote_submit_started"
+      || db.prepare("SELECT 1 FROM automation_funding_intents WHERE execution_id = ?").get(execution.id)
+      || db.prepare("SELECT 1 FROM automation_card_reservations WHERE execution_id = ? AND state <> 'released'").get(execution.id)
+      || db.prepare(`SELECT 1 FROM automation_execution_attempts WHERE execution_id = ?
+        AND (remote_task_id IS NOT NULL OR status NOT IN ('selected', 'not_created'))`).get(execution.id);
+    if (hasBoundary) {
+      markManualReview(execution, error.code, boundedError(error.message));
+      return true;
+    }
+    const at = iso(now());
+    const message = boundedError(error.message);
+    db.transaction(() => {
+      db.prepare(`UPDATE automation_execution_attempts
+        SET status = 'not_created', error_code = ?, error_message = ?, updated_at = ?
+        WHERE execution_id = ? AND attempt_no = ?`)
+        .run(error.code, message, at, execution.id, execution.attempt_count);
+      settleAutomationExecution(db, execution.id, "failed", {
+        code: error.code, message, publicMessage: message, at
+      });
+    }).immediate();
+    writeAudit("automation.subscription_rejected", execution, { code: error.code, message });
+    return true;
+  }
+
   async function prepareExecutionCard(execution) {
     const snapshot = parseJson(execution.mapping_snapshot);
     const mapping = mappingFromSnapshot(snapshot);
@@ -665,6 +693,7 @@ export function createAutomationRunner(options = {}) {
         WHERE execution_id = ? AND attempt_no = ?
       `).run(at, execution.id, execution.attempt_count);
     } catch (error) {
+      if (handleSubscriptionRejection(execution, error)) return;
       if (error instanceof AutomationAdapterError && error.requestNotSent) {
         const retryAfter = Number(error.retryAfterSeconds);
         schedule(execution, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30, {
@@ -944,6 +973,7 @@ export function createAutomationRunner(options = {}) {
       });
       processRemoteTask(execution, result.task);
     } catch (error) {
+      if (handleSubscriptionRejection(execution, error)) return;
       if (error instanceof AutomationAdapterError && error.cardUnavailable) {
         replaceExhaustedCard(execution, error);
         return;

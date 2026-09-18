@@ -33,6 +33,7 @@ tests/*
 !tests/automation-adapter.test.js
 !tests/automation-api.test.js
 !tests/automation-runner.test.js
+!tests/automation-subscription.test.js
 !tests/efuncard-openapi.test.js
 !tests/card-platform-migration.test.js
 !tests/store-membership-migration.test.js

@@ -364,7 +364,7 @@ function renderRedeemSuccess(payload) {
     processing: "processing",
     session_required: "processing",
     succeeded: "succeeded",
-    cancelled: "cancelled",
+    cancelled: payload.status === "failed" ? "failed" : "cancelled",
     manual_review: "processing",
     after_sales: "processing"
   }[String(membershipDelivery?.status || "").toLowerCase()];
@@ -388,7 +388,7 @@ function renderRedeemSuccess(payload) {
   } else if (recoveryRequired) {
     statusHint = "原订单已保留，请提交同一 ChatGPT 账号的新 Session。";
   } else if (membershipAutomation && membershipDelivery) {
-    statusHint = membershipDelivery.label || "会员自动化正在处理。";
+    statusHint = escapeHtml(payload.liveMessage || membershipDelivery.label || "会员自动化正在处理。");
   } else if (manualProcessing) {
     statusHint = "任务已提交成功，管理员将根据 session 手动处理。无需停留本页面轮询，后续请用卡密或订单号查看任务进度。";
   } else if (hasLiveTask) {

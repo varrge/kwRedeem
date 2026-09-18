@@ -200,7 +200,7 @@ export function settleAutomationExecution(db, executionId, status, options = {})
       WHERE id = ?
     `).run(
       status,
-      status === "succeeded" ? "已完成" : "处理失败",
+      status === "succeeded" ? "已完成" : (options.publicMessage || "处理失败"),
       status === "succeeded" ? null : (options.code || execution.last_error_code || "AUTOMATION_FAILED"),
       status === "succeeded" ? null : (options.message || execution.last_error_message || "自动化处理失败"),
       status === "succeeded" ? "consumed" : "released",

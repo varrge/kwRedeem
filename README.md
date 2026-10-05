@@ -44,11 +44,11 @@ npm run serve:admin
 - Admin: `http://127.0.0.1:4174`
 - API: `http://127.0.0.1:4300`
 
-## 独立会员自动化模块
+## 会员自动化
 
-会员自动化代码位于独立的同级项目 `../kwMembership`，但它直接使用本项目的 `DATABASE_PATH` 和 `JWT_SECRET`。只有 Go worker 会发现会员订单、校验 Session，并推进履约、库存、资金、自动结账与对账状态；kwRedeem 的 Node worker 不再运行会员自动化。
+会员付款由本项目的 Node Worker 执行后台“会员自动化”配置的协议任务。自动化站点与付款卡台分别配置；SpaceX Card / EfunCard 凭据继续用于选卡和充值。
 
-Go 在本地把订单 Session 生成 ChatGPT Cookie，在服务器私有 Xvfb 中验证身份、查询官方订阅状态，并通过官方 checkout API 创建受白名单约束的 Plus 结账入口；只有卡片与交易资料来自 SpaceXCard OpenAPI。会员流程不需要浏览器扩展、GPT Token、账号密码、旧的 `/#pricing` 套餐按钮或人工打开浏览器。kwRedeem 后台和 Webhook 直接读写同一数据库，因此没有第二套会员库、任务分发或状态回调。后台“会员履约 → 实施状态”显示 Go owner、版本、心跳、最近 Tick 和脱敏错误码。构建、启动和 systemd 部署见 `../kwMembership/README.md`。
+旧版 Go / Python 浏览器付款已退役。旧版管理接口不再允许新增履约、开启付款或补单；历史订单、卡片和交易证据保留，后台提供只读履约历史。
 
 ## 后台结构
 
@@ -72,22 +72,10 @@ Go 在本地把订单 Session 生成 ChatGPT Cookie，在服务器私有 Xvfb �
 
 更多细节见 `docs/deploy.md` 与 `docs/architecture.md`。
 
-## 会员自动化 Module
+## 旧版会员安装的升级兼容
 
-`modules/kwMembership` 与 Node 主项目由同一个 Git commit 管理。后台“系统更新”会统一构建 Go Worker、迁移共享 SQLite、部署 Python Executor，并在版本和心跳检查通过后解除维护模式。
+已有 `kwmembership-worker.service` / `kwmembership-python-executor.service` 安装通过统一更新器迁移为兼容进程。Go 仅维护版本和心跳，Python 仅等待退出信号，均不领取任务、打开浏览器或付款。这保留了旧版在线更新器的部署与心跳检查契约，也沿用已有固定部署助手的 sudo 权限。首次安装和独立启动入口已关闭，新部署只需 Node API 与 Worker。
 
-生产服务器首次启用时，需要由 root 安装一次 systemd、独立环境文件和受限部署权限。已有旧环境文件时执行：
+更新会先关闭旧版付款 Gate。部署前若发现 `queued`、`leased` 或 `action_required` 的旧结账命令，检查会中止更新并保留维护模式及现有进程，防止中断在途付款；需核对并处理旧命令的真实结果后重试。历史订单和资金证据不会自动清除或重试。
 
-```bash
-cd /var/local/1panel/apps/openresty/openresty/www/sites/key/index
-sudo \
-  KWMEMBERSHIP_USER=<运行 kwRedeem 的 Unix 用户> \
-  KWMEMBERSHIP_SOURCE_ENV_FILE=/opt/kwmembership/.env \
-  bash modules/kwMembership/scripts/install-systemd.sh
-```
-
-主仓库可以位于任意绝对路径；安装器会从当前 `modules/kwMembership` 自动识别 kwRedeem 根目录。本服务器的主仓库是 `/var/local/1panel/apps/openresty/openresty/www/sites/key/index`，而 `/opt/kwmembership` 只是 systemd 使用的隔离运行副本。
-
-全新安装时，先基于 `modules/kwMembership/.env.example` 创建仅 root 和运行用户可读的临时环境文件，再通过 `KWMEMBERSHIP_SOURCE_ENV_FILE` 传给安装器。安装完成后密钥保存在 `/etc/kwmembership.env`；后续无需 root 登录，后台“在线更新”只获准调用固定的 `/usr/local/sbin/kawang-membership-deploy`。
-
-Go 和 Python 仍分别运行在 `kwmembership-worker.service` 与 `kwmembership-python-executor.service`，不进入 PM2。付款 Gate 和 `KWMEMBERSHIP_LIVE_PAYMENT_ENABLED` 不会被系统更新自动开启。
+旧 systemd 单元及 `/etc/kwmembership.env` 保留用于升级兼容与历史核对；更新不会要求新的任意 `systemctl` sudo 权限，也不会自动卸载这些文件。

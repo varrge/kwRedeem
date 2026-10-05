@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from python_executor.client import ExecutorAPIError, ExecutorLease
-from python_executor.runner import PreflightExecutor, executor_for_mode
+from python_executor.runner import PreflightExecutor, executor_for_mode, main
 
 
 def lease(command_kind: str) -> ExecutorLease:
@@ -39,6 +39,14 @@ class PreflightExecutorTest(unittest.TestCase):
 
     def test_mode_selects_preflight_executor(self) -> None:
         self.assertIsInstance(executor_for_mode("preflight"), PreflightExecutor)
+
+
+class RetiredEntrypointTest(unittest.TestCase):
+    def test_live_settings_cannot_start_a_client_or_browser(self) -> None:
+        with mock.patch.dict("os.environ", {"KWMEMBERSHIP_PYTHON_EXECUTOR_MODE": "live", "KWMEMBERSHIP_LIVE_PAYMENT_ENABLED": "true"}), mock.patch("sys.argv", ["python_executor", "--once"]), mock.patch("python_executor.runner.ExecutorClient") as client, mock.patch("python_executor.runner.LiveExecutor") as browser:
+            main()
+        client.assert_not_called()
+        browser.assert_not_called()
 
 
 if __name__ == "__main__":

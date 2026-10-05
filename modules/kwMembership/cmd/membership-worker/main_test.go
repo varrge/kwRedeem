@@ -146,3 +146,110 @@ func testLeaseStatus(t *testing.T, ctx context.Context, repository *store.Store)
 	}
 	return status
 }
+
+func TestRetirementPreservesInflightCheckoutAndRejectsDeploy(t *testing.T) {
+	ctx := context.Background()
+	repository, err := store.Open(filepath.Join(t.TempDir(), "retirement.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	_, err = repository.DB().Exec(`CREATE TABLE membership_fulfillment_settings (id TEXT PRIMARY KEY, enabled INTEGER, rollout_mode TEXT);
+ INSERT INTO membership_fulfillment_settings VALUES ('default', 1, 'automatic');
+ CREATE TABLE membership_checkout_commands (id TEXT PRIMARY KEY, state TEXT, evidence TEXT);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"queued", "leased", "action_required"} {
+		_, err = repository.DB().Exec(`INSERT INTO membership_checkout_commands VALUES (?, ?, 'preserve-me')`, state, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := retirePayments(ctx, repository); err == nil {
+			t.Fatalf("deployment accepted %s checkout", state)
+		}
+		var after, evidence string
+		if err := repository.DB().QueryRow(`SELECT state,evidence FROM membership_checkout_commands WHERE id=?`, state).Scan(&after, &evidence); err != nil {
+			t.Fatal(err)
+		}
+		if after != state || evidence != "preserve-me" {
+			t.Fatal("inflight checkout evidence changed")
+		}
+	}
+	var enabled int
+	var mode string
+	if err := repository.DB().QueryRow(`SELECT enabled,rollout_mode FROM membership_fulfillment_settings`).Scan(&enabled, &mode); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 || mode != "disabled" {
+		t.Fatal("retirement did not close legacy payment gate")
+	}
+}
+
+func TestRetiredRuntimeSatisfiesOldUpdaterWithoutProcessingOrders(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "retirement.db")
+	repository, err := store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	_, err = repository.DB().Exec(`CREATE TABLE membership_fulfillment_settings (id TEXT PRIMARY KEY, enabled INTEGER, rollout_mode TEXT);
+ INSERT INTO membership_fulfillment_settings VALUES ('default',1,'automatic');
+ CREATE TABLE membership_checkout_commands (id TEXT PRIMARY KEY, state TEXT, evidence TEXT);
+ INSERT INTO membership_checkout_commands VALUES ('history','reported','receipt');
+ CREATE TABLE membership_fulfillments (id TEXT PRIMARY KEY, state TEXT);
+ INSERT INTO membership_fulfillments VALUES ('pending-order','QUEUED');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, "maintenance.json")
+	if err := os.WriteFile(marker, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- runRetiredWithConfig(ctx, config.Config{DatabasePath: databasePath, MaintenancePath: marker, LeaseTTL: time.Minute, HeartbeatInterval: 5 * time.Millisecond})
+	}()
+	awaitStatus := func(expected string) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			var owner, status, installedVersion, heartbeat string
+			err := repository.DB().QueryRow(`SELECT owner,status,version,heartbeat_at FROM membership_processor_lease WHERE id='default'`).Scan(&owner, &status, &installedVersion, &heartbeat)
+			if err == nil && status == expected {
+				if owner != "retired" || installedVersion != version || heartbeat == "" {
+					t.Fatalf("unexpected lease: %s %s %s", owner, status, installedVersion)
+				}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("old updater did not observe %s heartbeat", expected)
+	}
+	awaitStatus("standby")
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	awaitStatus("active")
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := repository.DB().QueryRow(`SELECT state FROM membership_fulfillments WHERE id='pending-order'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "QUEUED" {
+		t.Fatalf("retired runtime processed order: %s", state)
+	}
+	var evidence string
+	if err := repository.DB().QueryRow(`SELECT evidence FROM membership_checkout_commands WHERE id='history'`).Scan(&evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence != "receipt" {
+		t.Fatal("history changed")
+	}
+}

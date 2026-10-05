@@ -21,6 +21,7 @@ import { convertSessionToCookiePayload } from "../../shared/src/session-cookie-c
 import { createExtensionDeliveryService } from "./extension-delivery.js";
 import { createMembershipFulfillmentService } from "./membership-fulfillment.js";
 import { createMembershipPaymentService } from "./membership-payment.js";
+import { registerLegacyMembershipRetirement } from "./legacy-membership-retirement.js";
 import { createAutomationFulfillmentService } from "./automation-fulfillment.js";
 import { createSub2ApiShakeService } from "./sub2api-shake.js";
 import { createSub2ApiRaidService } from "./sub2api-raid.js";
@@ -30,8 +31,6 @@ import { createSpaceXCardCheckout } from "../../shared/src/spacexcard-gpt.js";
 import { persistManagedCardTransactions } from "../../shared/src/membership-reconciliation.js";
 import { enrollAutomationOrder, serializeAutomationExecution } from "../../shared/src/automation-fulfillment.js";
 import {
-  activateMembershipFulfillmentIdentity,
-  createMembershipFulfillmentForOrder,
 	deriveMembershipAccountLockKey,
   projectMembershipDelivery,
   transitionMembershipFulfillment
@@ -524,7 +523,7 @@ async function getMembershipRuntimeStatus(sourceVersion = null) {
   let lease = null;
   try {
     lease = db.prepare(`
-      SELECT status,version,heartbeat_at,expires_at,last_tick_at,last_success_at,last_error_code
+      SELECT owner,status,version,heartbeat_at,expires_at,last_tick_at,last_success_at,last_error_code
       FROM membership_processor_lease WHERE id='default'
     `).get() || null;
   } catch {
@@ -544,8 +543,6 @@ async function getMembershipRuntimeStatus(sourceVersion = null) {
     systemdUnitState("kwmembership-python-executor.service")
   ]);
   const installedVersion = lease?.version || null;
-  const unitsPresent = !["unknown", "unavailable", "not-installed"].includes(workerService)
-    && !["unknown", "unavailable", "not-installed"].includes(pythonExecutorService);
   return {
     sourcePresent,
     sourceVersion,
@@ -553,11 +550,13 @@ async function getMembershipRuntimeStatus(sourceVersion = null) {
     versionMatches: Boolean(sourceVersion && installedVersion && sourceVersion === installedVersion),
     deployHelperPresent,
     environmentPresent,
-    firstInstallRequired: sourcePresent && !(deployHelperPresent && environmentPresent && unitsPresent),
+    retired: true,
+    firstInstallRequired: false,
     deployHelperPath,
     environmentPath,
     workerService,
     pythonExecutorService,
+    processorOwner: lease?.owner || null,
     processorStatus: lease?.status || "stopped",
     heartbeatAt,
     heartbeatFresh,
@@ -652,10 +651,8 @@ function createAuditLog({ action, actor = "system", resourceType, resourceId = n
   `).run(nanoid(16), action, actor, resourceType, resourceId, detail ? JSON.stringify(detail) : null, nowIso());
 }
 
-// Production fulfillment intake is owned by the Go processor, which observes
-// orders and delivery facts in this database. Node keeps the legacy hook only
-// for the in-process API test suite.
-const nodeMembershipAutomationTest = process.env.KAWANG_SKIP_LISTEN === "1";
+// Legacy settings stay disabled; historical records remain available for inspection.
+registerLegacyMembershipRetirement(app, db);
 const extensionDelivery = createExtensionDeliveryService({
   app,
   db,
@@ -663,15 +660,6 @@ const extensionDelivery = createExtensionDeliveryService({
   encryptText,
   requireAdmin,
   createAuditLog,
-  onDeliverySucceeded({ orderNo, verifiedEmail, at }) {
-    if (!nodeMembershipAutomationTest) return;
-    activateMembershipFulfillmentIdentity(db, {
-      orderNo,
-      verifiedEmail,
-      secret: env.jwtSecret,
-      at
-    });
-  },
   isMaintenanceEnabled
 });
 
@@ -1088,7 +1076,7 @@ function interpretVerifyResult(siteSlug, remoteResult, defaultCanRedeem) {
 const MEIMEI_SITE_SLUG = "meimei_site";
 const MEIMEI_SITE_QUEUE_STATUS_URL = "https://ai.dengta-learning.online/api/cdk/queue-status";
 const SUPPORT_API_BASE_URL = "https://ai.dengta-learning.online/support/api/support";
-const MANUAL_CDKEY_TYPES = ["PLUS", "x5", "x20"];
+const MANUAL_CDKEY_TYPES = ["PLUS", "x5", "x20", "x50"];
 
 async function fetchQueueStatusForSite(site) {
   const slug = String(site?.slug || "").trim().toLowerCase();
@@ -7296,14 +7284,6 @@ app.post("/api/public/redeem", async (request, reply) => {
           orderId,
           orderNo,
           productId: automationRoutingId,
-          createdAt: now
-        });
-      } else if (nodeMembershipAutomationTest) {
-        createMembershipFulfillmentForOrder(db, {
-          orderId,
-          orderNo,
-          productId,
-          manualType: delegatedMembershipProcessing ? manualType : null,
           createdAt: now
         });
       }

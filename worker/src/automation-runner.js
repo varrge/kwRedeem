@@ -5,7 +5,7 @@ import {
   automationRiskAllocationUsd,
   prepareAutomationCard
 } from "../../shared/src/automation-card-funding.js";
-import { isSpaceXGptCardUnavailableMessage } from "../../shared/src/automation-adapters/spacex-gpt-direct-v1.js";
+import { automationAccountKey } from "../../shared/src/secure.js";
 import { settleAutomationExecution } from "../../shared/src/automation-fulfillment.js";
 import {
   createAutomationAdapter,
@@ -141,9 +141,12 @@ function priceProblem(task, snapshot) {
   const currency = task.pricing.currency || task.checkoutCurrency;
   const total = parseDisplayAmount(task.pricing.displayTotal);
   if (!task.pricing.confirmed) return "REMOTE_PRICE_NOT_CONFIRMED";
-  if (currency !== snapshot.currency) return "REMOTE_PRICE_CURRENCY_MISMATCH";
+  if (currency !== (snapshot.paymentQuote?.currency || snapshot.currency)) return "REMOTE_PRICE_CURRENCY_MISMATCH";
   if (snapshot.adapterKey === "efun_open_v1" && task.pricing.amountUnavailable === true) return null;
   if (total === null) return "REMOTE_PRICE_UNREADABLE";
+  // Upgrade acceptance authorizes the account's live invoice. The provider may
+  // refresh the prorated difference after acceptance; never compare to full price.
+  if (snapshot.paymentQuote?.kind === "upgrade") return total > 0 ? null : "REMOTE_PRICE_OUT_OF_RANGE";
   if (total < snapshot.expectedMinAmount || total > snapshot.expectedMaxAmount) {
     return "REMOTE_PRICE_OUT_OF_RANGE";
   }
@@ -155,6 +158,7 @@ function requestId(execution) {
 }
 
 export function createAutomationRunner(options = {}) {
+  const preparedAccounts = new Map();
   const {
     db,
     decryptText,
@@ -643,6 +647,37 @@ export function createAutomationRunner(options = {}) {
     return true;
   }
 
+  function capturePreparation(execution, snapshot, prepared) {
+    if (!prepared?.quote) return;
+    const quote = prepared.quote;
+    const total = quote.amountMinor / (10 ** quote.minorUnitExponent);
+    if (quote.kind === 'purchase' && (quote.currency !== snapshot.currency
+      || total < snapshot.expectedMinAmount || total > snapshot.expectedMaxAmount)) {
+      throw new AutomationAdapterError('AUTOMATION_QUOTE_OUT_OF_RANGE', '实时报价超出映射允许的付款范围', {
+        retryable:false, definitelyNotCreated:true
+      });
+    }
+    const accountKey = automationAccountKey(execution.provider_id, prepared.verifiedAccountId);
+    if (execution.verified_account_key && execution.verified_account_key !== accountKey) {
+      throw new AutomationFundingError('AUTOMATION_ACCOUNT_CHANGED', '预检账号与本次订单已确认的账号不一致', {unknownOutcome:true});
+    }
+    snapshot.paymentQuote = { kind: quote.kind, amountMinor: quote.amountMinor, currency: quote.currency,
+      minorUnitExponent: quote.minorUnitExponent, fundingUsdMinor: quote.fundingUsdMinor,
+      expiresAt: quote.expiresAt, serviceFeeUsdMinor: quote.serviceFeeUsdMinor };
+    const serialized = JSON.stringify(snapshot);
+    db.transaction(() => {
+      if (accountKey && db.prepare(`SELECT 1 FROM automation_executions WHERE provider_id=?
+        AND verified_account_key=? AND id<>? AND status NOT IN ('succeeded','failed','cancelled') LIMIT 1`)
+        .get(execution.provider_id, accountKey, execution.id)) {
+        throw new AutomationFundingError('AUTOMATION_ACCOUNT_BUSY', '同一客户账号还有未完成订单', {retryable:true});
+      }
+      db.prepare(`UPDATE automation_executions SET verified_account_key=?, mapping_snapshot=? WHERE id=?`)
+        .run(accountKey, serialized, execution.id);
+    }).immediate();
+    execution.verified_account_key = accountKey;
+    execution.mapping_snapshot = serialized;
+  }
+
   async function prepareExecutionCard(execution) {
     const snapshot = parseJson(execution.mapping_snapshot);
     const mapping = mappingFromSnapshot(snapshot);
@@ -655,6 +690,7 @@ export function createAutomationRunner(options = {}) {
         lookup,
         efunAutomationProxyUrl
       });
+      let preparedAccount;
       if (typeof adapter.prepareAccount === "function") {
         const order = db.prepare("SELECT session_payload FROM redeem_orders WHERE id = ?").get(execution.order_id);
         let authSessionJson;
@@ -665,15 +701,20 @@ export function createAutomationRunner(options = {}) {
             retryable: false
           });
         }
-        await adapter.prepareAccount({
+        preparedAccount = await adapter.prepareAccount({
           planId: snapshot.externalPlanId,
           authSessionJson,
-          checkoutCountry: snapshot.regionCode
+          checkoutCountry: snapshot.regionCode,
+          checkoutCurrency: snapshot.currency
         });
+        capturePreparation(execution, snapshot, preparedAccount);
+        preparedAccounts.set(execution.id, { adapter, preparedAccount, attempt: execution.attempt_count });
       }
       await prepareCard(db, {
         execution,
         mapping,
+        adapter,
+        preparedAccount,
         decryptText,
         encryptText,
         fetchImpl,
@@ -693,8 +734,9 @@ export function createAutomationRunner(options = {}) {
         WHERE execution_id = ? AND attempt_no = ?
       `).run(at, execution.id, execution.attempt_count);
     } catch (error) {
+      preparedAccounts.delete(execution.id);
       if (handleSubscriptionRejection(execution, error)) return;
-      if (error instanceof AutomationAdapterError && error.requestNotSent) {
+      if (error instanceof AutomationAdapterError && error.requestNotSent && error.retryable) {
         const retryAfter = Number(error.retryAfterSeconds);
         schedule(execution, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30, {
           status: "preparing_card",
@@ -777,70 +819,6 @@ export function createAutomationRunner(options = {}) {
     writeAudit("automation.task_not_created", execution, { code, providerCode: providerCode || null });
   }
 
-  function replaceExhaustedCard(execution, error) {
-    const snapshot = parseJson(execution.mapping_snapshot);
-    const reservation = db.prepare(`
-      SELECT * FROM automation_card_reservations WHERE execution_id = ?
-    `).get(execution.id);
-    const intents = db.prepare(`
-      SELECT operation, state FROM automation_funding_intents
-      WHERE execution_id = ? ORDER BY intent_no
-    `).all(execution.id);
-    if (snapshot?.adapterKey !== "spacex_gpt_direct_v1"
-      || snapshot.cardPlatformKey !== "spacexcard"
-      || !snapshot.cardProductCode
-      || !reservation?.card_id
-      || reservation.state !== "reserved"
-      || intents.some((intent) => intent.state !== "succeeded")
-      || intents.some((intent) => intent.operation === "open")) {
-      markManualReview(
-        execution,
-        "SPACEX_GPT_CARD_REPLACEMENT_UNSAFE",
-        "卡片额度已满，但当前资金或卡片状态不允许自动换卡"
-      );
-      return;
-    }
-    const at = iso(now());
-    const oldCardId = reservation.card_id;
-    db.transaction(() => {
-      db.prepare(`
-        UPDATE managed_cards
-        SET consumed_slots = MAX(consumed_slots, ?), capacity_state = 'CAPACITY_FULL', updated_at = ?
-        WHERE id = ?
-      `).run(Number(snapshot.cardCapacity), at, oldCardId);
-      db.prepare(`
-        UPDATE automation_card_reservations
-        SET card_id = NULL, planned_product_code = ?, slot_index = NULL,
-            state = 'reserved', reserved_at = ?, consumed_at = NULL, released_at = NULL
-        WHERE id = ?
-      `).run(snapshot.cardProductCode, at, reservation.id);
-      db.prepare(`
-        UPDATE automation_execution_attempts
-        SET status = 'selected', error_code = ?, error_message = ?, updated_at = ?
-        WHERE execution_id = ? AND attempt_no = ?
-      `).run(
-        "SPACEX_GPT_CARD_EXHAUSTED",
-        boundedError(error?.message, "卡片直充额度已满"),
-        at,
-        execution.id,
-        execution.attempt_count
-      );
-      db.prepare(`
-        UPDATE automation_executions
-        SET status = 'preparing_card', current_phase = 'opening_replacement_card',
-            public_message = '处理中', card_id = NULL, card_last4 = NULL,
-            card_reservation_state = 'reserved', remote_task_id = NULL,
-            remote_status = NULL, remote_snapshot = NULL, poll_failure_count = 0,
-            last_error_code = 'SPACEX_GPT_CARD_EXHAUSTED', last_error_message = ?,
-            next_action_at = ?, updated_at = ?
-        WHERE id = ?
-      `).run(boundedError(error?.message, "卡片直充额度已满"), at, at, execution.id);
-    }).immediate();
-    writeAudit("automation.card_replacement_planned", execution, {
-      reason: "SPACEX_GPT_CARD_EXHAUSTED"
-    });
-  }
-
   function createBackoff(execution) {
     const failures = Number(execution.poll_failure_count || 0) + 1;
     const attempt = db.prepare(`
@@ -898,38 +876,10 @@ export function createAutomationRunner(options = {}) {
   async function submitExecution(execution) {
     const snapshot = parseJson(execution.mapping_snapshot);
     const mapping = mappingFromSnapshot(snapshot);
-    if (!execution.remote_task_id
-      && snapshot.adapterKey === "spacex_gpt_direct_v1"
-      && isSpaceXGptCardUnavailableMessage(execution.last_error_message)) {
-      replaceExhaustedCard(execution, {
-        message: execution.last_error_message
-      });
-      return;
-    }
-    const order = db.prepare("SELECT session_payload FROM redeem_orders WHERE id = ?").get(execution.order_id);
-    let authSessionJson;
+    let recoveringSubmission = false;
     try {
-      authSessionJson = JSON.parse(decryptText(order?.session_payload || ""));
-    } catch {
-      settleAutomationExecution(db, execution.id, "failed", {
-        code: "AUTOMATION_SESSION_UNAVAILABLE",
-        message: "订单 Session 无法读取",
-        at: iso(now())
-      });
-      return;
-    }
-    try {
-      const prepared = await prepareCard(db, {
-        execution,
-        mapping,
-        decryptText,
-        encryptText,
-        fetchImpl,
-        efuncardProxyUrl,
-        getCardholder: () => deterministicCardholder(execution.order_no),
-        at: iso(now())
-      });
-      const { adapter } = adapterFactory(db, {
+      const cached = preparedAccounts.get(execution.id);
+      let { adapter } = cached?.attempt === execution.attempt_count ? cached : adapterFactory(db, {
         providerId: execution.provider_id,
         credentialId: execution.credential_id,
         decryptText,
@@ -941,14 +891,46 @@ export function createAutomationRunner(options = {}) {
         SELECT status FROM automation_execution_attempts
         WHERE execution_id = ? AND attempt_no = ?
       `).get(execution.id, execution.attempt_count);
-      if (adapter.createReplaySafe === false && attempt?.status === "submit_started") {
+      if (adapter.createReplaySafe === false && (['submit_started', 'submit_unknown'].includes(attempt?.status)
+        || execution.status === 'submit_unknown' || execution.current_phase === 'remote_submit_started')) {
+        recoveringSubmission = true;
+        preparedAccounts.delete(execution.id);
+        if (typeof adapter.findTaskByClientOrderId === 'function') {
+          const recovered = await adapter.findTaskByClientOrderId(execution.client_order_id, {
+            planId:snapshot.externalPlanId, checkoutCountry:snapshot.regionCode,
+            checkoutCurrency:snapshot.paymentQuote?.currency || snapshot.currency,
+            minorUnitExponent:snapshot.paymentQuote?.minorUnitExponent, cardLast4:execution.card_last4
+          });
+          if (recovered) { processRemoteTask(execution, recovered.task); return; }
+        }
         markManualReview(
           execution,
           "AUTOMATION_SUBMIT_OUTCOME_UNKNOWN",
-          "当前站点协议不支持幂等重放，已停止自动重提"
+          "提交结果不明，查询未找到可确认的原订单，已停止自动重提"
         );
         return;
       }
+      // Recovery reads the original order without needing the customer's session.
+      // A missing/expired local session cannot prove an earlier payment failed.
+      const order = db.prepare("SELECT session_payload FROM redeem_orders WHERE id = ?").get(execution.order_id);
+      let authSessionJson;
+      try {
+        authSessionJson = JSON.parse(decryptText(order?.session_payload || ""));
+      } catch {
+        markManualReview(execution, 'AUTOMATION_SESSION_UNAVAILABLE', '订单 Session 无法读取');
+        return;
+      }
+      let preparedAccount = cached?.attempt === execution.attempt_count ? cached.preparedAccount : null;
+      if (typeof adapter.prepareAccount === 'function' && (!preparedAccount
+        || (preparedAccount.quote && Date.parse(preparedAccount.quote.expiresAt) <= Date.now()))) {
+        preparedAccount = await adapter.prepareAccount({ planId:snapshot.externalPlanId,
+          authSessionJson, checkoutCountry:snapshot.regionCode, checkoutCurrency:snapshot.currency });
+      }
+      capturePreparation(execution, snapshot, preparedAccount);
+      const prepared = await prepareCard(db, {
+        execution, mapping, adapter, preparedAccount, decryptText, encryptText, fetchImpl,
+        efuncardProxyUrl, getCardholder: () => deterministicCardholder(execution.order_no), at:iso(now())
+      });
       const submittedAt = iso(now());
       db.transaction(() => {
         db.prepare(`
@@ -965,19 +947,26 @@ export function createAutomationRunner(options = {}) {
         clientOrderId: execution.client_order_id,
         planId: snapshot.externalPlanId,
         checkoutCountry: snapshot.regionCode,
+        checkoutCurrency: snapshot.currency,
+        preparedAccount,
         authSessionJson,
         card: prepared.material,
         cardProviderKey: prepared.card.provider_key,
         providerCardId: prepared.card.upstream_card_id,
         requestId: requestId(execution)
       });
+      preparedAccounts.delete(execution.id);
       processRemoteTask(execution, result.task);
     } catch (error) {
-      if (handleSubscriptionRejection(execution, error)) return;
-      if (error instanceof AutomationAdapterError && error.cardUnavailable) {
-        replaceExhaustedCard(execution, error);
+      preparedAccounts.delete(execution.id);
+      if (recoveringSubmission) {
+        // A query's auth/validation/network failure says nothing about whether
+        // the original payment was accepted. Never clear its submission marker.
+        if (error.retryable === false) markManualReview(execution, 'AUTOMATION_SUBMIT_OUTCOME_UNKNOWN', boundedError(error.message));
+        else recordAmbiguousCreate(execution, error);
         return;
       }
+      if (handleSubscriptionRejection(execution, error)) return;
       if (error instanceof AutomationAdapterError && error.definitelyNotCreated) {
         markDefinitelyNotCreated(execution, error);
         return;
@@ -1034,6 +1023,8 @@ export function createAutomationRunner(options = {}) {
         clientOrderId: execution.client_order_id,
         planId: snapshot?.externalPlanId,
         checkoutCountry: snapshot?.regionCode,
+        checkoutCurrency: snapshot?.paymentQuote?.currency || snapshot?.currency,
+        minorUnitExponent: snapshot?.paymentQuote?.minorUnitExponent,
         cardLast4: execution.card_last4
       });
       processRemoteTask(execution, result.task);

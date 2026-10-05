@@ -145,6 +145,7 @@ const refs = {
   membershipFulfillmentSettingsForm: document.querySelector("#membership-fulfillment-settings-form"),
   membershipOpenApiBase: document.querySelector("#membership-openapi-base"),
   membershipAppId: document.querySelector("#membership-app-id"),
+  membershipSpaceXEnabled: document.querySelector("#membership-spacexcard-enabled"),
   membershipAppSecret: document.querySelector("#membership-app-secret"),
   membershipClearAppSecret: document.querySelector("#membership-clear-app-secret"),
   membershipWebhookSecret: document.querySelector("#membership-webhook-secret"),
@@ -1694,7 +1695,7 @@ async function refreshStoreMappings() {
     { label: "履约类型", render: (item) => item.fulfillmentKind === "spacex_cdk"
       ? `<span class="table-badge status-processing">SpaceX CDK / ${escapeHtml(item.spacexPlan)}</span>`
       : (item.fulfillmentKind === "membership_auto"
-        ? `<span class="table-badge status-processing">EfunCard 自动化 / ${escapeHtml(item.manualType)}</span>`
+        ? `<span class="table-badge status-processing">会员自动化 / ${escapeHtml(item.manualType)}</span>`
         : `<span class="table-badge status-processing">人工 / ${escapeHtml(item.manualType)}</span>`) },
     { label: "KaWang 站点", render: (item) => escapeHtml(item.siteName || item.siteId) },
     { label: "前缀", render: (item) => `<code>${escapeHtml(item.prefix)}</code>` },
@@ -2336,83 +2337,22 @@ window.resolveAutomationExecution = resolveAutomationExecution;
 
 async function refreshMembershipFulfillmentConsole() {
   await refreshAutomationConsole();
-  const payload = await api("/api/admin/membership-fulfillment/settings");
-  const settings = payload.settings || {};
-  const dependencies = settings.dependencies || {};
-  const processor = settings.processor || {};
-  const cardPlatforms = payload.cardPlatforms || [];
-  const selectedPlatformKey = refs.membershipInventoryPlatform?.value || "spacexcard";
-  const spaceXCard = cardPlatforms.find((item) => item.key === "spacexcard") || {};
-  const efunCard = cardPlatforms.find((item) => item.key === "efuncard") || {};
-  refs.membershipOpenApiBase.value = spaceXCard.baseUrl || dependencies.openApiBaseUrl || "";
-  refs.membershipAppId.value = settings.appId || "";
+  const payload = await api("/api/admin/membership-card-platforms");
+  const spaceX = (payload.items || []).find((item) => item.key === "spacexcard") || {};
+  const efun = (payload.items || []).find((item) => item.key === "efuncard") || {};
+  refs.membershipOpenApiBase.value = spaceX.baseUrl || "";
+  refs.membershipAppId.value = spaceX.appId || "";
   refs.membershipAppSecret.value = "";
-  refs.membershipAppSecret.placeholder = settings.hasAppSecret
-    ? "app_secret 已加密保存；留空保持不变"
-    : "sk_...；首次配置必填";
+  refs.membershipAppSecret.placeholder = spaceX.hasCredential ? "已保存；留空保持不变" : "首次配置必填";
   refs.membershipClearAppSecret.checked = false;
-  refs.membershipWebhookSecret.value = "";
-  refs.membershipWebhookSecret.placeholder = settings.hasWebhookSecret
-    ? "Webhook 密钥已加密保存；留空保持不变"
-    : "whsec_...；配置回调后填写";
-  refs.membershipClearWebhookSecret.checked = false;
-	refs.membershipGptToken.value = "";
-	refs.membershipGptToken.placeholder = dependencies.hasGptToken
-	  ? "GPT Token 已加密保存；留空保持不变"
-	  : "首次配置必填";
-	refs.membershipClearGptToken.checked = false;
-  refs.membershipEfunCardBaseUrl.value = efunCard.baseUrl || "";
+  refs.membershipSpaceXEnabled.checked = spaceX.enabled === true;
+  refs.membershipEfunCardBaseUrl.value = efun.baseUrl || "";
   refs.membershipEfunCardApiKey.value = "";
-  refs.membershipEfunCardApiKey.placeholder = efunCard.hasCredential
-    ? "API Key 已加密保存；留空保持不变"
-    : "首次启用前必填";
+  refs.membershipEfunCardApiKey.placeholder = efun.hasCredential ? "已保存；留空保持不变" : "首次配置必填";
   refs.membershipEfunCardClearApiKey.checked = false;
-  refs.membershipEfunCardPriority.value = Number(efunCard.priority) || 200;
-  refs.membershipEfunCardEnabled.checked = efunCard.enabled === true;
-  refs.membershipInventoryPlatform.innerHTML = cardPlatforms.map((item) => `
-    <option value="${escapeHtml(item.key)}">${escapeHtml(item.displayName || item.key)}</option>
-  `).join("");
-  refs.membershipInventoryPlatform.value = cardPlatforms.some((item) => item.key === selectedPlatformKey)
-    ? selectedPlatformKey
-    : (cardPlatforms[0]?.key || "spacexcard");
-  refs.membershipStateProviderUrl.value = dependencies.membershipStateProviderUrl || "";
-  refs.membershipCheckoutBrokerUrl.value = dependencies.checkoutBrokerUrl || "";
-  if (refs.membershipRolloutMode) refs.membershipRolloutMode.value = settings.rolloutMode || "disabled";
-  refs.membershipFulfillmentStatus.innerHTML = `
-    <div class="membership-processor-status">
-      <div class="membership-processor-status-title">自动处理器</div>
-      <div>运行主体：<code>${escapeHtml(processor.owner || "未接管")}</code></div>
-      <div>状态：<strong title="${escapeHtml(`状态码：${processor.status || "stopped"}`)}">${escapeHtml(getMembershipProcessorStatusLabel(processor.status || "stopped"))}</strong></div>
-      <div>版本：<code>${escapeHtml(processor.version || "-")}</code></div>
-      <div>最近心跳：${escapeHtml(processor.heartbeatAt || "-")}</div>
-      <div>租约到期：${escapeHtml(processor.expiresAt || "-")}</div>
-      <div>最近 Tick：${escapeHtml(processor.lastTickAt || "-")}</div>
-      <div>最近成功：${escapeHtml(processor.lastSuccessAt || "-")}</div>
-      <div>最近错误：<code>${escapeHtml(processor.lastErrorCode || "无")}</code></div>
-    </div>
-    <div>付款 Gate：<strong>${settings.paymentGateLocked ? "锁定（安全默认）" : (settings.enabled ? "已启用" : "已停用")}</strong></div>
-    <div>Rollout 模式：<code>${escapeHtml(settings.rolloutMode || "disabled")}</code></div>
-    <div>OpenAPI app_secret：<strong>${settings.hasAppSecret ? "已配置" : "未配置"}</strong></div>
-    <div>Webhook 密钥：<strong>${settings.hasWebhookSecret ? "已配置" : "未配置"}</strong></div>
-	<div>旧版 GPT Broker Token（Go 不使用）：<strong>${dependencies.hasGptToken ? "已配置" : "未配置"}</strong></div>
-	<div>结账执行器：<code>${escapeHtml(dependencies.executor || "go-headless")}</code></div>
-	<div>浏览器扩展：<strong>${dependencies.requiresExtension === false ? "不需要" : "兼容模式"}</strong></div>
-	<div>历史库存任务：<strong>${escapeHtml(getMembershipInventoryLabel(settings.inventoryStatus || "not_started"))}</strong></div>
-    <div>业务时区：${escapeHtml(settings.businessTimezone || "Asia/Shanghai")}</div>
-    <div>更新时间：${escapeHtml(settings.updatedAt || "-")}</div>
-  `;
-  await Promise.all([
-    refreshMembershipFulfillments(),
-    refreshMembershipInventoryConsole(settings, cardPlatforms),
-    refreshMembershipPriceContracts(),
-    refreshMembershipProductPolicies(),
-    refreshMembershipNoChargeRuns(),
-    refreshMembershipCircuits(),
-    refreshMembershipCanaryAuthorizations(),
-    refreshMembershipQualifications(),
-    refreshMembershipAutomaticScopes(),
-    refreshMembershipInterventions()
-  ]);
+  refs.membershipEfunCardPriority.value = Number(efun.priority) || 200;
+  refs.membershipEfunCardEnabled.checked = efun.enabled === true;
+  await refreshMembershipFulfillments();
 }
 
 async function refreshMembershipFulfillments() {
@@ -2448,23 +2388,10 @@ async function refreshMembershipFulfillments() {
         const actions = [
           `<button class="ghost-btn small" type="button" onclick='viewMembershipFulfillment(${JSON.stringify(item.id)})'>详情</button>`
         ];
-        if (["PLUS_APPROVAL_WAIT", "UPGRADE_APPROVAL_WAIT"].includes(item.state)) {
-          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCanaryPreparation(${JSON.stringify(item.id)})'>载入批准</button>`);
-        }
-        if (item.state === "FUNDING_READY" && !item.runMode) {
-          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCanaryStart(${JSON.stringify(item.id)})'>准备 Canary</button>`);
-        }
-        if (item.state === "COMPLETED" && item.runMode === "canary") {
-          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipQualification(${JSON.stringify(item.id)})'>资格检查</button>`);
-        }
-        if (item.state === "PARTIAL_FULFILLMENT_EXPIRED") {
-          actions.push(`<button class="ghost-btn small" type="button" onclick='loadMembershipCompensation(${JSON.stringify(item.id)})'>记录补偿</button>`);
-        }
         return actions.join(" ");
       }
     }
   ], payload.items || [], "暂无会员履约记录");
-  renderMembershipCanaryPreparations(payload.items || []);
   setHint(refs.membershipFulfillmentListResult, `已读取 ${payload.items?.length || 0} 条脱敏履约记录`);
 }
 
@@ -3091,13 +3018,9 @@ function renderSystemInfo(payload) {
     ["远端版本", shortCommit(payload.remoteCommit || state.remoteCommit)],
     ["更新状态", state.status || "idle"],
     ["是否有更新", payload.hasUpdate || state.hasUpdate ? "有更新" : "无"],
-    ["会员 Module", membership.sourcePresent
-      ? (membership.firstInstallRequired ? "待首次安装" : (membership.versionMatches ? "已纳管" : "版本不一致"))
-      : "缺失"],
-    ["会员源码版本", shortCommit(membership.sourceVersion)],
-    ["会员运行版本", shortCommit(membership.installedVersion)],
-    ["Go Worker", membership.workerService === "active" && membership.heartbeatFresh ? "运行中" : (membership.workerService || "未安装")],
-    ["Python Executor", membership.pythonExecutorService || "未安装"]
+    ["旧版会员运行时", membership.processorOwner !== "retired" && (membership.workerService === "active" || membership.pythonExecutorService === "active")
+      ? "已退役，待停止历史进程" : "已退役"],
+    ["会员执行方式", "协议自动化"]
   ];
 
   refs.systemVersionCards.innerHTML = cards.map(([label, value]) => `
@@ -7336,21 +7259,15 @@ refs.membershipFulfillmentSettingsForm?.addEventListener("submit", async (event)
   try {
     await api("/api/admin/membership-card-platforms/spacexcard", {
       method: "PUT",
-      body: JSON.stringify({ baseUrl: refs.membershipOpenApiBase.value.trim() })
-    });
-    await api("/api/admin/membership-fulfillment/settings", {
-      method: "PATCH",
       body: JSON.stringify({
-        appId: refs.membershipAppId.value.trim() || null,
+        baseUrl: refs.membershipOpenApiBase.value.trim(),
+        appId: refs.membershipAppId.value.trim(),
         appSecret: refs.membershipAppSecret.value.trim(),
-        clearAppSecret: refs.membershipClearAppSecret.checked,
-        webhookSecret: refs.membershipWebhookSecret.value.trim(),
-		clearWebhookSecret: refs.membershipClearWebhookSecret.checked,
-		gptToken: refs.membershipGptToken.value.trim(),
-		clearGptToken: refs.membershipClearGptToken.checked
+        clearCredential: refs.membershipClearAppSecret.checked,
+        enabled: refs.membershipSpaceXEnabled.checked
       })
     });
-    setHint(refs.membershipFulfillmentSettingsResult, "会员履约基础凭据已加密保存；付款 Gate 仍保持锁定");
+    setHint(refs.membershipFulfillmentSettingsResult, "SpaceX Card 付款卡台凭据已加密保存");
     await refreshMembershipFulfillmentConsole();
   } catch (error) {
     setHint(refs.membershipFulfillmentSettingsResult, error.message);
@@ -7915,7 +7832,7 @@ refs.storeTaskQuery?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") refreshStoreTasks().catch((error) => setHint(refs.storeTaskResult, error.message));
 });
 refs.storeManualType?.addEventListener("change", () => {
-  if (!refs.storePrefix.value.trim() || ["PLUS", "x5", "x20"].includes(refs.storePrefix.value.trim())) {
+  if (!refs.storePrefix.value.trim() || ["PLUS", "x5", "x20", "x50"].includes(refs.storePrefix.value.trim())) {
     refs.storePrefix.value = refs.storeManualType.value;
   }
 });

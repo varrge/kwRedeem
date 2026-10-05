@@ -129,6 +129,8 @@ run_update_runtime enter-maintenance "$UPDATE_ID"
 MAINTENANCE_ENTERED=1
 pm2 stop kawang-worker >/dev/null 2>&1 || true
 
+run_update_runtime retire-membership
+
 if [ "$MEMBERSHIP_INSTALLED" -eq 1 ]; then
   log "等待 kwMembership Worker 完成在途 Tick 并进入 standby..."
   run_update_runtime wait-membership-standby
@@ -166,7 +168,7 @@ if [ ! -f "$MEMBERSHIP_SOURCE_DIR/go.mod" ] || [ ! -f "$MEMBERSHIP_SOURCE_DIR/py
 fi
 
 if [ "$MEMBERSHIP_INSTALLED" -eq 1 ]; then
-  log "构建并检查 kwMembership Module..."
+  log "构建旧版会员停用兼容进程..."
   KWMEMBERSHIP_PROJECT_ROOT="$MEMBERSHIP_SOURCE_DIR" \
   KWMEMBERSHIP_ENV_FILE="$MEMBERSHIP_ENV_FILE" \
   KAWANG_PROJECT_ROOT="$ROOT_DIR" \
@@ -178,7 +180,7 @@ log "初始化或迁移数据库..."
 npm run db:init
 
 if [ "$MEMBERSHIP_INSTALLED" -eq 1 ]; then
-  log "检查迁移后的 kwMembership 共享数据库契约..."
+  log "确认旧版会员没有在途结账后停用付款..."
   KWMEMBERSHIP_PROJECT_ROOT="$MEMBERSHIP_SOURCE_DIR" \
   KWMEMBERSHIP_ENV_FILE="$MEMBERSHIP_ENV_FILE" \
   KAWANG_PROJECT_ROOT="$ROOT_DIR" \
@@ -189,7 +191,7 @@ log "生成前后台运行时配置..."
 npm run config:runtime
 
 if [ "$MEMBERSHIP_INSTALLED" -eq 1 ]; then
-  log "部署并重启 kwMembership systemd 进程..."
+  log "部署旧版会员停用兼容进程（不再处理订单）..."
   sudo -n "$MEMBERSHIP_DEPLOY_HELPER"
 fi
 

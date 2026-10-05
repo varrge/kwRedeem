@@ -20,15 +20,13 @@ const PLAN_DEFINITIONS = Object.freeze({
   go: Object.freeze({ id: "go", name: "ChatGPT Go", label: "Go", taskType: "purchase", canonicalOffer: "go" }),
   plus: Object.freeze({ id: "plus", name: "ChatGPT Plus", label: "Plus", taskType: "purchase", canonicalOffer: "plus" }),
   pro_5x: Object.freeze({ id: "pro_5x", name: "ChatGPT Pro 5X", label: "Pro 5X", taskType: "purchase", canonicalOffer: "x5" }),
-  pro_20x: Object.freeze({ id: "pro_20x", name: "ChatGPT Pro 20X", label: "Pro 20X", taskType: "purchase", canonicalOffer: "x20" })
+  pro_20x: Object.freeze({ id: "pro_20x", name: "ChatGPT Pro 20X", label: "Pro 20X", taskType: "purchase", canonicalOffer: "x20" }),
+  pro_50x: Object.freeze({ id: "pro_50x", name: "ChatGPT Pro 50X", label: "Pro 50X", taskType: "purchase", canonicalOffer: "x50" })
 });
-const SUPPORTED_PLAN_IDS = new Set(["plus", "pro_5x", "pro_20x"]);
+const SUPPORTED_PLAN_IDS = new Set(["plus", "pro_5x", "pro_20x", "pro_50x"]);
 // Quote names differ from the plan IDs required by the order API.
-const QUOTE_PLAN_NAMES = Object.freeze({ plus: "plus", pro_5x: "prolite", pro_20x: "pro" });
-
-export function isSpaceXGptCardUnavailableMessage(value) {
-  return /直充额度已用满[^\n]*(?:换一张卡|换卡)|所选卡片当前不可支付/.test(String(value || ""));
-}
+const QUOTE_PLAN_NAMES = Object.freeze({ plus: "plus", pro_5x: "prolite", pro_20x: "pro", pro_50x: "promax" });
+const PLAN_TIERS = Object.freeze({ free: 0, go: 1, plus: 2, prolite: 3, pro_5x: 3, pro: 4, pro_20x: 4, promax: 5, pro_50x: 5 });
 
 function fail(code, message, options = {}) {
   throw new AutomationAdapterError(code, message, options);
@@ -141,32 +139,46 @@ function providerCode(payload) {
 function normalizeCapabilities(payload) {
   const data = payload?.data;
   if (!data || typeof data !== "object" || Array.isArray(data)
-    || !data.plans || typeof data.plans !== "object" || Array.isArray(data.plans)) {
-    fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 套餐配置无法识别", { retryable: false });
+    || !data.plans || typeof data.plans !== "object" || Array.isArray(data.plans)
+    || !Array.isArray(data.registry) || !Array.isArray(data.payment_regions)) {
+    fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 套餐注册表或付款地区无法识别", { retryable: false });
   }
   const plans = [];
-  const currencies = new Set();
-  for (const [id, item] of Object.entries(data.plans)) {
+  const seen = new Set();
+  for (const entry of data.registry) {
+    if (entry?.product !== "gpt" || !SUPPORTED_PLAN_IDS.has(entry.key)
+      || entry.purchasable !== true || entry.is_credit === true || entry.requires_active_subscription === true) continue;
+    const item = data.plans[entry.acc_plan_key];
     if (item?.enabled !== true) continue;
-    const definition = PLAN_DEFINITIONS[id];
-    if (!definition) continue;
-    if (item.key !== id) {
-      fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 返回了未知套餐", { retryable: false });
+    if (seen.has(entry.key) || item.key !== entry.acc_plan_key) {
+      fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 套餐注册表映射无效", { retryable: false });
     }
-    if (!SUPPORTED_PLAN_IDS.has(id)) continue;
-    const currency = boundedString(item.currency, `plans.${id}.currency`, 20).toUpperCase();
-    currencies.add(currency);
-    plans.push(Object.freeze({ ...definition }));
+    const serviceFeeUsdMinor = Number(entry.service_fee_usd_minor ?? item.serviceFeeUsdMinor);
+    if (!Number.isSafeInteger(serviceFeeUsdMinor) || serviceFeeUsdMinor < 0) {
+      fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 套餐服务费无效", { retryable: false });
+    }
+    seen.add(entry.key);
+    plans.push(Object.freeze({ ...PLAN_DEFINITIONS[entry.key], serviceFeeUsdMinor }));
   }
-  if (plans.length === 0 || currencies.size !== 1) {
-    fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 没有可用的统一币种套餐", { retryable: false });
+  const regionCodes = new Set();
+  const regions = data.payment_regions.filter((entry) => entry?.enabled !== false).map((entry) => {
+    const code = boundedString(entry.code ?? entry.country ?? entry.payment_country, "payment_regions.country", 2).toUpperCase();
+    const currency = boundedString(entry.currency ?? entry.payment_currency, "payment_regions.currency", 3).toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code) || !/^[A-Z]{3}$/.test(currency) || regionCodes.has(code)) {
+      fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 付款地区配置无效", { retryable: false });
+    }
+    regionCodes.add(code);
+    return Object.freeze({ code, currency, label: optionalString(entry.label ?? entry.name, 100) || code });
+  });
+  if (regions.length === 0) {
+    fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 没有可用付款地区", { retryable: false });
   }
+  const configuredDefault = optionalString(data.default_region ?? data.default_payment_country, 2)?.toUpperCase();
   return Object.freeze({
     plans: Object.freeze(plans),
-    regions: Object.freeze([
-      Object.freeze({ code: "PH", currency: [...currencies][0], label: "Philippines" })
-    ]),
-    defaultRegion: "PH",
+    regions: Object.freeze(regions),
+    defaultRegion: regions.find((entry) => entry.code === configuredDefault)?.code
+      || regions.find((entry) => entry.code === "PH")?.code || regions[0].code,
     billingAddressSource: "provider_managed",
     pricingEvidence: "provider_quote",
     pricingVersion: positiveInteger(data.version, "version")
@@ -213,10 +225,12 @@ function last4(value, fallback = null) {
   return /^\d{4}$/.test(String(fallback || "")) ? String(fallback) : null;
 }
 
-function amountMajor(order) {
+function amountMajor(order, context = {}) {
   const minor = Number(order.final_amount_minor ?? order.quoted_amount_minor);
   if (!Number.isSafeInteger(minor) || minor < 0) return null;
-  const exponent = Number(order.minor_unit_exponent ?? 2);
+  const currency = String(order.currency ?? order.payment_currency ?? context.checkoutCurrency ?? "PHP").toUpperCase();
+  const exponent = Number(order.minor_unit_exponent ?? context.minorUnitExponent
+    ?? (["PHP", "USD", "EGP"].includes(currency) ? 2 : NaN));
   if (!Number.isInteger(exponent) || exponent < 0 || exponent > 6) return null;
   return (minor / (10 ** exponent)).toFixed(exponent);
 }
@@ -245,7 +259,7 @@ function rejectActiveSubscription(data) {
     .map((value) => Date.parse(value))
     .filter((value) => Number.isFinite(value) && value > Date.now());
   const hasSubscription = data?.subscription_has_active === true
-    || ["plus", "go", "pro", "prolite", "pro_5x", "pro_20x", "team", "business"].includes(plan);
+    || ["plus", "go", "pro", "prolite", "promax", "pro_5x", "pro_20x", "pro_50x", "team", "business"].includes(plan);
   if (!hasSubscription && futureTimes.length === 0) return;
   const availableAt = futureTimes.length ? Math.max(...futureTimes) : null;
   const timeText = availableAt
@@ -269,6 +283,39 @@ function waitForPurchasableAccount(data, fallback = 120) {
   });
 }
 
+function quoteContext(quote, { planId, currency, country, kind, now, expiresAt, serviceFeeUsdMinor }) {
+  const quoteCurrency = String(quote?.currency || "").toUpperCase();
+  const amountMinor = Number(quote?.amount_minor ?? quote?.amountMinor);
+  const exponentValue = quote?.minor_unit_exponent ?? quote?.minorUnitExponent;
+  const minorUnitExponent = exponentValue === undefined && quoteCurrency === "PHP" ? 2 : Number(exponentValue);
+  const fundingValue = quote?.funding_usd_minor ?? quote?.fundingUsdMinor;
+  const fundingUsdMinor = fundingValue === undefined || fundingValue === null ? null : Number(fundingValue);
+  const quoteCountry = optionalString(quote?.country ?? quote?.payment_country, 2)?.toUpperCase();
+  const problem = !quote ? "缺少目标套餐报价"
+    : ![planId, QUOTE_PLAN_NAMES[planId]].includes(quote.plan) ? "报价套餐不匹配"
+      : !/^[A-Z]{3}$/.test(quoteCurrency) || (kind === "purchase" && quoteCurrency !== currency) ? "报价币种不匹配"
+        : kind === "purchase" && quoteCountry && quoteCountry !== country ? "报价地区不匹配"
+          : !Number.isSafeInteger(amountMinor) || amountMinor <= 0 ? "报价金额无效"
+            : !Number.isInteger(minorUnitExponent) || minorUnitExponent < 0 || minorUnitExponent > 6 ? "最小货币单位无效"
+              : fundingUsdMinor !== null && (!Number.isSafeInteger(fundingUsdMinor) || fundingUsdMinor <= 0) ? "注资估算无效" : null;
+  if (problem) {
+    fail("SPACEX_GPT_QUOTE_INVALID", `ZovoCard 预检报价无法识别（${planId}：${problem}）`, {
+      retryable: false, definitelyNotCreated: true
+    });
+  }
+  const deadline = now + (kind === "upgrade" ? 5 : 10) * 60_000;
+  const expiry = expiresAt == null ? deadline : Date.parse(String(expiresAt));
+  if (!Number.isFinite(expiry) || expiry <= now) {
+    fail("SPACEX_GPT_PREFLIGHT_EXPIRED", "ZovoCard 报价凭证已过期或有效期无效，请重新预检", {
+      retryable: false, definitelyNotCreated: true
+    });
+  }
+  return Object.freeze({
+    kind, amountMinor, currency: quoteCurrency, minorUnitExponent, fundingUsdMinor,
+    expiresAt: new Date(Math.min(expiry, deadline)).toISOString(), serviceFeeUsdMinor
+  });
+}
+
 function normalizeTask(raw, context = {}) {
   const order = raw?.order && typeof raw.order === "object" && !Array.isArray(raw.order) ? raw.order : raw;
   if (!order || typeof order !== "object" || Array.isArray(order)) {
@@ -277,6 +324,9 @@ function normalizeTask(raw, context = {}) {
   const id = boundedString(order.id, "order.id", 120);
   const providerStatus = boundedString(order.status, "order.status", 40).toLowerCase();
   const planId = boundedString(order.plan, "order.plan", 40);
+  if (order.product !== undefined && order.product !== "gpt") {
+    fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 订单产品与 GPT 不一致", { retryable: false });
+  }
   if (!PLAN_DEFINITIONS[planId] || (context.planId && context.planId !== planId)) {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 订单套餐与本地映射不一致", { retryable: false });
   }
@@ -288,7 +338,7 @@ function normalizeTask(raw, context = {}) {
   let status;
   let errorCode = null;
   if (PENDING_STATUSES.has(providerStatus)) status = providerStatus === "queued" ? "queued" : "running";
-  else if (providerStatus === "review") status = "manual_review";
+  else if (providerStatus === "review" || providerStatus.endsWith("_review")) status = "manual_review";
   else if (FAILED_STATUSES.has(providerStatus)) status = "failed";
   else if (providerStatus === "cancelled" || providerStatus === "canceled") status = "cancelled";
   else if (providerStatus === "completed" && renewalStatus === "success") status = "succeeded";
@@ -299,10 +349,10 @@ function normalizeTask(raw, context = {}) {
   } else {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 订单状态无法识别");
   }
-  if (providerStatus === "review") errorCode = "SPACEX_GPT_REMOTE_REVIEW";
+  if (status === "manual_review" && !errorCode) errorCode = "SPACEX_GPT_REMOTE_REVIEW";
   if (["failed", "cancelled"].includes(status)) errorCode = `SPACEX_GPT_${providerStatus.toUpperCase()}`;
-  const currency = optionalString(order.currency ?? order.payment_currency, 20)?.toUpperCase() || "PHP";
-  const total = amountMajor(order);
+  const currency = optionalString(order.currency ?? order.payment_currency ?? context.checkoutCurrency, 20)?.toUpperCase() || "PHP";
+  const total = amountMajor(order, context);
   if (providerStatus === "completed" && total === null) {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 完成订单缺少支付金额");
   }
@@ -358,7 +408,12 @@ export class SpaceXGptDirectV1Adapter {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.lookup = options.lookup || dns.lookup;
     this.timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
-    this.createReplaySafe = true;
+    this.now = options.now || Date.now;
+    // A fresh preflight changes a single-use payment request. Recover by order lookup,
+    // never by preparing another payment after an ambiguous submission.
+    this.createReplaySafe = false;
+    this.preparedAccounts = new WeakMap();
+    this.consumedPreflightTokens = new Set();
   }
 
   async request(path, options = {}) {
@@ -405,24 +460,27 @@ export class SpaceXGptDirectV1Adapter {
     if (!response.ok || Number(payload?.code) !== 0) {
       const remoteCode = providerCode(payload);
       const remoteMessage = optionalString(payload?.msg ?? payload?.message, 500);
-      const cardUnavailable = options.cardSelection === true
-        && remoteCode === "GPT_DIRECT_ORDER_REJECTED"
-        && isSpaceXGptCardUnavailableMessage(remoteMessage);
       const knownPreCreateFailure = [
         "GPT_DIRECT_ACCESS_DENIED",
         "RECHARGE_REQUIRED",
         "GPT_SESSION_INVALID",
         "SESSION_REQUIRED",
         "GPT_PLAN_ALREADY_ACTIVE",
-        "INSUFFICIENT_BALANCE"
+        "INSUFFICIENT_BALANCE",
+        "INVALID_REQUEST",
+        "DIRECT_PRODUCT_DISABLED",
+        "PRECHECK_REJECTED",
+        "GPT_PRICE_UNCONFIRMED"
       ].includes(remoteCode);
       fail("AUTOMATION_REMOTE_REJECTED", remoteMessage
         || `SpaceX GPT 返回 HTTP ${response.status}`, {
         statusCode: response.status,
         providerCode: remoteCode,
-        definitelyNotCreated: options.preCreate === true || knownPreCreateFailure || cardUnavailable,
+        definitelyNotCreated: options.preCreate === true || knownPreCreateFailure,
         requestNotSent: options.preCreate === true,
-        cardUnavailable,
+        // GPT_DIRECT_ORDER_REJECTED and generic 400s do not prove no write.
+        // The protocol publishes no stable exhausted-card error code.
+        cardUnavailable: false,
         retryable: response.status >= 500 || [429, 503].includes(response.status)
       });
     }
@@ -430,7 +488,7 @@ export class SpaceXGptDirectV1Adapter {
   }
 
   async discoverCapabilities() {
-    return normalizeCapabilities(await this.request("/gpt-direct/plans"));
+    return normalizeCapabilities(await this.request("/gpt-direct/plans?product=gpt", { preCreate: true }));
   }
 
   async prepareAccount(input = {}) {
@@ -444,17 +502,24 @@ export class SpaceXGptDirectV1Adapter {
     const country = boundedString(input.checkoutCountry, "checkoutCountry", 20, {
       definitelyNotCreated: true
     }).toUpperCase();
-    if (country !== "PH") {
-      fail("SPACEX_GPT_REGION_INVALID", "SpaceX GPT 直充当前仅支持 PH 地区", {
-        retryable: false,
-        definitelyNotCreated: true
+    const capabilities = await this.discoverCapabilities();
+    const plan = capabilities.plans.find((entry) => entry.id === planId);
+    const region = capabilities.regions.find((entry) => entry.code === country);
+    if (!plan) {
+      fail("SPACEX_GPT_PLAN_UNAVAILABLE", "ZovoCard 目标套餐尚未上架、不可购买或已停用", {
+        retryable: false, definitelyNotCreated: true
+      });
+    }
+    if (!region || (input.checkoutCurrency && String(input.checkoutCurrency).toUpperCase() !== region.currency)) {
+      fail("SPACEX_GPT_REGION_INVALID", "ZovoCard 付款地区或币种与实时配置不一致", {
+        retryable: false, definitelyNotCreated: true
       });
     }
     const credential = sessionCredential(input.authSessionJson);
     const preflight = () => this.request("/gpt-direct/preflight", {
       method: "POST",
       preCreate: true,
-      body: { credential, payment_country: country, payment_currency: "PHP" }
+      body: { product: "gpt", plan: planId, credential, payment_country: country, payment_currency: region.currency }
     });
     let preflightData = (await preflight())?.data;
     let currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
@@ -503,89 +568,164 @@ export class SpaceXGptDirectV1Adapter {
         waitForPurchasableAccount(preflightData);
       }
     }
-    rejectActiveSubscription(preflightData);
-    boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
+    currentPlan = optionalString(preflightData?.currentPlan ?? preflightData?.current_plan, 40)?.toLowerCase();
+    const hasSubscription = currentPlan !== "free" && (preflightData?.subscription_has_active === true
+      || (PLAN_TIERS[currentPlan] || 0) > 0 || ["team", "business"].includes(currentPlan));
+    if (hasSubscription) {
+      const currentTier = PLAN_TIERS[currentPlan];
+      // The upgrade endpoint only supports 5x/20x/50x. Same/lower and unknown
+      // subscription tiers cannot become a new-subscription purchase.
+      if (!["pro_5x", "pro_20x", "pro_50x"].includes(planId)
+        || currentTier === undefined || currentTier >= PLAN_TIERS[planId]) rejectActiveSubscription(preflightData);
+    } else rejectActiveSubscription(preflightData);
+    const sourceToken = boundedString(preflightData?.preflight_token, "preflight_token", 16 * 1024, {
       definitelyNotCreated: true
     });
-    if (optionalString(preflightData?.quote_error, 500)) {
-      fail("SPACEX_GPT_QUOTE_UNAVAILABLE", "SpaceX GPT 当前报价不可用", {
-        retryable: false,
-        definitelyNotCreated: true
+    let token = sourceToken;
+    let quote;
+    if (hasSubscription) {
+      const upgraded = await this.request("/gpt-direct/upgrade-quotes", {
+        method: "POST", preCreate: true, body: { preflight_token: sourceToken }
       });
+      const selected = upgraded?.data?.quotes?.find((entry) => entry?.plan === planId);
+      if (!selected || selected.available !== true) {
+        fail("SPACEX_GPT_UPGRADE_UNAVAILABLE", "ZovoCard 未提供目标套餐的可支付升级报价", {
+          retryable: false, definitelyNotCreated: true,
+          providerCode: providerCode(selected)
+        });
+      }
+      token = boundedString(selected.preflight_token, "upgrade.preflight_token", 16 * 1024, { definitelyNotCreated: true });
+      if (token === sourceToken) {
+        fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 升级报价未返回独立凭证", { retryable: false, definitelyNotCreated: true });
+      }
+      quote = quoteContext(selected, { planId, kind: "upgrade", country, now: this.now(),
+        expiresAt: selected.expires_at, serviceFeeUsdMinor: plan.serviceFeeUsdMinor });
+    } else {
+      rejectActiveSubscription(preflightData);
+      if (optionalString(preflightData?.quote_error, 500)) {
+        fail("SPACEX_GPT_QUOTE_UNAVAILABLE", "ZovoCard 当前报价不可用", {
+          retryable: false, definitelyNotCreated: true
+        });
+      }
+      const returnedCountry = optionalString(preflightData?.payment_country, 2)?.toUpperCase();
+      const returnedCurrency = optionalString(preflightData?.payment_currency, 3)?.toUpperCase();
+      if ((returnedCountry && returnedCountry !== country) || (returnedCurrency && returnedCurrency !== region.currency)) {
+        fail("SPACEX_GPT_QUOTE_INVALID", "ZovoCard 预检付款地区或币种不匹配", { retryable: false, definitelyNotCreated: true });
+      }
+      quote = quoteContext(preflightData?.quotes?.[planId], { planId, currency: region.currency,
+        country, kind: "purchase", now: this.now(), expiresAt: preflightData?.preflight_expires_at,
+        serviceFeeUsdMinor: plan.serviceFeeUsdMinor });
     }
-    const quote = preflightData?.quotes?.[planId];
-    const quoteProblem = !quote ? "缺少目标套餐报价"
-      : ![planId, QUOTE_PLAN_NAMES[planId]].includes(quote.plan) ? "报价套餐不匹配"
-        : String(quote.currency || "").toUpperCase() !== "PHP" ? "报价币种不是 PHP"
-          : !Number.isSafeInteger(Number(quote.amountMinor)) || Number(quote.amountMinor) <= 0 ? "报价金额无效"
-            : null;
-    if (quoteProblem) {
-      fail("SPACEX_GPT_QUOTE_INVALID", `SpaceX GPT 预检报价无法识别（${planId}：${quoteProblem}）`, {
-        retryable: false,
-        definitelyNotCreated: true
-      });
-    }
-    return Object.freeze({ credential, preflightData });
+    const email = optionalString(preflightData?.email, 320)?.toLowerCase();
+    const prepared = Object.freeze({
+      credential, preflightData: Object.freeze({ ...preflightData, preflight_token: token }),
+      planId, checkoutCountry: country, checkoutCurrency: quote.currency, quote,
+      // Only the upstream-authenticated email identifies a reusable account.
+      verifiedAccountId: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? `email:${email}` : null
+    });
+    this.preparedAccounts.set(prepared, {
+      token, credential, pricingVersion: preflightData.pricing_version ?? preflightData.version ?? capabilities.pricingVersion,
+      consumed: false
+    });
+    return prepared;
   }
 
   async createTask(input = {}) {
     const clientOrderId = boundedString(input.clientOrderId, "clientOrderId", 80, {
       definitelyNotCreated: true
     });
+    if (!/^[A-Za-z0-9._:-]+$/.test(clientOrderId)) {
+      fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 订单编号不符合幂等键格式", { retryable: false, definitelyNotCreated: true });
+    }
     const planId = boundedString(input.planId, "planId", 40, { definitelyNotCreated: true });
     if (!SUPPORTED_PLAN_IDS.has(planId)) {
-      fail("SPACEX_GPT_PLAN_UNSUPPORTED", "SpaceX GPT 套餐暂不支持安全库存对账", {
-        retryable: false,
-        definitelyNotCreated: true
+      fail("SPACEX_GPT_PLAN_UNSUPPORTED", "ZovoCard 套餐不在支持的会员开通范围内", {
+        retryable: false, definitelyNotCreated: true
       });
     }
     const country = boundedString(input.checkoutCountry, "checkoutCountry", 20, {
       definitelyNotCreated: true
     }).toUpperCase();
-    if (country !== "PH") {
-      fail("SPACEX_GPT_REGION_INVALID", "SpaceX GPT 直充当前仅支持 PH 地区", {
-        retryable: false,
-        definitelyNotCreated: true
-      });
-    }
     if (input.cardProviderKey !== "spacexcard") {
-      fail("SPACEX_GPT_CARD_PLATFORM_INVALID", "SpaceX GPT 直充只能使用 SpaceX Card 卡片", {
-        retryable: false,
-        definitelyNotCreated: true
+      fail("SPACEX_GPT_CARD_PLATFORM_INVALID", "ZovoCard 直充只能使用 SpaceX Card 卡片", {
+        retryable: false, definitelyNotCreated: true
       });
     }
     const cardId = positiveInteger(input.providerCardId, "card_id", { definitelyNotCreated: true });
-    const { credential, preflightData } = await this.prepareAccount({
-      planId,
-      authSessionJson: input.authSessionJson,
-      checkoutCountry: country
+    const prepared = input.preparedAccount || await this.prepareAccount({
+      planId, authSessionJson: input.authSessionJson, checkoutCountry: country, checkoutCurrency: input.checkoutCurrency
     });
+    const ticket = this.preparedAccounts.get(prepared);
+    if (!ticket || prepared.planId !== planId || prepared.checkoutCountry !== country) {
+      fail("SPACEX_GPT_PREFLIGHT_MISMATCH", "ZovoCard 预检凭证与当前订单不匹配", {
+        retryable: false, definitelyNotCreated: true
+      });
+    }
+    if (ticket.consumed || this.consumedPreflightTokens.has(ticket.token)) {
+      fail("SPACEX_GPT_PREFLIGHT_CONSUMED", "ZovoCard 预检凭证已提交，请查询原订单", {
+        retryable: false, unsafeToReplay: true
+      });
+    }
+    if (Date.parse(prepared.quote.expiresAt) <= this.now()) {
+      fail("SPACEX_GPT_PREFLIGHT_EXPIRED", "ZovoCard 预检凭证已过期，请重新预检", {
+        retryable: false, definitelyNotCreated: true
+      });
+    }
     const body = {
-      card_id: cardId,
-      plan: planId,
-      credential,
-      preflight_token: preflightData.preflight_token,
-      client_request_id: clientOrderId,
-      no_auto_card_switch: true
+      product: "gpt", card_id: cardId, plan: planId, credential: ticket.credential,
+      preflight_token: ticket.token, payment_country: country, payment_currency: prepared.checkoutCurrency,
+      payment_mode: "direct", client_request_id: clientOrderId, no_auto_card_switch: true
     };
-    const pricingVersion = Number(preflightData.pricing_version ?? preflightData.version);
+    const pricingVersion = Number(ticket.pricingVersion);
     if (Number.isSafeInteger(pricingVersion) && pricingVersion > 0) body.pricing_version = pricingVersion;
-    const created = await this.request("/gpt-direct/orders", {
-      method: "POST",
-      body,
-      idempotencyKey: clientOrderId,
-      cardSelection: true
-    });
+    ticket.consumed = true;
+    this.consumedPreflightTokens.add(ticket.token);
+    let created;
+    try {
+      created = await this.request("/gpt-direct/orders", { method: "POST", body, idempotencyKey: clientOrderId });
+    } catch (error) {
+      // A local failure before transport cannot have consumed the upstream ticket.
+      if (error.requestNotSent === true) {
+        ticket.consumed = false;
+        this.consumedPreflightTokens.delete(ticket.token);
+      }
+      throw error;
+    }
     return Object.freeze({
-      idempotentReplay: false,
-      requestId: optionalString(input.requestId, 200),
+      idempotentReplay: false, requestId: optionalString(input.requestId, 200),
       task: normalizeTask(created.data, {
-        clientOrderId,
-        planId,
-        checkoutCountry: country,
+        clientOrderId, planId, checkoutCountry: country, checkoutCurrency: prepared.checkoutCurrency,
+        minorUnitExponent: prepared.quote.minorUnitExponent,
         cardLast4: input.card?.number ? last4(input.card.number) : null
       })
     });
+  }
+
+  async getCardRules() {
+    return (await this.request("/gpt-direct/card-rules?product=gpt", { preCreate: true })).data;
+  }
+
+  async getCardUsage(cardId) {
+    const id = positiveInteger(cardId, "card_id", { definitelyNotCreated: true });
+    return (await this.request(`/gpt-direct/cards/${id}/usage?product=gpt`, { preCreate: true })).data;
+  }
+
+  async findTaskByClientOrderId(clientOrderId, context = {}) {
+    const id = boundedString(clientOrderId, "clientOrderId", 80);
+    for (let page = 1; page <= 100; page += 1) {
+      const data = (await this.request(`/gpt-direct/orders?page=${page}&page_size=100`)).data;
+      if (!Array.isArray(data?.list) || !Number.isSafeInteger(Number(data?.total)) || Number(data.total) < 0) {
+        fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 订单列表无法识别", { retryable: false });
+      }
+      const matches = data.list.filter((order) => order?.client_request_id === id);
+      if (matches.length > 1) fail("SPACEX_GPT_CONTRACT_INVALID", "ZovoCard 订单编号不唯一", { retryable: false });
+      if (matches.length === 1) {
+        return this.getTask(matches[0].id, { ...context, clientOrderId: id });
+      }
+      if (page * 100 >= Number(data.total)) return null;
+      if (data.list.length === 0) break;
+    }
+    fail("SPACEX_GPT_LOOKUP_INCOMPLETE", "ZovoCard 订单查询未能覆盖全部记录，需要人工核对", { retryable: false });
   }
 
   async getTask(taskId, context = {}) {
@@ -609,6 +749,8 @@ export class SpaceXGptDirectV1Adapter {
       clientOrderId: context.clientOrderId,
       planId: context.planId,
       checkoutCountry: context.checkoutCountry,
+      checkoutCurrency: context.checkoutCurrency,
+      minorUnitExponent: context.minorUnitExponent,
       cardLast4: context.cardLast4
     });
     if (task.id !== id) {

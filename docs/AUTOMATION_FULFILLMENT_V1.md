@@ -1,5 +1,7 @@
 # 多站点协议自动化履约 v1
 
+ZovoCard 新协议（50x、差价升级、动态地区、原卡复用）及旧付款退役说明见 [ZovoCard 会员自动化](zovocard-membership-automation.md)。
+
 ## 目标
 
 商城订单不再由本地 Go/Python/浏览器执行 ChatGPT Checkout。每个外部站点由一个代码 Adapter 对接其原始 API 文档；同协议的多个站点实例复用同一个 Adapter，不在本系统中虚构站点没有提供的接口、套餐或参数。
@@ -77,7 +79,7 @@ queued / running：每 3 秒使用原远端查询标识对账
 
 - Automate 的 Plus、Go、x20 是否可用，以站点 `/config` 为准。
 - eFun 按开放文档提供 `plus`、`pro5`、`pro20`，分别映射 Plus、x5、x20；地区和币种固定为 PH/PHP。
-- x5 与 x20 都按直付商品处理，不先购买 Plus/Go，也不进入升级阶段。
+- Automate / eFun 的 x5 与 x20 按直付商品处理，不先购买 Plus/Go。ZovoCard 的已有低档会员使用独立差价报价流程。
 - 当前 Automate V1 文档提供直付 Plus、Go、Pro 20x，没有直付 x5，因此该 Adapter 当前不能映射 x5。
 - 后续站点如在其协议中明确提供直付 x5，可由对应 Adapter 原样暴露。
 

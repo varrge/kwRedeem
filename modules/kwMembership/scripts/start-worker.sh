@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT_DIR"
-
-if [ ! -x bin/kwmembership-worker ]; then
-  echo "missing bin/kwmembership-worker; run bash scripts/build.sh first"
-  exit 1
-fi
-
-exec bin/kwmembership-worker
+echo "旧版 Go / Python 会员付款已退役，请使用 kwRedeem 会员自动化协议站点。" >&2
+echo "历史安装由项目统一更新器迁移为不处理订单的兼容进程。" >&2
+exit 1

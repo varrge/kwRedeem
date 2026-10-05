@@ -287,7 +287,7 @@ export function createSpaceXCdkService({
       cachedClient = clientFactory
         ? clientFactory(current)
         : new SpaceXCdkClient({
-          baseUrl: current?.base_url || "https://spacexcard.com",
+          baseUrl: current?.base_url || "https://zovocard.com",
           apiKey: current?.api_key_encrypted ? decryptText(current.api_key_encrypted) : ""
         });
       cachedVersion = version;

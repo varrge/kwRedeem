@@ -175,9 +175,10 @@ function serializeCardPlatform(row) {
 
 function serializeSettings(row, extensionSettings, processorLease) {
   return {
-    enabled: row.enabled === 1,
-    paymentGateLocked: row.enabled !== 1 || !["canary", "automatic"].includes(row.rollout_mode),
-    rolloutMode: row.rollout_mode || "disabled",
+    retired: true,
+    enabled: false,
+    paymentGateLocked: true,
+    rolloutMode: "disabled",
     appId: row.spacexcard_app_id || "",
     hasAppSecret: Boolean(row.spacexcard_app_secret_encrypted),
     hasWebhookSecret: Boolean(row.spacexcard_webhook_secret_encrypted),
@@ -190,7 +191,7 @@ function serializeSettings(row, extensionSettings, processorLease) {
     updatedBy: row.updated_by,
     processor: serializeProcessor(processorLease),
     dependencies: {
-		executor: "go-headless",
+		executor: "retired",
 		requiresExtension: false,
       openApiBaseUrl: spaceXCardOpenApiBaseUrl,
       membershipStateProviderUrl,
@@ -233,12 +234,23 @@ export function createMembershipFulfillmentService(options) {
   }
 
   function listCardPlatforms() {
-    const legacySpaceXConfigured = Boolean(getSettings()?.spacexcard_app_secret_encrypted);
+    const settings = getSettings();
+    const legacySpaceXConfigured = Boolean(settings?.spacexcard_app_secret_encrypted);
     return db.prepare(`SELECT * FROM membership_card_platforms ORDER BY priority,key`).all()
-      .map((row) => ({
-        ...serializeCardPlatform(row),
-        hasCredential: Boolean(row.credential_encrypted || (row.key === "spacexcard" && legacySpaceXConfigured))
-      }));
+      .map((row) => {
+        let appId;
+        if (row.key === "spacexcard") {
+          appId = settings?.spacexcard_app_id || "";
+          if (row.credential_encrypted) {
+            // Older imports can store the secret directly rather than a JSON wrapper.
+            try { appId = JSON.parse(decryptText(row.credential_encrypted))?.appId || appId; } catch {}
+          }
+        }
+        return {
+          ...serializeCardPlatform(row), appId,
+          hasCredential: Boolean(row.credential_encrypted || (row.key === "spacexcard" && legacySpaceXConfigured))
+        };
+      });
   }
 
   function cardPlatformFinancialExposure(key) {
@@ -250,8 +262,16 @@ export function createMembershipFulfillmentService(options) {
       SELECT fulfillment_id AS fulfillmentId, 'funding_intent' AS source
       FROM funding_intents
       WHERE provider_key = ? AND state NOT IN ('succeeded', 'failed')
+      UNION ALL
+      SELECT execution_id AS fulfillmentId, 'automation_reservation' AS source
+      FROM automation_card_reservations
+      WHERE provider_key = ? AND state IN ('reserved', 'manual_review')
+      UNION ALL
+      SELECT execution_id AS fulfillmentId, 'automation_funding_intent' AS source
+      FROM automation_funding_intents
+      WHERE provider_key = ? AND state NOT IN ('succeeded', 'failed')
       LIMIT 1
-    `).get(key, key) || null;
+    `).get(key, key, key, key) || null;
   }
 
   function listCardProductPolicies(nowMs = Date.now()) {
@@ -1747,7 +1767,7 @@ export function createMembershipFulfillmentService(options) {
       return reply.code(409).send({ code: "CARD_PLATFORM_NOT_CONFIGURED", message: "启用 EfunCard 前必须配置 API Base URL 和 API Key" });
     }
     if (key === "spacexcard" && enabled
-        && !credential && !getSettings().spacexcard_app_secret_encrypted) {
+        && !credential && (parsed.data.clearCredential || !getSettings().spacexcard_app_secret_encrypted)) {
       return reply.code(409).send({ code: "CARD_PLATFORM_NOT_CONFIGURED", message: "启用 SpaceX Card 前必须配置 app_secret" });
     }
     const connectionChanged = credentialChanged || baseChanged;
@@ -1769,6 +1789,10 @@ export function createMembershipFulfillmentService(options) {
       request.admin.username,
       key
     );
+    if (key === "spacexcard" && parsed.data.clearCredential) {
+      db.prepare(`UPDATE membership_fulfillment_settings
+        SET spacexcard_app_secret_encrypted=NULL WHERE id='default'`).run();
+    }
     createAuditLog({
       action: "membership_card_platform.update",
       actor: request.admin.username,
@@ -2605,18 +2629,9 @@ export function createMembershipFulfillmentService(options) {
     return reply.code(202).send({ accepted: true, duplicate: result.duplicate });
   });
 
-  const outboxTimer = setInterval(() => {
-    if (isMaintenanceEnabled()) return;
-    try {
-      expireBrowserFulfillmentLease(db);
-      dispatchMembershipOutbox();
-    } catch {}
-  }, 1000);
-  outboxTimer.unref?.();
-  app.addHook("onClose", async () => clearInterval(outboxTimer));
 
   return {
-    dispatchMembershipOutbox,
+    dispatchMembershipOutbox: () => 0,
     getSettings,
     serializeSettings: () => serializeSettings(getSettings(), getExtensionSettings(), getProcessorStatus())
   };

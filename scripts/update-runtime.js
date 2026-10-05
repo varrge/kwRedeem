@@ -143,6 +143,17 @@ function membershipLease() {
   }
 }
 
+function retireMembership() {
+  if (!fs.existsSync(databasePath)) return;
+  const database = new Database(databasePath, { fileMustExist: true });
+  try {
+    const settings = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='membership_fulfillment_settings'").get();
+    if (settings) database.prepare("UPDATE membership_fulfillment_settings SET enabled=0, rollout_mode='disabled' WHERE id='default'").run();
+  } finally {
+    database.close();
+  }
+}
+
 async function backupDatabase(destination) {
   if (!destination) throw new Error("backup destination is required");
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -228,6 +239,9 @@ async function main() {
       break;
     case "wait-membership-deployed":
       await waitForLease((lease, version, now) => leaseIsDeployed(lease, version, now), argument);
+      break;
+    case "retire-membership":
+      retireMembership();
       break;
     case "backup-database":
       await backupDatabase(argument);

@@ -23,6 +23,7 @@ fi
 bash scripts/ensure-git.sh
 npm install
 npm run db:init
+node scripts/update-runtime.js retire-membership
 npm run config:runtime
 
 echo "KaWang 初始化完成。"

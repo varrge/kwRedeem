@@ -180,7 +180,7 @@ function normalizeStatus(value) {
 }
 
 export class SpaceXCdkClient {
-  constructor({ baseUrl = "https://spacexcard.com", apiKey = "", fetchImpl = globalThis.fetch, timeoutMs = 15000 }) {
+  constructor({ baseUrl = "https://zovocard.com", apiKey = "", fetchImpl = globalThis.fetch, timeoutMs = 15000 }) {
     this.baseUrl = normalizeSpaceXCdkBaseUrl(baseUrl);
     this.apiKey = String(apiKey || "").trim();
     this.fetchImpl = fetchImpl;
@@ -233,7 +233,7 @@ export class SpaceXCdkClient {
 
   async getBalance() {
     const { data } = await this.request("/openapi/v1/balance", { authenticated: true });
-    const balanceMinor = decimalToMinorFloor(data?.balance);
+    const balanceMinor = decimalToMinorFloor(data?.spendable_balance);
     const currency = String(data?.currency || "").trim().toUpperCase();
     if (balanceMinor === null || !currency) {
       throw new SpaceXCdkApiError("SpaceX 余额响应缺少金额或币种", { code: "SPACEX_CDK_BALANCE_CONTRACT_INVALID" });
@@ -352,7 +352,7 @@ export function normalizeActivationResult(data = {}) {
     status,
     stage: String(data?.stage || data?.order?.stage || data?.result?.stage || "").trim(),
     message: String(data?.message || data?.msg || data?.result?.message || "").trim().slice(0, 300),
-    upstreamOrderId: String(data?.order_id || data?.orderId || data?.order?.id || "").trim() || null
+    upstreamOrderId: String(data?.order_id || data?.orderId || data?.order?.order_id || data?.order?.id || data?.id || "").trim() || null
   };
 }
 

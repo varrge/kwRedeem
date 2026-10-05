@@ -93,31 +93,45 @@ func (drain *maintenanceDrain) heartbeat(
 	return nil
 }
 
+// Keep the historical updater's --check and versioned heartbeat contract. This
+// compatibility process never creates a processor, browser or executor bridge.
 func main() {
+	_ = os.Setenv("KWMEMBERSHIP_CHECKOUT_EXECUTOR", "python")
 	if len(os.Args) == 2 && os.Args[1] == "--check" {
 		if err := checkConfiguration(); err != nil {
-			log.Printf("[kwMembership worker] configuration invalid: %v", err)
+			log.Print(err)
 			os.Exit(1)
 		}
-		log.Printf("[kwMembership worker] shared kwRedeem database configuration is valid")
 		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	if err := run(ctx); err != nil {
-		log.Printf("[kwMembership worker] stopped: %v", err)
+	if err := runRetired(ctx); err != nil {
+		log.Print(err)
 		os.Exit(1)
 	}
+}
+
+func retirePayments(ctx context.Context, repository *store.Store) error {
+	if _, err := repository.DB().ExecContext(ctx, `UPDATE membership_fulfillment_settings
+		SET enabled=0,rollout_mode='disabled' WHERE id='default'`); err != nil {
+		return err
+	}
+	var count int
+	if err := repository.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM membership_checkout_commands
+		WHERE state IN ('queued','leased','action_required')`).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("legacy checkout commands remain in flight; preserve services and reconcile before updating")
+	}
+	return nil
 }
 
 func checkConfiguration() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
-	}
-	if _, err := os.Stat(cfg.DatabasePath); err != nil {
-		return fmt.Errorf("open kwRedeem database path: %w", err)
 	}
 	repository, err := store.Open(cfg.DatabasePath)
 	if err != nil {
@@ -126,13 +140,61 @@ func checkConfiguration() error {
 	defer repository.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := repository.VerifySharedSchema(ctx); err != nil {
+	return retirePayments(ctx, repository)
+}
+
+func runRetired(ctx context.Context) error {
+	cfg, err := config.Load()
+	if err != nil {
 		return err
 	}
-	if cfg.CheckoutExecutor == "legacy-go" {
-		return checkout.VerifyChrome(ctx, cfg.ChromePath, cfg.ChromeProxyServer, cfg.VisibleBrowser)
+	return runRetiredWithConfig(ctx, cfg)
+}
+
+func runRetiredWithConfig(ctx context.Context, cfg config.Config) error {
+	repository, err := store.Open(cfg.DatabasePath)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer repository.Close()
+	if err := retirePayments(ctx, repository); err != nil {
+		return err
+	}
+	if err := repository.EnsureLeaseTable(ctx, time.Now()); err != nil {
+		return err
+	}
+	token, err := randomHolderToken()
+	if err != nil {
+		return err
+	}
+	lease, err := repository.AcquireLease(ctx, "retired", token, version, time.Now(), cfg.LeaseTTL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = repository.ReleaseLease(context.Background(), lease, time.Now()) }()
+	log.Print("legacy membership payments retired; compatibility heartbeat only")
+	ticker := time.NewTicker(cfg.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		status, err := maintenanceStatus(cfg.MaintenancePath)
+		if err != nil {
+			return err
+		}
+		if err := repository.HeartbeatLease(ctx, lease, status, time.Now(), cfg.LeaseTTL); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func run(ctx context.Context) (runErr error) {

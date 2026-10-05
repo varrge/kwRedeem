@@ -2251,6 +2251,7 @@ function createSchema(db) {
     "membership_fulfillments",
     "automation_enrolled_at"
   );
+  ensureColumn(db, "automation_executions", "verified_account_key", "TEXT");
   ensureColumn(db, "products", "membership_tier", "TEXT");
 	ensureColumn(db, "redeem_orders", "session_revision", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "membership_fulfillments", "automation_enrolled_at", "TEXT");

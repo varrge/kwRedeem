@@ -3,6 +3,20 @@ export const spaceXCardOpenApiBaseUrl = "https://zovocard.com/openapi/v1";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const OPENAI_TIERS = Object.freeze(["plus", "x5", "x20"]);
+// Only documented precondition failures prove that a money operation did not run.
+// In particular, HTTP 400/request_failed may mean a recharge is still confirming.
+const NO_WRITE_PROVIDER_CODES = new Set([
+  "invalid_argument",
+  "not_found",
+  "insufficient_balance",
+  "forbidden",
+  "RECHARGE_REQUIRED",
+  "FORBIDDEN",
+  "product_exclusive_access_required",
+  "product_approval_required",
+  "product_policy_outdated",
+  "product_unavailable"
+]);
 
 export class SpaceXCardOpenApiError extends Error {
   constructor(code, message, options = {}) {
@@ -242,7 +256,7 @@ export class SpaceXCardOpenApiClient {
           retryable: response.status >= 500,
           retryScope: "order",
           providerCode,
-          knownNoWrite: response.status < 500 || root.error_code === "channel_unavailable"
+          knownNoWrite: NO_WRITE_PROVIDER_CODES.has(root.error_code)
         });
       }
       return root.data;

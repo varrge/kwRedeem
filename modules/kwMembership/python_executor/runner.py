@@ -118,23 +118,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    mode = os.environ.get("KWMEMBERSHIP_PYTHON_EXECUTOR_MODE", "fixture").strip()
-    if mode not in {"fixture", "preflight", "live"}:
-        raise SystemExit("KWMEMBERSHIP_PYTHON_EXECUTOR_MODE must be fixture, preflight or live")
-    if mode == "live" and os.environ.get("KWMEMBERSHIP_LIVE_PAYMENT_ENABLED") != "true":
-        raise SystemExit("live payment remains disabled")
-    client = ExecutorClient(
-        os.environ.get("KWMEMBERSHIP_EXECUTOR_URL", "http://127.0.0.1:4312"),
-        os.environ["KWMEMBERSHIP_EXECUTOR_SECRET"],
-        os.environ.get("KWMEMBERSHIP_EXECUTOR_ID", f"python-{socket.gethostname()}-{os.getpid()}"),
-    )
+    # Older systemd deploy helpers still start this unit. Remain alive without
+    # leasing commands, loading credentials or opening a browser.
     if args.once:
-        lease = client.lease()
-        if lease is not None:
-            executor_for_mode(mode).execute(client, lease)
         return
-    run_forever(client, mode)
+    import signal
+    import threading
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
+    LOGGER.warning("legacy membership payments retired; idle compatibility process")
+    stopped.wait()
 
 
 if __name__ == "__main__":

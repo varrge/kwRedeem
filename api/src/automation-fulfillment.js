@@ -425,7 +425,8 @@ export function createAutomationFulfillmentService(options = {}) {
         if (!provider) throw new Error("自动化站点不存在");
         const capability = validateAutomationMappingCapability(provider, {
           externalPlanId: mapping.external_plan_id,
-          regionCode: mapping.region_code
+          regionCode: mapping.region_code,
+          cardPlatformKey: mapping.card_platform_key
         });
         assertAutomationStoreSource(loadAutomationStoreSource(db, mapping.product_id), capability);
       } catch (error) {

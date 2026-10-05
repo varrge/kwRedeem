@@ -1,4 +1,8 @@
-# kwMembership
+# kwMembership（已退役）
+
+旧版 Go / Python 付款已关闭。现有 systemd 安装仅运行版本心跳和空闲兼容进程，以兼容升级前的在线更新器；不再处理订单或启动浏览器。`--check` 会拒绝部署仍存在排队、已领取或待人工操作的结账命令，保留现有进程和证据。首次安装和独立启动脚本不再可用。当前付款请使用 kwRedeem 后台“会员自动化”的协议站点与付款卡台配置。
+
+以下内容为旧实现的历史说明，不应作为启用或部署操作指南。
 
 kwRedeem 内部的会员自动化 Module。源码位于 `modules/kwMembership`，与 Node 主项目由同一个 Git commit 管理；运行时仍由独立的 Go Worker 和 Python Executor 直接读写 kwRedeem 的 SQLite/WAL 数据库，不创建第二套会员数据库。
 

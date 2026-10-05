@@ -71,7 +71,8 @@ function fundingIdempotencyKey(orderNo, operation) {
   if (!/^[A-Za-z0-9._:-]{1,120}$/.test(normalized) || !["open", "recharge"].includes(operation)) {
     throw new TypeError("资金幂等键无效");
   }
-  return `kwa:${normalized}:${operation}:v1`;
+  const key = `kwa:${normalized}:${operation}:v1`;
+  return key.length <= 80 ? key : `kwa:${createHash("sha256").update(normalized).digest("hex").slice(0, 48)}:${operation}:v1`;
 }
 
 export function createConfiguredAutomationCardProvider(db, providerKey, decryptText, options = {}) {
@@ -237,10 +238,86 @@ async function discoverSpaceXCardCandidates(db, provider, liveCards, products, m
   return [];
 }
 
-function selectSpaceXOpenProduct(products, mapping, fundingAmount) {
+function cardBusy(db, cardId, executionId) {
+  return Boolean(db.prepare(`SELECT 1 FROM automation_card_reservations
+    WHERE card_id = ? AND execution_id <> ? AND state IN ('reserved','manual_review') LIMIT 1`)
+    .get(cardId, executionId) || db.prepare(`SELECT 1 FROM card_capacity_reservations
+      WHERE card_id = ? AND state IN ('reserved','retained_partial') LIMIT 1`).get(cardId));
+}
+
+function validateZovoCardUsage(usage) {
+  const invalid = () => fail('AUTOMATION_CARD_USAGE_INVALID', '卡台用量响应无效', { retryable: true });
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) invalid();
+  for (const name of ['light', 'pro20']) {
+    const counter = usage[name];
+    if (!counter || typeof counter !== 'object' || Array.isArray(counter)) invalid();
+    for (const field of ['used', 'reserved', 'remaining']) {
+      if (!Number.isSafeInteger(counter[field]) || counter[field] < (field === 'remaining' ? -1 : 0)) invalid();
+    }
+    for (const field of ['cap', 'completed', 'failed']) {
+      if (counter[field] !== undefined && (!Number.isSafeInteger(counter[field]) || counter[field] < 0)) invalid();
+    }
+  }
+  for (const field of ['in_use', 'cooling_down', 'archived']) {
+    if (usage[field] !== undefined && typeof usage[field] !== 'boolean') invalid();
+  }
+  for (const field of ['cooldown_until', 'cooling_until']) {
+    if (usage[field] != null && usage[field] !== ''
+      && (typeof usage[field] !== 'string' || !Number.isFinite(Date.parse(usage[field])))) invalid();
+  }
+}
+
+// Renewal eligibility belongs to Zovo's authenticated account/history checks. Local
+// successful payments only nominate the original card; they never authorize payment.
+async function discoverZovoCardCandidates(db, adapter, liveCards, products, mapping, execution, at) {
+  const excluded = excludedCardIds(db, mapping);
+  const eligibleProducts = new Set(products.filter((item) => item.gptEligible === true).map((item) => item.productCode));
+  const previous = execution.verified_account_key ? db.prepare(`
+    SELECT DISTINCT card_id FROM automation_executions
+    WHERE provider_id = ? AND verified_account_key = ? AND status = 'succeeded' AND card_id IS NOT NULL
+  `).all(execution.provider_id, execution.verified_account_key) : [];
+  const originals = new Set(previous.map((row) => row.card_id));
+  const ordered = [...liveCards.values()].map((live) => ({ live, existing: db.prepare(
+    "SELECT * FROM managed_cards WHERE provider_key='spacexcard' AND upstream_card_id=?"
+  ).get(live.upstreamCardId) })).sort((a, b) => Number(originals.has(b.existing?.id)) - Number(originals.has(a.existing?.id))
+    || Number(b.live.availableAmount) - Number(a.live.availableAmount));
+  const candidates = [];
+  for (const { live, existing } of ordered) {
+    if (excluded.has(Number(live.upstreamCardId)) || live.status !== 'ACTIVE' || !eligibleProducts.has(live.productCode)) continue;
+    if (existing && (existing.reconciliation_state === 'HOLD' || existing.capacity_state === 'HOLD'
+      || cardBusy(db, existing.id, execution.id))) continue;
+    const usage = await adapter.getCardUsage(live.upstreamCardId);
+    validateZovoCardUsage(usage);
+    if (usage.active_order_id || usage.in_use === true || usage.cooling_down === true || usage.archived === true) continue;
+    const cooldown = usage.cooldown_until ?? usage.cooling_until;
+    if (cooldown && Date.parse(cooldown) > Date.parse(at)) continue;
+    if ([usage.light, usage.pro20].some((counter) => Number(counter?.reserved || 0) > 0)) continue;
+    const reusable = originals.has(existing?.id);
+    const counter = mapping.external_plan_id === 'pro_20x' ? usage.pro20
+      : ['plus', 'pro_5x'].includes(mapping.external_plan_id) ? usage.light : null;
+    // The protocol does not define a 50x counter bucket; the order endpoint applies it.
+    if (!reusable && counter && Number(counter.remaining) === 0) continue;
+    const consumed = Math.max(Number(existing?.consumed_slots || 0), Number(counter?.used || 0));
+    const card = upsertDiscoveredSpaceXCard(db, live, {
+      lane: existing?.lane || null, consumed, state: 'AVAILABLE', reason: null
+    }, Number(mapping.card_capacity), at);
+    if (!reusable && !firstFreeSlot(db, card, mapping)) continue;
+    candidates.push({...card, reuseOriginal: reusable});
+    break;
+  }
+  return candidates;
+}
+
+function reservationSlot(db, card, mapping) {
+  if (!card.reuseOriginal) return firstFreeSlot(db, card, mapping);
+  const occupied = occupiedSlots(db, card.id, mapping.capacity_key);
+  return Math.max(Number(card.consumed_slots || 0), ...occupied, 0) + 1;
+}
+
+function selectSpaceXOpenProduct(products, mapping, fundingAmount, maxFunding = fundingAmount) {
   const eligible = products.filter((product) => product.gptEligible === true
-    && Number(product.minAmount) <= fundingAmount
-    && Number(product.maxAmount) >= fundingAmount);
+    && Math.max(Number(product.minAmount), fundingAmount) <= maxFunding
+    && Number(product.maxAmount) >= Math.max(Number(product.minAmount), fundingAmount));
   return eligible.find((product) => product.productCode === mapping.card_product_code)
     || eligible.sort((left, right) => Number(left.openFee) - Number(right.openFee)
       || left.productCode.localeCompare(right.productCode))[0]
@@ -294,6 +371,7 @@ function reserveExistingCard(db, execution, mapping, card, slot, at) {
   return db.transaction(() => {
     const existing = persistedReservation(db, execution.id);
     if (existing) return existing;
+    if (cardBusy(db, card.id, execution.id)) fail('AUTOMATION_CARD_BUSY', '卡片正在处理其他订单', {retryable:true});
     const id = `acr_${randomUUID()}`;
     db.prepare(`
       INSERT INTO automation_card_reservations (
@@ -483,7 +561,7 @@ function normalizeCardMaterial(raw) {
 }
 
 export async function prepareAutomationCard(db, input = {}) {
-  const { execution, mapping, decryptText, encryptText, getCardholder } = input;
+  const { execution, mapping, decryptText, encryptText, getCardholder, adapter, preparedAccount } = input;
   if (!execution || !mapping || typeof decryptText !== "function" || typeof encryptText !== "function") {
     throw new TypeError("自动化卡片准备参数不完整");
   }
@@ -495,6 +573,21 @@ export async function prepareAutomationCard(db, input = {}) {
     { fetchImpl: input.fetchImpl, efuncardProxyUrl: input.efuncardProxyUrl }
   );
   const fundingAmount = mappingFundingPolicy(mapping).fundingAmount;
+  const estimatedFunding = preparedAccount?.quote?.fundingUsdMinor;
+  const perOrderBudget = automationRiskAllocationUsd(mapping);
+  if (preparedAccount?.quote?.kind === 'upgrade' && estimatedFunding == null) {
+    fail('AUTOMATION_FUNDING_QUOTE_UNAVAILABLE', '升级报价缺少美元注资估算，暂不能准备卡片资金');
+  }
+  if (estimatedFunding != null && (!Number.isSafeInteger(estimatedFunding) || estimatedFunding <= 0
+    || estimatedFunding > Math.round(perOrderBudget * 100))) {
+    fail('AUTOMATION_FUNDING_BUDGET_EXCEEDED', '报价所需卡内资金超过映射的单笔资金预算');
+  }
+  if (db.prepare(`SELECT 1 FROM automation_funding_intents WHERE execution_id=?
+    AND state IN ('submitted','outcome_unknown') LIMIT 1`).get(execution.id)) {
+    fail('AUTOMATION_FUNDING_OUTCOME_UNKNOWN', '已有资金操作结果待对账，禁止继续付款', {unknownOutcome:true});
+  }
+  const targetFunding = estimatedFunding == null ? perOrderBudget : estimatedFunding / 100;
+  const initialFunding = preparedAccount?.quote?.kind === 'upgrade' ? targetFunding : fundingAmount;
   let reservation = persistedReservation(db, execution.id);
   const liveCards = await listLiveCards(provider);
   let products = mapping.card_platform_key === "spacexcard" ? await provider.listProducts() : null;
@@ -502,9 +595,10 @@ export async function prepareAutomationCard(db, input = {}) {
     fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡台返回的卡产品规则无效", { retryable: true });
   }
   const openProduct = mapping.card_platform_key === "spacexcard"
-    ? selectSpaceXOpenProduct(products, mapping, fundingAmount)
+    ? selectSpaceXOpenProduct(products, mapping, initialFunding,
+      preparedAccount?.quote?.kind === 'upgrade' ? perOrderBudget : initialFunding)
     : null;
-  const rechargeAmountFor = async (card) => {
+  const rechargeAmountFor = async (card, availableAmount) => {
     if (!products) {
       if (typeof provider.listProducts !== "function") {
         fail("AUTOMATION_CARD_PRODUCT_INVALID", "卡台无法提供充值产品规则", { retryable: true });
@@ -523,8 +617,13 @@ export async function prepareAutomationCard(db, input = {}) {
     }
     const minimum = usd(product.minimumRechargeAmount ?? product.minAmount, "minimumRechargeAmount");
     const maximum = usd(product.maxAmount, "maximumRechargeAmount", true);
-    const amount = usd(Math.max(automationRiskAllocationUsd(mapping), minimum), "rechargeAmount", true);
-    if (amount > maximum) {
+    const upgrade = preparedAccount?.quote?.kind === 'upgrade';
+    // A recharge minimum is a constraint on a new transfer, not on the balance
+    // already on the card. Prorated upgrades may need much less than that minimum.
+    const requiredBalance = upgrade ? targetFunding : Math.max(targetFunding, minimum);
+    if (availableAmount >= requiredBalance) return 0;
+    const amount = usd(Math.max(upgrade ? targetFunding - availableAmount : targetFunding, minimum), "rechargeAmount", true);
+    if (amount > maximum || (preparedAccount?.quote?.kind === 'upgrade' && amount > perOrderBudget)) {
       fail("AUTOMATION_CARD_PRODUCT_INVALID", "单笔订单额度超出卡产品充值上限", { retryable: true });
     }
     return amount;
@@ -533,7 +632,9 @@ export async function prepareAutomationCard(db, input = {}) {
   if (!reservation) {
     const excluded = excludedCardIds(db, mapping);
     const cards = mapping.card_platform_key === "spacexcard"
-      ? await discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at)
+      ? (adapter?.getCardUsage
+        ? await discoverZovoCardCandidates(db, adapter, liveCards, products, mapping, execution, at)
+        : await discoverSpaceXCardCandidates(db, provider, liveCards, products, mapping, at))
       : db.prepare(`
         SELECT * FROM managed_cards
         WHERE provider_key = ? AND upstream_status = 'ACTIVE' AND reconciliation_state = 'READY'
@@ -545,18 +646,19 @@ export async function prepareAutomationCard(db, input = {}) {
       if (excluded.has(Number(card.upstream_card_id))) continue;
       if (mapping.card_platform_key !== "spacexcard"
         && mapping.card_product_code && card.product_code !== mapping.card_product_code) continue;
-      const slot = firstFreeSlot(db, card, mapping);
+      const slot = reservationSlot(db, card, mapping);
       const live = liveCards.get(Number(card.upstream_card_id));
       if (!slot || !live || String(live.status).toUpperCase() !== "ACTIVE") continue;
-      const rechargeAmount = await rechargeAmountFor(card);
+      const rechargeAmount = await rechargeAmountFor(card, Number(live.availableAmount || 0));
       candidates.push({
         card,
         live,
         slot,
-        shortfall: Math.max(0, rechargeAmount - Number(live.availableAmount || 0))
+        shortfall: rechargeAmount
       });
     }
-    candidates.sort((left, right) => left.shortfall - right.shortfall || left.card.id.localeCompare(right.card.id));
+    candidates.sort((left, right) => Number(right.card.reuseOriginal === true) - Number(left.card.reuseOriginal === true)
+      || left.shortfall - right.shortfall || left.card.id.localeCompare(right.card.id));
     if (candidates[0]) {
       reservation = reserveExistingCard(db, execution, mapping, candidates[0].card, candidates[0].slot, at);
     } else {
@@ -573,12 +675,19 @@ export async function prepareAutomationCard(db, input = {}) {
     ? db.prepare("SELECT * FROM managed_cards WHERE id = ?").get(reservation.card_id)
     : null;
   if (!card) {
+    let openFundingAmount = initialFunding;
     if (mapping.card_platform_key === "spacexcard") {
       const plannedProduct = products.find((product) => product.productCode === reservation.planned_product_code);
       if (plannedProduct?.gptEligible !== true) {
         fail("AUTOMATION_CARD_PRODUCT_INVALID", "SpaceX Card 计划开卡产品当前不支持 GPT 支付", {
           retryable: true
         });
+      }
+      if (preparedAccount?.quote?.kind === 'upgrade') {
+        openFundingAmount = usd(Math.max(targetFunding, Number(plannedProduct.minAmount)), 'openFundingAmount', true);
+        if (openFundingAmount > perOrderBudget || openFundingAmount > Number(plannedProduct.maxAmount)) {
+          fail('AUTOMATION_FUNDING_BUDGET_EXCEEDED', '开卡最低资金超过映射预算或产品上限');
+        }
       }
     }
     const holder = typeof getCardholder === "function" ? await getCardholder() : null;
@@ -591,12 +700,12 @@ export async function prepareAutomationCard(db, input = {}) {
       providerKey: mapping.card_platform_key,
       operation: "open",
       productCode: reservation.planned_product_code,
-      amountUsd: fundingAmount,
+      amountUsd: openFundingAmount,
       body: {
         product_code: reservation.planned_product_code,
         first_name: firstName,
         last_name: lastName,
-        init_amount: fundingAmount
+        init_amount: openFundingAmount
       }
     }, encryptText, at);
     await executeFundingIntent(db, execution, mapping, provider, intent, decryptText, at);
@@ -607,9 +716,17 @@ export async function prepareAutomationCard(db, input = {}) {
   } else {
     const live = liveCards.get(Number(card.upstream_card_id));
     if (!live) fail("AUTOMATION_RESERVED_CARD_STALE", "已预留卡片不在实时卡片列表中", { retryable: true });
+    if (live.status !== 'ACTIVE' || reservation.state !== 'reserved') {
+      fail('AUTOMATION_RESERVED_CARD_UNAVAILABLE', '已预留卡片或预留状态不可支付', {unknownOutcome:true});
+    }
     const liveAmount = usd(Number(live.availableAmount || 0), "liveAvailableAmount");
-    const rechargeAmount = await rechargeAmountFor(card);
-    if (liveAmount < rechargeAmount) {
+    const rechargeAmount = await rechargeAmountFor(card, liveAmount);
+    if (rechargeAmount > 0) {
+      const previous = db.prepare(`SELECT state FROM automation_funding_intents
+        WHERE execution_id=? AND operation='recharge' ORDER BY intent_no DESC LIMIT 1`).get(execution.id);
+      if (previous?.state === 'succeeded') {
+        fail('AUTOMATION_FUNDING_BALANCE_UNCONFIRMED', '充值已受理但实时卡余额尚不足，需对账后继续', {unknownOutcome:true});
+      }
       const intent = persistFundingIntent(db, execution, {
         providerKey: mapping.card_platform_key,
         operation: "recharge",

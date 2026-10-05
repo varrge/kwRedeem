@@ -5,6 +5,14 @@ function getKey() {
   return crypto.createHash("sha256").update(env.jwtSecret).digest();
 }
 
+// Only call with an identity returned by the provider's authenticated preflight.
+export function automationAccountKey(providerId, identity) {
+  const value = String(identity || "").trim().toLowerCase();
+  if (!value || value.includes("*") || value.length > 320) return null;
+  return crypto.createHmac("sha256", getKey())
+    .update(JSON.stringify(["automation-account-v1", String(providerId), value])).digest("hex");
+}
+
 export function encryptText(value) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", getKey(), iv);

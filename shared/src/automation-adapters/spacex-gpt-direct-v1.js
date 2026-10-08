@@ -14,7 +14,9 @@ const PENDING_STATUSES = new Set([
   "pending",
   "plus_paid"
 ]);
-const FAILED_STATUSES = new Set(["declined", "failed_precharge"]);
+// Accepted orders can be corrected to paid after an apparent rejection. Only
+// an administrator may release the local card/key after these remote outcomes.
+const PAYMENT_REVIEW_STATUSES = new Set(["declined", "failed_precharge"]);
 const RENEWAL_RUNNING_STATUSES = new Set(["pending", "warning", "retrying"]);
 const PLAN_DEFINITIONS = Object.freeze({
   go: Object.freeze({ id: "go", name: "ChatGPT Go", label: "Go", taskType: "purchase", canonicalOffer: "go" }),
@@ -316,6 +318,13 @@ function quoteContext(quote, { planId, currency, country, kind, now, expiresAt, 
   });
 }
 
+function hasChargeCorrection(raw) {
+  const order = raw?.order || raw;
+  return order?.payment_state === "paid_verified_by_card"
+    || order?.stage === "charge_verified_completed"
+    || (Array.isArray(raw?.events) && raw.events.some((event) => event?.event === "charge_verified_by_card"));
+}
+
 function normalizeTask(raw, context = {}) {
   const order = raw?.order && typeof raw.order === "object" && !Array.isArray(raw.order) ? raw.order : raw;
   if (!order || typeof order !== "object" || Array.isArray(order)) {
@@ -335,12 +344,21 @@ function normalizeTask(raw, context = {}) {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 订单号与本地订单不一致", { retryable: false });
   }
   const renewalStatus = optionalString(order.renewal_status ?? order.renewal?.status, 40)?.toLowerCase() || null;
+  const chargeCorrection = hasChargeCorrection(raw);
+  const cancelled = ["cancelled", "canceled"].includes(providerStatus);
+  const cancelledWithPayment = cancelled && Boolean(order.payment_submitted_at || order.charge_tx_id
+    || order.payment_retry_blocked === true || Number(order.charged_amount_minor) > 0);
   let status;
   let errorCode = null;
-  if (PENDING_STATUSES.has(providerStatus)) status = providerStatus === "queued" ? "queued" : "running";
+  if (chargeCorrection) {
+    status = "manual_review";
+    errorCode = "SPACEX_GPT_CHARGE_CORRECTION_REVIEW";
+  } else if (PAYMENT_REVIEW_STATUSES.has(providerStatus) || cancelledWithPayment) {
+    status = "manual_review";
+    errorCode = "SPACEX_GPT_PAYMENT_REVIEW_REQUIRED";
+  } else if (PENDING_STATUSES.has(providerStatus)) status = providerStatus === "queued" ? "queued" : "running";
   else if (providerStatus === "review" || providerStatus.endsWith("_review")) status = "manual_review";
-  else if (FAILED_STATUSES.has(providerStatus)) status = "failed";
-  else if (providerStatus === "cancelled" || providerStatus === "canceled") status = "cancelled";
+  else if (cancelled) status = "cancelled";
   else if (providerStatus === "completed" && renewalStatus === "success") status = "succeeded";
   else if (providerStatus === "completed" && RENEWAL_RUNNING_STATUSES.has(renewalStatus)) status = "running";
   else if (providerStatus === "completed") {
@@ -353,12 +371,17 @@ function normalizeTask(raw, context = {}) {
   if (["failed", "cancelled"].includes(status)) errorCode = `SPACEX_GPT_${providerStatus.toUpperCase()}`;
   const currency = optionalString(order.currency ?? order.payment_currency ?? context.checkoutCurrency, 20)?.toUpperCase() || "PHP";
   const total = amountMajor(order, context);
-  if (providerStatus === "completed" && total === null) {
+  if (providerStatus === "completed" && total === null && !chargeCorrection) {
     fail("SPACEX_GPT_CONTRACT_INVALID", "SpaceX GPT 完成订单缺少支付金额");
   }
-  const renewalPending = providerStatus === "completed" && RENEWAL_RUNNING_STATUSES.has(renewalStatus);
-  const message = optionalString(order.message, 500)
-    || (status === "succeeded" ? "SpaceX GPT 已完成开通并取消自动续费" : "SpaceX GPT 订单处理中");
+  const renewalPending = status === "running" && providerStatus === "completed" && RENEWAL_RUNNING_STATUSES.has(renewalStatus);
+  const message = optionalString(order.user_message, 500) || optionalString(order.message, 500)
+    || (chargeCorrection ? "卡台已修正为扣款成功，订阅与续费状态需管理员裁决，请勿重复付款"
+      : errorCode === "SPACEX_GPT_PAYMENT_REVIEW_REQUIRED" ? "卡台返回失败或取消，需核对实际扣款后由管理员裁决，请勿重复付款"
+        : status === "manual_review" ? "远端付款或订阅状态需要管理员核验"
+          : status === "succeeded" ? "SpaceX GPT 已完成开通并取消自动续费"
+            : status === "cancelled" ? "SpaceX GPT 订单已取消" : "SpaceX GPT 订单处理中");
+  const renewalKnown = providerStatus === "completed" && ["success", ...RENEWAL_RUNNING_STATUSES].includes(renewalStatus);
   return Object.freeze({
     id,
     clientOrderId,
@@ -381,14 +404,20 @@ function normalizeTask(raw, context = {}) {
       currency,
       displayTotal: total,
       displayUsdTotal: null,
-      confirmed: providerStatus === "completed"
+      confirmed: providerStatus === "completed" && total !== null
     }),
-    subscriptionStatus: providerStatus === "completed" ? "active" : null,
+    payment: Object.freeze({
+      state: optionalString(order.payment_state, 80),
+      retryBlocked: order.payment_retry_blocked === true,
+      chargeTransactionId: optionalString(order.charge_tx_id, 120),
+      submittedAt: optionalString(order.payment_submitted_at, 100)
+    }),
+    subscriptionStatus: providerStatus === "completed" && !chargeCorrection ? "active" : null,
     renewalStatus: Object.freeze({
       status: renewalStatus,
       label: optionalString(order.renewal_message, 200),
-      verified: providerStatus === "completed" && renewalStatus !== null,
-      willRenew: providerStatus === "completed" ? renewalStatus !== "success" : null
+      verified: renewalKnown,
+      willRenew: renewalKnown ? renewalStatus !== "success" : null
     }),
     billing: Object.freeze({
       pointsCost: null,
@@ -734,6 +763,7 @@ export class SpaceXGptDirectV1Adapter {
     let order = payload?.data?.order || payload?.data;
     const renewalStatus = optionalString(order?.renewal_status ?? order?.renewal?.status, 40)?.toLowerCase();
     if (String(order?.status || "").toLowerCase() === "completed"
+      && !hasChargeCorrection(payload.data)
       && ["pending", "warning"].includes(renewalStatus)) {
       const renewal = await this.request(`/gpt-direct/orders/${encodeURIComponent(id)}/cancel-renewal`, {
         method: "POST",

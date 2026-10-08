@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import Database from "better-sqlite3";
@@ -154,34 +155,77 @@ function retireMembership() {
   }
 }
 
-async function backupDatabase(destination) {
-  if (!destination) throw new Error("backup destination is required");
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  const database = new Database(databasePath, { fileMustExist: true });
+function checkUpdateSpace(directory, {
+  databaseFile = databasePath,
+  projectDirectory = projectRoot,
+  temporaryDirectory = os.tmpdir(),
+  statfs = fs.statfsSync
+} = {}) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  let databaseBytes;
   try {
-    await database.backup(destination);
+    // page_count includes committed pages still in WAL, unlike stat(databaseFile).
+    databaseBytes = Math.max(fs.statSync(databaseFile).size,
+      database.pragma("page_count", { simple: true }) * database.pragma("page_size", { simple: true }));
   } finally {
     database.close();
   }
-  const backup = new Database(destination, { readonly: true, fileMustExist: true });
+  const backupBytes = Math.ceil(databaseBytes * 1.1);
+  // Leave room for dependency installation, Go build files and live database writes.
+  const reserveBytes = 512 * 1024 * 1024;
+  const volumes = new Map();
+  for (const [location, bytes] of [[directory, backupBytes], [projectDirectory, 0], [temporaryDirectory, 0]]) {
+    const device = fs.statSync(location).dev;
+    const stats = statfs(location);
+    const available = Number(stats.bavail) * Number(stats.bsize);
+    const volume = volumes.get(device) || { location, available, required: reserveBytes };
+    volume.available = Math.min(volume.available, available);
+    volume.required += bytes;
+    volumes.set(device, volume);
+  }
+  const megabytes = (bytes) => `${Math.ceil(bytes / 1024 / 1024)} MiB`;
+  for (const volume of volumes.values()) {
+    if (volume.available < volume.required) {
+      throw new Error(`磁盘空间不足（${volume.location}）：可用 ${megabytes(volume.available)}，需要至少 ${megabytes(volume.required)}（含数据库备份和更新预留空间）。请释放空间后重试。`);
+    }
+  }
+  return `空间检查通过：数据库备份预估 ${megabytes(backupBytes)}，每个文件系统另预留 ${megabytes(reserveBytes)}`;
+}
+
+async function backupDatabase(destination) {
+  if (!destination) throw new Error("backup destination is required");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const temporaryDirectory = fs.mkdtempSync(path.join(path.dirname(destination), ".kawang-backup-"));
+  const temporaryPath = path.join(temporaryDirectory, "backup.db");
   try {
-    const result = backup.pragma("integrity_check", { simple: true });
-    if (result !== "ok") throw new Error(`database backup integrity check failed: ${result}`);
+    const database = new Database(databasePath, { fileMustExist: true });
+    try {
+      await database.backup(temporaryPath);
+    } finally {
+      database.close();
+    }
+    const backup = new Database(temporaryPath, { readonly: true, fileMustExist: true });
+    try {
+      const result = backup.pragma("integrity_check", { simple: true });
+      if (result !== "ok") throw new Error(`database backup integrity check failed: ${result}`);
+    } finally {
+      backup.close();
+    }
+    fs.chmodSync(temporaryPath, 0o600);
+    // Publish only a verified backup, atomically, without replacing an existing one.
+    fs.linkSync(temporaryPath, destination);
   } finally {
-    backup.close();
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 }
 
 function pruneBackups(directory, keep = 10) {
   const removed = fs.readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /^kawang-\d{8}-\d{6}\.db$/.test(entry.name))
-    .map((entry) => {
-      const filePath = path.join(directory, entry.name);
-      return { filePath, modifiedAt: fs.statSync(filePath).mtimeMs };
-    })
-    .sort((left, right) => left.modifiedAt - right.modifiedAt || left.filePath.localeCompare(right.filePath))
-    .slice(0, -keep)
-    .map(({ filePath }) => filePath);
+    .filter((entry) => entry.isFile() && /^kawang-\d{8}-\d{6}\.db(?:\.gz)?$/.test(entry.name))
+    // Compression changes mtime; the timestamp in the filename is the backup date.
+    .map((entry) => path.join(directory, entry.name))
+    .sort()
+    .slice(0, -keep);
   for (const filePath of removed) fs.rmSync(filePath);
   return removed;
 }
@@ -246,6 +290,9 @@ async function main() {
     case "backup-database":
       await backupDatabase(argument);
       break;
+    case "check-update-space":
+      console.log(checkUpdateSpace(argument));
+      break;
     case "prune-backups":
       console.log(`已清理 ${pruneBackups(argument, Number(extra || 10)).length} 份旧 SQLite 备份`);
       break;
@@ -265,6 +312,7 @@ export {
   backupDatabase,
   canLeaveMaintenance,
   canResumeOnlineMaintenance,
+  checkUpdateSpace,
   leaseIsDeployed,
   leaseIsDrained,
   leaseIsHealthy,

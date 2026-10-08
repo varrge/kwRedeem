@@ -11,6 +11,7 @@ UPDATE_ID="update-$(date '+%Y%m%d-%H%M%S')-$$"
 UPDATE_COMPLETED=0
 MAINTENANCE_ENTERED=0
 POST_RELEASE_VERIFY=0
+UPDATE_FAILURE_DETAIL=""
 UPDATE_RUNTIME="$ROOT_DIR/scripts/update-runtime.js"
 
 run_update_runtime() {
@@ -41,7 +42,7 @@ finish_update() {
       run_update_runtime state failed "在线更新失败（退出码 $exit_code）；维护模式保持启用，请检查更新日志"
       log "在线更新失败，维护模式保持启用。排障后重新执行更新或由管理员确认后解除。"
     else
-      run_update_runtime state failed "在线更新失败（退出码 $exit_code）；尚未进入维护模式"
+      run_update_runtime state failed "${UPDATE_FAILURE_DETAIL:-在线更新失败（退出码 $exit_code）；尚未进入维护模式}"
       log "在线更新失败，未进入维护模式。"
     fi
   fi
@@ -104,6 +105,14 @@ STAMP="$(date '+%Y%m%d-%H%M%S')"
 log "开始在线更新，分支：$CURRENT_BRANCH，远端：$UPSTREAM"
 run_update_runtime prune-backups "$BACKUP_DIR" 9
 run_update_runtime state running
+
+log "检查数据库备份和更新所需磁盘空间..."
+if ! SPACE_REPORT="$(run_update_runtime check-update-space "$BACKUP_DIR" 2>&1)"; then
+  UPDATE_FAILURE_DETAIL="$SPACE_REPORT"
+  log "$SPACE_REPORT"
+  exit 1
+fi
+log "$SPACE_REPORT"
 
 MEMBERSHIP_INSTALLED=0
 if [ -x "$MEMBERSHIP_DEPLOY_HELPER" ] && [ -f "$MEMBERSHIP_ENV_FILE" ]; then
